@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -68,13 +68,17 @@ class ReviewService:
             self._complete_step(task, 3, f"解析到 {len(task.changed_files)} 个变更文件")
 
             self._start_step(task, 4)
-            task.issues = await self._provider.review(
-                task.pr,
-                task.changed_files,
-                diff_text,
-                task.model,
-            )
-            self._complete_step(task, 4, f"发现 {len(task.issues)} 个问题")
+            if task.changed_files:
+                task.issues = await self._provider.review(
+                    task.pr,
+                    task.changed_files,
+                    diff_text,
+                    task.model,
+                )
+                self._complete_step(task, 4, f"发现 {len(task.issues)} 个问题")
+            else:
+                task.issues = []
+                self._complete_step(task, 4, "未解析到变更文件，跳过 LLM 审查")
 
             self._start_step(task, 5)
             task.report_markdown = self._report_service.generate(task)
@@ -113,4 +117,3 @@ class ReviewService:
     @staticmethod
     def _touch(task: ReviewTask) -> None:
         task.updated_at = datetime.now(timezone.utc)
-

@@ -99,9 +99,31 @@ class OpenAICompatibleProvider(LLMProvider):
         if response.status_code >= 400:
             raise LLMProviderError(f"LLM request failed: {response.status_code} {response.text[:500]}")
 
-        content = response.json()["choices"][0]["message"]["content"]
+        payload = response.json()
+        content = self._extract_message_content(payload)
         return self._parse_issues(content)
 
+    @staticmethod
+    def _extract_message_content(payload: dict[str, Any]) -> str:
+        choices = payload.get("choices")
+        if not choices:
+            raise LLMProviderError(f"LLM response missing choices: {json.dumps(payload)[:500]}")
+
+        message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        if not isinstance(message, dict):
+            raise LLMProviderError(f"LLM response missing message: {json.dumps(payload)[:500]}")
+
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return content
+
+        reasoning_content = message.get("reasoning_content")
+        if isinstance(reasoning_content, str) and reasoning_content.strip():
+            raise LLMProviderError(
+                "LLM response only contained reasoning_content and no final JSON content"
+            )
+
+        raise LLMProviderError(f"LLM response missing content: {json.dumps(payload)[:500]}")
     def _parse_issues(self, content: str) -> list[ReviewIssue]:
         try:
             raw = json.loads(content)

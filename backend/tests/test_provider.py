@@ -10,6 +10,26 @@ def test_openai_provider_rejects_invalid_json() -> None:
         provider._parse_issues("not json")
 
 
+def test_openai_provider_extracts_message_content() -> None:
+    payload = {"choices": [{"message": {"content": "[]"}}]}
+
+    assert OpenAICompatibleProvider._extract_message_content(payload) == "[]"
+
+
+def test_openai_provider_rejects_missing_message_content() -> None:
+    payload = {"choices": [{"message": {"content": None}}]}
+
+    with pytest.raises(LLMProviderError, match="missing content"):
+        OpenAICompatibleProvider._extract_message_content(payload)
+
+
+def test_openai_provider_rejects_reasoning_without_final_content() -> None:
+    payload = {"choices": [{"message": {"content": None, "reasoning_content": "analysis"}}]}
+
+    with pytest.raises(LLMProviderError, match="reasoning_content"):
+        OpenAICompatibleProvider._extract_message_content(payload)
+
+
 def test_build_provider_supports_deepseek_alias() -> None:
     provider = build_provider("deepseek", "key", "https://api.deepseek.com", "deepseek-v4-pro")
 

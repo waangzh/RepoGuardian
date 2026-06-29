@@ -28,7 +28,14 @@ class GitTool:
 
     @staticmethod
     def _run(command: list[str]) -> str:
-        completed = subprocess.run(command, check=False, capture_output=True, text=True)
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout).strip()
             raise GitToolError(f"Command failed: {' '.join(command)}\n{detail}")
@@ -36,12 +43,26 @@ class GitTool:
 
     def _fetch_ref(self, repo_dir: Path, remote: str, sha: str, ref: str) -> None:
         command = [self._git, "-C", str(repo_dir), "fetch", remote, sha]
-        completed = subprocess.run(command, check=False, capture_output=True, text=True)
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
         if completed.returncode == 0:
             return
 
         fallback = [self._git, "-C", str(repo_dir), "fetch", remote, ref]
-        fallback_completed = subprocess.run(fallback, check=False, capture_output=True, text=True)
+        fallback_completed = subprocess.run(
+            fallback,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
         if fallback_completed.returncode != 0:
             detail = (fallback_completed.stderr or completed.stderr or fallback_completed.stdout).strip()
             raise GitToolError(

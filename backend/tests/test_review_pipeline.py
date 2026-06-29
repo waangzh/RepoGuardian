@@ -28,6 +28,11 @@ class FakeGitTool:
         return self._workspace, self._diff_text
 
 
+class FailingProvider(MockProvider):
+    async def review(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("provider should not be called when diff is empty")
+
+
 @pytest.mark.asyncio
 async def test_review_pipeline_with_mock_provider(tmp_path: Path) -> None:
     diff_text = """diff --git a/app.py b/app.py
@@ -40,7 +45,51 @@ index 1111111..2222222 100644
 +    name = "RepoGuardian"
 +    return f"hi {name}"
 """
-    pr = PullRequestInfo(
+    service = _build_service(tmp_path, diff_text, MockProvider())
+
+    task = service.create_task(
+        ReviewCreateRequest(pr_url="https://github.com/local/sample/pull/1", model=None)
+    )
+    await _wait_for_task(service, task.id)
+    completed = service.get_task(task.id)
+
+    assert completed is not None
+    assert completed.status == TaskStatus.completed, completed.error
+    assert completed.changed_files[0].file_path == "app.py"
+    assert completed.issues
+    assert completed.report_markdown is not None
+
+
+@pytest.mark.asyncio
+async def test_review_pipeline_skips_llm_when_diff_is_empty(tmp_path: Path) -> None:
+    service = _build_service(tmp_path, "", FailingProvider())
+
+    task = service.create_task(
+        ReviewCreateRequest(pr_url="https://github.com/local/sample/pull/1", model=None)
+    )
+    await _wait_for_task(service, task.id)
+    completed = service.get_task(task.id)
+
+    assert completed is not None
+    assert completed.status == TaskStatus.completed, completed.error
+    assert completed.changed_files == []
+    assert completed.issues == []
+    assert completed.report_markdown is not None
+    assert completed.steps[4].message == "未解析到变更文件，跳过 LLM 审查"
+
+
+def _build_service(tmp_path: Path, diff_text: str, provider: MockProvider) -> ReviewService:
+    return ReviewService(
+        github_tool=FakeGitHubTool(_build_pr()),
+        git_tool=FakeGitTool(tmp_path / "workspace", diff_text),
+        diff_parser=DiffParser(),
+        provider=provider,
+        report_service=ReportService(),
+    )
+
+
+def _build_pr() -> PullRequestInfo:
+    return PullRequestInfo(
         owner="local",
         repo="sample",
         number=1,
@@ -58,25 +107,6 @@ index 1111111..2222222 100644
             repo_clone_url="https://github.com/local/sample.git",
         ),
     )
-    service = ReviewService(
-        github_tool=FakeGitHubTool(pr),
-        git_tool=FakeGitTool(tmp_path / "workspace", diff_text),
-        diff_parser=DiffParser(),
-        provider=MockProvider(),
-        report_service=ReportService(),
-    )
-
-    task = service.create_task(
-        ReviewCreateRequest(pr_url="https://github.com/local/sample/pull/1", model=None)
-    )
-    await _wait_for_task(service, task.id)
-    completed = service.get_task(task.id)
-
-    assert completed is not None
-    assert completed.status == TaskStatus.completed, completed.error
-    assert completed.changed_files[0].file_path == "app.py"
-    assert completed.issues
-    assert completed.report_markdown is not None
 
 
 async def _wait_for_task(service: ReviewService, task_id: str) -> None:
