@@ -27,18 +27,19 @@ conda env create -f environment.yml
 conda activate repoguardian
 ```
 
-如果环境已经存在，可以更新依赖：
+如果环境已经存在，可以更新依赖。
+
+在项目根目录 `D:\Code\RepoGuardian` 运行：
 
 ```powershell
 conda activate repoguardian
 python -m pip install -e .\backend[test]
 ```
 
-也可以在 `backend` 目录内安装：
+如果你已经在 `backend` 目录，也就是提示符类似 `(repoguardian) PS D:\Code\RepoGuardian\backend>`，运行：
 
 ```powershell
 conda activate repoguardian
-cd backend
 python -m pip install -e .[test]
 ```
 
