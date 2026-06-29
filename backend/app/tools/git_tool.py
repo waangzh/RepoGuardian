@@ -10,9 +10,25 @@ class GitToolError(RuntimeError):
 
 
 class GitTool:
-    def __init__(self, workdir: Path, git_executable: str = "git") -> None:
-        self._workdir = workdir
+    def __init__(self, workdir: Path | None = None, git_executable: str = "git") -> None:
+        from app.core.config import settings
+        self._workdir = workdir or settings.repoguardian_workdir
         self._git = git_executable
+
+    def get_file_content(
+        self, repo_path: str | Path, file_path: str, start_line: int = 1, end_line: int | None = None
+    ) -> str:
+        full_path = Path(repo_path) / file_path
+        try:
+            with open(full_path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+        except (OSError, UnicodeDecodeError):
+            return ""
+        if end_line is None:
+            end_line = len(lines)
+        start_idx = max(start_line - 1, 0)
+        end_idx = min(end_line, len(lines))
+        return "".join(lines[start_idx:end_idx])
 
     def clone_and_diff(self, pr: PullRequestInfo) -> tuple[Path, str]:
         self._workdir.mkdir(parents=True, exist_ok=True)

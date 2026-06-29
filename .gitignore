@@ -13,3 +13,6 @@ node_modules/
 .repoguardian/
 RepoGuardian：代码审查与自动修复 Agent 实现方案.md
 .pytest_tmp/
+AGENTS.md
+CLAUDE.md
+.claude

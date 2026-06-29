@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from "vue";
-import { createReview, getReview, getReport } from "./api/client";
+import { createReview, getReview, getReport, subscribeToEvents } from "./api/client";
 import ChangedFiles from "./components/ChangedFiles.vue";
+import ContextPanel from "./components/ContextPanel.vue";
 import IssueList from "./components/IssueList.vue";
 import ReportPanel from "./components/ReportPanel.vue";
 import TaskTimeline from "./components/TaskTimeline.vue";
@@ -14,6 +15,7 @@ const report = ref<string | null>(null);
 const error = ref<string | null>(null);
 const submitting = ref(false);
 let pollTimer: number | undefined;
+let eventSource: EventSource | undefined;
 
 const statusText = computed(() => {
   if (!task.value) return "等待输入";
@@ -21,15 +23,17 @@ const statusText = computed(() => {
 });
 
 async function submitReview() {
-  clearPolling();
+  clearAll();
   error.value = null;
   report.value = null;
   task.value = null;
   submitting.value = true;
   try {
     const created = await createReview(prUrl.value.trim(), model.value.trim());
-    await refreshTask(created.task_id);
-    pollTimer = window.setInterval(() => refreshTask(created.task_id), 1800);
+    const currentTask = await refreshTask(created.task_id);
+    if (currentTask !== null && !isTerminalStatus(currentTask.status)) {
+      subscribeOrPoll(created.task_id);
+    }
   } catch (err) {
     error.value = err instanceof Error ? err.message : "创建任务失败";
   } finally {
@@ -37,7 +41,34 @@ async function submitReview() {
   }
 }
 
-async function refreshTask(taskId: string) {
+function subscribeOrPoll(taskId: string) {
+  try {
+    eventSource = subscribeToEvents(taskId, {
+      onStepProgress: () => {
+        void refreshTask(taskId);
+      },
+      onDone: () => {
+        window.setTimeout(() => void refreshTask(taskId), 500);
+      },
+      onError: () => {
+        startPolling(taskId);
+      },
+    });
+  } catch {
+    startPolling(taskId);
+  }
+}
+
+function startPolling(taskId: string) {
+  if (pollTimer !== undefined) return;
+  pollTimer = window.setInterval(() => void refreshTask(taskId), 1800);
+}
+
+function isTerminalStatus(status: ReviewTask["status"]) {
+  return status === "completed" || status === "failed";
+}
+
+async function refreshTask(taskId: string): Promise<ReviewTask | null> {
   try {
     const next = await getReview(taskId);
     task.value = next;
@@ -49,9 +80,11 @@ async function refreshTask(taskId: string) {
       clearPolling();
       error.value = next.error || "任务失败";
     }
+    return next;
   } catch (err) {
     clearPolling();
     error.value = err instanceof Error ? err.message : "读取任务失败";
+    return null;
   }
 }
 
@@ -60,6 +93,14 @@ function clearPolling() {
     window.clearInterval(pollTimer);
     pollTimer = undefined;
   }
+  if (eventSource) {
+    eventSource.close();
+    eventSource = undefined;
+  }
+}
+
+function clearAll() {
+  clearPolling();
 }
 
 onBeforeUnmount(clearPolling);
@@ -118,6 +159,7 @@ onBeforeUnmount(clearPolling);
         </section>
 
         <ChangedFiles :files="task?.changed_files || []" />
+        <ContextPanel :snippets="task?.context_snippets || []" />
         <IssueList :issues="task?.issues || []" />
         <ReportPanel :markdown="report || task?.report_markdown" />
       </section>

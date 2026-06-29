@@ -1,6 +1,9 @@
-﻿from functools import lru_cache
+﻿import asyncio
+import json
+from functools import lru_cache
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
+from sse_starlette.sse import EventSourceResponse
 
 from app.agents.providers import build_provider
 from app.core.config import settings
@@ -53,3 +56,41 @@ async def get_report(task_id: str) -> Response:
     if task.report_markdown is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report is not ready")
     return Response(content=task.report_markdown, media_type="text/markdown; charset=utf-8")
+
+
+@router.get("/{task_id}/stream")
+async def stream_review(task_id: str, request: Request) -> EventSourceResponse:
+    service = get_review_service()
+
+    async def event_generator():
+        last_step_count = 0
+        while True:
+            if await request.is_disconnected():
+                break
+            task = service.get_task(task_id)
+            if task is None:
+                yield {"event": "error", "data": json.dumps({"message": "Task not found"})}
+                break
+
+            # Emit progress for new steps
+            steps = [s.model_dump() for s in task.steps]
+            current_count = len([s for s in steps if s["status"] == "completed"])
+            if current_count > last_step_count:
+                for step in steps[last_step_count:current_count]:
+                    yield {
+                        "event": "step_progress",
+                        "data": json.dumps({
+                            "node": step["name"],
+                            "status": "completed",
+                            "message": step.get("message", ""),
+                        }),
+                    }
+                last_step_count = current_count
+
+            if task.status in ("completed", "failed"):
+                yield {"event": "done", "data": json.dumps({"status": task.status})}
+                break
+
+            await asyncio.sleep(1.0)
+
+    return EventSourceResponse(event_generator())

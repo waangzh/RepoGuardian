@@ -36,3 +36,32 @@ export async function getReport(taskId: string): Promise<string> {
   return response.text();
 }
 
+export function subscribeToEvents(
+  taskId: string,
+  callbacks: {
+    onStepProgress?: (data: { node: string; status: string; message?: string }) => void;
+    onDone?: (data: { status: string }) => void;
+    onError?: (data: { message: string }) => void;
+  }
+): EventSource {
+  const es = new EventSource(`${API_BASE}/api/reviews/${taskId}/stream`);
+  es.addEventListener("step_progress", (e: MessageEvent) => {
+    callbacks.onStepProgress?.(JSON.parse(e.data));
+  });
+  es.addEventListener("done", (e: MessageEvent) => {
+    callbacks.onDone?.(JSON.parse(e.data));
+    es.close();
+  });
+  es.addEventListener("error", (e: MessageEvent) => {
+    if (e.data) {
+      callbacks.onError?.(JSON.parse(e.data));
+    }
+    es.close();
+  });
+  es.onerror = () => {
+    callbacks.onError?.({ message: "Event stream disconnected" });
+    es.close();
+  };
+  return es;
+}
+

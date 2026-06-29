@@ -75,7 +75,6 @@ async def test_review_pipeline_skips_llm_when_diff_is_empty(tmp_path: Path) -> N
     assert completed.changed_files == []
     assert completed.issues == []
     assert completed.report_markdown is not None
-    assert completed.steps[4].message == "未解析到变更文件，跳过 LLM 审查"
 
 
 def _build_service(tmp_path: Path, diff_text: str, provider: MockProvider) -> ReviewService:

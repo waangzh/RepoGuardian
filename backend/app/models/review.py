@@ -101,6 +101,22 @@ class ReviewIssue(BaseModel):
     confidence: float = Field(ge=0, le=1)
 
 
+class ContextSnippet(BaseModel):
+    file: str
+    start_line: int
+    end_line: int
+    content: str
+    relevance: str
+    symbol: str | None = None
+
+
+class RepoSnapshot(BaseModel):
+    language: str
+    framework: str | None = None
+    test_framework: str | None = None
+    total_files: int
+
+
 class ReviewTask(BaseModel):
     id: str
     status: TaskStatus = TaskStatus.pending
@@ -110,6 +126,8 @@ class ReviewTask(BaseModel):
     pr: PullRequestInfo | None = None
     changed_files: list[ChangedFile] = Field(default_factory=list)
     issues: list[ReviewIssue] = Field(default_factory=list)
+    context_snippets: list[ContextSnippet] = Field(default_factory=list)
+    repo_snapshot: RepoSnapshot | None = None
     report_markdown: str | None = None
     error: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

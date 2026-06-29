@@ -65,6 +65,22 @@ export interface ReviewIssue {
   confidence: number;
 }
 
+export interface ContextSnippet {
+  file: string;
+  start_line: number;
+  end_line: number;
+  content: string;
+  relevance: string;
+  symbol?: string | null;
+}
+
+export interface RepoSnapshot {
+  language: string;
+  framework?: string | null;
+  test_framework?: string | null;
+  total_files: number;
+}
+
 export interface ReviewTask {
   id: string;
   status: TaskStatus;
@@ -78,5 +94,7 @@ export interface ReviewTask {
   error?: string | null;
   created_at: string;
   updated_at: string;
+  context_snippets?: ContextSnippet[];
+  repo_snapshot?: RepoSnapshot | null;
 }
 

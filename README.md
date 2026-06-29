@@ -1,49 +1,41 @@
-﻿# RepoGuardian
+# RepoGuardian
 
-RepoGuardian 是一个面向 GitHub Pull Request 的智能代码审查助手。当前版本支持输入 PR URL，由后端获取 PR 信息、克隆仓库、生成并解析 diff，调用可插拔 LLM Provider 生成结构化审查问题和 Markdown 报告，前端展示任务状态、变更文件、问题列表和报告。
+RepoGuardian 是一个面向 GitHub Pull Request 的**智能代码审查 Agent 系统**。基于 LangGraph 状态图编排多个专业 Agent，理解仓库结构、检索代码上下文、执行 LLM 审查，生成结构化审查报告。前端控制台实时展示任务进度。
 
 ## 当前能力
 
-- GitHub PR URL 解析
-- GitHub PR metadata 获取，支持可选 `GITHUB_TOKEN`
+- GitHub PR URL 解析 + PR metadata 获取，支持可选 `GITHUB_TOKEN`
 - PR base/head diff 生成，支持 fork PR
-- `unidiff` diff 解析
-- 可插拔 LLM Provider
-  - `mock`：无 API Key 时演示完整审查闭环
-  - `openai`：OpenAI 兼容 Chat Completions API`r`n  - `deepseek`：DeepSeek OpenAI 兼容接口
-- FastAPI 后端接口
-- Vue3 + TypeScript 前端控制台
+- unidiff diff 解析
+- LangGraph 状态图编排（7 节点流水线）
+- tree-sitter AST 仓库索引（文件级 + 符号级）
+- 代码上下文检索（调用方、被调用方、测试文件）
+- 可插拔 LLM Provider：`mock`（零费用演示）/ `openai` / `deepseek` / `openai-compatible`
 - Markdown 审查报告生成
-- 可通过 `REPOGUARDIAN_GIT_BIN` 指定 Git 可执行文件
+- SSE 事件流实时推送任务进度
+- SQLite 业务持久化 + LangGraph checkpoint
+- FastAPI 后端 + Vue3 + TypeScript 前端控制台
 
-当前版本不包含自动修复、AST 上下文索引、ruff/pytest/bandit、Docker 沙箱、GitHub 评论或 draft PR。
+## 架构概览
 
-## 后端环境
+```
+LangGraph StateGraph (ReviewState)
+  intake → repo_prepare → diff_parse → repo_index → context_retrieve → review → report
 
-推荐使用 conda 管理 Python 环境。项目根目录提供了 `environment.yml`：
+后端: Python 3.11+ / FastAPI / LangGraph / SQLAlchemy / tree-sitter / unidiff
+前端: Vue 3 / TypeScript / Vite / SSE EventSource
+存储: SQLite (业务) + SQLite (checkpoint)
+```
+
+## 环境与启动
 
 ```powershell
 conda env create -f environment.yml
 conda activate repoguardian
-```
-
-如果环境已经存在，可以更新依赖。
-
-在项目根目录 `D:\Code\RepoGuardian` 运行：
-
-```powershell
-conda activate repoguardian
 python -m pip install -e .\backend[test]
 ```
 
-如果你已经在 `backend` 目录，也就是提示符类似 `(repoguardian) PS D:\Code\RepoGuardian\backend>`，运行：
-
-```powershell
-conda activate repoguardian
-python -m pip install -e .[test]
-```
-
-## 后端启动
+### 后端
 
 ```powershell
 conda activate repoguardian
@@ -52,9 +44,7 @@ copy ..\.env.example .env
 uvicorn app.main:app --reload
 ```
 
-默认 `REPOGUARDIAN_PROVIDER=mock`，不需要 LLM Key。要启用真实审查，编辑 `backend/.env`。
-
-OpenAI 示例：
+默认 `REPOGUARDIAN_PROVIDER=mock` 无需 LLM Key。真实审查配置示例：
 
 ```env
 REPOGUARDIAN_PROVIDER=openai
@@ -63,24 +53,22 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 REPOGUARDIAN_MODEL=gpt-4.1-mini
 ```
 
-DeepSeek 示例：
+DeepSeek：
 
 ```env
 REPOGUARDIAN_PROVIDER=deepseek
-OPENAI_API_KEY=你的 DeepSeek API Key
+OPENAI_API_KEY=你的 DeepSeek Key
 OPENAI_BASE_URL=https://api.deepseek.com
 REPOGUARDIAN_MODEL=deepseek-v4-pro
 ```
 
-## 前端启动
+### 前端
 
 ```powershell
 cd frontend
 npm install
 npm run dev
 ```
-
-浏览器打开 Vite 输出的地址，通常是 `http://localhost:5173`。
 
 ## API
 
@@ -90,10 +78,7 @@ npm run dev
 POST /api/reviews
 Content-Type: application/json
 
-{
-  "pr_url": "https://github.com/owner/repo/pull/123",
-  "model": "可选模型名"
-}
+{"pr_url": "https://github.com/owner/repo/pull/123", "model": "可选模型名"}
 ```
 
 查询任务：
@@ -108,13 +93,19 @@ GET /api/reviews/{task_id}
 GET /api/reviews/{task_id}/report
 ```
 
+SSE 实时进度流（新增）：
+
+```http
+GET /api/reviews/{task_id}/stream
+```
+
 ## 测试
 
 ```powershell
 conda activate repoguardian
-cd backend
-pytest
+cd backend && pytest
 
-cd ..\frontend
-npm run build
+cd ..\frontend && npm run build
 ```
+
+当前版本不包含：自动修复、Docker 沙箱、ruff/mypy/bandit 静态分析、GitHub 评论、draft PR。
