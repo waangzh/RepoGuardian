@@ -1,6 +1,7 @@
 ﻿import pytest
 
 from app.agents.providers import LLMProviderError, MockProvider, OpenAICompatibleProvider, build_provider
+from app.models.review import PullRequestInfo, PullRequestRef
 
 
 def test_openai_provider_rejects_invalid_json() -> None:
@@ -136,6 +137,32 @@ def test_build_provider_supports_deepseek_alias() -> None:
     assert isinstance(provider, OpenAICompatibleProvider)
 
 
+def test_deepseek_provider_disables_thinking() -> None:
+    provider = build_provider("deepseek", "key", "https://api.deepseek.com", "deepseek-v4-pro")
+    payload = provider._build_request_payload(_sample_pr(), [], "", None)
+
+    assert payload["thinking"] == {"type": "disabled"}
+    assert payload["response_format"] == {"type": "json_object"}
+
+
+def test_deepseek_base_url_disables_thinking_for_openai_compatible_provider() -> None:
+    provider = build_provider(
+        "openai-compatible",
+        "key",
+        "https://api.deepseek.com",
+        "deepseek-v4-pro",
+    )
+    payload = provider._build_request_payload(_sample_pr(), [], "", None)
+
+    assert payload["thinking"] == {"type": "disabled"}
+
+
+def test_openai_provider_does_not_send_thinking_parameter() -> None:
+    provider = build_provider("openai", "key", "https://api.openai.com/v1", "gpt-4.1-mini")
+    payload = provider._build_request_payload(_sample_pr(), [], "", None)
+
+    assert "thinking" not in payload
+
 def test_build_provider_normalizes_provider_name() -> None:
     provider = build_provider(" OpenAI-Compatible ", "key", "https://example.com", "model")
 
@@ -151,3 +178,18 @@ def test_build_provider_supports_mock() -> None:
 def test_build_provider_rejects_unknown_provider() -> None:
     with pytest.raises(ValueError, match="REPOGUARDIAN_PROVIDER"):
         build_provider("unknown", None, "https://example.com", "model")
+
+def _sample_pr() -> PullRequestInfo:
+    ref = PullRequestRef(
+        ref="main", sha="abc123", repo_clone_url="https://github.com/owner/repo.git"
+    )
+    return PullRequestInfo(
+        owner="owner",
+        repo="repo",
+        number=1,
+        title="Test PR",
+        html_url="https://github.com/owner/repo/pull/1",
+        clone_url="https://github.com/owner/repo.git",
+        base=ref,
+        head=ref,
+    )

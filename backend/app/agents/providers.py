@@ -68,10 +68,17 @@ class OpenAICompatibleProvider(LLMProvider):
         "critical": 0.9,
     }
 
-    def __init__(self, api_key: str | None, base_url: str, default_model: str) -> None:
+    def __init__(
+        self,
+        api_key: str | None,
+        base_url: str,
+        default_model: str,
+        disable_thinking: bool = False,
+    ) -> None:
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._default_model = default_model
+        self._disable_thinking = disable_thinking
         self._issue_adapter = TypeAdapter(list[ReviewIssue])
 
     async def review(
@@ -84,8 +91,29 @@ class OpenAICompatibleProvider(LLMProvider):
         if not self._api_key:
             raise LLMProviderError("OPENAI_API_KEY is required for real LLM review")
 
+        payload = self._build_request_payload(pr, changed_files, diff_text, model)
+        headers = {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}
+        async with httpx.AsyncClient(timeout=90) as client:
+            response = await client.post(
+                f"{self._base_url}/chat/completions", headers=headers, json=payload
+            )
+
+        if response.status_code >= 400:
+            raise LLMProviderError(f"LLM request failed: {response.status_code} {response.text[:500]}")
+
+        response_payload = response.json()
+        content = self._extract_message_content(response_payload)
+        return self._parse_issues(content)
+
+    def _build_request_payload(
+        self,
+        pr: PullRequestInfo,
+        changed_files: list[ChangedFile],
+        diff_text: str,
+        model: str | None,
+    ) -> dict[str, Any]:
         prompt = self._build_prompt(pr, changed_files, diff_text)
-        payload = {
+        payload: dict[str, Any] = {
             "model": model or self._default_model,
             "temperature": 0.1,
             "max_tokens": 4096,
@@ -101,18 +129,9 @@ class OpenAICompatibleProvider(LLMProvider):
                 {"role": "user", "content": prompt},
             ],
         }
-        headers = {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}
-        async with httpx.AsyncClient(timeout=90) as client:
-            response = await client.post(
-                f"{self._base_url}/chat/completions", headers=headers, json=payload
-            )
-
-        if response.status_code >= 400:
-            raise LLMProviderError(f"LLM request failed: {response.status_code} {response.text[:500]}")
-
-        response_payload = response.json()
-        content = self._extract_message_content(response_payload)
-        return self._parse_issues(content)
+        if self._disable_thinking:
+            payload["thinking"] = {"type": "disabled"}
+        return payload
 
     @staticmethod
     def _extract_message_content(payload: dict[str, Any]) -> str:
@@ -131,7 +150,8 @@ class OpenAICompatibleProvider(LLMProvider):
         reasoning_content = message.get("reasoning_content")
         if isinstance(reasoning_content, str) and reasoning_content.strip():
             raise LLMProviderError(
-                "LLM response only contained reasoning_content and no final JSON content"
+                "LLM response only contained reasoning_content and no final JSON content. "
+                "For DeepSeek, use REPOGUARDIAN_PROVIDER=deepseek so thinking is disabled."
             )
 
         raise LLMProviderError(f"LLM response missing content: {json.dumps(payload)[:500]}")
@@ -237,7 +257,9 @@ def build_provider(
     if normalized_provider == "mock":
         return MockProvider()
     if normalized_provider in {"openai", "deepseek", "openai-compatible"}:
-        return OpenAICompatibleProvider(api_key, base_url, default_model)
+        disable_thinking = normalized_provider == "deepseek" or "deepseek.com" in base_url.lower()
+        return OpenAICompatibleProvider(api_key, base_url, default_model, disable_thinking)
     raise ValueError(
         "REPOGUARDIAN_PROVIDER must be one of: mock, openai, deepseek, openai-compatible"
     )
+
