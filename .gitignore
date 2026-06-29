@@ -1,0 +1,14 @@
+﻿.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+dist/
+node_modules/
+*.egg-info/
+*.tsbuildinfo
+.repoguardian/
+RepoGuardian：代码审查与自动修复 Agent 实现方案.md
