@@ -10,6 +10,106 @@ def test_openai_provider_rejects_invalid_json() -> None:
         provider._parse_issues("not json")
 
 
+def test_openai_provider_parses_json_object_with_issues() -> None:
+    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
+    content = """
+    {
+      "issues": [
+        {
+          "file_path": "app.py",
+          "line_no": 10,
+          "severity": "high",
+          "category": "correctness",
+          "title": "空值未处理",
+          "description": "存在空值风险。",
+          "suggestion": "增加空值检查。",
+          "confidence": 0.8
+        }
+      ]
+    }
+    """
+
+    issues = provider._parse_issues(content)
+
+    assert len(issues) == 1
+    assert issues[0].confidence == 0.8
+
+
+def test_openai_provider_normalizes_confidence_labels() -> None:
+    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
+    content = """
+    {
+      "issues": [
+        {
+          "file_path": "app.py",
+          "line_no": 10,
+          "severity": "high",
+          "category": "correctness",
+          "title": "空值未处理",
+          "description": "存在空值风险。",
+          "suggestion": "增加空值检查。",
+          "confidence": "high"
+        },
+        {
+          "file_path": "app.py",
+          "line_no": 20,
+          "severity": "medium",
+          "category": "test",
+          "title": "缺少测试",
+          "description": "新增逻辑缺少测试。",
+          "suggestion": "补充测试。",
+          "confidence": "medium"
+        }
+      ]
+    }
+    """
+
+    issues = provider._parse_issues(content)
+
+    assert issues[0].confidence == 0.85
+    assert issues[1].confidence == 0.65
+
+
+def test_openai_provider_normalizes_numeric_confidence_strings() -> None:
+    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
+    content = """
+    {"issues":[{
+      "file_path":"app.py",
+      "line_no":1,
+      "severity":"low",
+      "category":"maintainability",
+      "title":"命名不清晰",
+      "description":"变量命名不清晰。",
+      "suggestion":"改为更明确的名称。",
+      "confidence":"75%"
+    }]}
+    """
+
+    issues = provider._parse_issues(content)
+
+    assert issues[0].confidence == 0.75
+
+
+def test_openai_provider_accepts_legacy_issue_array() -> None:
+    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
+    content = """
+    [{
+      "file_path":"app.py",
+      "line_no":1,
+      "severity":"low",
+      "category":"maintainability",
+      "title":"命名不清晰",
+      "description":"变量命名不清晰。",
+      "suggestion":"改为更明确的名称。",
+      "confidence":0.5
+    }]
+    """
+
+    issues = provider._parse_issues(content)
+
+    assert len(issues) == 1
+
+
 def test_openai_provider_extracts_message_content() -> None:
     payload = {"choices": [{"message": {"content": "[]"}}]}
 

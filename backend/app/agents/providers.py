@@ -59,6 +59,15 @@ class MockProvider(LLMProvider):
 
 
 class OpenAICompatibleProvider(LLMProvider):
+    _CONFIDENCE_LABELS = {
+        "very_low": 0.15,
+        "low": 0.35,
+        "medium": 0.65,
+        "high": 0.85,
+        "very_high": 0.95,
+        "critical": 0.9,
+    }
+
     def __init__(self, api_key: str | None, base_url: str, default_model: str) -> None:
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
@@ -79,12 +88,14 @@ class OpenAICompatibleProvider(LLMProvider):
         payload = {
             "model": model or self._default_model,
             "temperature": 0.1,
+            "max_tokens": 4096,
+            "response_format": {"type": "json_object"},
             "messages": [
                 {
                     "role": "system",
                     "content": (
                         "You are a strict code review agent. Report only issues with "
-                        "clear evidence. Return a JSON array only. Do not use Markdown."
+                        "clear evidence. Return valid json only. Do not use Markdown."
                     ),
                 },
                 {"role": "user", "content": prompt},
@@ -99,8 +110,8 @@ class OpenAICompatibleProvider(LLMProvider):
         if response.status_code >= 400:
             raise LLMProviderError(f"LLM request failed: {response.status_code} {response.text[:500]}")
 
-        payload = response.json()
-        content = self._extract_message_content(payload)
+        response_payload = response.json()
+        content = self._extract_message_content(response_payload)
         return self._parse_issues(content)
 
     @staticmethod
@@ -124,19 +135,69 @@ class OpenAICompatibleProvider(LLMProvider):
             )
 
         raise LLMProviderError(f"LLM response missing content: {json.dumps(payload)[:500]}")
+
     def _parse_issues(self, content: str) -> list[ReviewIssue]:
         try:
             raw = json.loads(content)
         except json.JSONDecodeError:
-            match = re.search(r"\[[\s\S]*\]", content)
+            match = re.search(r"\{[\s\S]*\}|\[[\s\S]*\]", content)
             if not match:
-                raise LLMProviderError("LLM output is not a valid JSON array")
+                raise LLMProviderError("LLM output is not valid JSON")
             raw = json.loads(match.group(0))
 
+        raw_issues = self._extract_raw_issues(raw)
+        normalized_issues = [self._normalize_issue(issue) for issue in raw_issues]
+
         try:
-            return self._issue_adapter.validate_python(raw)
+            return self._issue_adapter.validate_python(normalized_issues)
         except ValidationError as exc:
             raise LLMProviderError(f"LLM issue schema validation failed: {exc}") from exc
+
+    @staticmethod
+    def _extract_raw_issues(raw: Any) -> list[Any]:
+        if isinstance(raw, list):
+            return raw
+        if isinstance(raw, dict):
+            issues = raw.get("issues")
+            if isinstance(issues, list):
+                return issues
+            if issues is None:
+                return []
+        raise LLMProviderError("LLM output must be a JSON object with an issues array")
+
+    @classmethod
+    def _normalize_issue(cls, issue: Any) -> Any:
+        if not isinstance(issue, dict):
+            return issue
+        normalized = dict(issue)
+        normalized["confidence"] = cls._normalize_confidence(normalized.get("confidence"))
+        return normalized
+
+    @classmethod
+    def _normalize_confidence(cls, value: Any) -> float:
+        if value is None:
+            return 0.5
+        if isinstance(value, bool):
+            return 1.0 if value else 0.0
+        if isinstance(value, (int, float)):
+            return cls._clamp_confidence(float(value))
+        if isinstance(value, str):
+            normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+            if normalized in cls._CONFIDENCE_LABELS:
+                return cls._CONFIDENCE_LABELS[normalized]
+            if normalized.endswith("%"):
+                return cls._clamp_confidence(float(normalized[:-1]) / 100)
+            try:
+                return cls._clamp_confidence(float(normalized))
+            except ValueError:
+                return 0.5
+        return 0.5
+
+    @staticmethod
+    def _clamp_confidence(value: float) -> float:
+        if value > 1 and value <= 100:
+            value = value / 100
+        return min(max(value, 0.0), 1.0)
 
     @staticmethod
     def _build_prompt(pr: PullRequestInfo, changed_files: list[ChangedFile], diff_text: str) -> str:
@@ -152,11 +213,16 @@ class OpenAICompatibleProvider(LLMProvider):
             "Review the diff for correctness, security, performance, maintainability, "
             "and test coverage issues. Return Chinese text for title, description, "
             "and suggestion when possible.\n"
-            "Return a JSON array. Each object must contain exactly these fields: "
-            "file_path, line_no, severity, category, title, description, suggestion, confidence.\n"
+            "Return valid json as a single JSON object with this exact shape:\n"
+            "{\"issues\":[{\"file_path\":\"path/to/file\",\"line_no\":1,"
+            "\"severity\":\"high\",\"category\":\"correctness\","
+            "\"title\":\"问题标题\",\"description\":\"问题说明\","
+            "\"suggestion\":\"修复建议\",\"confidence\":0.85}]}\n"
+            "The confidence field must be a number between 0 and 1. Do not use strings "
+            "such as high, medium, or low for confidence.\n"
             "severity must be one of: low, medium, high, critical. "
             "category must be one of: correctness, maintainability, performance, security, test.\n"
-            "If there is no clear issue, return [].\n\n"
+            "If there is no clear issue, return {\"issues\":[]}.\n\n"
             f"Diff:\n{limited_diff}"
         )
 
