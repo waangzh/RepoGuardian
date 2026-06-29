@@ -1,4 +1,4 @@
-import json
+﻿import json
 import re
 from abc import ABC, abstractmethod
 from typing import Any
@@ -43,9 +43,15 @@ class MockProvider(LLMProvider):
                             line_no=line.line_no,
                             severity="low",
                             category="maintainability",
-                            title="Mock 审查提示",
-                            description="当前使用 MockProvider，仅用于验证任务闭环，不代表真实代码问题。",
-                            suggestion="配置 OPENAI_API_KEY 并设置 REPOGUARDIAN_PROVIDER=openai 以启用真实审查。",
+                            title="Mock review notice",
+                            description=(
+                                "The backend is using MockProvider. This validates the review "
+                                "pipeline only and does not represent a real code issue."
+                            ),
+                            suggestion=(
+                                "Set REPOGUARDIAN_PROVIDER=openai or deepseek and configure "
+                                "OPENAI_API_KEY to enable real LLM review."
+                            ),
                             confidence=0.2,
                         )
                     ]
@@ -67,7 +73,7 @@ class OpenAICompatibleProvider(LLMProvider):
         model: str | None,
     ) -> list[ReviewIssue]:
         if not self._api_key:
-            raise LLMProviderError("OPENAI_API_KEY 未配置，无法使用 openai provider")
+            raise LLMProviderError("OPENAI_API_KEY is required for real LLM review")
 
         prompt = self._build_prompt(pr, changed_files, diff_text)
         payload = {
@@ -77,8 +83,8 @@ class OpenAICompatibleProvider(LLMProvider):
                 {
                     "role": "system",
                     "content": (
-                        "你是严格的代码审查 Agent。只报告有明确证据的问题，"
-                        "输出必须是 JSON 数组，不要 Markdown。"
+                        "You are a strict code review agent. Report only issues with "
+                        "clear evidence. Return a JSON array only. Do not use Markdown."
                     ),
                 },
                 {"role": "user", "content": prompt},
@@ -91,7 +97,7 @@ class OpenAICompatibleProvider(LLMProvider):
             )
 
         if response.status_code >= 400:
-            raise LLMProviderError(f"LLM 请求失败：{response.status_code} {response.text[:500]}")
+            raise LLMProviderError(f"LLM request failed: {response.status_code} {response.text[:500]}")
 
         content = response.json()["choices"][0]["message"]["content"]
         return self._parse_issues(content)
@@ -102,13 +108,13 @@ class OpenAICompatibleProvider(LLMProvider):
         except json.JSONDecodeError:
             match = re.search(r"\[[\s\S]*\]", content)
             if not match:
-                raise LLMProviderError("LLM 输出不是合法 JSON 数组")
+                raise LLMProviderError("LLM output is not a valid JSON array")
             raw = json.loads(match.group(0))
 
         try:
             return self._issue_adapter.validate_python(raw)
         except ValidationError as exc:
-            raise LLMProviderError(f"LLM issue 结构校验失败：{exc}") from exc
+            raise LLMProviderError(f"LLM issue schema validation failed: {exc}") from exc
 
     @staticmethod
     def _build_prompt(pr: PullRequestInfo, changed_files: list[ChangedFile], diff_text: str) -> str:
@@ -121,12 +127,14 @@ class OpenAICompatibleProvider(LLMProvider):
             f"PR: {pr.owner}/{pr.repo}#{pr.number}\n"
             f"Title: {pr.title}\n"
             f"Changed files JSON:\n{json.dumps(files_payload, ensure_ascii=False)}\n\n"
-            "请基于 diff 审查 correctness、security、performance、maintainability、test 问题。\n"
-            "输出 JSON 数组，每个对象字段必须是：file_path,line_no,severity,category,title,"
-            "description,suggestion,confidence。\n"
-            "severity 只能是 low/medium/high/critical；category 只能是 correctness/"
-            "maintainability/performance/security/test。\n"
-            "如果没有明确问题，输出 []。\n\n"
+            "Review the diff for correctness, security, performance, maintainability, "
+            "and test coverage issues. Return Chinese text for title, description, "
+            "and suggestion when possible.\n"
+            "Return a JSON array. Each object must contain exactly these fields: "
+            "file_path, line_no, severity, category, title, description, suggestion, confidence.\n"
+            "severity must be one of: low, medium, high, critical. "
+            "category must be one of: correctness, maintainability, performance, security, test.\n"
+            "If there is no clear issue, return [].\n\n"
             f"Diff:\n{limited_diff}"
         )
 
@@ -137,9 +145,11 @@ def build_provider(
     base_url: str,
     default_model: str,
 ) -> LLMProvider:
-    if provider_name == "mock":
+    normalized_provider = provider_name.strip().lower()
+    if normalized_provider == "mock":
         return MockProvider()
-    if provider_name == "openai":
+    if normalized_provider in {"openai", "deepseek", "openai-compatible"}:
         return OpenAICompatibleProvider(api_key, base_url, default_model)
-    raise ValueError("REPOGUARDIAN_PROVIDER 只支持 mock 或 openai")
-
+    raise ValueError(
+        "REPOGUARDIAN_PROVIDER must be one of: mock, openai, deepseek, openai-compatible"
+    )
