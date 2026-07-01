@@ -6,7 +6,7 @@ from typing import Any
 import httpx
 from pydantic import TypeAdapter, ValidationError
 
-from app.models.review import ChangedFile, PullRequestInfo, ReviewIssue
+from app.models.review import AgentAction, AgentActionName, ChangedFile, PatchResult, PullRequestInfo, ReviewIssue
 
 
 class LLMProviderError(RuntimeError):
@@ -14,6 +14,10 @@ class LLMProviderError(RuntimeError):
 
 
 class LLMProvider(ABC):
+    @abstractmethod
+    async def decide(self, state: dict[str, Any], model: str | None) -> AgentAction:
+        raise NotImplementedError
+
     @abstractmethod
     async def review(
         self,
@@ -24,8 +28,39 @@ class LLMProvider(ABC):
     ) -> list[ReviewIssue]:
         raise NotImplementedError
 
+    @abstractmethod
+    async def generate_patch(
+        self,
+        state: dict[str, Any],
+        model: str | None,
+    ) -> list[PatchResult]:
+        raise NotImplementedError
+
 
 class MockProvider(LLMProvider):
+    def __init__(
+        self,
+        action_sequence: list[AgentAction | dict[str, Any] | str] | None = None,
+        patch_sequence: list[PatchResult | dict[str, Any]] | None = None,
+    ) -> None:
+        self._action_sequence = list(action_sequence or [
+            AgentAction(action="retrieve_context", reason="Mock: gather related context."),
+            AgentAction(action="run_static_analysis", reason="Mock: run safe analysis tools."),
+            AgentAction(action="review_code", reason="Mock: review after context and tools."),
+            AgentAction(action="finish_report", reason="Mock: finish report."),
+        ])
+        self._patch_sequence = list(patch_sequence or [])
+
+    async def decide(self, state: dict[str, Any], model: str | None) -> AgentAction:
+        if self._action_sequence:
+            raw = self._action_sequence.pop(0)
+            if isinstance(raw, AgentAction):
+                return raw
+            if isinstance(raw, str):
+                return AgentAction(action=raw, reason=f"Mock action: {raw}")
+            return AgentAction.model_validate(raw)
+        return AgentAction(action="finish_report", reason="Mock action sequence exhausted.")
+
     async def review(
         self,
         pr: PullRequestInfo,
@@ -53,8 +88,21 @@ class MockProvider(LLMProvider):
                                 "OPENAI_API_KEY to enable real LLM review."
                             ),
                             confidence=0.2,
+                            auto_fixable=True,
                         )
                     ]
+        return []
+
+    async def generate_patch(
+        self,
+        state: dict[str, Any],
+        model: str | None,
+    ) -> list[PatchResult]:
+        if self._patch_sequence:
+            raw = self._patch_sequence.pop(0)
+            if isinstance(raw, PatchResult):
+                return [raw]
+            return [PatchResult.model_validate(raw)]
         return []
 
 
@@ -80,6 +128,27 @@ class OpenAICompatibleProvider(LLMProvider):
         self._default_model = default_model
         self._disable_thinking = disable_thinking
         self._issue_adapter = TypeAdapter(list[ReviewIssue])
+        self._patch_adapter = TypeAdapter(list[PatchResult])
+
+    async def decide(self, state: dict[str, Any], model: str | None) -> AgentAction:
+        if not self._api_key:
+            raise LLMProviderError("OPENAI_API_KEY is required for real agent decisions")
+
+        prompt = self._build_decision_prompt(state)
+        content = await self._request_json_content(
+            prompt=prompt,
+            model=model,
+            system=(
+                "You are the planner for a code review and auto-fix agent. "
+                "Return valid JSON only. Choose exactly one next action."
+            ),
+            max_tokens=1200,
+        )
+        try:
+            raw = self._load_json(content)
+            return AgentAction.model_validate(raw)
+        except ValidationError as exc:
+            raise LLMProviderError(f"Agent action schema validation failed: {exc}") from exc
 
     async def review(
         self,
@@ -91,7 +160,50 @@ class OpenAICompatibleProvider(LLMProvider):
         if not self._api_key:
             raise LLMProviderError("OPENAI_API_KEY is required for real LLM review")
 
-        payload = self._build_request_payload(pr, changed_files, diff_text, model)
+        prompt = self._build_prompt(pr, changed_files, diff_text)
+        content = await self._request_json_content(
+            prompt=prompt,
+            model=model,
+            system=(
+                "You are a strict code review agent. Report only issues with "
+                "clear evidence. Return valid json only. Do not use Markdown."
+            ),
+            max_tokens=4096,
+        )
+        return self._parse_issues(content)
+
+    async def generate_patch(
+        self,
+        state: dict[str, Any],
+        model: str | None,
+    ) -> list[PatchResult]:
+        if not self._api_key:
+            raise LLMProviderError("OPENAI_API_KEY is required for real patch generation")
+
+        content = await self._request_json_content(
+            prompt=self._build_patch_prompt(state),
+            model=model,
+            system=(
+                "You generate minimal unified diffs for clear code review issues. "
+                "Return valid JSON only. Do not use Markdown."
+            ),
+            max_tokens=4096,
+        )
+        raw = self._load_json(content)
+        patches = raw.get("patches", raw) if isinstance(raw, dict) else raw
+        try:
+            return self._patch_adapter.validate_python(patches)
+        except ValidationError as exc:
+            raise LLMProviderError(f"Patch schema validation failed: {exc}") from exc
+
+    async def _request_json_content(
+        self,
+        prompt: str,
+        model: str | None,
+        system: str,
+        max_tokens: int,
+    ) -> str:
+        payload = self._build_request_payload(prompt, model, system, max_tokens)
         headers = {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}
         async with httpx.AsyncClient(timeout=90) as client:
             response = await client.post(
@@ -100,32 +212,22 @@ class OpenAICompatibleProvider(LLMProvider):
 
         if response.status_code >= 400:
             raise LLMProviderError(f"LLM request failed: {response.status_code} {response.text[:500]}")
-
-        response_payload = response.json()
-        content = self._extract_message_content(response_payload)
-        return self._parse_issues(content)
+        return self._extract_message_content(response.json())
 
     def _build_request_payload(
         self,
-        pr: PullRequestInfo,
-        changed_files: list[ChangedFile],
-        diff_text: str,
+        prompt: str,
         model: str | None,
+        system: str,
+        max_tokens: int,
     ) -> dict[str, Any]:
-        prompt = self._build_prompt(pr, changed_files, diff_text)
         payload: dict[str, Any] = {
             "model": model or self._default_model,
             "temperature": 0.1,
-            "max_tokens": 4096,
+            "max_tokens": max_tokens,
             "response_format": {"type": "json_object"},
             "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a strict code review agent. Report only issues with "
-                        "clear evidence. Return valid json only. Do not use Markdown."
-                    ),
-                },
+                {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
         }
@@ -157,13 +259,7 @@ class OpenAICompatibleProvider(LLMProvider):
         raise LLMProviderError(f"LLM response missing content: {json.dumps(payload)[:500]}")
 
     def _parse_issues(self, content: str) -> list[ReviewIssue]:
-        try:
-            raw = json.loads(content)
-        except json.JSONDecodeError:
-            match = re.search(r"\{[\s\S]*\}|\[[\s\S]*\]", content)
-            if not match:
-                raise LLMProviderError("LLM output is not valid JSON")
-            raw = json.loads(match.group(0))
+        raw = self._load_json(content)
 
         raw_issues = self._extract_raw_issues(raw)
         normalized_issues = [self._normalize_issue(issue) for issue in raw_issues]
@@ -184,6 +280,16 @@ class OpenAICompatibleProvider(LLMProvider):
             if issues is None:
                 return []
         raise LLMProviderError("LLM output must be a JSON object with an issues array")
+
+    @staticmethod
+    def _load_json(content: str) -> Any:
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            match = re.search(r"\{[\s\S]*\}|\[[\s\S]*\]", content)
+            if not match:
+                raise LLMProviderError("LLM output is not valid JSON")
+            return json.loads(match.group(0))
 
     @classmethod
     def _normalize_issue(cls, issue: Any) -> Any:
@@ -235,6 +341,7 @@ class OpenAICompatibleProvider(LLMProvider):
             "and suggestion when possible.\n"
             "Return valid json as a single JSON object with this exact shape:\n"
             "{\"issues\":[{\"file_path\":\"path/to/file\",\"line_no\":1,"
+            "\"id\":\"optional-stable-id\",\"auto_fixable\":true,"
             "\"severity\":\"high\",\"category\":\"correctness\","
             "\"title\":\"问题标题\",\"description\":\"问题说明\","
             "\"suggestion\":\"修复建议\",\"confidence\":0.85}]}\n"
@@ -244,6 +351,47 @@ class OpenAICompatibleProvider(LLMProvider):
             "category must be one of: correctness, maintainability, performance, security, test.\n"
             "If there is no clear issue, return {\"issues\":[]}.\n\n"
             f"Diff:\n{limited_diff}"
+        )
+
+    @staticmethod
+    def _build_decision_prompt(state: dict[str, Any]) -> str:
+        compact = {
+            "changed_files": state.get("changed_files") or [],
+            "context_count": len(state.get("context_snippets") or []),
+            "static_results": state.get("static_results") or [],
+            "review_issues": state.get("review_issues") or [],
+            "patches": state.get("patches") or [],
+            "test_results": state.get("test_results") or [],
+            "fix_iteration": state.get("fix_iteration", 0),
+            "max_fix_iterations": state.get("max_fix_iterations", 3),
+            "agent_events": state.get("agent_events") or [],
+        }
+        allowed = ", ".join(action.value for action in AgentActionName)
+        return (
+            "Decide the next action for this code review agent.\n"
+            f"Allowed actions: {allowed}.\n"
+            "Return exactly this JSON shape:\n"
+            "{\"action\":\"review_code\",\"reason\":\"中文理由\","
+            "\"target_issue_ids\":[],\"tool_args\":{}}\n\n"
+            f"Current state JSON:\n{json.dumps(compact, ensure_ascii=False)[:50000]}"
+        )
+
+    @staticmethod
+    def _build_patch_prompt(state: dict[str, Any]) -> str:
+        compact = {
+            "diff_text": (state.get("diff_text") or "")[:50000],
+            "context_snippets": state.get("context_snippets") or [],
+            "review_issues": state.get("review_issues") or [],
+            "test_results": state.get("test_results") or [],
+            "target_issue_ids": (state.get("next_action") or {}).get("target_issue_ids", []),
+        }
+        return (
+            "Generate minimal unified diff patches for clearly auto-fixable issues only. "
+            "If no issue can be fixed safely, return {\"patches\":[]}.\n"
+            "Return JSON shape:\n"
+            "{\"patches\":[{\"issue_id\":\"issue-id\",\"diff_content\":\"diff --git ...\","
+            "\"status\":\"generated\"}]}\n\n"
+            f"State JSON:\n{json.dumps(compact, ensure_ascii=False)[:60000]}"
         )
 
 

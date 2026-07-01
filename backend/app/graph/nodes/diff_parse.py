@@ -1,24 +1,20 @@
-from datetime import datetime, timezone
 from typing import Any
 
+from app.graph.nodes._events import append_step
 from app.graph.state import ReviewState
 from app.tools.diff_parser import DiffParser
 
 
 async def diff_parse_node(state: ReviewState) -> ReviewState:
-    diff_text = state.get("diff_text", "")
     parser: Any = state.get("_diff_parser") or DiffParser()
-    changed_files = parser.parse(diff_text)
-
-    changed_files_dicts = [f.model_dump() for f in changed_files]
-    step_progress: list[dict] = list(state.get("step_progress") or [])
-    step_progress.append({
-        "node": "diff_parse",
-        "status": "completed",
-        "message": f"解析到 {len(changed_files)} 个变更文件",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    })
+    changed_files = parser.parse(state.get("diff_text") or "")
+    changed_files_dicts = [file.model_dump(mode="json") for file in changed_files]
     return ReviewState(
         changed_files=changed_files_dicts,
-        step_progress=step_progress,
+        step_progress=append_step(
+            state,
+            "diff_parse",
+            "completed",
+            f"解析到 {len(changed_files)} 个变更文件",
+        ),
     )

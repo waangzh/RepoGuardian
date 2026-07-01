@@ -1,21 +1,26 @@
-from datetime import datetime, timezone
-
 from typing import Any
 
-from app.agents.providers import build_provider
 from app.agents.review_agent import ReviewAgent
 from app.core.config import settings
+from app.agents.providers import build_provider
+from app.graph.nodes._events import append_event, append_step
 from app.graph.state import ReviewState
-from app.models.review import ChangedFile, ChangedLine, PullRequestInfo
+from app.models.review import AgentAction, ChangedFile, ChangedLine, PullRequestInfo
 
 
 async def review_node(state: ReviewState) -> ReviewState:
-    pr_info_dict = state.get("pr_info") or {}
-    pr_info = _rebuild_pr_info(pr_info_dict)
+    action = AgentAction.model_validate(state.get("next_action") or {
+        "action": "review_code",
+        "reason": "执行代码审查",
+    })
     changed_files = _rebuild_changed_files(state.get("changed_files") or [])
-    diff_text = state.get("diff_text") or ""
-    model = state.get("model")
-    context_snippets = state.get("context_snippets") or []
+    if not changed_files:
+        message = "无变更文件，跳过 LLM 审查"
+        return ReviewState(
+            review_issues=[],
+            agent_events=append_event(state, action.action, action.reason, "completed", message),
+            step_progress=append_step(state, "review", "completed", message),
+        )
 
     provider: Any = state.get("_provider") or build_provider(
         settings.repoguardian_provider,
@@ -24,49 +29,50 @@ async def review_node(state: ReviewState) -> ReviewState:
         settings.repoguardian_model,
     )
     agent = ReviewAgent(provider)
-
-    if changed_files:
-        # Inject context into diff for enhanced review
-        context_text = _build_context_text(context_snippets)
-        enhanced_diff = diff_text
-        if context_text:
-            enhanced_diff = (
-                f"## 相关代码上下文\n{context_text}\n\n## Diff\n{diff_text}"
-            )
-        issues = await agent.review(pr_info, changed_files, enhanced_diff, model)
-        issues_dicts = [i.model_dump() for i in issues]
-    else:
-        issues_dicts = []
-
-    step_progress: list[dict] = list(state.get("step_progress") or [])
-    step_progress.append({
-        "node": "review",
-        "status": "completed",
-        "message": f"发现 {len(issues_dicts)} 个问题",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    })
+    pr_info = _rebuild_pr_info(state.get("pr_info") or {})
+    enhanced_diff = _build_enhanced_diff(state)
+    issues = await agent.review(pr_info, changed_files, enhanced_diff, state.get("model"))
+    issues_dicts = [issue.model_dump(mode="json") for issue in issues]
+    message = f"发现 {len(issues_dicts)} 个问题"
     return ReviewState(
         review_issues=issues_dicts,
-        step_progress=step_progress,
+        agent_events=append_event(state, action.action, action.reason, "completed", message),
+        step_progress=append_step(state, "review", "completed", message),
     )
 
 
-def _build_context_text(snippets: list[dict]) -> str:
-    if not snippets:
-        return ""
-    lines = ["## 相关代码上下文"]
-    for s in snippets:
-        lines.append(
-            f"### {s.get('relevance', '?')} | `{s['file']}`:{s.get('start_line', '?')}-{s.get('end_line', '?')}"
-        )
-        lines.append("```python")
-        lines.append(s.get("content", ""))
-        lines.append("```")
-    return "\n".join(lines)
+def _build_enhanced_diff(state: ReviewState) -> str:
+    sections: list[str] = []
+    context_snippets = state.get("context_snippets") or []
+    if context_snippets:
+        sections.append("## 相关代码上下文")
+        for snippet in context_snippets:
+            sections.append(
+                f"### {snippet.get('relevance', '?')} | "
+                f"`{snippet.get('file', '')}`:{snippet.get('start_line', '?')}-{snippet.get('end_line', '?')}"
+            )
+            sections.append("```python")
+            sections.append(snippet.get("content", ""))
+            sections.append("```")
+    static_results = state.get("static_results") or []
+    if static_results:
+        sections.append("## 静态分析结果")
+        for result in static_results:
+            sections.append(
+                f"- {result.get('command')} exit={result.get('exit_code')} "
+                f"passed={result.get('passed')}"
+            )
+            stderr = result.get("stderr") or result.get("stdout") or ""
+            if stderr:
+                sections.append(stderr[:2000])
+    sections.append("## Diff")
+    sections.append(state.get("diff_text") or "")
+    return "\n".join(sections)
 
 
 def _rebuild_pr_info(data: dict) -> PullRequestInfo:
     from app.models.review import PullRequestRef
+
     base = data.get("base", {})
     head = data.get("head", {})
     return PullRequestInfo(
@@ -90,28 +96,33 @@ def _rebuild_pr_info(data: dict) -> PullRequestInfo:
 
 
 def _rebuild_changed_files(data: list[dict]) -> list[ChangedFile]:
+    from app.models.review import DiffHunk
+
     result: list[ChangedFile] = []
-    for f in data:
+    for file_data in data:
         hunks = []
-        for h in f.get("hunks", []):
-            added = [ChangedLine(line_no=a.get("line_no"), content=a.get("content", ""))
-                     for a in h.get("added_lines", [])]
-            removed = [ChangedLine(line_no=r.get("line_no"), content=r.get("content", ""))
-                      for r in h.get("removed_lines", [])]
-            from app.models.review import DiffHunk
+        for hunk_data in file_data.get("hunks", []):
+            added = [
+                ChangedLine(line_no=line.get("line_no"), content=line.get("content", ""))
+                for line in hunk_data.get("added_lines", [])
+            ]
+            removed = [
+                ChangedLine(line_no=line.get("line_no"), content=line.get("content", ""))
+                for line in hunk_data.get("removed_lines", [])
+            ]
             hunks.append(DiffHunk(
-                old_start=h.get("old_start", 0),
-                old_length=h.get("old_length", 0),
-                new_start=h.get("new_start", 0),
-                new_length=h.get("new_length", 0),
+                old_start=hunk_data.get("old_start", 0),
+                old_length=hunk_data.get("old_length", 0),
+                new_start=hunk_data.get("new_start", 0),
+                new_length=hunk_data.get("new_length", 0),
                 added_lines=added,
                 removed_lines=removed,
             ))
         result.append(ChangedFile(
-            file_path=f.get("file_path", ""),
-            change_type=f.get("change_type", "modified"),
-            additions=f.get("additions", 0),
-            deletions=f.get("deletions", 0),
+            file_path=file_data.get("file_path", ""),
+            change_type=file_data.get("change_type", "modified"),
+            additions=file_data.get("additions", 0),
+            deletions=file_data.get("deletions", 0),
             hunks=hunks,
         ))
     return result

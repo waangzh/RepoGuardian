@@ -40,6 +40,7 @@ class GitTool:
         diff = self._run(
             [self._git, "-C", str(repo_dir), "diff", "--unified=80", pr.base.sha, "FETCH_HEAD"]
         )
+        self._run([self._git, "-C", str(repo_dir), "checkout", "--detach", "FETCH_HEAD"])
         return repo_dir, diff
 
     @staticmethod

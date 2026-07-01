@@ -55,6 +55,7 @@ export interface ChangedFile {
 }
 
 export interface ReviewIssue {
+  id: string;
   file_path: string;
   line_no: number | null;
   severity: Severity;
@@ -63,6 +64,7 @@ export interface ReviewIssue {
   description: string;
   suggestion: string;
   confidence: number;
+  auto_fixable: boolean;
 }
 
 export interface ContextSnippet {
@@ -81,6 +83,33 @@ export interface RepoSnapshot {
   total_files: number;
 }
 
+export interface TestRunResult {
+  tool: string;
+  command: string;
+  exit_code: number;
+  stdout: string;
+  stderr: string;
+  passed: boolean;
+  duration: number;
+}
+
+export interface PatchResult {
+  id: string;
+  issue_id?: string | null;
+  diff_content: string;
+  status: string;
+  error?: string | null;
+  created_at: string;
+}
+
+export interface AgentEvent {
+  action: string;
+  reason: string;
+  status: string;
+  message?: string | null;
+  created_at: string;
+}
+
 export interface ReviewTask {
   id: string;
   status: TaskStatus;
@@ -90,6 +119,10 @@ export interface ReviewTask {
   pr?: PullRequestInfo | null;
   changed_files: ChangedFile[];
   issues: ReviewIssue[];
+  static_results: TestRunResult[];
+  patches: PatchResult[];
+  test_results: TestRunResult[];
+  agent_events: AgentEvent[];
   report_markdown?: string | null;
   error?: string | null;
   created_at: string;
@@ -97,4 +130,3 @@ export interface ReviewTask {
   context_snippets?: ContextSnippet[];
   repo_snapshot?: RepoSnapshot | null;
 }
-

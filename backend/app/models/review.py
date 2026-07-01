@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any
+from uuid import uuid4
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -31,6 +33,17 @@ class IssueCategory(str, Enum):
     performance = "performance"
     security = "security"
     test = "test"
+
+
+class AgentActionName(str, Enum):
+    retrieve_context = "retrieve_context"
+    run_static_analysis = "run_static_analysis"
+    review_code = "review_code"
+    generate_patch = "generate_patch"
+    apply_patch = "apply_patch"
+    run_tests = "run_tests"
+    finish_report = "finish_report"
+    request_human = "request_human"
 
 
 class ReviewCreateRequest(BaseModel):
@@ -91,6 +104,7 @@ class ChangedFile(BaseModel):
 
 
 class ReviewIssue(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex)
     file_path: str
     line_no: int | None = None
     severity: Severity
@@ -99,6 +113,41 @@ class ReviewIssue(BaseModel):
     description: str
     suggestion: str
     confidence: float = Field(ge=0, le=1)
+    auto_fixable: bool = False
+
+
+class AgentAction(BaseModel):
+    action: AgentActionName
+    reason: str
+    target_issue_ids: list[str] = Field(default_factory=list)
+    tool_args: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentEvent(BaseModel):
+    action: AgentActionName | str
+    reason: str
+    status: str
+    message: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class TestRunResult(BaseModel):
+    tool: str
+    command: str
+    exit_code: int
+    stdout: str = ""
+    stderr: str = ""
+    passed: bool
+    duration: float = 0.0
+
+
+class PatchResult(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    issue_id: str | None = None
+    diff_content: str
+    status: str = "generated"
+    error: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class ContextSnippet(BaseModel):
@@ -128,6 +177,10 @@ class ReviewTask(BaseModel):
     issues: list[ReviewIssue] = Field(default_factory=list)
     context_snippets: list[ContextSnippet] = Field(default_factory=list)
     repo_snapshot: RepoSnapshot | None = None
+    static_results: list[TestRunResult] = Field(default_factory=list)
+    patches: list[PatchResult] = Field(default_factory=list)
+    test_results: list[TestRunResult] = Field(default_factory=list)
+    agent_events: list[AgentEvent] = Field(default_factory=list)
     report_markdown: str | None = None
     error: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

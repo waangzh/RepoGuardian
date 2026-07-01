@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from "vue";
 import { createReview, getReview, getReport, subscribeToEvents } from "./api/client";
+import AgentPanel from "./components/AgentPanel.vue";
 import ChangedFiles from "./components/ChangedFiles.vue";
 import ContextPanel from "./components/ContextPanel.vue";
 import IssueList from "./components/IssueList.vue";
@@ -159,6 +160,12 @@ onBeforeUnmount(clearPolling);
         </section>
 
         <ChangedFiles :files="task?.changed_files || []" />
+        <AgentPanel
+          :events="task?.agent_events || []"
+          :static-results="task?.static_results || []"
+          :patches="task?.patches || []"
+          :test-results="task?.test_results || []"
+        />
         <ContextPanel :snippets="task?.context_snippets || []" />
         <IssueList :issues="task?.issues || []" />
         <ReportPanel :markdown="report || task?.report_markdown" />

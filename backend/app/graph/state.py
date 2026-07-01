@@ -34,6 +34,7 @@ class ReviewState(TypedDict, total=False):
     static_results: dict[str, Any] | None
 
     # Review
+    next_action: dict[str, Any] | None
     review_issues: list[dict[str, Any]] | None
     fix_decision: list[dict[str, Any]] | None
 
@@ -51,6 +52,10 @@ class ReviewState(TypedDict, total=False):
     # Observability
     error: str | None
     step_progress: list[dict[str, Any]] | None
+    agent_events: list[dict[str, Any]] | None
+    agent_loop_count: int
+    max_agent_loops: int
+    invalid_action_count: int
 
     # Tool injection (for testing; not serialized to checkpoint)
     _github_tool: Any

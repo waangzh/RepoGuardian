@@ -1,4 +1,5 @@
 ﻿import asyncio
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -19,12 +20,23 @@ class FakeGitHubTool:
 
 
 class FakeGitTool:
-    def __init__(self, workspace: Path, diff_text: str) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        diff_text: str,
+        files: dict[str, str] | None = None,
+    ) -> None:
         self._workspace = workspace
         self._diff_text = diff_text
+        self._files = files or {}
 
     def clone_and_diff(self, pr: PullRequestInfo) -> tuple[Path, str]:
         self._workspace.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init"], cwd=self._workspace, check=True, capture_output=True)
+        for rel_path, content in self._files.items():
+            target = self._workspace / rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
         return self._workspace, self._diff_text
 
 
@@ -35,10 +47,10 @@ class FailingProvider(MockProvider):
 
 @pytest.mark.asyncio
 async def test_review_pipeline_with_mock_provider(tmp_path: Path) -> None:
-    diff_text = """diff --git a/app.py b/app.py
+    diff_text = """diff --git a/sample.py b/sample.py
 index 1111111..2222222 100644
---- a/app.py
-+++ b/app.py
+--- a/sample.py
++++ b/sample.py
 @@ -1,2 +1,3 @@
  def hello():
 -    return "hi"
@@ -55,7 +67,7 @@ index 1111111..2222222 100644
 
     assert completed is not None
     assert completed.status == TaskStatus.completed, completed.error
-    assert completed.changed_files[0].file_path == "app.py"
+    assert completed.changed_files[0].file_path == "sample.py"
     assert completed.issues
     assert completed.report_markdown is not None
 
@@ -77,10 +89,71 @@ async def test_review_pipeline_skips_llm_when_diff_is_empty(tmp_path: Path) -> N
     assert completed.report_markdown is not None
 
 
-def _build_service(tmp_path: Path, diff_text: str, provider: MockProvider) -> ReviewService:
+@pytest.mark.asyncio
+async def test_review_pipeline_generates_applies_patch_and_runs_tests(tmp_path: Path) -> None:
+    diff_text = """diff --git a/sample.py b/sample.py
+index 1111111..2222222 100644
+--- a/sample.py
++++ b/sample.py
+@@ -1,2 +1,3 @@
+ def hello():
+-    return "hi"
++    name = "RepoGuardian"
++    return f"hi {name}"
+"""
+    patch_text = """diff --git a/sample.py b/sample.py
+--- a/sample.py
++++ b/sample.py
+@@ -1,3 +1,3 @@
+ def hello():
+     name = "RepoGuardian"
+-    return f"hi {name}"
++    return f"hello {name}"
+"""
+    provider = MockProvider(
+        action_sequence=[
+            {"action": "review_code", "reason": "先审查 diff"},
+            {"action": "generate_patch", "reason": "生成最小修复"},
+            {"action": "apply_patch", "reason": "应用临时 patch"},
+            {"action": "run_tests", "reason": "验证 patch"},
+            {"action": "finish_report", "reason": "输出报告"},
+        ],
+        patch_sequence=[{"diff_content": patch_text, "status": "generated"}],
+    )
+    service = _build_service(
+        tmp_path,
+        diff_text,
+        provider,
+        files={
+            "sample.py": 'def hello():\n    name = "RepoGuardian"\n    return f"hi {name}"\n',
+            "test_sample.py": 'from sample import hello\n\n\ndef test_hello():\n    assert hello() == "hello RepoGuardian"\n',
+        },
+    )
+
+    task = service.create_task(
+        ReviewCreateRequest(pr_url="https://github.com/local/sample/pull/1", model=None)
+    )
+    await _wait_for_task(service, task.id)
+    completed = service.get_task(task.id)
+
+    assert completed is not None
+    assert completed.status == TaskStatus.completed, completed.error
+    assert completed.patches
+    assert completed.patches[-1].status == "applied"
+    assert completed.test_results
+    assert completed.test_results[-1].passed is True
+    assert any(event.action == "run_tests" for event in completed.agent_events)
+
+
+def _build_service(
+    tmp_path: Path,
+    diff_text: str,
+    provider: MockProvider,
+    files: dict[str, str] | None = None,
+) -> ReviewService:
     return ReviewService(
         github_tool=FakeGitHubTool(_build_pr()),
-        git_tool=FakeGitTool(tmp_path / "workspace", diff_text),
+        git_tool=FakeGitTool(tmp_path / "workspace", diff_text, files),
         diff_parser=DiffParser(),
         provider=provider,
         report_service=ReportService(),

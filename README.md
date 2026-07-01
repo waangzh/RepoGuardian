@@ -1,5 +1,29 @@
 # RepoGuardian
 
+## 当前 Agent 架构
+
+RepoGuardian 当前已从固定线性 pipeline 改造成“确定性准备阶段 + agentic 审查/修复子图”：
+
+```text
+intake -> repo_prepare -> diff_parse -> repo_index -> agent_decide
+                                                   ^              |
+                                                   |              v
+ context_retrieve <- retrieve_context        static_analysis <- run_static_analysis
+ review          <- review_code              patch           <- generate_patch / apply_patch
+ test            <- run_tests                report          <- finish_report
+```
+
+`agent_decide` 由 LLM Provider 产生结构化 `AgentAction` JSON，LangGraph 通过 `add_conditional_edges()` 根据 action 路由到工具节点。工具节点执行后把 observation 写回 state，再回到 `agent_decide`，形成可观察、可重试的反馈循环。
+
+已接入能力：
+
+- 结构化 Action JSON：`retrieve_context`、`run_static_analysis`、`review_code`、`generate_patch`、`apply_patch`、`run_tests`、`finish_report`、`request_human`
+- 受控工具执行：上下文检索、静态分析、patch 生成/临时应用、测试执行
+- 安全边界：patch 只应用到临时 clone 目录，不写回真实仓库；命令执行只允许白名单命令
+- 前端展示：Agent 决策日志、静态分析结果、patch、测试结果、Markdown 报告
+
+详细设计见 [docs/agentic-architecture.md](docs/agentic-architecture.md)。
+
 RepoGuardian 是一个面向 GitHub Pull Request 的智能代码审查 Agent 系统。它接收 PR URL，获取 PR 元数据，克隆仓库并生成 diff，通过 LangGraph 编排审查流水线，结合仓库索引和上下文检索，生成结构化问题列表与 Markdown 审查报告。
 
 默认使用 `mock` Provider，可以在没有 LLM API Key 的情况下跑通完整流程，适合本地开发和演示。

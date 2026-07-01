@@ -139,7 +139,7 @@ def test_build_provider_supports_deepseek_alias() -> None:
 
 def test_deepseek_provider_disables_thinking() -> None:
     provider = build_provider("deepseek", "key", "https://api.deepseek.com", "deepseek-v4-pro")
-    payload = provider._build_request_payload(_sample_pr(), [], "", None)
+    payload = provider._build_request_payload("prompt", None, "system", 100)
 
     assert payload["thinking"] == {"type": "disabled"}
     assert payload["response_format"] == {"type": "json_object"}
@@ -152,14 +152,14 @@ def test_deepseek_base_url_disables_thinking_for_openai_compatible_provider() ->
         "https://api.deepseek.com",
         "deepseek-v4-pro",
     )
-    payload = provider._build_request_payload(_sample_pr(), [], "", None)
+    payload = provider._build_request_payload("prompt", None, "system", 100)
 
     assert payload["thinking"] == {"type": "disabled"}
 
 
 def test_openai_provider_does_not_send_thinking_parameter() -> None:
     provider = build_provider("openai", "key", "https://api.openai.com/v1", "gpt-4.1-mini")
-    payload = provider._build_request_payload(_sample_pr(), [], "", None)
+    payload = provider._build_request_payload("prompt", None, "system", 100)
 
     assert "thinking" not in payload
 
@@ -173,6 +173,16 @@ def test_build_provider_supports_mock() -> None:
     provider = build_provider("mock", None, "https://example.com", "model")
 
     assert isinstance(provider, MockProvider)
+
+
+@pytest.mark.asyncio
+async def test_mock_provider_returns_scripted_agent_action() -> None:
+    provider = MockProvider(action_sequence=[{"action": "run_static_analysis", "reason": "先跑工具"}])
+
+    action = await provider.decide({}, None)
+
+    assert action.action == "run_static_analysis"
+    assert action.reason == "先跑工具"
 
 
 def test_build_provider_rejects_unknown_provider() -> None:
