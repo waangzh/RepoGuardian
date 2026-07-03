@@ -1,3 +1,5 @@
+"""测试运行工具 —— 在临时仓库中运行白名单测试命令（默认 pytest -q）。"""
+
 from typing import Any
 
 from app.tools.base import BaseTool
@@ -9,6 +11,7 @@ class TestRunnerTool(BaseTool):
     description = "Run allowlisted tests in the temporary repository."
 
     async def execute(self, **kwargs: Any) -> dict[str, Any]:
+        """执行测试，返回单条 TestRunResult。"""
         repo_path = kwargs["repo_path"]
         command = kwargs.get("command")
         result = await run_command(

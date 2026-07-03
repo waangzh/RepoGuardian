@@ -1,3 +1,9 @@
+"""状态重建 —— 将 LangGraph 扁平字典状态恢复为 Pydantic 模型。
+
+图节点间传递的 ReviewState 是 dict（TypedDict），所有嵌套模型被序列化为 dict。
+此模块提供 rebuild_task_from_state() 将最终 state 逆向重建为 ReviewTask 聚合根。
+"""
+
 from datetime import datetime, timezone
 
 from app.graph.state import ReviewState
@@ -18,6 +24,7 @@ from app.models.review import (
 
 
 def rebuild_task_from_state(state: ReviewState) -> ReviewTask:
+    """从图执行结束后的 ReviewState 重建完整的 ReviewTask 聚合根。"""
     return ReviewTask(
         id=state.get("task_id", ""),
         status=state.get("status", "completed"),
@@ -40,6 +47,7 @@ def rebuild_task_from_state(state: ReviewState) -> ReviewTask:
 
 
 def rebuild_pr_info(data: dict) -> PullRequestInfo:
+    """从 dict 重建 PullRequestInfo。"""
     base = data.get("base", {})
     head = data.get("head", {})
     return PullRequestInfo(
@@ -63,6 +71,7 @@ def rebuild_pr_info(data: dict) -> PullRequestInfo:
 
 
 def rebuild_changed_files(data: list[dict]) -> list[ChangedFile]:
+    """从 dict 列表重建 ChangedFile（含嵌套的 DiffHunk 和 ChangedLine）。"""
     result: list[ChangedFile] = []
     for file_data in data:
         hunks = []
@@ -94,6 +103,7 @@ def rebuild_changed_files(data: list[dict]) -> list[ChangedFile]:
 
 
 def rebuild_context_snippets(data: list[dict]) -> list[ContextSnippet]:
+    """从 dict 列表重建 ContextSnippet。"""
     return [
         ContextSnippet(
             file=item.get("file", ""),
@@ -108,6 +118,7 @@ def rebuild_context_snippets(data: list[dict]) -> list[ContextSnippet]:
 
 
 def rebuild_repo_snapshot(data: dict) -> RepoSnapshot | None:
+    """从 dict 重建 RepoSnapshot。"""
     if not data:
         return None
     return RepoSnapshot(
@@ -119,16 +130,20 @@ def rebuild_repo_snapshot(data: dict) -> RepoSnapshot | None:
 
 
 def rebuild_issues(data: list[dict]) -> list[ReviewIssue]:
+    """从 dict 列表重建 ReviewIssue（使用 Pydantic model_validate）。"""
     return [ReviewIssue.model_validate(item) for item in data]
 
 
 def rebuild_test_results(data: list[dict]) -> list[TestRunResult]:
+    """从 dict 列表重建 TestRunResult。"""
     return [TestRunResult.model_validate(item) for item in data]
 
 
 def rebuild_patches(data: list[dict]) -> list[PatchResult]:
+    """从 dict 列表重建 PatchResult。"""
     return [PatchResult.model_validate(item) for item in data]
 
 
 def rebuild_agent_events(data: list[dict]) -> list[AgentEvent]:
+    """从 dict 列表重建 AgentEvent。"""
     return [AgentEvent.model_validate(item) for item in data]

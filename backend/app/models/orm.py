@@ -1,3 +1,10 @@
+"""SQLAlchemy ORM 模型 —— 数据库表映射。
+
+当前版本未在审查管道中使用，保留供将来多用户持久化场景。
+表关系：ReviewTaskOrm 1:1 RepoSnapshotOrm, 1:N ChangedFileOrm / CodeSymbolOrm
+        / ReviewIssueOrm / PatchOrm / TestRunOrm
+"""
+
 import datetime
 
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
@@ -7,6 +14,7 @@ from app.core.database import Base
 
 
 class ReviewTaskOrm(Base):
+    """审查任务表。"""
     __tablename__ = "review_tasks"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
@@ -48,6 +56,7 @@ class ReviewTaskOrm(Base):
 
 
 class RepoSnapshotOrm(Base):
+    """仓库快照表（1:1 关联 ReviewTaskOrm）。"""
     __tablename__ = "repo_snapshots"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -63,6 +72,7 @@ class RepoSnapshotOrm(Base):
 
 
 class ChangedFileOrm(Base):
+    """变更文件表（N:1 关联 ReviewTaskOrm）。"""
     __tablename__ = "changed_files"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -71,19 +81,20 @@ class ChangedFileOrm(Base):
     change_type: Mapped[str] = mapped_column(String(16))
     additions: Mapped[int] = mapped_column(Integer, default=0)
     deletions: Mapped[int] = mapped_column(Integer, default=0)
-    hunks_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hunks_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # DiffHunk 序列化 JSON
 
     task: Mapped[ReviewTaskOrm] = relationship(back_populates="changed_files")
 
 
 class CodeSymbolOrm(Base):
+    """代码符号表（函数/类/方法）。"""
     __tablename__ = "code_symbols"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     task_id: Mapped[str] = mapped_column(String(32), ForeignKey("review_tasks.id"), index=True)
     file_path: Mapped[str] = mapped_column(String(512))
     symbol_name: Mapped[str] = mapped_column(String(256))
-    symbol_type: Mapped[str] = mapped_column(String(32))
+    symbol_type: Mapped[str] = mapped_column(String(32))  # function / class / method
     start_line: Mapped[int] = mapped_column(Integer)
     end_line: Mapped[int] = mapped_column(Integer)
     signature: Mapped[str | None] = mapped_column(String(512), nullable=True)
@@ -93,6 +104,7 @@ class CodeSymbolOrm(Base):
 
 
 class ReviewIssueOrm(Base):
+    """审查问题表。"""
     __tablename__ = "review_issues"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -112,13 +124,14 @@ class ReviewIssueOrm(Base):
 
 
 class PatchOrm(Base):
+    """自动修复 patch 表。"""
     __tablename__ = "patches"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     task_id: Mapped[str] = mapped_column(String(32), ForeignKey("review_tasks.id"), index=True)
     issue_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("review_issues.id"), nullable=True)
     diff_content: Mapped[str] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(String(32), default="generated")
+    status: Mapped[str] = mapped_column(String(32), default="generated")  # generated / applied / apply_failed
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc)
     )
@@ -129,6 +142,7 @@ class PatchOrm(Base):
 
 
 class TestRunOrm(Base):
+    """测试/静态分析运行记录表。"""
     __tablename__ = "test_runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

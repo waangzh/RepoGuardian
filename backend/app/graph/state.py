@@ -1,63 +1,71 @@
+"""审查状态定义 —— LangGraph StateGraph 中所有节点共享的 TypedDict。
+
+字段按职责分组：
+    输入 / PR 元数据 / 仓库 & Diff / 索引 / 上下文 / 静态分析 /
+    审查 & 修复 / 测试 & 输出 / 可观测性 / 工具注入
+"""
+
 from typing import Any, TypedDict
 
 
 class ReviewState(TypedDict, total=False):
+    # ---- 基础标识 ----
     task_id: str
-    mode: str
-    status: str
+    mode: str          # 审查模式，当前固定 "pr_review"
+    status: str         # pending → running → completed / failed
 
-    # Input
+    # ---- 输入 ----
     pr_url: str | None
-    model: str | None
+    model: str | None   # 可选模型覆盖
 
-    # PR metadata (serialized PullRequestInfo)
+    # ---- PR 元数据（PullRequestInfo 序列化）----
     pr_info: dict[str, Any] | None
 
-    # Repository
-    repo_path: str | None
+    # ---- 仓库 ----
+    repo_path: str | None    # 克隆到本地的临时路径
     base_sha: str | None
     head_sha: str | None
 
-    # Diff
-    diff_text: str | None
-    changed_files: list[dict[str, Any]] | None
+    # ---- Diff ----
+    diff_text: str | None                          # 原始 unified diff
+    changed_files: list[dict[str, Any]] | None     # DiffParser 解析后的 ChangedFile 列表
 
-    # Repo index
-    file_index: list[dict[str, Any]] | None
-    symbol_index: list[dict[str, Any]] | None
-    project_meta: dict[str, Any] | None
+    # ---- 仓库索引 ----
+    file_index: list[dict[str, Any]] | None     # [{path, language, size, imports}, ...]
+    symbol_index: list[dict[str, Any]] | None   # [{file, symbol, type, lines, signature, calls}, ...]
+    project_meta: dict[str, Any] | None         # {language, framework, test_dirs, ...}
 
-    # Context
-    context_snippets: list[dict[str, Any]] | None
+    # ---- 上下文 ----
+    context_snippets: list[dict[str, Any]] | None  # CodeSearch 返回的相关代码片段
 
-    # Static analysis (Phase 3)
+    # ---- 静态分析 ----
     static_results: dict[str, Any] | None
 
-    # Review
-    next_action: dict[str, Any] | None
-    review_issues: list[dict[str, Any]] | None
-    fix_decision: list[dict[str, Any]] | None
+    # ---- 审查 ----
+    next_action: dict[str, Any] | None             # 当前 AgentAction（决策节点的输出）
+    review_issues: list[dict[str, Any]] | None     # LLM 审查发现的问题列表
+    fix_decision: list[dict[str, Any]] | None      # 自动修复决策
 
-    # Auto-fix (Phase 4)
-    patches: list[dict[str, Any]] | None
-    fix_iteration: int
-    max_fix_iterations: int
+    # ---- 自动修复 ----
+    patches: list[dict[str, Any]] | None  # PatchResult 列表
+    fix_iteration: int                    # 当前修复重试次数
+    max_fix_iterations: int               # 最大修复重试次数（默认 3）
 
-    # Test results (Phase 4)
-    test_results: list[dict[str, Any]] | None
+    # ---- 测试结果 ----
+    test_results: list[dict[str, Any]] | None  # TestRunResult 列表
 
-    # Output
-    report_markdown: str | None
+    # ---- 输出 ----
+    report_markdown: str | None  # 最终 Markdown 报告
 
-    # Observability
+    # ---- 可观测性 ----
     error: str | None
-    step_progress: list[dict[str, Any]] | None
-    agent_events: list[dict[str, Any]] | None
-    agent_loop_count: int
-    max_agent_loops: int
-    invalid_action_count: int
+    step_progress: list[dict[str, Any]] | None    # 图步骤进度 [{node, status, message, timestamp}]
+    agent_events: list[dict[str, Any]] | None     # Agent 事件日志 [{action, reason, status, ...}]
+    agent_loop_count: int                         # 当前 agent 循环计数
+    max_agent_loops: int                          # 最大循环次数（默认 6）
+    invalid_action_count: int                     # 连续无效 action 计数
 
-    # Tool injection (for testing; not serialized to checkpoint)
+    # ---- 工具注入（用于测试；不进入 checkpoint）----
     _github_tool: Any
     _git_tool: Any
     _diff_parser: Any

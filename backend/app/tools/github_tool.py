@@ -1,3 +1,5 @@
+"""GitHub API 工具 —— 解析 PR URL 并获取 PR 元数据。"""
+
 import re
 
 import httpx
@@ -11,10 +13,12 @@ PR_URL_PATTERN = re.compile(
 
 
 class GitHubToolError(RuntimeError):
+    """GitHub API 请求失败时抛出。"""
     pass
 
 
 def parse_pr_url(pr_url: str) -> tuple[str, str, int]:
+    """从 GitHub PR URL 中提取 (owner, repo, number)。"""
     match = PR_URL_PATTERN.match(pr_url)
     if not match:
         raise ValueError("请输入合法的 GitHub PR URL，例如 https://github.com/owner/repo/pull/123")
@@ -22,10 +26,13 @@ def parse_pr_url(pr_url: str) -> tuple[str, str, int]:
 
 
 class GitHubTool:
+    """调用 GitHub REST API 获取 PR 详细信息。"""
+
     def __init__(self, token: str | None = None) -> None:
         self._token = token
 
     async def fetch_pr(self, pr_url: str) -> PullRequestInfo:
+        """获取 PR 的完整元数据（base/head refs, sha, clone_url 等）。"""
         owner, repo, number = parse_pr_url(pr_url)
         headers = {
             "Accept": "application/vnd.github+json",

@@ -1,3 +1,13 @@
+"""仓库索引器 —— 扫描仓库构建三级索引。
+
+产出：
+    1. file_index   — [{path, language, size, imports}, ...]
+    2. symbol_index — 函数/类/方法定义，tree-sitter 解析含签名、调用关系
+    3. project_meta — 语言、框架、测试目录、入口点
+
+注意：symbol_index 依赖 tree-sitter + tree-sitter-python，仅在解析 .py 文件时可用。
+"""
+
 import json
 import os
 import re
@@ -6,6 +16,7 @@ from typing import Any
 
 from app.tools.base import BaseTool
 
+# 扫描时跳过的目录和文件
 _IGNORED_DIRS = frozenset({
     ".git", "venv", "node_modules", "dist", "build",
     "__pycache__", ".pytest_cache", ".coverage", ".mypy_cache",
@@ -14,11 +25,13 @@ _IGNORED_DIRS = frozenset({
 
 _IGNORED_FILES = frozenset({".DS_Store", "Thumbs.db"})
 
+# 项目配置文件（用于 detect_project_meta）
 _PY_CONFIG_FILES = {
     "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt",
     "Makefile", "tox.ini", "Pipfile",
 }
 
+# 框架检测：import 关键字 → 框架名
 _FRAMEWORK_HINTS = {
     "fastapi": {"fastapi", "starlette"},
     "flask": {"flask"},
@@ -28,10 +41,12 @@ _FRAMEWORK_HINTS = {
 
 
 class RepoIndexer(BaseTool):
+    """仓库结构扫描器，构建文件级和符号级索引。"""
     name = "repo_indexer"
     description = "Scan repository structure and build file-level and symbol-level index."
 
     async def execute(self, **kwargs: Any) -> dict[str, Any]:
+        """执行完整扫描，返回三层索引。"""
         repo_path = kwargs["repo_path"]
         file_index = await self.build_file_index(repo_path)
         symbol_index = await self.build_symbol_index(repo_path)
@@ -43,10 +58,12 @@ class RepoIndexer(BaseTool):
         }
 
     async def build_file_index(self, repo_path: str) -> list[dict[str, Any]]:
+        """遍历仓库目录，构建文件级索引（路径、语言、大小、导入）。"""
         index: list[dict[str, Any]] = []
         root = Path(repo_path)
         for dirpath, dirnames, filenames in os.walk(root):
             rel_dir = Path(dirpath).relative_to(root)
+            # 跳过忽略目录
             if rel_dir.parts and rel_dir.parts[0] in _IGNORED_DIRS:
                 dirnames[:] = []
                 continue
@@ -72,6 +89,7 @@ class RepoIndexer(BaseTool):
         return sorted(index, key=lambda f: f["path"])
 
     async def build_symbol_index(self, repo_path: str) -> list[dict[str, Any]]:
+        """使用 tree-sitter 解析 Python 文件，提取函数/类/方法符号。"""
         index: list[dict[str, Any]] = []
         try:
             from tree_sitter import Language, Parser
@@ -97,6 +115,7 @@ class RepoIndexer(BaseTool):
     async def detect_project_meta(
         self, repo_path: str, file_index: list[dict[str, Any]] | None = None
     ) -> dict[str, Any]:
+        """检测项目元信息：语言、框架、测试目录、入口点、配置文件。"""
         if file_index is None:
             file_index = await self.build_file_index(repo_path)
         language = "python" if any(
@@ -127,6 +146,7 @@ class RepoIndexer(BaseTool):
 
 
 def _detect_language(filename: str) -> str:
+    """根据文件扩展名检测编程语言。"""
     ext = Path(filename).suffix.lower()
     return {
         ".py": "python",
@@ -141,6 +161,7 @@ def _detect_language(filename: str) -> str:
 
 
 def _extract_imports(file_path: Path) -> list[str]:
+    """提取 Python 文件的顶层模块导入名。"""
     try:
         content = file_path.read_text(encoding="utf-8", errors="ignore")
     except Exception:
@@ -155,6 +176,7 @@ def _extract_imports(file_path: Path) -> list[str]:
 
 
 def _detect_framework(repo_path: str) -> str | None:
+    """通过扫描所有 .py 文件的 import 语句检测使用的 Web 框架。"""
     all_imports: set[str] = set()
     root = Path(repo_path)
     for dirpath, _, filenames in os.walk(root):
@@ -173,6 +195,7 @@ def _detect_framework(repo_path: str) -> str | None:
 
 
 def _find_test_dirs(repo_path: str) -> list[str]:
+    """检测仓库根目录下是否存在测试目录。"""
     root = Path(repo_path)
     test_dirs: list[str] = []
     for candidate in ["tests", "test", "testing"]:
@@ -182,6 +205,7 @@ def _find_test_dirs(repo_path: str) -> list[str]:
 
 
 def _parse_python_symbols(file_path: str, rel_path: str) -> list[dict[str, Any]]:
+    """使用 tree-sitter 解析单个 Python 文件的符号（函数/类/方法）。"""
     try:
         import tree_sitter_python as tspython
         from tree_sitter import Language, Parser
@@ -240,7 +264,7 @@ def _parse_python_symbols(file_path: str, rel_path: str) -> list[dict[str, Any]]
                 "docstring": _extract_docstring(node, source_lines),
                 "calls": [],
             })
-            # methods
+            # 递归提取类内方法
             body = node.child_by_field_name("body")
             if body is not None:
                 for child in body.children:
@@ -269,16 +293,19 @@ def _parse_python_symbols(file_path: str, rel_path: str) -> list[dict[str, Any]]
 
 
 def _walk(node):
+    """递归遍历 AST 节点。"""
     yield node
     for child in node.children:
         yield from _walk(child)
 
 
 def _node_text(node, source: bytes) -> bytes:
+    """提取节点对应的源代码字节。"""
     return source[node.start_byte:node.end_byte]
 
 
 def _extract_calls(node, source: bytes) -> list[str]:
+    """从函数/方法节点中提取所有函数调用名。"""
     calls: list[str] = []
     for child in node.children:
         if child.type == "call":
@@ -292,6 +319,7 @@ def _extract_calls(node, source: bytes) -> list[str]:
 
 
 def _extract_docstring(node, source_lines: list[str]) -> str | None:
+    """提取函数/类的 docstring（首个字符串表达式语句）。"""
     body = node.child_by_field_name("body")
     if body is None or not body.children:
         return None

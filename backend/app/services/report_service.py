@@ -1,10 +1,15 @@
+"""Markdown 报告生成器 —— 将 ReviewTask 聚合根渲染为 9 节结构的审查报告。"""
+
 from collections import Counter
 
 from app.models.review import ReviewTask
 
 
 class ReportService:
+    """生成 Markdown 格式的代码审查报告，包含 PR 概览、变更、问题、修复、测试等章节。"""
+
     def generate(self, task: ReviewTask) -> str:
+        """从 ReviewTask 渲染完整 Markdown 报告（9 个章节）。"""
         lines: list[str] = ["# RepoGuardian 代码审查报告", ""]
         _append_pr_summary(lines, task)
         _append_change_summary(lines, task)
@@ -18,6 +23,7 @@ class ReportService:
 
 
 def _append_pr_summary(lines: list[str], task: ReviewTask) -> None:
+    """1. PR 概览：仓库、编号、标题、链接、base/head。"""
     if not task.pr:
         return
     pr = task.pr
@@ -36,6 +42,7 @@ def _append_pr_summary(lines: list[str], task: ReviewTask) -> None:
 
 
 def _append_change_summary(lines: list[str], task: ReviewTask) -> None:
+    """2. 变更概览：文件数、增减行数表格。"""
     total_additions = sum(file.additions for file in task.changed_files)
     total_deletions = sum(file.deletions for file in task.changed_files)
     lines.extend([
@@ -54,6 +61,7 @@ def _append_change_summary(lines: list[str], task: ReviewTask) -> None:
 
 
 def _append_issue_summary(lines: list[str], task: ReviewTask) -> None:
+    """3-4. 审查结论 + 详细问题列表。"""
     lines.extend(["## 3. 审查结论", ""])
     if task.issues:
         severity_counts = Counter(issue.severity.value for issue in task.issues)
@@ -96,6 +104,7 @@ def _append_issue_summary(lines: list[str], task: ReviewTask) -> None:
 
 
 def _append_static_results(lines: list[str], task: ReviewTask) -> None:
+    """5. 静态分析结果表格。"""
     lines.extend(["## 5. 静态分析结果", ""])
     if not task.static_results:
         lines.extend(["未运行。", ""])
@@ -110,6 +119,7 @@ def _append_static_results(lines: list[str], task: ReviewTask) -> None:
 
 
 def _append_patch_results(lines: list[str], task: ReviewTask) -> None:
+    """6. 自动修复结果表格。"""
     lines.extend(["## 6. 自动修复结果", ""])
     if not task.patches:
         lines.extend(["未生成 patch。", ""])
@@ -123,6 +133,7 @@ def _append_patch_results(lines: list[str], task: ReviewTask) -> None:
 
 
 def _append_test_results(lines: list[str], task: ReviewTask) -> None:
+    """7. 测试结果表格。"""
     lines.extend(["## 7. 测试结果", ""])
     if not task.test_results:
         lines.extend(["未运行。", ""])
@@ -137,6 +148,7 @@ def _append_test_results(lines: list[str], task: ReviewTask) -> None:
 
 
 def _append_agent_events(lines: list[str], task: ReviewTask) -> None:
+    """8. Agent 决策日志表格。"""
     lines.extend(["## 8. Agent 决策日志", ""])
     if not task.agent_events:
         lines.extend(["无。", ""])
@@ -148,6 +160,7 @@ def _append_agent_events(lines: list[str], task: ReviewTask) -> None:
 
 
 def _append_task_info(lines: list[str], task: ReviewTask) -> None:
+    """9. 任务元信息。"""
     lines.extend([
         "## 9. 任务信息",
         "",

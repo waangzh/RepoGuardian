@@ -1,3 +1,5 @@
+"""Diff 解析器 —— 将 unified diff 文本解析为结构化 ChangedFile 列表。"""
+
 from io import StringIO
 
 from unidiff import PatchSet
@@ -6,7 +8,10 @@ from app.models.review import ChangedFile, ChangedLine, DiffHunk
 
 
 class DiffParser:
+    """使用 unidiff 库解析 git diff 输出，按文件/hunk/行三层组织。"""
+
     def parse(self, diff_text: str) -> list[ChangedFile]:
+        """解析 unified diff 文本，返回 ChangedFile 列表。"""
         patch = PatchSet(StringIO(diff_text))
         files: list[ChangedFile] = []
 

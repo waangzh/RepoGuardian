@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 
 from app.agents.review_agent import ReviewAgent
@@ -7,8 +8,15 @@ from app.graph.nodes._events import append_event, append_step
 from app.graph.state import ReviewState
 from app.models.review import AgentAction, ChangedFile, ChangedLine, PullRequestInfo
 
+logger = logging.getLogger("RepoGuardian.Node")
+
 
 async def review_node(state: ReviewState) -> ReviewState:
+    """审查节点：调用 LLM 对变更文件进行结构化代码审查。
+
+    将 diff + 上下文片段 + 静态分析结果拼接为"增强 diff"送入 LLM，
+    产出结构化的 ReviewIssue 列表（严重性、类别、修复建议等）。
+    """
     action = AgentAction.model_validate(state.get("next_action") or {
         "action": "review_code",
         "reason": "执行代码审查",
@@ -16,11 +24,14 @@ async def review_node(state: ReviewState) -> ReviewState:
     changed_files = _rebuild_changed_files(state.get("changed_files") or [])
     if not changed_files:
         message = "无变更文件，跳过 LLM 审查"
+        logger.warning("✍️ [审查] 跳过: 无变更文件")
         return ReviewState(
             review_issues=[],
             agent_events=append_event(state, action.action, action.reason, "completed", message),
             step_progress=append_step(state, "review", "completed", message),
         )
+
+    logger.info("✍️ [审查] 开始审查 %d 个变更文件...", len(changed_files))
 
     provider: Any = state.get("_provider") or build_provider(
         settings.repoguardian_provider,
@@ -31,9 +42,16 @@ async def review_node(state: ReviewState) -> ReviewState:
     agent = ReviewAgent(provider)
     pr_info = _rebuild_pr_info(state.get("pr_info") or {})
     enhanced_diff = _build_enhanced_diff(state)
+    logger.debug("✍️ [审查] 增强 diff 总长度: %d 字符", len(enhanced_diff))
+
     issues = await agent.review(pr_info, changed_files, enhanced_diff, state.get("model"))
     issues_dicts = [issue.model_dump(mode="json") for issue in issues]
+    # 按严重性统计
+    severity_counts: dict[str, int] = {}
+    for issue in issues:
+        severity_counts[issue.severity] = severity_counts.get(issue.severity, 0) + 1
     message = f"发现 {len(issues_dicts)} 个问题"
+    logger.info("✍️ [审查] 完成: %d 个问题（严重性分布: %s）", len(issues_dicts), severity_counts)
     return ReviewState(
         review_issues=issues_dicts,
         agent_events=append_event(state, action.action, action.reason, "completed", message),
@@ -42,6 +60,7 @@ async def review_node(state: ReviewState) -> ReviewState:
 
 
 def _build_enhanced_diff(state: ReviewState) -> str:
+    """拼接增强 diff：上下文片段 + 静态分析结果 + 原始 diff。"""
     sections: list[str] = []
     context_snippets = state.get("context_snippets") or []
     if context_snippets:

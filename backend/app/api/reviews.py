@@ -1,4 +1,13 @@
-﻿import asyncio
+﻿"""审查 API 路由 —— 任务创建、查询、SSE 进度推送。
+
+端点：
+    POST   /api/reviews             创建审查任务（异步启动图执行）
+    GET    /api/reviews/{task_id}   获取任务完整状态
+    GET    /api/reviews/{task_id}/report  获取 Markdown 报告
+    GET    /api/reviews/{task_id}/stream   SSE 实时进度流
+"""
+
+import asyncio
 import json
 from functools import lru_cache
 
@@ -19,6 +28,7 @@ router = APIRouter(prefix="/reviews", tags=["reviews"])
 
 @lru_cache
 def get_review_service() -> ReviewService:
+    """获取全局单例 ReviewService（惰性初始化，含所有依赖注入）。"""
     provider = build_provider(
         settings.repoguardian_provider,
         settings.openai_api_key,
@@ -36,12 +46,14 @@ def get_review_service() -> ReviewService:
 
 @router.post("", response_model=ReviewCreateResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_review(request: ReviewCreateRequest) -> ReviewCreateResponse:
+    """创建审查任务，后台启动 LangGraph 执行，立即返回 202。"""
     task = get_review_service().create_task(request)
     return ReviewCreateResponse(task_id=task.id, status=task.status)
 
 
 @router.get("/{task_id}", response_model=ReviewTask)
 async def get_review(task_id: str) -> ReviewTask:
+    """按 ID 查询完整任务状态（包含审查问题、patch、测试结果等）。"""
     task = get_review_service().get_task(task_id)
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
@@ -50,6 +62,7 @@ async def get_review(task_id: str) -> ReviewTask:
 
 @router.get("/{task_id}/report")
 async def get_report(task_id: str) -> Response:
+    """获取 Markdown 格式的审查报告。"""
     task = get_review_service().get_task(task_id)
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
@@ -60,6 +73,7 @@ async def get_report(task_id: str) -> Response:
 
 @router.get("/{task_id}/stream")
 async def stream_review(task_id: str, request: Request) -> EventSourceResponse:
+    """SSE 端点：每秒轮询任务状态，推送步骤进度事件，任务结束时发送 done。"""
     service = get_review_service()
 
     async def event_generator():
@@ -72,7 +86,7 @@ async def stream_review(task_id: str, request: Request) -> EventSourceResponse:
                 yield {"event": "error", "data": json.dumps({"message": "Task not found"})}
                 break
 
-            # Emit progress for new steps
+            # 推送新完成的步骤
             steps = [s.model_dump() for s in task.steps]
             current_count = len([s for s in steps if s["status"] == "completed"])
             if current_count > last_step_count:

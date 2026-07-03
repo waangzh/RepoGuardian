@@ -1,4 +1,6 @@
-﻿import subprocess
+﻿"""Git 操作工具 —— 克隆仓库、生成 diff、读取文件内容。"""
+
+import subprocess
 from pathlib import Path
 from uuid import uuid4
 
@@ -6,10 +8,17 @@ from app.models.review import PullRequestInfo
 
 
 class GitToolError(RuntimeError):
+    """Git 命令执行失败时抛出。"""
     pass
 
 
 class GitTool:
+    """在临时目录中执行 Git 操作：浅克隆、fetch refs、生成 unified diff。
+
+    克隆到 settings.repoguardian_workdir 下随机命名的子目录中，
+    避免并发任务冲突。
+    """
+
     def __init__(self, workdir: Path | None = None, git_executable: str = "git") -> None:
         from app.core.config import settings
         self._workdir = workdir or settings.repoguardian_workdir
@@ -18,6 +27,7 @@ class GitTool:
     def get_file_content(
         self, repo_path: str | Path, file_path: str, start_line: int = 1, end_line: int | None = None
     ) -> str:
+        """从检出的仓库中直接读取指定文件的指定行范围（非 git 命令，直接文件 I/O）。"""
         full_path = Path(repo_path) / file_path
         try:
             with open(full_path, "r", encoding="utf-8", errors="replace") as f:
@@ -31,20 +41,29 @@ class GitTool:
         return "".join(lines[start_idx:end_idx])
 
     def clone_and_diff(self, pr: PullRequestInfo) -> tuple[Path, str]:
+        """核心操作：clone → fetch base/head refs → 生成 unified diff → checkout head。
+
+        返回 (仓库临时路径, diff 文本)。
+        """
         self._workdir.mkdir(parents=True, exist_ok=True)
         repo_dir = self._workdir / f"{pr.owner}-{pr.repo}-{pr.number}-{uuid4().hex[:8]}"
 
+        # 浅克隆（不带 checkout，节省时间）
         self._run([self._git, "clone", "--no-checkout", pr.clone_url, str(repo_dir)])
+        # 分别 fetch base 和 head 的 SHA
         self._fetch_ref(repo_dir, "origin", pr.base.sha, pr.base.ref)
         self._fetch_ref(repo_dir, pr.head.repo_clone_url, pr.head.sha, pr.head.ref)
+        # 生成 unified diff（上下文 80 行，足够 LLM 理解）
         diff = self._run(
             [self._git, "-C", str(repo_dir), "diff", "--unified=80", pr.base.sha, "FETCH_HEAD"]
         )
+        # 检出 head 到工作树（后续静态分析/测试需要）
         self._run([self._git, "-C", str(repo_dir), "checkout", "--detach", "FETCH_HEAD"])
         return repo_dir, diff
 
     @staticmethod
     def _run(command: list[str]) -> str:
+        """同步执行 git 命令，失败时抛出 GitToolError。"""
         completed = subprocess.run(
             command,
             check=False,
@@ -59,6 +78,7 @@ class GitTool:
         return completed.stdout
 
     def _fetch_ref(self, repo_dir: Path, remote: str, sha: str, ref: str) -> None:
+        """拉取指定 SHA，失败时回退到 ref 名称重试。"""
         command = [self._git, "-C", str(repo_dir), "fetch", remote, sha]
         completed = subprocess.run(
             command,
@@ -71,6 +91,7 @@ class GitTool:
         if completed.returncode == 0:
             return
 
+        # 回退：按 ref 名称 fetch（某些 fork PR 的 SHA 不在 origin 中）
         fallback = [self._git, "-C", str(repo_dir), "fetch", remote, ref]
         fallback_completed = subprocess.run(
             fallback,
