@@ -5,15 +5,15 @@
 
 from typing import Any
 
-from app.agents.providers import LLMProvider, MockProvider
+from app.agents.providers import LLMProvider
 from app.models.review import ChangedFile, PullRequestInfo, ReviewIssue
 
 
 class ReviewAgent:
     """代码审查 Agent，封装 LLMProvider 的 review 调用。"""
 
-    def __init__(self, provider: LLMProvider | None = None) -> None:
-        self._provider = provider or MockProvider()
+    def __init__(self, provider: LLMProvider) -> None:
+        self._provider = provider
 
     async def review(
         self,
@@ -24,8 +24,6 @@ class ReviewAgent:
         context_snippets: list[dict[str, Any]] | None = None,
     ) -> list[ReviewIssue]:
         """调用 LLM 执行代码审查，返回结构化问题列表。"""
-        if not isinstance(self._provider, MockProvider):
-            return await self._provider.review(pr_info, changed_files, diff_text, model)
         return await self._provider.review(pr_info, changed_files, diff_text, model)
 
 

@@ -10,7 +10,7 @@ logger = logging.getLogger("RepoGuardian.Node")
 async def repo_index_node(state: ReviewState) -> ReviewState:
     """索引节点：扫描克隆仓库，构建文件级和符号级索引。
 
-    产出三个维度的索引：
+    索引：
         file_index   — 文件路径、语言、大小、导入模块
         symbol_index — 函数/类/方法定义、签名、调用关系（tree-sitter 解析）
         project_meta — 语言、框架、测试目录、入口点

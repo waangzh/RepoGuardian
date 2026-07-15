@@ -13,7 +13,7 @@ logger = logging.getLogger("RepoGuardian.Node")
 async def agent_decide_node(state: ReviewState) -> ReviewState:
     """Agent 决策节点：核心大脑，每次循环调用 LLM 决定下一步做什么。
 
-    安全防护：
+    边界：
         1. agent_loop_count > max_agent_loops → 强制 finish_report
         2. fix_iteration >= max_fix_iterations 且测试仍失败 → 强制 finish_report
         3. LLM 连续返回无效 JSON 两次 → 强制 finish_report
@@ -34,7 +34,7 @@ async def agent_decide_node(state: ReviewState) -> ReviewState:
         len(state.get("patches") or []),
     )
 
-    # ---- 安全防护 1: Agent 循环次数超限 ----
+    # ---- 1: Agent 循环次数超限 ----
     if loop_count > max_loops:
         logger.warning("🛑 [决策] Agent 循环次数已达上限 %d，强制生成报告", max_loops)
         action = AgentAction(
@@ -43,7 +43,7 @@ async def agent_decide_node(state: ReviewState) -> ReviewState:
         )
         return _with_action(state, action, loop_count, "completed", "Agent loop limit reached")
 
-    # ---- 安全防护 2: 修复重试超限且测试仍失败 ----
+    # ---- 2: 修复重试超限且测试仍失败 ----
     if fix_iteration >= max_fix_iterations and _has_failed_tests(state):
         logger.warning("🛑 [决策] 修复重试已达上限 %d 且测试仍失败，强制生成报告", max_fix_iterations)
         action = AgentAction(

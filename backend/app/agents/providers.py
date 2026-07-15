@@ -5,7 +5,8 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any
 
-import httpx
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 from pydantic import TypeAdapter, ValidationError
 
 from app.models.review import AgentAction, AgentActionName, ChangedFile, PatchResult, PullRequestInfo, ReviewIssue
@@ -39,82 +40,6 @@ class LLMProvider(ABC):
         model: str | None,
     ) -> list[PatchResult]:
         raise NotImplementedError
-
-
-class MockProvider(LLMProvider):
-    """模拟 Provider：用预设的 action/patch 序列模拟 LLM 行为，不走真实 API。"""
-
-    def __init__(
-        self,
-        action_sequence: list[AgentAction | dict[str, Any] | str] | None = None,
-        patch_sequence: list[PatchResult | dict[str, Any]] | None = None,
-    ) -> None:
-        self._action_sequence = list(action_sequence or [
-            AgentAction(action="retrieve_context", reason="Mock: gather related context."),
-            AgentAction(action="run_static_analysis", reason="Mock: run safe analysis tools."),
-            AgentAction(action="review_code", reason="Mock: review after context and tools."),
-            AgentAction(action="finish_report", reason="Mock: finish report."),
-        ])
-        self._patch_sequence = list(patch_sequence or [])
-
-    async def decide(self, state: dict[str, Any], model: str | None) -> AgentAction:
-        if self._action_sequence:
-            raw = self._action_sequence.pop(0)
-            if isinstance(raw, AgentAction):
-                action = raw
-            elif isinstance(raw, str):
-                action = AgentAction(action=raw, reason=f"Mock action: {raw}")
-            else:
-                action = AgentAction.model_validate(raw)
-            logger.info("🤖 [Mock决策] 剩余 %d 步 → %s", len(self._action_sequence), action.action.value)
-            return action
-        return AgentAction(action="finish_report", reason="Mock action sequence exhausted.")
-
-    async def review(
-        self,
-        pr: PullRequestInfo,
-        changed_files: list[ChangedFile],
-        diff_text: str,
-        model: str | None,
-    ) -> list[ReviewIssue]:
-        logger.info("🤖 [Mock审查] 检查 %d 个文件", len(changed_files))
-        for file in changed_files:
-            for hunk in file.hunks:
-                if hunk.added_lines:
-                    line = hunk.added_lines[0]
-                    return [
-                        ReviewIssue(
-                            file_path=file.file_path,
-                            line_no=line.line_no,
-                            severity="low",
-                            category="maintainability",
-                            title="Mock review notice",
-                            description=(
-                                "The backend is using MockProvider. This validates the review "
-                                "pipeline only and does not represent a real code issue."
-                            ),
-                            suggestion=(
-                                "Set REPOGUARDIAN_PROVIDER=openai or deepseek and configure "
-                                "OPENAI_API_KEY to enable real LLM review."
-                            ),
-                            confidence=0.2,
-                            auto_fixable=True,
-                        )
-                    ]
-        return []
-
-    async def generate_patch(
-        self,
-        state: dict[str, Any],
-        model: str | None,
-    ) -> list[PatchResult]:
-        if self._patch_sequence:
-            raw = self._patch_sequence.pop(0)
-            logger.info("🤖 [Mock补丁] 剩余 %d 个 patch", len(self._patch_sequence))
-            if isinstance(raw, PatchResult):
-                return [raw]
-            return [PatchResult.model_validate(raw)]
-        return []
 
 
 class OpenAICompatibleProvider(LLMProvider):
@@ -232,65 +157,47 @@ class OpenAICompatibleProvider(LLMProvider):
         system: str,
         max_tokens: int,
     ) -> str:
-        payload = self._build_request_payload(prompt, model, system, max_tokens)
-        headers = {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}
-        resolved_model = model or self._default_model
-        logger.debug("🌐 [HTTP] POST %s/chat/completions，模型=%s，max_tokens=%d",
-                     self._base_url, resolved_model, max_tokens)
-        async with httpx.AsyncClient(timeout=90) as client:
-            response = await client.post(
-                f"{self._base_url}/chat/completions", headers=headers, json=payload
-            )
+        chat_model = self._build_chat_model(model, max_tokens)
+        try:
+            response = await chat_model.ainvoke([
+                SystemMessage(content=system),
+                HumanMessage(content=prompt),
+            ])
+        except Exception as exc:
+            logger.error("🌐 [LLM] ChatOpenAI 调用失败: %s", type(exc).__name__)
+            raise LLMProviderError("LLM request failed") from exc
+        return self._extract_message_content(response)
 
-        if response.status_code >= 400:
-            logger.error("🌐 [HTTP] 请求失败: HTTP %d, body=%s",
-                         response.status_code, response.text[:300])
-            raise LLMProviderError(f"LLM request failed: {response.status_code} {response.text[:500]}")
-        return self._extract_message_content(response.json())
-
-    def _build_request_payload(
-        self,
-        prompt: str,
-        model: str | None,
-        system: str,
-        max_tokens: int,
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
+    def _build_chat_model(self, model: str | None, max_tokens: int) -> ChatOpenAI:
+        """创建一次调用对应的 ChatOpenAI，保留模型覆写和 JSON 约束。"""
+        options: dict[str, Any] = {
+            "api_key": self._api_key,
+            "base_url": self._base_url,
             "model": model or self._default_model,
             "temperature": 0.1,
             "max_tokens": max_tokens,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
+            # JSON mode 比 tool calling 更适合 DeepSeek 和通用兼容端点。
+            "model_kwargs": {"response_format": {"type": "json_object"}},
         }
         if self._disable_thinking:
-            payload["thinking"] = {"type": "disabled"}
-        return payload
+            # 非标准字段必须放进 OpenAI SDK 的 extra_body，不能作为普通模型参数。
+            options["extra_body"] = {"thinking": {"type": "disabled"}}
+        return ChatOpenAI(**options)
 
     @staticmethod
-    def _extract_message_content(payload: dict[str, Any]) -> str:
-        choices = payload.get("choices")
-        if not choices:
-            raise LLMProviderError(f"LLM response missing choices: {json.dumps(payload)[:500]}")
-
-        message = choices[0].get("message") if isinstance(choices[0], dict) else None
-        if not isinstance(message, dict):
-            raise LLMProviderError(f"LLM response missing message: {json.dumps(payload)[:500]}")
-
-        content = message.get("content")
+    def _extract_message_content(message: AIMessage) -> str:
+        content = message.content
         if isinstance(content, str) and content.strip():
             return content
 
-        reasoning_content = message.get("reasoning_content")
+        reasoning_content = message.additional_kwargs.get("reasoning_content")
         if isinstance(reasoning_content, str) and reasoning_content.strip():
             raise LLMProviderError(
                 "LLM response only contained reasoning_content and no final JSON content. "
                 "For DeepSeek, use REPOGUARDIAN_PROVIDER=deepseek so thinking is disabled."
             )
 
-        raise LLMProviderError(f"LLM response missing content: {json.dumps(payload)[:500]}")
+        raise LLMProviderError("LLM response missing string content")
 
     def _parse_issues(self, content: str) -> list[ReviewIssue]:
         raw = self._load_json(content)
@@ -437,16 +344,12 @@ def build_provider(
 ) -> LLMProvider:
     """工厂函数：根据配置名创建对应的 LLM Provider 实例。"""
     normalized_provider = provider_name.strip().lower()
-    logger.info("🔌 构建 LLM Provider: %s（模型=%s, base_url=%s）", normalized_provider, default_model, base_url)
-    if normalized_provider == "mock":
-        logger.info("🔌 使用 MockProvider（不产生真实 API 费用）")
-        return MockProvider()
+    logger.info("🔌 构建 LLM Provider: %s（模型=%s）", normalized_provider, default_model)
     if normalized_provider in {"openai", "deepseek", "openai-compatible"}:
         disable_thinking = normalized_provider == "deepseek" or "deepseek.com" in base_url.lower()
         if disable_thinking:
             logger.info("🔌 检测到 DeepSeek，已禁用 thinking 模式")
         return OpenAICompatibleProvider(api_key, base_url, default_model, disable_thinking)
     raise ValueError(
-        "REPOGUARDIAN_PROVIDER must be one of: mock, openai, deepseek, openai-compatible"
+        "REPOGUARDIAN_PROVIDER must be one of: openai, deepseek, openai-compatible"
     )
-

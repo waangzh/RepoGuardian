@@ -14,7 +14,14 @@ class Settings(BaseSettings):
     # ---- LLM Provider ----
     openai_base_url: str = "https://api.openai.com/v1"
     repoguardian_model: str = "gpt-4.1-mini"
-    repoguardian_provider: str = "mock"  # mock / openai / deepseek / openai-compatible
+    repoguardian_provider: str = "openai"  # openai / deepseek / openai-compatible
+
+    # ---- LangSmith 可观测性（默认不追踪，也不上传审查内容）----
+    repoguardian_langsmith_tracing: bool = False
+    langsmith_api_key: str | None = None
+    langsmith_project: str = "repoguardian"
+    langsmith_endpoint: str | None = None
+    repoguardian_langsmith_include_content: bool = False
 
     # ---- 工作目录 ----
     repoguardian_workdir: Path = Path(__file__).resolve().parent.parent.parent / ".repoguardian" / "workspaces"
@@ -29,4 +36,3 @@ class Settings(BaseSettings):
 
 # 全局配置单例
 settings = Settings()
-

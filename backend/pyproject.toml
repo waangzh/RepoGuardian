@@ -12,6 +12,8 @@ dependencies = [
     "uvicorn[standard]>=0.30.0",
     "langgraph>=0.2.0",
     "langgraph-checkpoint-sqlite>=3.0.0",
+    "langchain-openai>=0.3.0",
+    "langsmith>=0.3.0",
     "sqlalchemy[asyncio]>=2.0.30",
     "aiosqlite>=0.20.0",
     "sse-starlette>=2.0.0",
@@ -33,4 +35,3 @@ addopts = "--basetemp=.pytest_tmp"
 
 [tool.ruff]
 line-length = 100
-

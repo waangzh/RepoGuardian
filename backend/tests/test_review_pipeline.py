@@ -1,11 +1,21 @@
-﻿import asyncio
+import asyncio
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from app.agents.providers import MockProvider
-from app.models.review import PullRequestInfo, PullRequestRef, ReviewCreateRequest, TaskStatus
+from app.agents.providers import LLMProvider
+from app.models.review import (
+    AgentAction,
+    ChangedFile,
+    PatchResult,
+    PullRequestInfo,
+    PullRequestRef,
+    ReviewCreateRequest,
+    ReviewIssue,
+    TaskStatus,
+)
 from app.services.report_service import ReportService
 from app.services.review_service import ReviewService
 from app.tools.diff_parser import DiffParser
@@ -40,13 +50,67 @@ class FakeGitTool:
         return self._workspace, self._diff_text
 
 
-class FailingProvider(MockProvider):
+class ScriptedProvider(LLMProvider):
+    """仅用于图编排测试的确定性 Provider，不属于运行时 Provider。"""
+
+    def __init__(
+        self,
+        action_sequence: list[AgentAction | dict[str, Any]] | None = None,
+        patch_sequence: list[PatchResult | dict[str, Any]] | None = None,
+    ) -> None:
+        self._action_sequence = list(action_sequence or [
+            {"action": "retrieve_context", "reason": "测试检索上下文"},
+            {"action": "run_static_analysis", "reason": "测试静态分析"},
+            {"action": "review_code", "reason": "测试代码审查"},
+            {"action": "finish_report", "reason": "测试输出报告"},
+        ])
+        self._patch_sequence = list(patch_sequence or [])
+
+    async def decide(self, state: dict[str, Any], model: str | None) -> AgentAction:
+        raw = self._action_sequence.pop(0) if self._action_sequence else {
+            "action": "finish_report",
+            "reason": "测试动作序列结束",
+        }
+        return raw if isinstance(raw, AgentAction) else AgentAction.model_validate(raw)
+
+    async def review(
+        self,
+        pr: PullRequestInfo,
+        changed_files: list[ChangedFile],
+        diff_text: str,
+        model: str | None,
+    ) -> list[ReviewIssue]:
+        if not changed_files:
+            return []
+        return [ReviewIssue(
+            file_path=changed_files[0].file_path,
+            line_no=1,
+            severity="low",
+            category="maintainability",
+            title="测试审查问题",
+            description="用于验证审查图状态传递。",
+            suggestion="无需修改。",
+            confidence=0.2,
+        )]
+
+    async def generate_patch(
+        self,
+        state: dict[str, Any],
+        model: str | None,
+    ) -> list[PatchResult]:
+        if not self._patch_sequence:
+            return []
+        raw = self._patch_sequence.pop(0)
+        return [raw if isinstance(raw, PatchResult) else PatchResult.model_validate(raw)]
+
+
+class FailingProvider(ScriptedProvider):
     async def review(self, *args, **kwargs):  # type: ignore[no-untyped-def]
         raise AssertionError("provider should not be called when diff is empty")
 
 
 @pytest.mark.asyncio
-async def test_review_pipeline_with_mock_provider(tmp_path: Path) -> None:
+async def test_review_pipeline_with_scripted_provider(tmp_path: Path) -> None:
     diff_text = """diff --git a/sample.py b/sample.py
 index 1111111..2222222 100644
 --- a/sample.py
@@ -57,7 +121,7 @@ index 1111111..2222222 100644
 +    name = "RepoGuardian"
 +    return f"hi {name}"
 """
-    service = _build_service(tmp_path, diff_text, MockProvider())
+    service = _build_service(tmp_path, diff_text, ScriptedProvider())
 
     task = service.create_task(
         ReviewCreateRequest(pr_url="https://github.com/local/sample/pull/1", model=None)
@@ -110,7 +174,7 @@ index 1111111..2222222 100644
 -    return f"hi {name}"
 +    return f"hello {name}"
 """
-    provider = MockProvider(
+    provider = ScriptedProvider(
         action_sequence=[
             {"action": "review_code", "reason": "先审查 diff"},
             {"action": "generate_patch", "reason": "生成最小修复"},
@@ -148,7 +212,7 @@ index 1111111..2222222 100644
 def _build_service(
     tmp_path: Path,
     diff_text: str,
-    provider: MockProvider,
+    provider: LLMProvider,
     files: dict[str, str] | None = None,
 ) -> ReviewService:
     return ReviewService(

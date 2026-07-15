@@ -1,11 +1,17 @@
 import asyncio
 import logging
 import shutil
+from contextlib import AbstractContextManager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
+from langchain_core.tracers.langchain import LangChainTracer
+from langsmith import Client, tracing_context
+
 from app.agents.providers import LLMProvider
+from app.core.config import settings
 from app.graph.builder import build_review_graph
 from app.graph.state import ReviewState
 from app.models.review import (
@@ -23,11 +29,26 @@ from app.tools.github_tool import GitHubTool
 
 logger = logging.getLogger("RepoGuardian.Service")
 
+_TRACE_REDACTED_KEYS = {
+    "api_key",
+    "authorization",
+    "base_url",
+    "clone_url",
+    "github_token",
+    "headers",
+    "html_url",
+    "langsmith_api_key",
+    "openai_api_key",
+    "pr_url",
+    "repo_clone_url",
+    "repo_path",
+}
+
 
 class ReviewService:
-    """审查服务：协调从任务创建到图执行的完整生命周期。
-
-    流程概览：
+    """
+    审查服务：协调从任务创建到图执行的完整生命周期。
+    流程：
         create_task()          → 创建 ReviewTask，存入内存，后台启动图
         _run_graph()           → 构建 StateGraph，注入工具，执行 ainvoke
         _sync_result_to_task() → 将图状态字典重建为 Pydantic 模型写回任务
@@ -102,8 +123,22 @@ class ReviewService:
         try:
             graph = build_review_graph(phase=2)
             compiled = graph.compile()
+            run_metadata = {
+                "task_id": task_id,
+                "mode": "pr_review",
+                "model_override": task.model is not None,
+            }
+            run_config: dict[str, Any] = {
+                "run_name": "repoguardian-pr-review",
+                "tags": ["repoguardian", "pr_review"],
+                "metadata": run_metadata,
+            }
+            tracing, callbacks = _build_langsmith_tracing(run_metadata)
+            if callbacks:
+                run_config["callbacks"] = callbacks
             logger.info("📊 开始 ainvoke 执行...")
-            result = await compiled.ainvoke(initial_state)
+            with tracing:
+                result = await compiled.ainvoke(initial_state, config=run_config)
             logger.info("✅ ainvoke 执行完成，开始同步结果")
             self._sync_result_to_task(task, result)
             logger.info("🎉 审查任务 %s 完成", task_id[:8])
@@ -151,3 +186,65 @@ def _cleanup_repo(repo_path: Path) -> None:
         shutil.rmtree(repo_path, ignore_errors=True)
     except Exception:
         pass
+
+
+def _build_langsmith_tracing(
+    metadata: dict[str, Any],
+) -> tuple[AbstractContextManager[None], list[LangChainTracer]]:
+    """创建本次图调用专用的 LangSmith 配置，失败时无损降级。"""
+    if not settings.repoguardian_langsmith_tracing or not settings.langsmith_api_key:
+        return tracing_context(enabled=False), []
+
+    try:
+        client_options: dict[str, Any] = {
+            "api_key": settings.langsmith_api_key,
+            "hide_inputs": _trace_content_filter,
+            "hide_outputs": _trace_content_filter,
+        }
+        if settings.langsmith_endpoint:
+            client_options["api_url"] = settings.langsmith_endpoint
+        client = Client(**client_options)
+        tags = ["repoguardian", "pr_review"]
+        tracer = LangChainTracer(
+            project_name=settings.langsmith_project,
+            client=client,
+            tags=tags,
+            metadata=metadata,
+        )
+        return (
+            tracing_context(
+                enabled=True,
+                client=client,
+                project_name=settings.langsmith_project,
+                tags=tags,
+                metadata=metadata,
+            ),
+            [tracer],
+        )
+    except Exception as exc:
+        logger.warning("LangSmith 初始化失败，已跳过本次追踪: %s", type(exc).__name__)
+        return tracing_context(enabled=False), []
+
+
+def _trace_content_filter(value: dict[str, Any]) -> dict[str, Any]:
+    """LangSmith 输入/输出过滤器：默认不上传内容，始终移除敏感字段。"""
+    if not settings.repoguardian_langsmith_include_content:
+        return {}
+    filtered = _remove_sensitive_trace_values(value)
+    return filtered if isinstance(filtered, dict) else {}
+
+
+def _remove_sensitive_trace_values(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _remove_sensitive_trace_values(item)
+            for key, item in value.items()
+            if not key.startswith("_") and key.lower() not in _TRACE_REDACTED_KEYS
+        }
+    if isinstance(value, list):
+        return [_remove_sensitive_trace_values(item) for item in value]
+    if isinstance(value, tuple):
+        return [_remove_sensitive_trace_values(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return "<redacted non-serializable value>"
