@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,9 @@ from app.models.review import (
 from app.services.report_service import ReportService
 from app.services.review_service import ReviewService
 from app.tools.diff_parser import DiffParser
+
+
+SAMPLE_PYTHON_REPO = Path(__file__).parent / "fixtures" / "sample_python_repo"
 
 
 class FakeGitHubTool:
@@ -47,6 +51,22 @@ class FakeGitTool:
             target = self._workspace / rel_path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
+        return self._workspace, self._diff_text
+
+
+class FixtureGitTool:
+    """将受版本控制的最小 fixture 复制为审查任务的临时工作树。"""
+
+    def __init__(self, fixture_path: Path, workspace: Path, diff_text: str) -> None:
+        self._fixture_path = fixture_path
+        self._workspace = workspace
+        self._diff_text = diff_text
+
+    def clone_and_diff(self, pr: PullRequestInfo) -> tuple[Path, str]:
+        shutil.copytree(self._fixture_path, self._workspace)
+        for source_file in self._workspace.rglob("*.py"):
+            source_file.write_text(source_file.read_text(encoding="utf-8"), encoding="utf-8")
+        subprocess.run(["git", "init"], cwd=self._workspace, check=True, capture_output=True)
         return self._workspace, self._diff_text
 
 
@@ -207,6 +227,59 @@ index 1111111..2222222 100644
     assert completed.test_results
     assert completed.test_results[-1].passed is True
     assert any(event.action == "run_tests" for event in completed.agent_events)
+
+
+@pytest.mark.asyncio
+async def test_existing_review_pipeline_with_sample_python_repository(tmp_path: Path) -> None:
+    """以静态 fixture 保护准备、审查、修复、验证和报告的完整既有链路。"""
+    diff_text = """diff --git a/pricing.py b/pricing.py
+index 1111111..2222222 100644
+--- a/pricing.py
++++ b/pricing.py
+@@ -1,3 +1,3 @@
+ def calculate_discounted_total(amount: float, discount_percent: float) -> float:
+     \"\"\"Return the total after applying a percentage discount.\"\"\"
+-    return amount * (100 - discount_percent) / 100
++    return amount * discount_percent / 100
+"""
+    patch_text = """diff --git a/pricing.py b/pricing.py
+--- a/pricing.py
++++ b/pricing.py
+@@ -3 +3 @@
+-    return amount * discount_percent / 100
++    return amount * (100 - discount_percent) / 100
+"""
+    provider = ScriptedProvider(
+        action_sequence=[
+            {"action": "review_code", "reason": "审查 fixture 中的回归"},
+            {"action": "generate_patch", "reason": "生成折扣计算修复"},
+            {"action": "apply_patch", "reason": "应用候选修复"},
+            {"action": "run_tests", "reason": "运行 fixture 测试"},
+            {"action": "finish_report", "reason": "输出最终报告"},
+        ],
+        patch_sequence=[{"diff_content": patch_text, "status": "generated"}],
+    )
+    service = ReviewService(
+        github_tool=FakeGitHubTool(_build_pr()),
+        git_tool=FixtureGitTool(SAMPLE_PYTHON_REPO, tmp_path / "workspace", diff_text),
+        diff_parser=DiffParser(),
+        provider=provider,
+        report_service=ReportService(),
+    )
+
+    task = service.create_task(
+        ReviewCreateRequest(pr_url="https://github.com/local/sample/pull/1", model=None)
+    )
+    await _wait_for_task(service, task.id)
+    completed = service.get_task(task.id)
+
+    assert completed is not None
+    assert completed.status == TaskStatus.completed, completed.error
+    assert completed.changed_files[0].file_path == "pricing.py"
+    assert completed.issues
+    assert completed.patches[-1].status == "applied"
+    assert completed.test_results[-1].passed is True
+    assert completed.report_markdown is not None
 
 
 def _build_service(
