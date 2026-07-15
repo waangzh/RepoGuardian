@@ -12,7 +12,7 @@ from enum import Enum
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +79,34 @@ class AgentActionName(str, Enum):
     request_human = "request_human"
     revise_patch = "revise_patch"
     abandon_patch = "abandon_patch"
+
+
+class CommandId(str, Enum):
+    """服务端注册的逻辑命令标识，不能由模型扩展为任意 Shell 文本。"""
+
+    python_static_default = "python.static.default"
+    python_test_collect = "python.test.collect"
+    python_test_targeted = "python.test.targeted"
+    python_test_full = "python.test.full"
+
+
+class ValidationStage(str, Enum):
+    """同一工作树在补丁前后的三个验证阶段。"""
+
+    base = "base"
+    head = "head"
+    patched = "patched"
+
+
+class FailureKind(str, Enum):
+    """验证失败的受控分类。"""
+
+    dependency_missing = "dependency_missing"
+    test_collection_error = "test_collection_error"
+    timeout = "timeout"
+    infrastructure = "infrastructure"
+    code_regression = "code_regression"
+    unknown = "unknown"
 
 
 class ExecutionBudget(BaseModel):
@@ -218,6 +246,19 @@ class AgentAction(BaseModel):
     target_issue_ids: list[str] = Field(default_factory=list)
     tool_args: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def reject_free_form_shell_command(self) -> "AgentAction":
+        """模型可选命令 ID，但不能把任意 Shell 命令带入工具调用。"""
+        if "command" in self.tool_args:
+            raise ValueError("tool_args.command is not supported; use command_id")
+        command_id = self.tool_args.get("command_id")
+        if command_id is not None:
+            try:
+                CommandId(command_id)
+            except ValueError as exc:
+                raise ValueError(f"unknown command_id: {command_id}") from exc
+        return self
+
 
 class AgentEvent(BaseModel):
     """Agent 决策事件日志条目。"""
@@ -241,6 +282,47 @@ class TestRunResult(BaseModel):
     stderr: str = ""
     passed: bool         # exit_code == 0
     duration: float = 0.0
+
+
+class CommandSpec(BaseModel):
+    """仅由服务端适配器注册的命令定义。"""
+
+    command_id: CommandId
+    argv: tuple[str, ...] = Field(min_length=1)
+    tool: str
+    timeout_seconds: int = Field(default=60, gt=0, le=600)
+
+
+class ProjectProfile(BaseModel):
+    """项目适配器检测出的、可安全公开的项目元数据。"""
+
+    adapter_id: str
+    language: str
+    detected_files: list[str] = Field(default_factory=list)
+    validation_command_ids: list[CommandId] = Field(default_factory=list)
+
+
+class ValidationSnapshot(BaseModel):
+    """Base、Head 或 Patched 阶段的一组受控验证结果。"""
+
+    stage: ValidationStage
+    sha: str = Field(min_length=1)
+    command_results: list[TestRunResult] = Field(default_factory=list)
+    passed: bool
+    failure_kind: FailureKind | None = None
+    failure_detail: str | None = None
+
+
+class ValidationDelta(BaseModel):
+    """两个验证快照的语义差异，用于区分既有失败与新增回归。"""
+
+    from_stage: ValidationStage
+    to_stage: ValidationStage
+    previous_passed: bool
+    current_passed: bool
+    failure_kind: FailureKind | None = None
+    introduced_failure: bool = False
+    resolved_failure: bool = False
 
 
 class PatchResult(BaseModel):
@@ -288,7 +370,10 @@ class ReviewTask(BaseModel):
     issues: list[ReviewIssue] = Field(default_factory=list)
     context_snippets: list[ContextSnippet] = Field(default_factory=list)
     repo_snapshot: RepoSnapshot | None = None
+    project_profile: ProjectProfile | None = None
     static_results: list[TestRunResult] = Field(default_factory=list)
+    validation_snapshots: list[ValidationSnapshot] = Field(default_factory=list)
+    validation_deltas: list[ValidationDelta] = Field(default_factory=list)
     patches: list[PatchResult] = Field(default_factory=list)
     test_results: list[TestRunResult] = Field(default_factory=list)
     agent_events: list[AgentEvent] = Field(default_factory=list)

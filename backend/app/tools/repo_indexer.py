@@ -8,7 +8,6 @@
 注意：symbol_index 依赖 tree-sitter + tree-sitter-python，仅在解析 .py 文件时可用。
 """
 
-import json
 import os
 import re
 from pathlib import Path
@@ -91,10 +90,6 @@ class RepoIndexer(BaseTool):
     async def build_symbol_index(self, repo_path: str) -> list[dict[str, Any]]:
         """使用 tree-sitter 解析 Python 文件，提取函数/类/方法符号。"""
         index: list[dict[str, Any]] = []
-        try:
-            from tree_sitter import Language, Parser
-        except ImportError:
-            index
         root = Path(repo_path)
         for dirpath, _, filenames in os.walk(root):
             rel_dir = Path(dirpath).relative_to(root)

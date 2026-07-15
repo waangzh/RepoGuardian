@@ -25,6 +25,7 @@ dependencies = [
 test = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.23.0",
+    "ruff>=0.6.0",
 ]
 
 [tool.pytest.ini_options]

@@ -3,7 +3,8 @@
 from typing import Any
 
 from app.tools.base import BaseTool
-from app.tools.command_runner import run_command
+from app.models.review import CommandId
+from app.tools.command_runner import LocalCommandExecutor, resolve_command_spec
 
 
 class TestRunnerTool(BaseTool):
@@ -13,12 +14,8 @@ class TestRunnerTool(BaseTool):
     async def execute(self, **kwargs: Any) -> dict[str, Any]:
         """执行测试，返回单条 TestRunResult。"""
         repo_path = kwargs["repo_path"]
-        command = kwargs.get("command")
-        result = await run_command(
-            repo_path=repo_path,
-            command=command,
-            default="python -m pytest -q",
-            tool=self.name,
-            timeout_seconds=kwargs.get("timeout_seconds", 120),
-        )
+        command_id = kwargs.get("command_id", CommandId.python_test_full)
+        spec = resolve_command_spec(command_id, kwargs.get("adapter_id", "python"))
+        executor = kwargs.get("executor") or LocalCommandExecutor()
+        result = await executor.execute(repo_path, spec)
         return {"test_results": [result.model_dump(mode="json")]}

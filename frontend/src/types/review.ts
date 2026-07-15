@@ -104,6 +104,40 @@ export interface TestRunResult {
   duration: number;
 }
 
+export type FailureKind =
+  | "dependency_missing"
+  | "test_collection_error"
+  | "timeout"
+  | "infrastructure"
+  | "code_regression"
+  | "unknown";
+
+export interface ProjectProfile {
+  adapter_id: string;
+  language: string;
+  detected_files: string[];
+  validation_command_ids: string[];
+}
+
+export interface ValidationSnapshot {
+  stage: "base" | "head" | "patched";
+  sha: string;
+  command_results: TestRunResult[];
+  passed: boolean;
+  failure_kind?: FailureKind | null;
+  failure_detail?: string | null;
+}
+
+export interface ValidationDelta {
+  from_stage: "base" | "head" | "patched";
+  to_stage: "head" | "patched";
+  previous_passed: boolean;
+  current_passed: boolean;
+  failure_kind?: FailureKind | null;
+  introduced_failure: boolean;
+  resolved_failure: boolean;
+}
+
 export interface PatchResult {
   id: string;
   issue_id?: string | null;
@@ -141,4 +175,7 @@ export interface ReviewTask {
   updated_at: string;
   context_snippets?: ContextSnippet[];
   repo_snapshot?: RepoSnapshot | null;
+  project_profile?: ProjectProfile | null;
+  validation_snapshots: ValidationSnapshot[];
+  validation_deltas: ValidationDelta[];
 }

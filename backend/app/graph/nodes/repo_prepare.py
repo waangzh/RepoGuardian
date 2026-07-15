@@ -24,6 +24,8 @@ async def repo_prepare_node(state: ReviewState) -> ReviewState:
     return ReviewState(
         pr_info=pr_info.model_dump(mode="json"),
         repo_path=str(repo_path),
+        base_sha=pr_info.base.sha,
+        head_sha=pr_info.head.sha,
         diff_text=diff_text,
         step_progress=append_step(
             state,

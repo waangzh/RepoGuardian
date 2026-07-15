@@ -28,6 +28,8 @@ class ReviewState(TypedDict, total=False):
     repo_path: str | None    # 克隆到本地的临时路径
     base_sha: str | None
     head_sha: str | None
+    project_adapter_id: str | None
+    project_profile: dict[str, Any] | None
 
     # ---- Diff ----
     diff_text: str | None                          # 原始 unified diff
@@ -55,6 +57,10 @@ class ReviewState(TypedDict, total=False):
 
     # ---- 测试结果 ----
     test_results: list[dict[str, Any]] | None  # TestRunResult 列表
+    validation_snapshots: list[dict[str, Any]] | None
+    validation_deltas: list[dict[str, Any]] | None
+    validation_blocked: bool
+    validation_ready: bool
 
     # ---- 输出 ----
     report_markdown: str | None  # 最终 Markdown 报告
@@ -69,3 +75,5 @@ class ReviewState(TypedDict, total=False):
     _git_tool: Any
     _diff_parser: Any
     _provider: Any
+    _command_executor: Any
+    _project_registry: Any

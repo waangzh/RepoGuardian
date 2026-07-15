@@ -2,29 +2,31 @@ from pathlib import Path
 
 import pytest
 
-from app.models.review import PatchResult
-from app.tools.command_runner import CommandPolicyError, resolve_allowed_command
+from app.models.review import CommandId, PatchResult
+from app.tools.command_runner import CommandPolicyError, resolve_command_spec
 from app.tools.patch_tool import PatchTool
 from app.tools.test_runner import TestRunnerTool
 
 
-def test_resolve_allowed_command_rejects_unknown_command() -> None:
+def test_resolve_command_spec_rejects_unknown_command_id() -> None:
     with pytest.raises(CommandPolicyError):
-        resolve_allowed_command("rm -rf .", "ruff check .")
+        resolve_command_spec("rm -rf .")
 
 
-def test_resolve_allowed_command_allows_pytest() -> None:
-    name, argv = resolve_allowed_command("python -m pytest -q", "ruff check .")
+def test_resolve_command_spec_allows_registered_pytest_command() -> None:
+    spec = resolve_command_spec(CommandId.python_test_full)
 
-    assert name == "python -m pytest -q"
-    assert "-m" in argv
+    assert spec.command_id == CommandId.python_test_full
+    assert "-m" in spec.argv
 
 
 @pytest.mark.asyncio
 async def test_test_runner_returns_structured_result(tmp_path: Path) -> None:
-    result = await TestRunnerTool().execute(repo_path=str(tmp_path), command="python -m pytest -q")
+    result = await TestRunnerTool().execute(
+        repo_path=str(tmp_path), command_id=CommandId.python_test_full
+    )
 
-    assert result["test_results"][0]["command"] == "python -m pytest -q"
+    assert result["test_results"][0]["command"] == "python.test.full"
     assert isinstance(result["test_results"][0]["exit_code"], int)
 
 

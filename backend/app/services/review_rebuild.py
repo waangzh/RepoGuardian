@@ -14,6 +14,7 @@ from app.models.review import (
     ContextSnippet,
     DiffHunk,
     PatchResult,
+    ProjectProfile,
     PullRequestInfo,
     PullRequestRef,
     RepoSnapshot,
@@ -21,6 +22,8 @@ from app.models.review import (
     ReviewIssue,
     ReviewTask,
     TestRunResult,
+    ValidationDelta,
+    ValidationSnapshot,
 )
 
 
@@ -37,7 +40,10 @@ def rebuild_task_from_state(state: ReviewState) -> ReviewTask:
         issues=rebuild_issues(state.get("review_issues") or []),
         context_snippets=rebuild_context_snippets(state.get("context_snippets") or []),
         repo_snapshot=rebuild_repo_snapshot(state.get("project_meta") or {}),
+        project_profile=rebuild_project_profile(state.get("project_profile")),
         static_results=rebuild_test_results(state.get("static_results") or []),
+        validation_snapshots=rebuild_validation_snapshots(state.get("validation_snapshots") or []),
+        validation_deltas=rebuild_validation_deltas(state.get("validation_deltas") or []),
         patches=rebuild_patches(state.get("patches") or []),
         test_results=rebuild_test_results(state.get("test_results") or []),
         agent_events=rebuild_agent_events(state.get("agent_events") or []),
@@ -131,6 +137,11 @@ def rebuild_repo_snapshot(data: dict) -> RepoSnapshot | None:
     )
 
 
+def rebuild_project_profile(data: dict | None) -> ProjectProfile | None:
+    """从图状态恢复项目适配器的检测结果。"""
+    return ProjectProfile.model_validate(data) if data else None
+
+
 def rebuild_issues(data: list[dict]) -> list[ReviewIssue]:
     """从 dict 列表重建 ReviewIssue（使用 Pydantic model_validate）。"""
     return [ReviewIssue.model_validate(item) for item in data]
@@ -139,6 +150,16 @@ def rebuild_issues(data: list[dict]) -> list[ReviewIssue]:
 def rebuild_test_results(data: list[dict]) -> list[TestRunResult]:
     """从 dict 列表重建 TestRunResult。"""
     return [TestRunResult.model_validate(item) for item in data]
+
+
+def rebuild_validation_snapshots(data: list[dict]) -> list[ValidationSnapshot]:
+    """从图状态恢复三个验证阶段的快照。"""
+    return [ValidationSnapshot.model_validate(item) for item in data]
+
+
+def rebuild_validation_deltas(data: list[dict]) -> list[ValidationDelta]:
+    """从图状态恢复阶段间的验证差异。"""
+    return [ValidationDelta.model_validate(item) for item in data]
 
 
 def rebuild_patches(data: list[dict]) -> list[PatchResult]:

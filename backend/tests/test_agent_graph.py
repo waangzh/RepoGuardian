@@ -1,4 +1,5 @@
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +37,9 @@ index 1111111..2222222 100644
 SAMPLE_PATCH = """diff --git a/pricing.py b/pricing.py
 --- a/pricing.py
 +++ b/pricing.py
-@@ -3 +3 @@
+@@ -1,3 +1,3 @@
+ def calculate_discounted_total(amount: float, discount_percent: float) -> float:
+     \"\"\"Return the total after applying a percentage discount.\"\"\"
 -    return amount * discount_percent / 100
 +    return amount * (100 - discount_percent) / 100
 """
@@ -101,7 +104,15 @@ class FixtureGitTool:
 
     def clone_and_diff(self, pr: PullRequestInfo) -> tuple[Path, str]:
         shutil.copytree(SAMPLE_PYTHON_REPO, self._workspace)
+        for source_file in self._workspace.rglob("*.py"):
+            source_file.write_text(
+                source_file.read_text(encoding="utf-8"), encoding="utf-8", newline="\n"
+            )
+        subprocess.run(["git", "init"], cwd=self._workspace, check=True, capture_output=True)
         return self._workspace, SAMPLE_DIFF
+
+    def checkout_sha(self, repo_path: str | Path, sha: str) -> None:
+        """图测试只验证 checkout 顺序；工作树内容由 fixture 固定提供。"""
 
 
 def _sample_pr() -> PullRequestInfo:

@@ -3,7 +3,8 @@
 from typing import Any
 
 from app.tools.base import BaseTool
-from app.tools.command_runner import run_command
+from app.models.review import CommandId
+from app.tools.command_runner import LocalCommandExecutor, resolve_command_spec
 
 
 class StaticAnalyzerTool(BaseTool):
@@ -13,12 +14,8 @@ class StaticAnalyzerTool(BaseTool):
     async def execute(self, **kwargs: Any) -> dict[str, Any]:
         """执行静态分析，返回单条 TestRunResult。"""
         repo_path = kwargs["repo_path"]
-        command = kwargs.get("command")
-        result = await run_command(
-            repo_path=repo_path,
-            command=command,
-            default="ruff check .",
-            tool=self.name,
-            timeout_seconds=kwargs.get("timeout_seconds", 60),
-        )
+        command_id = kwargs.get("command_id", CommandId.python_static_default)
+        spec = resolve_command_spec(command_id, kwargs.get("adapter_id", "python"))
+        executor = kwargs.get("executor") or LocalCommandExecutor()
+        result = await executor.execute(repo_path, spec)
         return {"static_results": [result.model_dump(mode="json")]}

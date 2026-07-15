@@ -160,7 +160,10 @@ class ReviewService:
         task.issues = rebuilt.issues
         task.context_snippets = rebuilt.context_snippets
         task.repo_snapshot = rebuilt.repo_snapshot
+        task.project_profile = rebuilt.project_profile
         task.static_results = rebuilt.static_results
+        task.validation_snapshots = rebuilt.validation_snapshots
+        task.validation_deltas = rebuilt.validation_deltas
         task.patches = rebuilt.patches
         task.test_results = rebuilt.test_results
         task.agent_events = rebuilt.agent_events

@@ -61,6 +61,11 @@ class GitTool:
         self._run([self._git, "-C", str(repo_dir), "checkout", "--detach", "FETCH_HEAD"])
         return repo_dir, diff
 
+    def checkout_sha(self, repo_path: str | Path, sha: str) -> None:
+        """在任务临时 clone 中切换到已 fetch 的确定 SHA。"""
+        repo_dir = Path(repo_path).resolve()
+        self._run([self._git, "-C", str(repo_dir), "checkout", "--detach", sha])
+
     @staticmethod
     def _run(command: list[str]) -> str:
         """同步执行 git 命令，失败时抛出 GitToolError。"""

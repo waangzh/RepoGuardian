@@ -47,11 +47,16 @@ class FakeGitTool:
     def clone_and_diff(self, pr: PullRequestInfo) -> tuple[Path, str]:
         self._workspace.mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "init"], cwd=self._workspace, check=True, capture_output=True)
+        if not self._files and self._diff_text:
+            (self._workspace / "sample.py").write_text("def hello():\n    return 'hi'\n", encoding="utf-8")
         for rel_path, content in self._files.items():
             target = self._workspace / rel_path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
         return self._workspace, self._diff_text
+
+    def checkout_sha(self, repo_path: str | Path, sha: str) -> None:
+        """此假件只保留一个受控工作树，checkout 本身由集成测试覆盖。"""
 
 
 class FixtureGitTool:
@@ -68,6 +73,9 @@ class FixtureGitTool:
             source_file.write_text(source_file.read_text(encoding="utf-8"), encoding="utf-8")
         subprocess.run(["git", "init"], cwd=self._workspace, check=True, capture_output=True)
         return self._workspace, self._diff_text
+
+    def checkout_sha(self, repo_path: str | Path, sha: str) -> None:
+        """fixture 在每个阶段复用同一工作树。"""
 
 
 class ScriptedProvider(LLMProvider):
@@ -224,7 +232,8 @@ index 1111111..2222222 100644
     assert completed.patches[-1].status == "applied"
     assert completed.test_results
     assert completed.test_results[-1].passed is True
-    assert any(event.action == "run_tests" for event in completed.agent_events)
+    assert completed.validation_snapshots[-1].stage.value == "patched"
+    assert completed.validation_snapshots[-1].passed is True
 
 
 @pytest.mark.asyncio
@@ -315,7 +324,8 @@ def _build_pr() -> PullRequestInfo:
 
 
 async def _wait_for_task(service: ReviewService, task_id: str) -> None:
-    for _ in range(100):
+    # Base、Head 与 Patched 都会运行受控验证，异步图的完成窗口相应扩大。
+    for _ in range(400):
         task = service.get_task(task_id)
         if task and task.status in {TaskStatus.completed, TaskStatus.failed}:
             return

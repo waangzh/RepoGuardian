@@ -4,7 +4,7 @@ import logging
 
 from app.graph.nodes._events import append_event, append_step
 from app.graph.state import ReviewState
-from app.models.review import AgentAction
+from app.models.review import AgentAction, CommandId
 from app.tools.test_runner import TestRunnerTool
 
 logger = logging.getLogger("RepoGuardian.Node")
@@ -16,12 +16,12 @@ async def test_node(state: ReviewState) -> ReviewState:
         "action": "run_tests",
         "reason": "Run tests.",
     })
-    command = action.tool_args.get("command")
-    timeout = action.tool_args.get("timeout_seconds", 120)
+    command_id = action.tool_args.get("command_id", CommandId.python_test_full.value)
     result = await TestRunnerTool().execute(
         repo_path=state.get("repo_path", ""),
-        command=command,
-        timeout_seconds=timeout,
+        command_id=command_id,
+        adapter_id=state.get("project_adapter_id", "python"),
+        executor=state.get("_command_executor"),
     )
     previous = list(state.get("test_results") or [])
     current = result["test_results"]

@@ -61,7 +61,8 @@ class PatchTool(BaseTool):
 
 async def _run_git_apply(repo: Path, diff_content: str, check_only: bool) -> subprocess.CompletedProcess[str]:
     """通过子进程执行 git apply，通过 stdin 传入 patch 内容。"""
-    command = ["git", "apply"]
+    # 仓库检出可能采用 CRLF；忽略上下文空白差异但仍严格校验路径和内容。
+    command = ["git", "apply", "--ignore-space-change"]
     if check_only:
         command.append("--check")
     command.append("-")

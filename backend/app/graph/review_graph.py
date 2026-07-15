@@ -15,7 +15,7 @@ from app.graph.nodes.review import review_node
 from app.graph.nodes.static_analysis import static_analysis_node
 from app.graph.nodes.verification import verification_node
 from app.graph.repair_graph import build_repair_graph
-from app.graph.routers import route_discovery_action
+from app.graph.routers import route_baseline_validation, route_discovery_action
 from app.graph.state import ReviewState
 
 
@@ -43,7 +43,11 @@ def build_review_graph(phase: int | None = None) -> StateGraph:
     graph.add_edge("diff_parse", "repo_index")
     graph.add_edge("repo_index", "project_detection")
     graph.add_edge("project_detection", "baseline")
-    graph.add_edge("baseline", "context_retrieve")
+    graph.add_conditional_edges(
+        "baseline",
+        route_baseline_validation,
+        {"continue": "context_retrieve", "report": "report"},
+    )
     graph.add_edge("context_retrieve", "static_analysis")
     graph.add_edge("static_analysis", "discovery_decide")
     graph.add_conditional_edges(

@@ -49,6 +49,11 @@ def route_repair_entry(state: dict[str, Any]) -> str:
     return "generate_patch" if state.get("repair_enabled") else "repair_exit"
 
 
+def route_baseline_validation(state: dict[str, Any]) -> str:
+    """只有成功恢复到 Head 工作树后才继续读取代码并调用模型。"""
+    return "continue" if state.get("validation_ready") else "report"
+
+
 def route_agent_action(state: dict[str, Any]) -> str:
     """旧路由入口兼容层；新图不得使用此通用路由。"""
     action = _read_action(state)
