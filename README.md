@@ -24,9 +24,9 @@ intake -> repo_prepare -> diff_parse -> repo_index -> agent_decide
 
 详细设计见 [docs/agentic-architecture.md](docs/agentic-architecture.md)。
 
-RepoGuardian 是一个面向 GitHub Pull Request 的智能代码审查 Agent 系统。它接收 PR URL，获取 PR 元数据，克隆仓库并生成 diff，通过 LangGraph 编排审查流水线，结合仓库索引和上下文检索，生成结构化问题列表与 Markdown 审查报告。
+RepoGuardian 是一个面向 GitHub Pull Request 的智能代码审查 Agent 系统。它接收 PR URL，获取 PR 元数据，在任务临时目录中克隆仓库并生成 diff；随后由 LangGraph 编排确定性准备阶段和 Agent 工具反馈循环，产出结构化问题、受控 patch、测试结果与 Markdown 审查报告。
 
-默认使用 `mock` Provider，可以在没有 LLM API Key 的情况下跑通完整流程，适合本地开发和演示。
+默认使用 OpenAI 兼容 Provider，需要配置 `OPENAI_API_KEY`。本项目不再提供运行时 mock Provider；测试通过局部假实现隔离网络和模型调用。
 
 ## 目录
 
@@ -46,13 +46,15 @@ RepoGuardian 是一个面向 GitHub Pull Request 的智能代码审查 Agent 系
 - GitHub PR URL 解析和 PR metadata 获取，支持可选 `GITHUB_TOKEN`
 - 支持 base/head diff 生成，包括 fork PR 场景
 - 基于 `unidiff` 解析变更文件、hunk、增删行
-- 基于 LangGraph StateGraph 编排 7 个审查节点
+- 基于 LangGraph StateGraph 编排确定性准备阶段与可循环的 Agent 决策阶段
 - 基于 tree-sitter 建立文件级和符号级仓库索引
 - 检索直接变更、调用方和测试文件等相关上下文
-- 可插拔 LLM Provider：`mock`、`openai`、`deepseek`、`openai-compatible`
-- 生成结构化审查问题和 Markdown 报告
+- 支持 `openai`、`deepseek`、`openai-compatible` Provider，所有模型输出均经 JSON 和 Pydantic 校验
+- 受控执行静态分析与测试命令；可生成并仅在任务临时 clone 中应用 unified diff patch
+- 生成结构化审查问题、patch、测试结果和 Markdown 报告
+- 可选接入 LangSmith 追踪；默认不追踪，也不上传提示词、diff、代码上下文或模型输出
 - 通过 SSE 向前端实时推送任务进度
-- 前端展示任务状态、PR 摘要、变更文件、上下文片段、问题列表和报告
+- 前端展示任务状态、PR 摘要、变更文件、上下文片段、Agent 决策日志、静态分析、patch、测试结果和报告
 
 ## 架构
 
@@ -72,9 +74,11 @@ LangGraph StateGraph
    +--> repo_prepare
    +--> diff_parse
    +--> repo_index
-   +--> context_retrieve
-   +--> review
-   +--> report
+   +--> agent_decide <-------------------------------+
+   |      |                                           |
+   |      +--> context_retrieve / static_analysis ----+
+   |      +--> review / patch / test -----------------+
+   |      +--> report 或 human_required -> report
    |
    v
 Vue 控制台 + SSE 进度流
@@ -84,6 +88,7 @@ Vue 控制台 + SSE 进度流
 
 - 状态载体是 `ReviewState`，节点间只传递 dict
 - 工具通过 `state["_xxx"]` 注入，方便测试替换
+- `agent_decide` 最多循环 6 次，自动修复最多迭代 3 次，超限后收敛为报告
 - Git 和文件系统等阻塞操作使用 `asyncio.to_thread` 包装
 - LLM 返回值必须经过 JSON 解析和 Pydantic schema 校验
 - 任务状态当前保存在后端内存中，服务重启后不恢复
@@ -92,7 +97,7 @@ Vue 控制台 + SSE 进度流
 
 | 层级 | 技术 |
 | --- | --- |
-| 后端 | Python 3.11+、FastAPI、Pydantic、LangGraph |
+| 后端 | Python 3.11+、FastAPI、Pydantic、LangGraph、LangChain OpenAI |
 | 仓库分析 | Git、unidiff、tree-sitter、tree-sitter-python |
 | 存储 | SQLite、SQLAlchemy、LangGraph checkpoint SQLite |
 | 前端 | Vue 3、TypeScript、Vite、EventSource/SSE |
@@ -160,7 +165,7 @@ Vite 默认地址通常是：`http://localhost:5173`
 https://github.com/owner/repo/pull/123
 ```
 
-本地默认 `REPOGUARDIAN_PROVIDER=mock`，不需要真实 LLM Key。
+开始审查前，请在 `backend/.env` 中填写 `OPENAI_API_KEY`，或改用兼容的 DeepSeek 配置。未配置 Key 时，Agent 决策、审查和 patch 生成会失败，任务状态会标记为 `failed`。
 
 ## 配置说明
 
@@ -174,10 +179,15 @@ copy ..\.env.example .env
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `GITHUB_TOKEN` | 空 | GitHub API Token；不填也可访问公开仓库，但有更低 rate limit |
-| `OPENAI_API_KEY` | 空 | OpenAI 兼容接口 Key；`mock` 模式不需要 |
+| `OPENAI_API_KEY` | 空 | OpenAI 或兼容接口 Key；运行审查时必填 |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容接口地址 |
 | `REPOGUARDIAN_MODEL` | `gpt-4.1-mini` | 默认审查模型 |
-| `REPOGUARDIAN_PROVIDER` | `mock` | Provider，可选 `mock`、`openai`、`deepseek`、`openai-compatible` |
+| `REPOGUARDIAN_PROVIDER` | `openai` | Provider，可选 `openai`、`deepseek`、`openai-compatible` |
+| `REPOGUARDIAN_LANGSMITH_TRACING` | `false` | 是否启用 LangSmith 追踪；未配置 Key 时自动跳过 |
+| `LANGSMITH_API_KEY` | 空 | 启用 LangSmith 追踪时必填 |
+| `LANGSMITH_PROJECT` | `repoguardian` | LangSmith 项目名 |
+| `LANGSMITH_ENDPOINT` | 空 | 可选的自托管 LangSmith API 地址 |
+| `REPOGUARDIAN_LANGSMITH_INCLUDE_CONTENT` | `false` | 是否上传提示词、diff、上下文和模型输出；默认只上传安全元数据 |
 | `REPOGUARDIAN_GIT_BIN` | `git` | Git 可执行文件路径或命令名 |
 | `REPOGUARDIAN_WORKDIR` | `backend/.repoguardian/workspaces` | 临时克隆仓库目录 |
 | `REPOGUARDIAN_DB_PATH` | `backend/.repoguardian/repoguardian.db` | 业务 SQLite 数据库路径 |
@@ -199,6 +209,16 @@ REPOGUARDIAN_PROVIDER=deepseek
 OPENAI_API_KEY=你的 DeepSeek Key
 OPENAI_BASE_URL=https://api.deepseek.com
 REPOGUARDIAN_MODEL=deepseek-v4-pro
+```
+
+### LangSmith 示例（可选）
+
+```env
+REPOGUARDIAN_LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=你的 LangSmith Key
+LANGSMITH_PROJECT=repoguardian
+# 如需上传审查内容，显式开启；默认保持 false。
+REPOGUARDIAN_LANGSMITH_INCLUDE_CONTENT=false
 ```
 
 ## API
@@ -302,11 +322,10 @@ npm run build
 
 ## 当前边界
 
-当前版本聚焦 PR 审查、上下文检索和报告生成，暂不包含：
+当前版本聚焦 PR 审查、仓库索引、上下文检索、受控静态分析/测试、临时 patch 应用与报告生成，暂不包含：
 
-- 自动修复代码
 - Docker 沙箱执行
-- ruff、mypy、bandit 等静态分析集成
+- `mypy`、`bandit`、`semgrep` 等更多静态分析集成
 - GitHub review comment 写回
 - draft PR 自动创建
 - 跨进程或服务重启后的任务恢复
