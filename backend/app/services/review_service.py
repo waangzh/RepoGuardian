@@ -15,7 +15,9 @@ from app.core.config import settings
 from app.graph.builder import build_review_graph
 from app.graph.state import ReviewState
 from app.models.review import (
+    ExecutionBudget,
     ReviewCreateRequest,
+    ReviewPhase,
     ReviewTask,
     StepStatus,
     TaskStatus,
@@ -107,11 +109,7 @@ class ReviewService:
             "status": "running",
             "pr_url": task.pr_url,
             "model": task.model,
-            "fix_iteration": 0,
-            "max_fix_iterations": 3,
-            "agent_loop_count": 0,
-            "max_agent_loops": 6,
-            "invalid_action_count": 0,
+            "execution_budget": ExecutionBudget().model_dump(),
             "agent_events": [],
             "_github_tool": self._github_tool,
             "_git_tool": self._git_tool,
@@ -145,6 +143,7 @@ class ReviewService:
         except Exception as exc:
             logger.error("❌ 审查任务 %s 执行失败: %s", task_id[:8], exc)
             task.status = TaskStatus.failed
+            task.phase = ReviewPhase.failed
             task.error = str(exc)
             self._touch(task)
         finally:
@@ -155,6 +154,7 @@ class ReviewService:
         """将图的扁平字典状态重建为 Pydantic 模型并写回 ReviewTask。"""
         rebuilt = rebuild_task_from_state(result)
         task.status = TaskStatus.completed
+        task.phase = rebuilt.phase
         task.pr = rebuilt.pr
         task.changed_files = rebuilt.changed_files
         task.issues = rebuilt.issues

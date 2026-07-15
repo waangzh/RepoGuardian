@@ -77,14 +77,13 @@ class ScriptedProvider(LLMProvider):
         self,
         action_sequence: list[AgentAction | dict[str, Any]] | None = None,
         patch_sequence: list[PatchResult | dict[str, Any]] | None = None,
+        auto_fixable: bool = False,
     ) -> None:
         self._action_sequence = list(action_sequence or [
-            {"action": "retrieve_context", "reason": "测试检索上下文"},
-            {"action": "run_static_analysis", "reason": "测试静态分析"},
             {"action": "review_code", "reason": "测试代码审查"},
-            {"action": "finish_report", "reason": "测试输出报告"},
         ])
         self._patch_sequence = list(patch_sequence or [])
+        self._auto_fixable = auto_fixable
 
     async def decide(self, state: dict[str, Any], model: str | None) -> AgentAction:
         raw = self._action_sequence.pop(0) if self._action_sequence else {
@@ -111,6 +110,7 @@ class ScriptedProvider(LLMProvider):
             description="用于验证审查图状态传递。",
             suggestion="无需修改。",
             confidence=0.2,
+            auto_fixable=self._auto_fixable,
         )]
 
     async def generate_patch(
@@ -197,12 +197,10 @@ index 1111111..2222222 100644
     provider = ScriptedProvider(
         action_sequence=[
             {"action": "review_code", "reason": "先审查 diff"},
-            {"action": "generate_patch", "reason": "生成最小修复"},
-            {"action": "apply_patch", "reason": "应用临时 patch"},
-            {"action": "run_tests", "reason": "验证 patch"},
-            {"action": "finish_report", "reason": "输出报告"},
+            {"action": "abandon_patch", "reason": "验证后结束修复"},
         ],
         patch_sequence=[{"diff_content": patch_text, "status": "generated"}],
+        auto_fixable=True,
     )
     service = _build_service(
         tmp_path,
@@ -252,12 +250,10 @@ index 1111111..2222222 100644
     provider = ScriptedProvider(
         action_sequence=[
             {"action": "review_code", "reason": "审查 fixture 中的回归"},
-            {"action": "generate_patch", "reason": "生成折扣计算修复"},
-            {"action": "apply_patch", "reason": "应用候选修复"},
-            {"action": "run_tests", "reason": "运行 fixture 测试"},
-            {"action": "finish_report", "reason": "输出最终报告"},
+            {"action": "abandon_patch", "reason": "验证后结束修复"},
         ],
         patch_sequence=[{"diff_content": patch_text, "status": "generated"}],
+        auto_fixable=True,
     )
     service = ReviewService(
         github_tool=FakeGitHubTool(_build_pr()),

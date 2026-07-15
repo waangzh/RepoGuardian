@@ -7,12 +7,15 @@
 
 from typing import Any, TypedDict
 
+from app.models.review import ExecutionBudget, ReviewPhase
+
 
 class ReviewState(TypedDict, total=False):
     # ---- 基础标识 ----
     task_id: str
     mode: str          # 审查模式，当前固定 "pr_review"
     status: str         # pending → running → completed / failed
+    phase: ReviewPhase
 
     # ---- 输入 ----
     pr_url: str | None
@@ -39,17 +42,16 @@ class ReviewState(TypedDict, total=False):
     context_snippets: list[dict[str, Any]] | None  # CodeSearch 返回的相关代码片段
 
     # ---- 静态分析 ----
-    static_results: dict[str, Any] | None
+    static_results: list[dict[str, Any]] | None
 
     # ---- 审查 ----
-    next_action: dict[str, Any] | None             # 当前 AgentAction（决策节点的输出）
+    next_action: dict[str, Any] | None             # 序列化的当前 AgentAction
     review_issues: list[dict[str, Any]] | None     # LLM 审查发现的问题列表
-    fix_decision: list[dict[str, Any]] | None      # 自动修复决策
 
     # ---- 自动修复 ----
     patches: list[dict[str, Any]] | None  # PatchResult 列表
-    fix_iteration: int                    # 当前修复重试次数
-    max_fix_iterations: int               # 最大修复重试次数（默认 3）
+    execution_budget: dict[str, int] | ExecutionBudget
+    repair_enabled: bool
 
     # ---- 测试结果 ----
     test_results: list[dict[str, Any]] | None  # TestRunResult 列表
@@ -61,9 +63,6 @@ class ReviewState(TypedDict, total=False):
     error: str | None
     step_progress: list[dict[str, Any]] | None    # 图步骤进度 [{node, status, message, timestamp}]
     agent_events: list[dict[str, Any]] | None     # Agent 事件日志 [{action, reason, status, ...}]
-    agent_loop_count: int                         # 当前 agent 循环计数
-    max_agent_loops: int                          # 最大循环次数（默认 6）
-    invalid_action_count: int                     # 连续无效 action 计数
 
     # ---- 工具注入（用于测试；不进入 checkpoint）----
     _github_tool: Any

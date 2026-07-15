@@ -5,10 +5,13 @@ from app.agents.review_agent import ReviewAgent
 from app.core.config import settings
 from app.agents.providers import build_provider
 from app.graph.nodes._events import append_event, append_step
+from app.graph.policies import consume_budget
 from app.graph.state import ReviewState
 from app.models.review import AgentAction, ChangedFile, ChangedLine, PullRequestInfo
 
 logger = logging.getLogger("RepoGuardian.Node")
+
+_DIAGNOSIS_TOKEN_RESERVE = 4_096
 
 
 async def review_node(state: ReviewState) -> ReviewState:
@@ -25,6 +28,20 @@ async def review_node(state: ReviewState) -> ReviewState:
     if not changed_files:
         message = "无变更文件，跳过 LLM 审查"
         logger.warning("✍️ [审查] 跳过: 无变更文件")
+        return ReviewState(
+            review_issues=[],
+            agent_events=append_event(state, action.action, action.reason, "completed", message),
+            step_progress=append_step(state, "review", "completed", message),
+        )
+
+    budget = consume_budget(
+        state,
+        diagnosis_attempts=1,
+        model_calls=1,
+        token_usage=_DIAGNOSIS_TOKEN_RESERVE,
+    )
+    if budget is None:
+        message = "诊断或模型调用预算已耗尽，跳过 LLM 审查"
         return ReviewState(
             review_issues=[],
             agent_events=append_event(state, action.action, action.reason, "completed", message),
@@ -54,6 +71,7 @@ async def review_node(state: ReviewState) -> ReviewState:
     logger.info("✍️ [审查] 完成: %d 个问题（严重性分布: %s）", len(issues_dicts), severity_counts)
     return ReviewState(
         review_issues=issues_dicts,
+        execution_budget=budget.model_dump(),
         agent_events=append_event(state, action.action, action.reason, "completed", message),
         step_progress=append_step(state, "review", "completed", message),
     )

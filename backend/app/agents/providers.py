@@ -9,7 +9,8 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import TypeAdapter, ValidationError
 
-from app.models.review import AgentAction, AgentActionName, ChangedFile, PatchResult, PullRequestInfo, ReviewIssue
+from app.graph.policies import ALLOWED_ACTIONS_BY_PHASE, get_phase
+from app.models.review import AgentAction, ChangedFile, PatchResult, PullRequestInfo, ReviewIssue
 
 logger = logging.getLogger("RepoGuardian.LLM")
 
@@ -296,20 +297,23 @@ class OpenAICompatibleProvider(LLMProvider):
 
     @staticmethod
     def _build_decision_prompt(state: dict[str, Any]) -> str:
+        phase = get_phase(state)
         compact = {
+            "phase": phase.value,
             "changed_files": state.get("changed_files") or [],
             "context_count": len(state.get("context_snippets") or []),
             "static_results": state.get("static_results") or [],
             "review_issues": state.get("review_issues") or [],
             "patches": state.get("patches") or [],
             "test_results": state.get("test_results") or [],
-            "fix_iteration": state.get("fix_iteration", 0),
-            "max_fix_iterations": state.get("max_fix_iterations", 3),
+            "execution_budget": state.get("execution_budget") or {},
             "agent_events": state.get("agent_events") or [],
         }
-        allowed = ", ".join(action.value for action in AgentActionName)
+        allowed = ", ".join(
+            action.value for action in ALLOWED_ACTIONS_BY_PHASE.get(phase, frozenset())
+        )
         return (
-            "Decide the next action for this code review agent.\n"
+            f"Decide the next action for the '{phase.value}' code review phase.\n"
             f"Allowed actions: {allowed}.\n"
             "Return exactly this JSON shape:\n"
             "{\"action\":\"review_code\",\"reason\":\"中文理由\","

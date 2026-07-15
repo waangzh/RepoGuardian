@@ -1,8 +1,9 @@
 import logging
 
 from app.graph.nodes._events import append_event, append_step
+from app.graph.policies import consume_budget
 from app.graph.state import ReviewState
-from app.models.review import AgentAction
+from app.models.review import AgentAction, ReviewPhase
 from app.tools.code_search import CodeSearchTool
 
 logger = logging.getLogger("RepoGuardian.Node")
@@ -18,12 +19,23 @@ async def context_retrieve_node(state: ReviewState) -> ReviewState:
     symbol_index = state.get("symbol_index") or []
     file_index = state.get("file_index") or []
     repo_path = state.get("repo_path", "")
+    budget = consume_budget(state, context_retrievals=1)
+    if budget is None:
+        message = "上下文检索预算已耗尽"
+        return ReviewState(
+            next_action=None,
+            agent_events=append_event(state, action.action, action.reason, "completed", message),
+            step_progress=append_step(state, "context_retrieve", "completed", message),
+        )
 
     if not changed_files or not symbol_index:
         message = "无可检索上下文（无变更文件或符号索引为空）"
         logger.warning("🔍 [上下文] 跳过: %s", message)
         return ReviewState(
+            next_action=None,
             context_snippets=[],
+            phase=ReviewPhase.discovery,
+            execution_budget=budget.model_dump(),
             agent_events=append_event(state, action.action, action.reason, "completed", message),
             step_progress=append_step(state, "context_retrieve", "completed", message),
         )
@@ -40,7 +52,10 @@ async def context_retrieve_node(state: ReviewState) -> ReviewState:
         len(result), direct_count, caller_count, test_count,
     )
     return ReviewState(
+        next_action=None,
         context_snippets=result,
+        phase=ReviewPhase.discovery,
+        execution_budget=budget.model_dump(),
         agent_events=append_event(state, action.action, action.reason, "completed", message),
         step_progress=append_step(state, "context_retrieve", "completed", message),
     )

@@ -4,11 +4,14 @@ from typing import Any
 from app.agents.providers import build_provider
 from app.core.config import settings
 from app.graph.nodes._events import append_event, append_step
+from app.graph.policies import consume_budget
 from app.graph.state import ReviewState
 from app.models.review import AgentAction, AgentActionName, PatchResult
 from app.tools.patch_tool import PatchTool
 
 logger = logging.getLogger("RepoGuardian.Node")
+
+_PATCH_TOKEN_RESERVE = 4_096
 
 
 async def patch_node(state: ReviewState) -> ReviewState:
@@ -21,7 +24,7 @@ async def patch_node(state: ReviewState) -> ReviewState:
         "action": "generate_patch",
         "reason": "Generate patch.",
     })
-    if action.action == AgentActionName.generate_patch:
+    if action.action in {AgentActionName.generate_patch, AgentActionName.revise_patch}:
         logger.info("🩹 [修复] 生成 patch，目标 issue IDs: %s", action.target_issue_ids)
         return await _generate_patch(state, action)
     if action.action == AgentActionName.apply_patch:
@@ -38,6 +41,18 @@ async def patch_node(state: ReviewState) -> ReviewState:
 
 
 async def _generate_patch(state: ReviewState, action: AgentAction) -> ReviewState:
+    budget = consume_budget(
+        state,
+        patch_attempts=1,
+        model_calls=1,
+        token_usage=_PATCH_TOKEN_RESERVE,
+    )
+    if budget is None:
+        message = "补丁或模型调用预算已耗尽"
+        return ReviewState(
+            agent_events=append_event(state, action.action, action.reason, "completed", message),
+            step_progress=append_step(state, "patch_generate", "completed", message),
+        )
     provider: Any = state.get("_provider") or build_provider(
         settings.repoguardian_provider,
         settings.openai_api_key,
@@ -52,6 +67,7 @@ async def _generate_patch(state: ReviewState, action: AgentAction) -> ReviewStat
     logger.info("🩹 [生成 patch] 完成: 生成了 %d 个 patch（累计 %d 个）", len(patch_dicts), len(previous) + len(patch_dicts))
     return ReviewState(
         patches=previous + patch_dicts,
+        execution_budget=budget.model_dump(),
         agent_events=append_event(state, action.action, action.reason, "completed", message),
         step_progress=append_step(state, "patch_generate", "completed", message),
     )

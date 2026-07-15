@@ -2,6 +2,7 @@ import logging
 
 from app.graph.nodes._events import append_step
 from app.graph.state import ReviewState
+from app.models.review import ReviewPhase
 from app.services.review_rebuild import rebuild_task_from_state
 from app.services.report_service import ReportService
 
@@ -19,6 +20,11 @@ async def report_node(state: ReviewState) -> ReviewState:
     logger.info("📝 [报告] 报告生成完成（%d 字符 Markdown）", len(markdown))
     return ReviewState(
         report_markdown=markdown,
-        status="completed",
+        phase=ReviewPhase.publishing,
         step_progress=append_step(state, "report", "completed", "报告已生成"),
     )
+
+
+async def complete_node(state: ReviewState) -> ReviewState:
+    """报告发布完成后才将任务标记为 completed。"""
+    return ReviewState(status="completed", phase=ReviewPhase.completed)

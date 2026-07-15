@@ -1,4 +1,15 @@
 export type TaskStatus = "pending" | "running" | "completed" | "failed";
+export type ReviewPhase =
+  | "prepare"
+  | "project_detection"
+  | "baseline"
+  | "discovery"
+  | "verification"
+  | "repair"
+  | "validation"
+  | "publishing"
+  | "completed"
+  | "failed";
 export type StepStatus = "pending" | "running" | "completed" | "failed";
 export type Severity = "low" | "medium" | "high" | "critical";
 
@@ -113,6 +124,7 @@ export interface AgentEvent {
 export interface ReviewTask {
   id: string;
   status: TaskStatus;
+  phase: ReviewPhase;
   pr_url: string;
   model?: string | null;
   steps: TaskStep[];

@@ -17,6 +17,7 @@ from app.models.review import (
     PullRequestInfo,
     PullRequestRef,
     RepoSnapshot,
+    ReviewPhase,
     ReviewIssue,
     ReviewTask,
     TestRunResult,
@@ -28,6 +29,7 @@ def rebuild_task_from_state(state: ReviewState) -> ReviewTask:
     return ReviewTask(
         id=state.get("task_id", ""),
         status=state.get("status", "completed"),
+        phase=ReviewPhase(state.get("phase") or ReviewPhase.completed),
         pr_url=state.get("pr_url", ""),
         model=state.get("model"),
         pr=rebuild_pr_info(state.get("pr_info") or {}),

@@ -27,6 +27,21 @@ class TaskStatus(str, Enum):
     failed = "failed"
 
 
+class ReviewPhase(str, Enum):
+    """审查图的受控阶段。"""
+
+    prepare = "prepare"
+    project_detection = "project_detection"
+    baseline = "baseline"
+    discovery = "discovery"
+    verification = "verification"
+    repair = "repair"
+    validation = "validation"
+    publishing = "publishing"
+    completed = "completed"
+    failed = "failed"
+
+
 class StepStatus(str, Enum):
     """单个图节点的执行状态。"""
     pending = "pending"
@@ -53,7 +68,7 @@ class IssueCategory(str, Enum):
 
 
 class AgentActionName(str, Enum):
-    """Agent 支持的 8 种操作类型。"""
+    """Agent 及兼容流程支持的操作类型。"""
     retrieve_context = "retrieve_context"
     run_static_analysis = "run_static_analysis"
     review_code = "review_code"
@@ -62,6 +77,43 @@ class AgentActionName(str, Enum):
     run_tests = "run_tests"
     finish_report = "finish_report"
     request_human = "request_human"
+    revise_patch = "revise_patch"
+    abandon_patch = "abandon_patch"
+
+
+class ExecutionBudget(BaseModel):
+    """限制一次审查中可消耗的外部与模型资源。"""
+
+    context_retrievals: int = Field(default=0, ge=0)
+    max_context_retrievals: int = Field(default=2, ge=0)
+    diagnosis_attempts: int = Field(default=0, ge=0)
+    max_diagnosis_attempts: int = Field(default=1, ge=0)
+    patch_attempts: int = Field(default=0, ge=0)
+    max_patch_attempts: int = Field(default=3, ge=0)
+    model_calls: int = Field(default=0, ge=0)
+    max_model_calls: int = Field(default=6, ge=0)
+    token_usage: int = Field(default=0, ge=0)
+    max_token_usage: int = Field(default=24_000, ge=0)
+
+    def can_consume(self, **amounts: int) -> bool:
+        """检查一组预算消耗是否仍在上限内。"""
+        for name, amount in amounts.items():
+            if amount < 0:
+                raise ValueError("budget consumption must not be negative")
+            limit_name = f"max_{name}"
+            if not hasattr(self, name) or not hasattr(self, limit_name):
+                raise ValueError(f"unsupported budget metric: {name}")
+            if getattr(self, name) + amount > getattr(self, limit_name):
+                return False
+        return True
+
+    def consume(self, **amounts: int) -> "ExecutionBudget":
+        """返回已消耗预算的新实例；超限时拒绝执行。"""
+        if not self.can_consume(**amounts):
+            raise ValueError("execution budget exhausted")
+        return self.model_copy(
+            update={name: getattr(self, name) + amount for name, amount in amounts.items()}
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +279,7 @@ class ReviewTask(BaseModel):
     """审查任务聚合根，聚合所有阶段的产出，供前端完整展示。"""
     id: str
     status: TaskStatus = TaskStatus.pending
+    phase: ReviewPhase = ReviewPhase.prepare
     pr_url: str
     model: str | None = None
     steps: list[TaskStep] = Field(default_factory=list)

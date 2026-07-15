@@ -1,56 +1,43 @@
+"""仅在 discovery 与 repair 阶段调用模型的受限 Agent 决策节点。"""
+
 import logging
 from typing import Any
 
 from app.agents.providers import LLMProviderError, build_provider
 from app.core.config import settings
 from app.graph.nodes._events import append_event, append_step
+from app.graph.policies import (
+    ActionPolicyViolation,
+    consume_budget,
+    get_execution_budget,
+    get_phase,
+    safe_action_for_phase,
+    validate_action_for_phase,
+)
 from app.graph.state import ReviewState
-from app.models.review import AgentAction
+from app.models.review import AgentAction, ReviewPhase
 
 logger = logging.getLogger("RepoGuardian.Node")
 
+_DECISION_TOKEN_RESERVE = 1_200
+
 
 async def agent_decide_node(state: ReviewState) -> ReviewState:
-    """Agent 决策节点：核心大脑，每次循环调用 LLM 决定下一步做什么。
+    """从阶段白名单中选择动作，永不接受模型给出的自由节点名。"""
+    phase = get_phase(state)
+    if phase not in {ReviewPhase.discovery, ReviewPhase.repair}:
+        raise ActionPolicyViolation(f"agent decisions are not permitted during '{phase.value}'")
 
-    边界：
-        1. agent_loop_count > max_agent_loops → 强制 finish_report
-        2. fix_iteration >= max_fix_iterations 且测试仍失败 → 强制 finish_report
-        3. LLM 连续返回无效 JSON 两次 → 强制 finish_report
-        4. 单次 LLM 异常 → 回退到 review_code
-    """
-    loop_count = int(state.get("agent_loop_count") or 0) + 1
-    max_loops = int(state.get("max_agent_loops") or 6)
-    fix_iteration = int(state.get("fix_iteration") or 0)
-    max_fix_iterations = int(state.get("max_fix_iterations") or 3)
-
-    logger.info(
-        "🧠 [决策] 第 %d/%d 轮 | 修复迭代 %d/%d | 已有问题 %d | patches %d",
-        loop_count,
-        max_loops,
-        fix_iteration,
-        max_fix_iterations,
-        len(state.get("review_issues") or []),
-        len(state.get("patches") or []),
-    )
-
-    # ---- 1: Agent 循环次数超限 ----
-    if loop_count > max_loops:
-        logger.warning("🛑 [决策] Agent 循环次数已达上限 %d，强制生成报告", max_loops)
-        action = AgentAction(
-            action="finish_report",
-            reason=f"Agent loop limit reached ({max_loops}); finishing report.",
-        )
-        return _with_action(state, action, loop_count, "completed", "Agent loop limit reached")
-
-    # ---- 2: 修复重试超限且测试仍失败 ----
-    if fix_iteration >= max_fix_iterations and _has_failed_tests(state):
-        logger.warning("🛑 [决策] 修复重试已达上限 %d 且测试仍失败，强制生成报告", max_fix_iterations)
-        action = AgentAction(
-            action="finish_report",
-            reason=f"Fix retry limit reached ({max_fix_iterations}); finishing report.",
-        )
-        return _with_action(state, action, loop_count, "completed", "Fix retry limit reached")
+    budget = get_execution_budget(state)
+    if phase == ReviewPhase.discovery and not state.get("changed_files"):
+        action = safe_action_for_phase(phase, "没有变更文件，无需额外上下文。")
+        return _with_action(state, action, "completed", action.reason)
+    if phase == ReviewPhase.discovery and not budget.can_consume(context_retrievals=1):
+        action = safe_action_for_phase(phase, "上下文检索预算已耗尽，开始诊断。")
+        return _with_action(state, action, "completed", action.reason)
+    if not budget.can_consume(model_calls=1, token_usage=_DECISION_TOKEN_RESERVE):
+        action = safe_action_for_phase(phase, "模型调用预算已耗尽，使用安全收敛动作。")
+        return _with_action(state, action, "completed", action.reason)
 
     provider: Any = state.get("_provider") or build_provider(
         settings.repoguardian_provider,
@@ -58,47 +45,42 @@ async def agent_decide_node(state: ReviewState) -> ReviewState:
         settings.openai_base_url,
         settings.repoguardian_model,
     )
+    consumed = consume_budget(state, model_calls=1, token_usage=_DECISION_TOKEN_RESERVE)
+    assert consumed is not None
 
-    # ---- 调用 LLM 做决策 ----
     try:
-        logger.debug("🧠 [决策] 调用 Provider.decide() ...")
         action = await provider.decide(dict(state), state.get("model"))
-        invalid_action_count = int(state.get("invalid_action_count") or 0)
-        logger.info("🧠 [决策] LLM 选择: %s（理由: %s）", action.action.value, action.reason)
-    except (LLMProviderError, ValueError) as exc:
-        invalid_action_count = int(state.get("invalid_action_count") or 0) + 1
-        logger.error("❌ [决策] LLM 返回无效，第 %d/2 次失败: %s", invalid_action_count, exc)
-        if invalid_action_count >= 2:
-            logger.warning("🛑 [决策] 连续两次无效输出，强制 finish_report")
-            action = AgentAction(
-                action="finish_report",
-                reason="LLM action output was invalid twice; finishing report.",
-            )
-        else:
-            action = AgentAction(
-                action="review_code",
-                reason=f"LLM action output invalid; fallback to review. Error: {exc}",
-            )
-        result = _with_action(state, action, loop_count, "failed", str(exc))
-        result["invalid_action_count"] = invalid_action_count
-        return ReviewState(**result)
+        validate_action_for_phase(phase, action)
+    except (LLMProviderError, ValueError, ActionPolicyViolation) as exc:
+        action = safe_action_for_phase(phase, f"已拒绝无效 Agent 动作：{exc}")
+        return _with_action(
+            state,
+            action,
+            "rejected",
+            str(exc),
+            execution_budget=consumed,
+        )
 
-    result = _with_action(state, action, loop_count, "selected", action.reason)
-    result["invalid_action_count"] = invalid_action_count
-    return ReviewState(**result)
+    return _with_action(
+        state,
+        action,
+        "selected",
+        action.reason,
+        execution_budget=consumed,
+    )
 
 
 def _with_action(
     state: ReviewState,
     action: AgentAction,
-    loop_count: int,
     status: str,
     message: str,
-) -> dict[str, Any]:
-    """将 LLM 决策结果写入状态：next_action + 事件日志 + 进度步骤。"""
-    return {
+    *,
+    execution_budget: Any | None = None,
+) -> ReviewState:
+    """将已经过阶段策略校验的动作、预算和审计事件写入状态。"""
+    result: dict[str, Any] = {
         "next_action": action.model_dump(mode="json"),
-        "agent_loop_count": loop_count,
         "agent_events": append_event(state, action.action, action.reason, status, message),
         "step_progress": append_step(
             state,
@@ -107,7 +89,6 @@ def _with_action(
             action.reason,
         ),
     }
-
-
-def _has_failed_tests(state: ReviewState) -> bool:
-    return any(not result.get("passed", False) for result in state.get("test_results") or [])
+    if execution_budget is not None:
+        result["execution_budget"] = execution_budget.model_dump()
+    return ReviewState(**result)

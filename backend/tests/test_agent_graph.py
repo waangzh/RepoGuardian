@@ -6,9 +6,19 @@ import pytest
 from pydantic import ValidationError
 
 from app.agents.providers import LLMProvider
-from app.graph.builder import build_review_graph
-from app.graph.builder import route_agent_action
-from app.models.review import AgentAction, ChangedFile, PatchResult, PullRequestInfo, PullRequestRef, ReviewIssue
+from app.graph.policies import ALLOWED_ACTIONS_BY_PHASE
+from app.graph.review_graph import build_review_graph
+from app.graph.routers import route_discovery_action, route_repair_action
+from app.models.review import (
+    AgentAction,
+    ChangedFile,
+    ExecutionBudget,
+    PatchResult,
+    PullRequestInfo,
+    PullRequestRef,
+    ReviewIssue,
+    ReviewPhase,
+)
 from app.tools.diff_parser import DiffParser
 
 
@@ -23,26 +33,36 @@ index 1111111..2222222 100644
 -    return amount * (100 - discount_percent) / 100
 +    return amount * discount_percent / 100
 """
+SAMPLE_PATCH = """diff --git a/pricing.py b/pricing.py
+--- a/pricing.py
++++ b/pricing.py
+@@ -3 +3 @@
+-    return amount * discount_percent / 100
++    return amount * (100 - discount_percent) / 100
+"""
 
 
 class GraphScriptedProvider(LLMProvider):
-    """为真实 StateGraph 执行提供确定性动作，不发起网络请求。"""
+    """用于图测试的确定性 Provider，不访问网络或宿主机凭据。"""
 
     def __init__(
         self,
-        actions: list[dict[str, Any]],
+        actions: list[dict[str, Any]] | None = None,
         review_issues: list[ReviewIssue] | None = None,
+        patches: list[PatchResult] | None = None,
     ) -> None:
-        self._actions = list(actions)
+        self._actions = list(actions or [{"action": "review_code", "reason": "开始诊断"}])
         self._review_issues = review_issues or []
+        self._patches = list(patches or [])
         self.decide_calls = 0
         self.review_calls = 0
+        self.patch_calls = 0
 
     async def decide(self, state: dict[str, Any], model: str | None) -> AgentAction:
         self.decide_calls += 1
         raw = self._actions.pop(0) if self._actions else {
-            "action": "finish_report",
-            "reason": "动作序列已完成",
+            "action": "abandon_patch",
+            "reason": "脚本化动作已完成",
         }
         return AgentAction.model_validate(raw)
 
@@ -61,7 +81,8 @@ class GraphScriptedProvider(LLMProvider):
         state: dict[str, Any],
         model: str | None,
     ) -> list[PatchResult]:
-        return []
+        self.patch_calls += 1
+        return list(self._patches)
 
 
 class FixtureGitHubTool:
@@ -104,6 +125,8 @@ def _sample_pr() -> PullRequestInfo:
 def _initial_state(
     tmp_path: Path,
     provider: LLMProvider,
+    *,
+    budget: ExecutionBudget | None = None,
     github_tool: object | None = None,
 ) -> dict[str, Any]:
     return {
@@ -111,11 +134,27 @@ def _initial_state(
         "mode": "pr_review",
         "pr_url": "https://github.com/local/sample/pull/1",
         "model": None,
+        "execution_budget": (budget or ExecutionBudget()).model_dump(),
         "_github_tool": github_tool or FixtureGitHubTool(),
         "_git_tool": FixtureGitTool(tmp_path / "workspace"),
         "_diff_parser": DiffParser(),
         "_provider": provider,
     }
+
+
+def _auto_fixable_issue() -> ReviewIssue:
+    return ReviewIssue(
+        id="discount-fix",
+        file_path="pricing.py",
+        line_no=3,
+        severity="high",
+        category="correctness",
+        title="折扣计算错误",
+        description="折扣百分比被直接作为剩余金额使用。",
+        suggestion="使用 100 - discount_percent。",
+        confidence=0.95,
+        auto_fixable=True,
+    )
 
 
 def test_agent_action_accepts_valid_json_shape() -> None:
@@ -134,68 +173,106 @@ def test_agent_action_rejects_unknown_action() -> None:
         AgentAction.model_validate({"action": "unknown", "reason": "bad"})
 
 
-def test_route_agent_action_uses_next_action() -> None:
-    route = route_agent_action({"next_action": {"action": "run_tests"}})
-
-    assert route == "run_tests"
-
-
-def test_route_agent_action_falls_back_to_report() -> None:
-    route = route_agent_action({"next_action": {"action": "unknown"}})
-
-    assert route == "finish_report"
+def test_legal_actions_are_routed_only_within_their_phase() -> None:
+    assert ALLOWED_ACTIONS_BY_PHASE[ReviewPhase.discovery] == {
+        "retrieve_context",
+        "review_code",
+    }
+    assert ALLOWED_ACTIONS_BY_PHASE[ReviewPhase.repair] == {
+        "revise_patch",
+        "abandon_patch",
+    }
+    assert route_discovery_action({"next_action": {"action": "retrieve_context", "reason": "x"}}) == (
+        "context_retrieve"
+    )
+    assert route_repair_action({"next_action": {"action": "revise_patch", "reason": "x"}}) == (
+        "generate_patch"
+    )
 
 
 @pytest.mark.asyncio
-async def test_graph_routes_normal_action_to_report_and_ends(tmp_path: Path) -> None:
-    provider = GraphScriptedProvider([
-        {"action": "finish_report", "reason": "正常结束"},
-    ])
+async def test_illegal_phase_action_is_rejected_and_cannot_run_tool(tmp_path: Path) -> None:
+    provider = GraphScriptedProvider(actions=[{"action": "run_tests", "reason": "越权动作"}])
 
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
     assert result["status"] == "completed"
-    assert result["next_action"]["action"] == "finish_report"
-    assert result["agent_loop_count"] == 1
-    assert result["report_markdown"].startswith("# RepoGuardian 代码审查报告")
+    assert provider.review_calls == 1
+    assert not result.get("test_results")
+    assert any(event["status"] == "rejected" for event in result["agent_events"])
 
 
 @pytest.mark.asyncio
-async def test_graph_forces_report_after_agent_loop_limit(tmp_path: Path) -> None:
-    provider = GraphScriptedProvider([
-        {"action": "retrieve_context", "reason": "继续检索"}
-        for _ in range(6)
-    ])
+async def test_context_budget_exhaustion_skips_extra_retrieval(tmp_path: Path) -> None:
+    provider = GraphScriptedProvider(actions=[{"action": "retrieve_context", "reason": "继续检索"}])
+    budget = ExecutionBudget(max_context_retrievals=1)
+
+    result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider, budget=budget))
+
+    assert result["execution_budget"]["context_retrievals"] == 1
+    assert provider.decide_calls == 0
+    assert result["next_action"]["action"] == "review_code"
+
+
+@pytest.mark.asyncio
+async def test_patch_budget_exhaustion_skips_repair_subgraph_work(tmp_path: Path) -> None:
+    provider = GraphScriptedProvider(review_issues=[_auto_fixable_issue()])
+    budget = ExecutionBudget(max_patch_attempts=0)
+
+    result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider, budget=budget))
+
+    assert result["status"] == "completed"
+    assert provider.patch_calls == 0
+    assert not result.get("patches")
+    assert result["report_markdown"]
+
+
+@pytest.mark.asyncio
+async def test_model_call_budget_exhaustion_still_publishes_report(tmp_path: Path) -> None:
+    provider = GraphScriptedProvider()
+    budget = ExecutionBudget(max_model_calls=0)
+
+    result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider, budget=budget))
+
+    assert result["status"] == "completed"
+    assert result["execution_budget"]["model_calls"] == 0
+    assert provider.decide_calls == provider.review_calls == 0
+    assert result["report_markdown"]
+
+
+@pytest.mark.asyncio
+async def test_main_flow_cannot_skip_report(tmp_path: Path) -> None:
+    result = await build_review_graph().compile().ainvoke(
+        _initial_state(tmp_path, GraphScriptedProvider())
+    )
+
+    assert result["phase"] == ReviewPhase.completed
+    assert result["step_progress"][-1]["node"] == "report"
+    assert result["report_markdown"].startswith("# RepoGuardian")
+
+
+@pytest.mark.asyncio
+async def test_repair_subgraph_returns_to_main_flow(tmp_path: Path) -> None:
+    provider = GraphScriptedProvider(
+        actions=[
+            {"action": "review_code", "reason": "开始诊断"},
+            {"action": "abandon_patch", "reason": "验证后结束修复"},
+        ],
+        review_issues=[_auto_fixable_issue()],
+        patches=[PatchResult(issue_id="discount-fix", diff_content=SAMPLE_PATCH)],
+    )
 
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
-    assert result["status"] == "completed"
-    assert result["next_action"]["action"] == "finish_report"
-    assert result["agent_loop_count"] == 7
-    assert provider.decide_calls == 6
-    assert "Agent loop limit reached" in result["report_markdown"]
+    assert provider.patch_calls == 1
+    assert result["patches"][-1]["status"] == "applied"
+    assert result["test_results"][-1]["passed"] is True
+    assert result["step_progress"][-1]["node"] == "report"
 
 
 @pytest.mark.asyncio
-async def test_graph_propagates_node_exception(tmp_path: Path) -> None:
-    provider = GraphScriptedProvider([])
-
+async def test_graph_propagates_repository_preparation_failure(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="fixture repository preparation failed"):
         await build_review_graph().compile().ainvoke(
-            _initial_state(tmp_path, provider, FailingGitHubTool())
+            _initial_state(tmp_path, GraphScriptedProvider(), github_tool=FailingGitHubTool())
         )
-
-
-@pytest.mark.asyncio
-async def test_graph_generates_report_directly_when_review_has_no_issues(tmp_path: Path) -> None:
-    provider = GraphScriptedProvider([
-        {"action": "review_code", "reason": "先确认是否有问题"},
-        {"action": "finish_report", "reason": "无问题，直接报告"},
-    ])
-
-    result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
-
-    assert provider.review_calls == 1
-    assert result["review_issues"] == []
-    assert result["next_action"]["action"] == "finish_report"
-    assert "未发现有明确证据的代码问题" in result["report_markdown"]
