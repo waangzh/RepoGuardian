@@ -8,6 +8,7 @@ from app.graph.nodes.verification import patched_validation_node
 from app.models.review import ExecutionBudget, PatchResult, TestRunResult as RunResult, ValidationSnapshot, ValidationStage
 from app.projects.python import PythonProjectAdapter
 from app.tools.git_tool import GitTool
+from app.tools.patch_tool import PatchTool
 
 
 def _init_repo(tmp_path: Path) -> tuple[Path, str]:
@@ -96,6 +97,34 @@ async def test_failed_apply_is_cleaned_before_the_next_candidate(tmp_path: Path)
     after_second = await _apply_candidate(after_failed)
     assert after_second["patches"][1]["status"] == "applied"
     assert (repo / "marker.txt").read_text(encoding="utf-8") == "second\n"
+
+
+@pytest.mark.asyncio
+async def test_patch_application_rejects_indentation_mismatch(tmp_path: Path) -> None:
+    repo, _ = _init_repo(tmp_path)
+    (repo / "module.py").write_text(
+        "def render():\n    return 'head'\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "add", "module.py"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=test@example.test", "-c", "user.name=Test", "commit", "-m", "indent"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    patch = PatchResult(diff_content="""diff --git a/module.py b/module.py
+--- a/module.py
++++ b/module.py
+@@ -1,2 +1,2 @@
+ def render():
+-return 'head'
++return 'patched'
+""")
+
+    applied = await PatchTool().apply(repo, patch)
+
+    assert applied.status == "apply_failed"
+    assert (repo / "module.py").read_text(encoding="utf-8") == "def render():\n    return 'head'\n"
 
 
 @pytest.mark.asyncio

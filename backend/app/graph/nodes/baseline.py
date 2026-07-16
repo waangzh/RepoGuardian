@@ -44,7 +44,19 @@ async def baseline_node(state: ReviewState) -> ReviewState:
     head_snapshot = await _checkout_and_validate(
         git_tool, repo_path, head_sha, ValidationStage.head, profile, validator
     )
-    return _baseline_state(state, [base_snapshot, head_snapshot], validation_ready=head_snapshot.failure_kind != FailureKind.infrastructure)
+    return _baseline_state(
+        state,
+        [base_snapshot, head_snapshot],
+        validation_ready=_head_checkout_succeeded(head_snapshot),
+    )
+
+
+def _head_checkout_succeeded(snapshot: ValidationSnapshot) -> bool:
+    """命令执行不可用时仍可继续只读审查；仅 checkout 失败才终止流程。"""
+    return not any(
+        result.command == "git.checkout" and not result.passed
+        for result in snapshot.command_results
+    )
 
 
 async def _checkout_and_validate(

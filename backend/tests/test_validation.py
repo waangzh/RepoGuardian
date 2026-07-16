@@ -151,6 +151,11 @@ class PassingExecutor:
         return _result(passed=True, command=spec.command_id.value)
 
 
+class RejectedExecutor:
+    async def execute(self, repo_path: str, spec: CommandSpec) -> RunResult:
+        return _result(passed=False, command=spec.command_id.value, exit_code=125)
+
+
 @pytest.mark.asyncio
 async def test_baseline_validation_checkouts_base_then_head(tmp_path: Path) -> None:
     (tmp_path / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
@@ -170,6 +175,25 @@ async def test_baseline_validation_checkouts_base_then_head(tmp_path: Path) -> N
     assert git_tool.checkouts == ["base-sha", "head-sha"]
     assert [item["stage"] for item in result["validation_snapshots"]] == ["base", "head"]
     assert result["validation_deltas"][0]["failure_kind"] is None
+
+
+@pytest.mark.asyncio
+async def test_rejected_validation_still_allows_read_only_review(tmp_path: Path) -> None:
+    (tmp_path / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
+    profile = PythonProjectAdapter().detect(tmp_path)
+    assert profile is not None
+
+    result = await baseline_node({
+        "repo_path": str(tmp_path),
+        "base_sha": "base-sha",
+        "head_sha": "head-sha",
+        "project_profile": profile.model_dump(mode="json"),
+        "_git_tool": CheckoutFixtureGitTool(),
+        "_command_executor": RejectedExecutor(),
+    })
+
+    assert result["validation_ready"] is True
+    assert result["validation_blocked"] is True
 
 
 @pytest.mark.asyncio
