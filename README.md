@@ -1,5 +1,9 @@
 # RepoGuardian
 
+> 当前验证语义：Base、Head 与每个候选补丁均有独立快照。每个候选补丁在干净的 PR Head 上执行 `git apply --check`、应用和验证；验证结束后工作树立即复位，因此补丁不会彼此累积或共享副作用。
+
+> 执行安全边界：默认执行器为安全拒绝的沙箱占位实现，未配置真实沙箱时不会运行仓库命令，更不会静默回退到宿主机。仅开发或可信仓库可同时设置 `REPOGUARDIAN_EXECUTOR=local` 与 `REPOGUARDIAN_ALLOW_UNSAFE_LOCAL_EXECUTION=true` 显式授权本地执行。
+
 > 面向 GitHub Pull Request 的 Python 代码审查与受控修复工作台。
 
 RepoGuardian 接收一个 GitHub PR URL，在任务临时 clone 中读取 Base / Head 版本、分析 diff 与相关上下文，并生成结构化问题、受控补丁、验证快照和 Markdown 报告。它把确定性步骤交给 LangGraph 编排，把模型能力限定在审查与修复决策中，让每一步都可观察、可追踪。

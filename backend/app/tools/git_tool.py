@@ -66,6 +66,28 @@ class GitTool:
         repo_dir = Path(repo_path).resolve()
         self._run([self._git, "-C", str(repo_dir), "checkout", "--detach", sha])
 
+    def reset_to_sha(self, repo_path: str | Path, sha: str) -> None:
+        """强制将任务临时 clone 复位到一个服务端已获取的确定 SHA。"""
+        repo_dir = self._validate_worktree(repo_path)
+        self._run([self._git, "-C", str(repo_dir), "reset", "--hard", sha])
+
+    def clean_worktree(self, repo_path: str | Path) -> None:
+        """删除临时 clone 中所有未跟踪和忽略文件，不保留候选补丁副作用。"""
+        repo_dir = self._validate_worktree(repo_path)
+        self._run([self._git, "-C", str(repo_dir), "clean", "-fdx"])
+
+    def prepare_patch_workspace(self, repo_path: str | Path, head_sha: str) -> None:
+        """为单个候选补丁建立 ``Head + 当前补丁`` 的唯一允许验证起点。"""
+        self.reset_to_sha(repo_path, head_sha)
+        self.clean_worktree(repo_path)
+
+    @staticmethod
+    def _validate_worktree(repo_path: str | Path) -> Path:
+        repo_dir = Path(repo_path).resolve()
+        if not repo_dir.is_dir() or not (repo_dir / ".git").exists():
+            raise GitToolError(f"Repository path is not a git worktree: {repo_dir}")
+        return repo_dir
+
     @staticmethod
     def _run(command: list[str]) -> str:
         """同步执行 git 命令，失败时抛出 GitToolError。"""

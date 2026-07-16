@@ -41,6 +41,8 @@ def route_repair_action(state: dict[str, Any]) -> str:
         return "repair_exit"
     if action.action == AgentActionName.revise_patch:
         return "generate_patch"
+    if action.action == AgentActionName.abandon_patch:
+        return "abandon_patch"
     return "repair_exit"
 
 

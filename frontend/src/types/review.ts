@@ -104,6 +104,19 @@ export interface TestRunResult {
   duration: number;
 }
 
+export interface FailureFingerprint {
+  tool: string;
+  identity: string;
+  test_node_id?: string | null;
+  error_type?: string | null;
+  file_path?: string | null;
+  line_no?: number | null;
+  column?: number | null;
+  rule_code?: string | null;
+  message?: string | null;
+  normalized_summary: string;
+}
+
 export type FailureKind =
   | "dependency_missing"
   | "test_collection_error"
@@ -120,10 +133,13 @@ export interface ProjectProfile {
 }
 
 export interface ValidationSnapshot {
+  id: string;
   stage: "base" | "head" | "patched";
   sha: string;
   patch_id?: string | null;
   command_results: TestRunResult[];
+  collected_test_count?: number | null;
+  failure_fingerprints: FailureFingerprint[];
   passed: boolean;
   failure_kind?: FailureKind | null;
   failure_detail?: string | null;
@@ -138,13 +154,25 @@ export interface ValidationDelta {
   failure_kind?: FailureKind | null;
   introduced_failure: boolean;
   resolved_failure: boolean;
+  introduced_failures: FailureFingerprint[];
+  resolved_failures: FailureFingerprint[];
 }
 
 export interface PatchResult {
   id: string;
   issue_id?: string | null;
   diff_content: string;
-  status: string;
+  status:
+    | "generated"
+    | "apply_failed"
+    | "applied"
+    | "validation_passed"
+    | "validation_failed"
+    | "abandoned"
+    | "superseded";
+  revision_of?: string | null;
+  attempt_number: number;
+  validation_snapshot_id?: string | null;
   error?: string | null;
   created_at: string;
 }

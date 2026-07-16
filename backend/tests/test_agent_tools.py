@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from app.models.review import CommandId, PatchResult
-from app.tools.command_runner import CommandPolicyError, resolve_command_spec
+from app.tools.command_runner import CommandPolicyError, LocalCommandExecutor, resolve_command_spec
 from app.tools.patch_tool import PatchTool
 from app.tools.test_runner import TestRunnerTool
 
@@ -36,3 +36,14 @@ async def test_patch_tool_rejects_empty_diff(tmp_path: Path) -> None:
     result = await PatchTool().apply(tmp_path, patch)
 
     assert result.status == "apply_failed"
+
+
+@pytest.mark.asyncio
+async def test_local_execution_is_rejected_without_explicit_unsafe_authorization(tmp_path: Path) -> None:
+    spec = resolve_command_spec(CommandId.python_test_full)
+
+    result = await LocalCommandExecutor().execute(tmp_path, spec)
+
+    assert result.passed is False
+    assert result.exit_code == 125
+    assert "Unsafe local execution is disabled" in result.stderr

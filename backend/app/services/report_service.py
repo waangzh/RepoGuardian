@@ -167,8 +167,9 @@ def _append_patch_results(lines: list[str], task: ReviewTask) -> None:
         return
     lines.extend(["| Patch | Issue | 状态 | 错误 |", "|---|---|---|---|"])
     for patch in task.patches:
+        status = patch.status.value
         lines.append(
-            f"| `{patch.id[:8]}` | `{patch.issue_id or ''}` | {patch.status} | {patch.error or ''} |"
+            f"| `{patch.id[:8]}` | `{patch.issue_id or ''}` | {status} | {patch.error or ''} |"
         )
     lines.append("")
 

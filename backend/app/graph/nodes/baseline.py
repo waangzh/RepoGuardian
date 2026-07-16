@@ -14,7 +14,7 @@ from app.models.review import (
 )
 from app.projects.registry import default_project_registry
 from app.services.validation_service import ValidationService, blocks_auto_repair, compare_snapshots
-from app.tools.command_runner import LocalCommandExecutor
+from app.tools.command_runner import build_command_executor
 
 
 async def baseline_node(state: ReviewState) -> ReviewState:
@@ -33,7 +33,7 @@ async def baseline_node(state: ReviewState) -> ReviewState:
         snapshots = [_unsupported_snapshot(ValidationStage.base, base_sha), _unsupported_snapshot(ValidationStage.head, head_sha)]
         return _baseline_state(state, snapshots, validation_ready=False)
 
-    executor = state.get("_command_executor") or LocalCommandExecutor()
+    executor = state.get("_command_executor") or build_command_executor()
     validator = ValidationService(adapter, executor)
     git_tool: Any = state.get("_git_tool")
     repo_path = state.get("repo_path", "")

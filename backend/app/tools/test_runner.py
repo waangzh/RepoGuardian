@@ -4,7 +4,7 @@ from typing import Any
 
 from app.tools.base import BaseTool
 from app.models.review import CommandId
-from app.tools.command_runner import LocalCommandExecutor, resolve_command_spec
+from app.tools.command_runner import build_command_executor, resolve_command_spec
 
 
 class TestRunnerTool(BaseTool):
@@ -16,6 +16,6 @@ class TestRunnerTool(BaseTool):
         repo_path = kwargs["repo_path"]
         command_id = kwargs.get("command_id", CommandId.python_test_full)
         spec = resolve_command_spec(command_id, kwargs.get("adapter_id", "python"))
-        executor = kwargs.get("executor") or LocalCommandExecutor()
+        executor = kwargs.get("executor") or build_command_executor()
         result = await executor.execute(repo_path, spec)
         return {"test_results": [result.model_dump(mode="json")]}

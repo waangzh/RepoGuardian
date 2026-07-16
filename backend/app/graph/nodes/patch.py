@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Any
 
@@ -6,7 +7,7 @@ from app.core.config import settings
 from app.graph.nodes._events import append_event, append_step
 from app.graph.policies import consume_budget
 from app.graph.state import ReviewState
-from app.models.review import AgentAction, AgentActionName, PatchResult
+from app.models.review import AgentAction, AgentActionName, PatchResult, PatchStatus
 from app.tools.patch_tool import PatchTool
 
 logger = logging.getLogger("RepoGuardian.Node")
@@ -61,12 +62,30 @@ async def _generate_patch(state: ReviewState, action: AgentAction) -> ReviewStat
     )
     logger.info("🩹 [生成 patch] 调用 LLM 生成修复 diff...")
     patches = await provider.generate_patch(dict(state), state.get("model"))
-    patch_dicts = [patch.model_dump(mode="json") for patch in patches]
-    previous = list(state.get("patches") or [])
+    previous = [PatchResult.model_validate(item) for item in state.get("patches") or []]
+    active_patch = next(
+        (patch for patch in previous if patch.id == state.get("active_patch_id")), None
+    )
+    revision_of: str | None = None
+    attempt_number = 1
+    if action.action == AgentActionName.revise_patch and active_patch is not None:
+        active_patch.status = PatchStatus.superseded
+        revision_of = active_patch.id
+        attempt_number = active_patch.attempt_number + 1
+    patch_dicts: list[dict[str, Any]] = []
+    for patch in patches:
+        candidate = patch.model_copy(update={
+            "status": PatchStatus.generated,
+            "error": None,
+            "revision_of": revision_of,
+            "attempt_number": attempt_number,
+            "validation_snapshot_id": None,
+        })
+        patch_dicts.append(candidate.model_dump(mode="json"))
     message = f"Generated {len(patch_dicts)} patch(es)."
     logger.info("🩹 [生成 patch] 完成: 生成了 %d 个 patch（累计 %d 个）", len(patch_dicts), len(previous) + len(patch_dicts))
     return ReviewState(
-        patches=previous + patch_dicts,
+        patches=[patch.model_dump(mode="json") for patch in previous] + patch_dicts,
         pending_patch_ids=[patch["id"] for patch in patch_dicts],
         active_patch_id=None,
         active_patch_validation_passed=None,
@@ -89,11 +108,24 @@ async def _apply_patch(state: ReviewState, action: AgentAction) -> ReviewState:
         )
 
     logger.info("🩹 [应用 patch] git apply patch %s...", patch.id[:8])
-    applied = await PatchTool().apply(state.get("repo_path", ""), patch)
+    applied: PatchResult | None = None
+    try:
+        await prepare_patch_workspace(state)
+        applied = await PatchTool().apply(state.get("repo_path", ""), patch)
+    except Exception as exc:
+        patch.status = PatchStatus.apply_failed
+        patch.error = f"patch workspace preparation failed: {type(exc).__name__}: {exc}"
+        applied = patch
+    finally:
+        if applied is None or applied.status != PatchStatus.applied:
+            cleanup_error = await restore_patch_workspace(state)
+            if cleanup_error and applied is not None:
+                applied.error = f"{applied.error or 'patch application failed'}; cleanup failed: {cleanup_error}"
+    assert applied is not None
     updated = [applied if item.id == applied.id else item for item in patches]
     message = f"Patch {applied.id[:8]} {applied.status}."
-    status = "completed" if applied.status == "applied" else "failed"
-    if applied.status == "applied":
+    status = "completed" if applied.status == PatchStatus.applied else "failed"
+    if applied.status == PatchStatus.applied:
         logger.info("🩹 [应用 patch] 成功: patch %s 已应用", applied.id[:8])
     else:
         logger.error("🩹 [应用 patch] 失败: patch %s → %s", applied.id[:8], applied.error)
@@ -108,10 +140,29 @@ def _select_patch(patches: list[PatchResult], patch_id: str | None) -> PatchResu
     """选 patch 策略：优先按 ID 精确匹配，否则选最后一个 status=generated 的。"""
     if patch_id:
         for patch in patches:
-            if patch.id == patch_id:
+            if patch.id == patch_id and patch.status == PatchStatus.generated:
                 return patch
         return None
     for patch in reversed(patches):
-        if patch.status == "generated":
+        if patch.status == PatchStatus.generated:
             return patch
+    return None
+
+
+async def prepare_patch_workspace(state: ReviewState) -> None:
+    """仅由图节点以服务端 Head SHA 重置任务 clone，模型无法影响 Git 参数。"""
+    git_tool: Any = state.get("_git_tool")
+    repo_path = state.get("repo_path")
+    head_sha = state.get("head_sha")
+    if git_tool is None or not repo_path or not head_sha:
+        raise RuntimeError("patch workspace is missing GitTool, repository path, or Head SHA")
+    await asyncio.to_thread(git_tool.prepare_patch_workspace, repo_path, head_sha)
+
+
+async def restore_patch_workspace(state: ReviewState) -> str | None:
+    """无论候选补丁的结果如何，尽力恢复干净 Head，避免状态泄漏到下一候选。"""
+    try:
+        await prepare_patch_workspace(state)
+    except Exception as exc:
+        return f"{type(exc).__name__}: {exc}"
     return None

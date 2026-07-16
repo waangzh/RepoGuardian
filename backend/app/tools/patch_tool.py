@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from app.models.review import PatchResult
+from app.models.review import PatchResult, PatchStatus
 from app.tools.base import BaseTool
 from app.tools.command_runner import ensure_repo_path
 
@@ -32,29 +32,39 @@ class PatchTool(BaseTool):
 
         # 前置校验
         if not patch.diff_content.strip():
-            patch.status = "apply_failed"
+            patch.status = PatchStatus.apply_failed
             patch.error = "Patch diff is empty"
             return patch
         if not (repo / ".git").exists():
-            patch.status = "apply_failed"
+            patch.status = PatchStatus.apply_failed
             patch.error = "Repository path is not a git worktree"
             return patch
 
         # 1) 试运行
-        check = await _run_git_apply(repo, patch.diff_content, check_only=True)
+        try:
+            check = await _run_git_apply(repo, patch.diff_content, check_only=True)
+        except subprocess.TimeoutExpired:
+            patch.status = PatchStatus.apply_failed
+            patch.error = "git apply --check timed out"
+            return patch
         if check.returncode != 0:
-            patch.status = "apply_failed"
+            patch.status = PatchStatus.apply_failed
             patch.error = (check.stderr or check.stdout or "git apply --check failed")[-8000:]
             return patch
 
         # 2) 正式应用
-        applied = await _run_git_apply(repo, patch.diff_content, check_only=False)
+        try:
+            applied = await _run_git_apply(repo, patch.diff_content, check_only=False)
+        except subprocess.TimeoutExpired:
+            patch.status = PatchStatus.apply_failed
+            patch.error = "git apply timed out"
+            return patch
         if applied.returncode != 0:
-            patch.status = "apply_failed"
+            patch.status = PatchStatus.apply_failed
             patch.error = (applied.stderr or applied.stdout or "git apply failed")[-8000:]
             return patch
 
-        patch.status = "applied"
+        patch.status = PatchStatus.applied
         patch.error = None
         return patch
 
@@ -76,4 +86,5 @@ async def _run_git_apply(repo: Path, diff_content: str, check_only: bool) -> sub
         text=True,
         encoding="utf-8",
         errors="replace",
+        timeout=30,
     )

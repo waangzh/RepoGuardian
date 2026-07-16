@@ -21,6 +21,7 @@ from app.models.review import (
     ReviewPhase,
 )
 from app.tools.diff_parser import DiffParser
+from app.tools.command_runner import LocalCommandExecutor
 
 
 SAMPLE_PYTHON_REPO = Path(__file__).parent / "fixtures" / "sample_python_repo"
@@ -123,10 +124,22 @@ class FixtureGitTool:
                 source_file.read_text(encoding="utf-8"), encoding="utf-8", newline="\n"
             )
         subprocess.run(["git", "init"], cwd=self._workspace, check=True, capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=self._workspace, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-c", "user.email=fixture@example.test", "-c", "user.name=Fixture", "commit", "-m", "head"],
+            cwd=self._workspace,
+            check=True,
+            capture_output=True,
+        )
         return self._workspace, SAMPLE_DIFF
 
     def checkout_sha(self, repo_path: str | Path, sha: str) -> None:
         """图测试只验证 checkout 顺序；工作树内容由 fixture 固定提供。"""
+
+    def prepare_patch_workspace(self, repo_path: str | Path, head_sha: str) -> None:
+        del head_sha
+        subprocess.run(["git", "reset", "--hard", "HEAD"], cwd=repo_path, check=True, capture_output=True)
+        subprocess.run(["git", "clean", "-fdx"], cwd=repo_path, check=True, capture_output=True)
 
 
 def _sample_pr() -> PullRequestInfo:
@@ -164,6 +177,7 @@ def _initial_state(
         "_git_tool": FixtureGitTool(tmp_path / "workspace"),
         "_diff_parser": DiffParser(),
         "_provider": provider,
+        "_command_executor": LocalCommandExecutor(allow_unsafe=True),
     }
 
 
@@ -290,7 +304,7 @@ async def test_repair_subgraph_returns_to_main_flow(tmp_path: Path) -> None:
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
     assert provider.patch_calls == 1
-    assert result["patches"][-1]["status"] == "applied"
+    assert result["patches"][-1]["status"] == "validation_passed"
     assert result["test_results"][-1]["passed"] is True
     assert result["step_progress"][-1]["node"] == "report"
 
@@ -311,7 +325,10 @@ async def test_repair_subgraph_applies_and_verifies_every_generated_patch(tmp_pa
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
     assert provider.patch_calls == 1
-    assert [patch["status"] for patch in result["patches"]] == ["applied", "applied"]
+    assert [patch["status"] for patch in result["patches"]] == [
+        "validation_passed",
+        "abandoned",
+    ]
     patched_snapshots = [
         snapshot for snapshot in result["validation_snapshots"] if snapshot["stage"] == "patched"
     ]
@@ -330,7 +347,10 @@ async def test_failed_current_patch_does_not_reuse_previous_patch_validation(tmp
 
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
-    assert [patch["status"] for patch in result["patches"]] == ["applied", "apply_failed"]
+    assert [patch["status"] for patch in result["patches"]] == [
+        "validation_passed",
+        "abandoned",
+    ]
     patched_snapshots = [
         snapshot for snapshot in result["validation_snapshots"] if snapshot["stage"] == "patched"
     ]

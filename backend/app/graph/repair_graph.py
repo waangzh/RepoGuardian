@@ -5,6 +5,7 @@ from langgraph.graph import END, StateGraph
 from app.graph.nodes.agent_decide import agent_decide_node
 from app.graph.nodes.repair_policy import (
     repair_apply_patch_node,
+    repair_abandon_patch_node,
     repair_assessment_node,
     repair_generate_patch_node,
     repair_policy_node,
@@ -23,14 +24,20 @@ def build_repair_graph() -> StateGraph:
     graph.add_node("validation", repair_validation_node)
     graph.add_node("repair_assessment", repair_assessment_node)
     graph.add_node("repair_decide", agent_decide_node)
+    graph.add_node("abandon_patch", repair_abandon_patch_node)
     graph.add_node("repair_exit", lambda state: state)
 
     graph.set_entry_point("repair_policy")
     graph.add_conditional_edges(
         "repair_policy",
         route_repair_entry,
-        {"generate_patch": "generate_patch", "repair_exit": "repair_exit"},
+        {
+            "generate_patch": "generate_patch",
+            "abandon_patch": "abandon_patch",
+            "repair_exit": "repair_exit",
+        },
     )
+    graph.add_edge("abandon_patch", "repair_exit")
     graph.add_edge("generate_patch", "apply_patch")
     graph.add_edge("apply_patch", "validation")
     graph.add_edge("validation", "repair_assessment")
@@ -46,7 +53,11 @@ def build_repair_graph() -> StateGraph:
     graph.add_conditional_edges(
         "repair_decide",
         route_repair_action,
-        {"generate_patch": "generate_patch", "repair_exit": "repair_exit"},
+        {
+            "generate_patch": "generate_patch",
+            "abandon_patch": "abandon_patch",
+            "repair_exit": "repair_exit",
+        },
     )
     graph.add_edge("repair_exit", END)
     return graph

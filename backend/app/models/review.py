@@ -98,6 +98,18 @@ class ValidationStage(str, Enum):
     patched = "patched"
 
 
+class PatchStatus(str, Enum):
+    """候选补丁在独立验证生命周期中的受验证状态。"""
+
+    generated = "generated"
+    apply_failed = "apply_failed"
+    applied = "applied"
+    validation_passed = "validation_passed"
+    validation_failed = "validation_failed"
+    abandoned = "abandoned"
+    superseded = "superseded"
+
+
 class FailureKind(str, Enum):
     """验证失败的受控分类。"""
 
@@ -284,6 +296,21 @@ class TestRunResult(BaseModel):
     duration: float = 0.0
 
 
+class FailureFingerprint(BaseModel):
+    """由受控验证输出提取的、可集合比较的单个失败。"""
+
+    tool: str
+    identity: str
+    test_node_id: str | None = None
+    error_type: str | None = None
+    file_path: str | None = None
+    line_no: int | None = None
+    column: int | None = None
+    rule_code: str | None = None
+    message: str | None = None
+    normalized_summary: str
+
+
 class CommandSpec(BaseModel):
     """仅由服务端适配器注册的命令定义。"""
 
@@ -305,10 +332,13 @@ class ProjectProfile(BaseModel):
 class ValidationSnapshot(BaseModel):
     """Base、Head 或 Patched 阶段的一组受控验证结果。"""
 
+    id: str = Field(default_factory=lambda: uuid4().hex)
     stage: ValidationStage
     sha: str = Field(min_length=1)
     patch_id: str | None = None
     command_results: list[TestRunResult] = Field(default_factory=list)
+    collected_test_count: int | None = Field(default=None, ge=0)
+    failure_fingerprints: list[FailureFingerprint] = Field(default_factory=list)
     passed: bool
     failure_kind: FailureKind | None = None
     failure_detail: str | None = None
@@ -325,6 +355,8 @@ class ValidationDelta(BaseModel):
     failure_kind: FailureKind | None = None
     introduced_failure: bool = False
     resolved_failure: bool = False
+    introduced_failures: list[FailureFingerprint] = Field(default_factory=list)
+    resolved_failures: list[FailureFingerprint] = Field(default_factory=list)
 
 
 class PatchResult(BaseModel):
@@ -332,7 +364,10 @@ class PatchResult(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex)
     issue_id: str | None = None          # 关联的 ReviewIssue ID
     diff_content: str                    # unified diff 内容
-    status: str = "generated"            # generated / applied / apply_failed
+    status: PatchStatus = PatchStatus.generated
+    revision_of: str | None = None
+    attempt_number: int = Field(default=1, ge=1)
+    validation_snapshot_id: str | None = None
     error: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

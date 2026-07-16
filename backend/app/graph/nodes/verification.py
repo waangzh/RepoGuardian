@@ -1,9 +1,12 @@
 """在进入修复子图前固化 Head 基线结论。"""
 
 from app.graph.nodes._events import append_step
+from app.graph.nodes.patch import restore_patch_workspace
 from app.graph.state import ReviewState
 from app.models.review import (
     FailureKind,
+    PatchResult,
+    PatchStatus,
     ProjectProfile,
     ReviewPhase,
     ValidationDelta,
@@ -16,7 +19,7 @@ from app.services.validation_service import (
     blocks_auto_repair,
     compare_snapshots,
 )
-from app.tools.command_runner import LocalCommandExecutor
+from app.tools.command_runner import build_command_executor
 
 
 async def verification_node(state: ReviewState) -> ReviewState:
@@ -53,21 +56,41 @@ async def patched_validation_node(state: ReviewState) -> ReviewState:
     profile = ProjectProfile.model_validate(profile_data)
     registry = state.get("_project_registry") or default_project_registry
     adapter = registry.get(profile.adapter_id)
-    if adapter is None:
+    patched: ValidationSnapshot
+    try:
+        if adapter is None:
+            patched = ValidationSnapshot(
+                stage=ValidationStage.patched,
+                sha=head_snapshot.sha,
+                patch_id=active_patch_id,
+                passed=False,
+                failure_kind=FailureKind.unknown,
+                failure_detail="project adapter is unavailable",
+            )
+        else:
+            executor = state.get("_command_executor") or build_command_executor()
+            patched = await ValidationService(adapter, executor).run_stage(
+                state.get("repo_path", ""), profile, ValidationStage.patched, head_snapshot.sha
+            )
+            patched.patch_id = active_patch_id
+    except Exception as exc:
         patched = ValidationSnapshot(
             stage=ValidationStage.patched,
             sha=head_snapshot.sha,
             patch_id=active_patch_id,
             passed=False,
-            failure_kind=FailureKind.unknown,
-            failure_detail="project adapter is unavailable",
+            failure_kind=FailureKind.infrastructure,
+            failure_detail=f"patched validation failed: {type(exc).__name__}: {exc}",
         )
-    else:
-        executor = state.get("_command_executor") or LocalCommandExecutor()
-        patched = await ValidationService(adapter, executor).run_stage(
-            state.get("repo_path", ""), profile, ValidationStage.patched, head_snapshot.sha
+    finally:
+        cleanup_error = await restore_patch_workspace(state)
+
+    if cleanup_error:
+        patched.passed = False
+        patched.failure_kind = FailureKind.infrastructure
+        patched.failure_detail = (
+            f"{patched.failure_detail or 'patched validation completed'}; cleanup failed: {cleanup_error}"
         )
-        patched.patch_id = active_patch_id
 
     delta = compare_snapshots(head_snapshot, patched)
     updated_snapshots = snapshots + [patched]
@@ -75,6 +98,14 @@ async def patched_validation_node(state: ReviewState) -> ReviewState:
         ValidationDelta.model_validate(item) for item in state.get("validation_deltas") or []
     ] + [delta]
     blocked = any(blocks_auto_repair(snapshot) for snapshot in updated_snapshots)
+    updated_patches = [PatchResult.model_validate(item) for item in state.get("patches") or []]
+    for patch in updated_patches:
+        if patch.id == active_patch_id:
+            patch.status = (
+                PatchStatus.validation_passed if patched.passed else PatchStatus.validation_failed
+            )
+            patch.validation_snapshot_id = patched.id
+            break
     message = (
         "补丁验证通过" if patched.passed else f"补丁验证失败：{patched.failure_kind.value}"
     )
@@ -84,6 +115,7 @@ async def patched_validation_node(state: ReviewState) -> ReviewState:
         validation_deltas=[item.model_dump(mode="json") for item in updated_deltas],
         validation_blocked=blocked,
         active_patch_validation_passed=patched.passed,
+        patches=[patch.model_dump(mode="json") for patch in updated_patches],
         test_results=[item.model_dump(mode="json") for item in patched.command_results],
         step_progress=append_step(state, "patched_validation", "completed", message),
     )

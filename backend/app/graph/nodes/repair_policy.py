@@ -3,11 +3,11 @@
 from typing import Any
 
 from app.graph.nodes._events import append_step
-from app.graph.nodes.patch import patch_node
+from app.graph.nodes.patch import patch_node, restore_patch_workspace
 from app.graph.nodes.verification import patched_validation_node
 from app.graph.policies import get_execution_budget
 from app.graph.state import ReviewState
-from app.models.review import AgentAction, AgentActionName, ReviewPhase
+from app.models.review import AgentAction, AgentActionName, PatchResult, PatchStatus, ReviewPhase
 
 
 async def repair_policy_node(state: ReviewState) -> ReviewState:
@@ -59,7 +59,7 @@ async def repair_apply_patch_node(state: ReviewState) -> ReviewState:
         (
             candidate_id
             for candidate_id in state.get("pending_patch_ids") or []
-            if patches_by_id.get(candidate_id, {}).get("status") == "generated"
+            if patches_by_id.get(candidate_id, {}).get("status") == PatchStatus.generated.value
         ),
         None,
     )
@@ -96,10 +96,11 @@ async def repair_validation_node(state: ReviewState) -> ReviewState:
         (item for item in state.get("patches") or [] if item.get("id") == active_patch_id),
         None,
     )
-    if active_patch is None or active_patch.get("status") != "applied":
+    if active_patch is None or active_patch.get("status") != PatchStatus.applied.value:
+        await restore_patch_workspace(state)
         return ReviewState(
             phase=ReviewPhase.validation,
-            repair_enabled=False,
+            repair_enabled=not state.get("validation_blocked", False),
             active_patch_validation_passed=False,
             step_progress=append_step(state, "patched_validation", "failed", "当前候选补丁未成功应用，跳过验证"),
         )
@@ -115,8 +116,11 @@ async def repair_assessment_node(state: ReviewState) -> ReviewState:
     )
     has_verified_patch = (
         active_patch is not None
-        and active_patch.get("status") == "applied"
-        and state.get("active_patch_validation_passed") is not None
+        and active_patch.get("status") in {
+            PatchStatus.apply_failed.value,
+            PatchStatus.validation_passed.value,
+            PatchStatus.validation_failed.value,
+        }
     )
     enabled = has_verified_patch and not state.get("validation_blocked", False)
     message = "补丁验证已完成" if has_verified_patch else "当前补丁未通过应用，修复流程已结束"
@@ -131,3 +135,19 @@ def _with_action(state: ReviewState, action: AgentAction) -> ReviewState:
     payload: dict[str, Any] = dict(state)
     payload["next_action"] = action.model_dump(mode="json")
     return ReviewState(**payload)
+
+
+async def repair_abandon_patch_node(state: ReviewState) -> ReviewState:
+    """显式结束未通过的候选补丁，避免其与最终有效补丁混淆。"""
+    active_patch_id = state.get("active_patch_id")
+    patches = [PatchResult.model_validate(item) for item in state.get("patches") or []]
+    for patch in patches:
+        if patch.id == active_patch_id and patch.status != PatchStatus.validation_passed:
+            patch.status = PatchStatus.abandoned
+            break
+    return ReviewState(
+        phase=ReviewPhase.repair,
+        repair_enabled=False,
+        patches=[patch.model_dump(mode="json") for patch in patches],
+        step_progress=append_step(state, "repair_abandon", "completed", "已结束当前候选补丁"),
+    )

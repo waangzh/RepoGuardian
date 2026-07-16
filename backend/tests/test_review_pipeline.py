@@ -20,6 +20,7 @@ from app.models.review import (
 from app.services.report_service import ReportService
 from app.services.review_service import ReviewService
 from app.tools.diff_parser import DiffParser
+from app.tools.command_runner import LocalCommandExecutor
 
 
 SAMPLE_PYTHON_REPO = Path(__file__).parent / "fixtures" / "sample_python_repo"
@@ -47,16 +48,29 @@ class FakeGitTool:
     def clone_and_diff(self, pr: PullRequestInfo) -> tuple[Path, str]:
         self._workspace.mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "init"], cwd=self._workspace, check=True, capture_output=True)
+        (self._workspace / ".fixture-repository").write_text("fixture\n", encoding="utf-8")
         if not self._files and self._diff_text:
             (self._workspace / "sample.py").write_text("def hello():\n    return 'hi'\n", encoding="utf-8")
         for rel_path, content in self._files.items():
             target = self._workspace / rel_path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=self._workspace, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-c", "user.email=fixture@example.test", "-c", "user.name=Fixture", "commit", "-m", "head"],
+            cwd=self._workspace,
+            check=True,
+            capture_output=True,
+        )
         return self._workspace, self._diff_text
 
     def checkout_sha(self, repo_path: str | Path, sha: str) -> None:
         """此假件只保留一个受控工作树，checkout 本身由集成测试覆盖。"""
+
+    def prepare_patch_workspace(self, repo_path: str | Path, head_sha: str) -> None:
+        del head_sha
+        subprocess.run(["git", "reset", "--hard", "HEAD"], cwd=repo_path, check=True, capture_output=True)
+        subprocess.run(["git", "clean", "-fdx"], cwd=repo_path, check=True, capture_output=True)
 
 
 class FixtureGitTool:
@@ -72,10 +86,22 @@ class FixtureGitTool:
         for source_file in self._workspace.rglob("*.py"):
             source_file.write_text(source_file.read_text(encoding="utf-8"), encoding="utf-8")
         subprocess.run(["git", "init"], cwd=self._workspace, check=True, capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=self._workspace, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-c", "user.email=fixture@example.test", "-c", "user.name=Fixture", "commit", "-m", "head"],
+            cwd=self._workspace,
+            check=True,
+            capture_output=True,
+        )
         return self._workspace, self._diff_text
 
     def checkout_sha(self, repo_path: str | Path, sha: str) -> None:
         """fixture 在每个阶段复用同一工作树。"""
+
+    def prepare_patch_workspace(self, repo_path: str | Path, head_sha: str) -> None:
+        del head_sha
+        subprocess.run(["git", "reset", "--hard", "HEAD"], cwd=repo_path, check=True, capture_output=True)
+        subprocess.run(["git", "clean", "-fdx"], cwd=repo_path, check=True, capture_output=True)
 
 
 class ScriptedProvider(LLMProvider):
@@ -229,7 +255,7 @@ index 1111111..2222222 100644
     assert completed is not None
     assert completed.status == TaskStatus.completed, completed.error
     assert completed.patches
-    assert completed.patches[-1].status == "applied"
+    assert completed.patches[-1].status == "validation_passed"
     assert completed.test_results
     assert completed.test_results[-1].passed is True
     assert completed.validation_snapshots[-1].stage.value == "patched"
@@ -272,6 +298,7 @@ index 1111111..2222222 100644
         diff_parser=DiffParser(),
         provider=provider,
         report_service=ReportService(),
+        command_executor=LocalCommandExecutor(allow_unsafe=True),
     )
 
     task = service.create_task(
@@ -284,7 +311,7 @@ index 1111111..2222222 100644
     assert completed.status == TaskStatus.completed, completed.error
     assert completed.changed_files[0].file_path == "pricing.py"
     assert completed.issues
-    assert completed.patches[-1].status == "applied"
+    assert completed.patches[-1].status == "validation_passed"
     assert completed.test_results[-1].passed is True
     assert completed.report_markdown is not None
 
@@ -301,6 +328,7 @@ def _build_service(
         diff_parser=DiffParser(),
         provider=provider,
         report_service=ReportService(),
+        command_executor=LocalCommandExecutor(allow_unsafe=True),
     )
 
 

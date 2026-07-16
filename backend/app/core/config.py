@@ -1,6 +1,7 @@
 ﻿"""全局配置 —— 从 .env 文件 / 环境变量加载，提供类型安全的 Settings 单例。"""
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -26,6 +27,17 @@ class Settings(BaseSettings):
     # ---- 工作目录 ----
     repoguardian_workdir: Path = Path(__file__).resolve().parent.parent.parent / ".repoguardian" / "workspaces"
     repoguardian_git_bin: str = "git"
+
+    # ---- 受控命令执行 ----
+    # 默认拒绝执行：生产环境必须提供真实 SandboxExecutor，绝不静默降级到宿主机。
+    repoguardian_executor: Literal["local", "sandbox"] = "sandbox"
+    repoguardian_allow_unsafe_local_execution: bool = False
+    repoguardian_sandbox_network: bool = False
+    repoguardian_sandbox_memory_mb: int = 512
+    repoguardian_sandbox_cpus: float = 1.0
+    repoguardian_sandbox_pids_limit: int = 64
+    repoguardian_sandbox_timeout_seconds: int = 300
+    repoguardian_sandbox_max_output_chars: int = 8_000
 
     # ---- 数据库 ----
     repoguardian_db_path: Path = Path(".repoguardian/repoguardian.db")

@@ -1,9 +1,11 @@
 """三阶段验证的运行、分类与对比逻辑。"""
 
+import re
 from pathlib import Path
 
 from app.models.review import (
     FailureKind,
+    FailureFingerprint,
     ProjectProfile,
     TestRunResult,
     ValidationDelta,
@@ -67,6 +69,8 @@ class ValidationService:
             stage=stage,
             sha=sha,
             command_results=results,
+            collected_test_count=_collected_test_count(results),
+            failure_fingerprints=extract_failure_fingerprints(results),
             passed=failure_kind is None,
             failure_kind=failure_kind,
             failure_detail=_failure_detail(results) if failure_kind else None,
@@ -96,9 +100,27 @@ def classify_failure(results: list[TestRunResult]) -> FailureKind | None:
 
 
 def compare_snapshots(previous: ValidationSnapshot, current: ValidationSnapshot) -> ValidationDelta:
-    """仅将“通过变失败”标记为代码回归，避免把既有失败误归因给 PR。"""
-    introduced = previous.passed and not current.passed
-    resolved = not previous.passed and current.passed
+    """按失败指纹集合比较，而不是仅以整体通过状态归因。"""
+    previous_by_identity = {item.identity: item for item in previous.failure_fingerprints}
+    current_by_identity = {item.identity: item for item in current.failure_fingerprints}
+    introduced_items = [
+        current_by_identity[identity]
+        for identity in sorted(current_by_identity.keys() - previous_by_identity.keys())
+    ]
+    resolved_items = [
+        previous_by_identity[identity]
+        for identity in sorted(previous_by_identity.keys() - current_by_identity.keys())
+    ]
+
+    # 兼容尚无可解析输出的执行器结果，同时优先使用结构化集合。
+    introduced = bool(introduced_items) or (
+        not previous.failure_fingerprints and not current.failure_fingerprints
+        and previous.passed and not current.passed
+    )
+    resolved = bool(resolved_items) or (
+        not previous.failure_fingerprints and not current.failure_fingerprints
+        and not previous.passed and current.passed
+    )
     if introduced:
         failure_kind: FailureKind | None = FailureKind.code_regression
     elif resolved:
@@ -114,6 +136,8 @@ def compare_snapshots(previous: ValidationSnapshot, current: ValidationSnapshot)
         failure_kind=failure_kind,
         introduced_failure=introduced,
         resolved_failure=resolved,
+        introduced_failures=introduced_items,
+        resolved_failures=resolved_items,
     )
 
 
@@ -127,3 +151,120 @@ def _failure_detail(results: list[TestRunResult]) -> str | None:
     if failure is None:
         return None
     return (failure.stderr or failure.stdout or f"exit code {failure.exit_code}")[:1000]
+
+
+_RUFF_FAILURE = re.compile(
+    r"^(?P<file>.+?):(?P<line>\d+):(?P<column>\d+):\s*"
+    r"(?P<rule>[A-Z]+\d+)\s+(?P<message>.+)$",
+    re.MULTILINE,
+)
+_PYTEST_FAILURE = re.compile(
+    r"^FAILED\s+(?P<node>\S+)(?:\s+-\s+(?P<summary>.*))?$", re.MULTILINE
+)
+_PYTEST_ERROR_TYPE = re.compile(r"\b([A-Za-z_]\w*(?:Error|Exception))\b")
+_PYTEST_LOCATION = re.compile(r"(?m)^(?P<file>[^\s:]+\.py):(?P<line>\d+):")
+_COLLECTED_TESTS = re.compile(r"\b(\d+)\s+(?:tests?\s+)?collected\b", re.IGNORECASE)
+_WHITESPACE = re.compile(r"\s+")
+
+
+def extract_failure_fingerprints(results: list[TestRunResult]) -> list[FailureFingerprint]:
+    """从 pytest 与 Ruff 的稳定输出提取失败集合；无法解析时保留受控兜底指纹。"""
+    fingerprints: dict[str, FailureFingerprint] = {}
+    for result in results:
+        if result.passed:
+            continue
+        output = f"{result.stdout}\n{result.stderr}"
+        parsed = (
+            _pytest_failure_fingerprints(output)
+            if result.command.startswith("python.test")
+            else _ruff_failure_fingerprints(output)
+            if result.command == "python.static.default"
+            else []
+        )
+        if not parsed:
+            summary = _normalized_summary(output) or f"exit code {result.exit_code}"
+            parsed = [FailureFingerprint(
+                tool=result.tool,
+                identity=f"unparsed:{result.command}:{summary}",
+                message=summary,
+                normalized_summary=summary,
+            )]
+        for item in parsed:
+            fingerprints[item.identity] = item
+    return [fingerprints[identity] for identity in sorted(fingerprints)]
+
+
+def _pytest_failure_fingerprints(output: str) -> list[FailureFingerprint]:
+    locations = list(_PYTEST_LOCATION.finditer(output))
+    fallback_location = locations[-1] if locations else None
+    fingerprints: list[FailureFingerprint] = []
+    for match in _PYTEST_FAILURE.finditer(output):
+        node_id = match.group("node")
+        summary = _normalized_summary(match.group("summary") or "pytest failure")
+        error_match = _PYTEST_ERROR_TYPE.search(match.group("summary") or "")
+        if error_match is None:
+            error_match = _PYTEST_ERROR_TYPE.search(output)
+        error_type = error_match.group(1) if error_match else None
+        location = fallback_location
+        file_path = location.group("file") if location else _node_file(node_id)
+        line_no = int(location.group("line")) if location else None
+        identity = ":".join([
+            "pytest",
+            node_id,
+            error_type or "unknown",
+            file_path or "unknown",
+            str(line_no or 0),
+            summary,
+        ])
+        fingerprints.append(FailureFingerprint(
+            tool="pytest",
+            identity=identity,
+            test_node_id=node_id,
+            error_type=error_type,
+            file_path=file_path,
+            line_no=line_no,
+            message=match.group("summary") or None,
+            normalized_summary=summary,
+        ))
+    return fingerprints
+
+
+def _ruff_failure_fingerprints(output: str) -> list[FailureFingerprint]:
+    fingerprints: list[FailureFingerprint] = []
+    for match in _RUFF_FAILURE.finditer(output):
+        file_path = match.group("file")
+        line_no = int(match.group("line"))
+        column = int(match.group("column"))
+        rule_code = match.group("rule")
+        message = match.group("message")
+        summary = _normalized_summary(message)
+        identity = f"ruff:{rule_code}:{file_path}:{line_no}:{column}:{summary}"
+        fingerprints.append(FailureFingerprint(
+            tool="ruff",
+            identity=identity,
+            file_path=file_path,
+            line_no=line_no,
+            column=column,
+            rule_code=rule_code,
+            message=message,
+            normalized_summary=summary,
+        ))
+    return fingerprints
+
+
+def _collected_test_count(results: list[TestRunResult]) -> int | None:
+    for result in results:
+        if not result.command.startswith("python.test"):
+            continue
+        match = _COLLECTED_TESTS.search(f"{result.stdout}\n{result.stderr}")
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _node_file(node_id: str) -> str | None:
+    return node_id.split("::", 1)[0] if ".py" in node_id else None
+
+
+def _normalized_summary(value: str) -> str:
+    return _WHITESPACE.sub(" ", value).strip().lower()[:500]

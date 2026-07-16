@@ -28,6 +28,7 @@ from app.services.review_rebuild import rebuild_task_from_state
 from app.tools.diff_parser import DiffParser
 from app.tools.git_tool import GitTool
 from app.tools.github_tool import GitHubTool
+from app.tools.command_runner import CommandExecutor, build_command_executor
 
 logger = logging.getLogger("RepoGuardian.Service")
 
@@ -63,12 +64,14 @@ class ReviewService:
         diff_parser: DiffParser,
         provider: LLMProvider,
         report_service: ReportService,
+        command_executor: CommandExecutor | None = None,
     ) -> None:
         self._github_tool = github_tool
         self._git_tool = git_tool
         self._diff_parser = diff_parser
         self._provider = provider
         self._report_service = report_service
+        self._command_executor = command_executor or build_command_executor()
         self._tasks: dict[str, ReviewTask] = {}
 
     def create_task(self, request: ReviewCreateRequest) -> ReviewTask:
@@ -115,6 +118,7 @@ class ReviewService:
             "_git_tool": self._git_tool,
             "_diff_parser": self._diff_parser,
             "_provider": self._provider,
+            "_command_executor": self._command_executor,
         }
 
         result = None
