@@ -8,6 +8,8 @@ from app.graph.nodes._events import append_event, append_step
 from app.graph.policies import consume_budget
 from app.graph.state import ReviewState
 from app.models.review import AgentAction, ChangedFile, ChangedLine, PullRequestInfo
+from app.models.review import ReviewIssue
+from app.tools.git_tool import GitTool
 
 logger = logging.getLogger("RepoGuardian.Node")
 
@@ -61,13 +63,16 @@ async def review_node(state: ReviewState) -> ReviewState:
     enhanced_diff = _build_enhanced_diff(state)
     logger.debug("✍️ [审查] 增强 diff 总长度: %d 字符", len(enhanced_diff))
 
-    issues = await agent.review(pr_info, changed_files, enhanced_diff, state.get("model"))
+    model_issues = await agent.review(pr_info, changed_files, enhanced_diff, state.get("model"))
+    issues, rejected_issue_count = _filter_head_mapped_issues(model_issues, state)
     issues_dicts = [issue.model_dump(mode="json") for issue in issues]
     # 按严重性统计
     severity_counts: dict[str, int] = {}
     for issue in issues:
         severity_counts[issue.severity] = severity_counts.get(issue.severity, 0) + 1
     message = f"发现 {len(issues_dicts)} 个问题"
+    if rejected_issue_count:
+        message += f"，拒绝 {rejected_issue_count} 个无法映射到 Head 的问题"
     logger.info("✍️ [审查] 完成: %d 个问题（严重性分布: %s）", len(issues_dicts), severity_counts)
     return ReviewState(
         review_issues=issues_dicts,
@@ -75,6 +80,41 @@ async def review_node(state: ReviewState) -> ReviewState:
         agent_events=append_event(state, action.action, action.reason, "completed", message),
         step_progress=append_step(state, "review", "completed", message),
     )
+
+
+def _filter_head_mapped_issues(
+    issues: list[ReviewIssue], state: ReviewState
+) -> tuple[list[ReviewIssue], int]:
+    """仅保留能映射到当前 Head、具有唯一 ID 和具体证据的位置的问题。"""
+    indexed_files = {item.get("path") for item in state.get("file_index") or []}
+    git_tool = GitTool()
+    line_counts: dict[str, int] = {}
+    accepted: list[ReviewIssue] = []
+    issue_ids: set[str] = set()
+    rejected = 0
+
+    def location_is_valid(file_path: str, line_no: int) -> bool:
+        if file_path not in indexed_files:
+            return False
+        if file_path not in line_counts:
+            content = git_tool.get_file_content(state.get("repo_path", ""), file_path)
+            line_counts[file_path] = len(content.splitlines())
+        return 1 <= line_no <= line_counts[file_path]
+
+    for issue in issues:
+        locations = list(issue.evidence_locations)
+        if issue.line_no is None:
+            rejected += 1
+            continue
+        if issue.id in issue_ids or not location_is_valid(issue.file_path, issue.line_no):
+            rejected += 1
+            continue
+        if any(not location_is_valid(location.file_path, location.line_no) for location in locations):
+            rejected += 1
+            continue
+        issue_ids.add(issue.id)
+        accepted.append(issue)
+    return accepted, rejected
 
 
 def _build_enhanced_diff(state: ReviewState) -> str:

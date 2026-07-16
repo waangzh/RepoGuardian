@@ -75,9 +75,11 @@ class GraphScriptedProvider(LLMProvider):
         self.decide_calls = 0
         self.review_calls = 0
         self.patch_calls = 0
+        self.decision_states: list[dict[str, Any]] = []
 
     async def decide(self, state: dict[str, Any], model: str | None) -> AgentAction:
         self.decide_calls += 1
+        self.decision_states.append(dict(state))
         raw = self._actions.pop(0) if self._actions else {
             "action": "abandon_patch",
             "reason": "脚本化动作已完成",
@@ -193,7 +195,36 @@ def _auto_fixable_issue() -> ReviewIssue:
         suggestion="使用 100 - discount_percent。",
         confidence=0.95,
         auto_fixable=True,
+        evidence="第 3 行直接将折扣百分比作为剩余比例计算。",
+        evidence_locations=[{"file_path": "pricing.py", "line_no": 3}],
+        affected_behavior="20% 折扣会返回 20 而不是 80。",
+        fix_risk="low",
     )
+
+
+def _retrieval_action(
+    *,
+    search_terms: list[str] | None = None,
+    relevance_types: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "action": "retrieve_context",
+        "reason": "读取折扣函数的相关上下文。",
+        "tool_args": {
+            "plan": {
+                "reason": "确认折扣函数的调用与测试。",
+                "target_files": ["pricing.py"],
+                "target_symbols": ["calculate_discounted_total"],
+                "search_terms": search_terms or [],
+                "relevance_types": relevance_types or ["direct", "caller", "test"],
+                "include_callers": True,
+                "include_callees": False,
+                "include_tests": True,
+                "max_results": 8,
+                "depth": 1,
+            }
+        },
+    }
 
 
 def test_agent_action_accepts_valid_json_shape() -> None:
@@ -201,7 +232,20 @@ def test_agent_action_accepts_valid_json_shape() -> None:
         "action": "retrieve_context",
         "reason": "需要更多上下文",
         "target_issue_ids": [],
-        "tool_args": {},
+        "tool_args": {
+            "plan": {
+                "reason": "读取折扣函数和测试。",
+                "target_files": ["pricing.py"],
+                "target_symbols": ["calculate_discounted_total"],
+                "search_terms": [],
+                "relevance_types": ["direct", "test"],
+                "include_callers": False,
+                "include_callees": False,
+                "include_tests": True,
+                "max_results": 8,
+                "depth": 1,
+            }
+        },
     })
 
     assert action.action == "retrieve_context"
@@ -216,12 +260,15 @@ def test_legal_actions_are_routed_only_within_their_phase() -> None:
     assert ALLOWED_ACTIONS_BY_PHASE[ReviewPhase.discovery] == {
         "retrieve_context",
         "review_code",
+        "request_human",
     }
     assert ALLOWED_ACTIONS_BY_PHASE[ReviewPhase.repair] == {
         "revise_patch",
+        "accept_patch",
         "abandon_patch",
+        "request_human",
     }
-    assert route_discovery_action({"next_action": {"action": "retrieve_context", "reason": "x"}}) == (
+    assert route_discovery_action({"next_action": _retrieval_action()}) == (
         "context_retrieve"
     )
     assert route_repair_action({"next_action": {"action": "revise_patch", "reason": "x"}}) == (
@@ -243,14 +290,165 @@ async def test_illegal_phase_action_is_rejected_and_cannot_run_tool(tmp_path: Pa
 
 @pytest.mark.asyncio
 async def test_context_budget_exhaustion_skips_extra_retrieval(tmp_path: Path) -> None:
-    provider = GraphScriptedProvider(actions=[{"action": "retrieve_context", "reason": "继续检索"}])
+    provider = GraphScriptedProvider(actions=[_retrieval_action()])
     budget = ExecutionBudget(max_context_retrievals=1)
 
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider, budget=budget))
 
     assert result["execution_budget"]["context_retrievals"] == 1
-    assert provider.decide_calls == 0
+    assert provider.decide_calls == 1
     assert result["next_action"]["action"] == "review_code"
+
+
+@pytest.mark.asyncio
+async def test_model_can_request_a_second_symbol_plan_after_observing_context(tmp_path: Path) -> None:
+    provider = GraphScriptedProvider(actions=[_retrieval_action(), {"action": "review_code", "reason": "证据足够"}])
+
+    result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
+
+    assert provider.decide_calls == 2
+    assert result["retrieval_history"][0]["new_snippet_count"] > 0
+    assert provider.decision_states[1]["context_snippets"]
+    assert any(item.get("symbol") == "calculate_discounted_total" for item in result["context_snippets"])
+
+
+@pytest.mark.asyncio
+async def test_duplicate_retrieval_plan_is_rejected_without_consuming_another_tool_call(tmp_path: Path) -> None:
+    provider = GraphScriptedProvider(actions=[
+        _retrieval_action(),
+        _retrieval_action(),
+        {"action": "review_code", "reason": "重复计划被拒绝后进行审查"},
+    ])
+
+    result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
+
+    assert result["execution_budget"]["context_retrievals"] == 1
+    assert result["retrieval_history"][-1]["status"] == "rejected"
+    assert any(event["status"] == "rejected" for event in result["agent_events"])
+
+
+@pytest.mark.asyncio
+async def test_two_empty_retrieval_rounds_force_review_convergence(tmp_path: Path) -> None:
+    def empty_text_plan(term: str) -> dict[str, Any]:
+        return {
+            "action": "retrieve_context",
+            "reason": "搜索未确认文本。",
+            "tool_args": {
+                "plan": {
+                    "reason": "确认不存在的文本。",
+                    "target_files": ["pricing.py"],
+                    "target_symbols": [],
+                    "search_terms": [term],
+                    "relevance_types": ["text"],
+                    "include_callers": False,
+                    "include_callees": False,
+                    "include_tests": False,
+                    "max_results": 4,
+                    "depth": 0,
+                }
+            },
+        }
+
+    provider = GraphScriptedProvider(actions=[empty_text_plan("never-one"), empty_text_plan("never-two")])
+    result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
+
+    assert result["retrieval_no_new_rounds"] == 2
+    assert provider.decide_calls == 2
+    assert provider.review_calls == 1
+    assert result["next_action"]["action"] == "review_code"
+
+
+@pytest.mark.asyncio
+async def test_illegal_retrieval_path_is_rejected_before_tool_execution(tmp_path: Path) -> None:
+    provider = GraphScriptedProvider(actions=[{
+        "action": "retrieve_context",
+        "reason": "尝试越权路径。",
+        "tool_args": {
+            "plan": {
+                "reason": "错误路径。",
+                "target_files": ["../secret.py"],
+                "target_symbols": [],
+                "search_terms": [],
+                "relevance_types": ["direct"],
+                "include_callers": False,
+                "include_callees": False,
+                "include_tests": False,
+                "max_results": 1,
+                "depth": 0,
+            }
+        },
+    }])
+
+    result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
+
+    assert result["execution_budget"]["context_retrievals"] == 0
+    assert provider.review_calls == 1
+    assert any(event["status"] == "rejected" for event in result["agent_events"])
+
+
+@pytest.mark.asyncio
+async def test_request_human_stops_automatic_review_and_repair(tmp_path: Path) -> None:
+    provider = GraphScriptedProvider(actions=[{
+        "action": "request_human",
+        "reason": "折扣规则存在多个合理业务解释。",
+        "human_request": {
+            "missing_information": ["折扣参数的业务语义。"],
+            "known_evidence": ["pricing.py 第 3 行使用了折扣参数。"],
+            "questions": ["discount_percent 表示折扣还是剩余比例？"],
+            "prohibited_operations": ["禁止自动生成或应用修复补丁。"],
+        },
+    }])
+
+    result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
+
+    assert result["human_request"]["questions"]
+    assert provider.review_calls == provider.patch_calls == 0
+    assert not result.get("patches")
+
+
+@pytest.mark.asyncio
+async def test_issue_with_nonexistent_head_file_is_rejected(tmp_path: Path) -> None:
+    invalid_issue = ReviewIssue(
+        id="missing-file",
+        file_path="missing.py",
+        line_no=1,
+        severity="high",
+        category="correctness",
+        title="错误位置",
+        description="模型引用了不存在的文件。",
+        suggestion="不应报告。",
+        confidence=0.9,
+        evidence="missing.py 第 1 行不存在。",
+        evidence_locations=[{"file_path": "missing.py", "line_no": 1}],
+        affected_behavior="无法验证。",
+    )
+    provider = GraphScriptedProvider(
+        actions=[{"action": "review_code", "reason": "审查"}], review_issues=[invalid_issue]
+    )
+
+    result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
+
+    assert result["review_issues"] == []
+
+
+@pytest.mark.asyncio
+async def test_failed_patch_decision_receives_structured_validation_feedback(tmp_path: Path) -> None:
+    provider = GraphScriptedProvider(
+        actions=[
+            {"action": "review_code", "reason": "审查"},
+            {"action": "abandon_patch", "reason": "验证反馈表明补丁未解决失败"},
+        ],
+        review_issues=[_auto_fixable_issue()],
+        patches=[PatchResult(issue_id="discount-fix", diff_content=SECOND_SAMPLE_PATCH)],
+    )
+
+    result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
+
+    repair_state = provider.decision_states[-1]
+    assert repair_state["patches"][-1]["status"] == "validation_failed"
+    assert repair_state["validation_deltas"][-1]["patch_id"] == repair_state["active_patch_id"]
+    assert repair_state["patch_workspace_clean"] is True
+    assert result["patches"][-1]["status"] == "abandoned"
 
 
 @pytest.mark.asyncio
@@ -310,7 +508,27 @@ async def test_repair_subgraph_returns_to_main_flow(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_repair_subgraph_applies_and_verifies_every_generated_patch(tmp_path: Path) -> None:
+async def test_accept_patch_is_gated_by_server_validation_policy(tmp_path: Path) -> None:
+    provider = GraphScriptedProvider(
+        actions=[
+            {"action": "review_code", "reason": "开始审查"},
+            {"action": "accept_patch", "reason": "验证结果满足接受条件"},
+        ],
+        review_issues=[_auto_fixable_issue()],
+        patches=[PatchResult(issue_id="discount-fix", diff_content=SAMPLE_PATCH)],
+    )
+
+    result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
+
+    assert result["patches"][-1]["status"] == "validation_passed"
+    assert any(
+        event["action"] == "accept_patch" and event["status"] == "completed"
+        for event in result["agent_events"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_repair_subgraph_abandons_unselected_generated_patches(tmp_path: Path) -> None:
     first_patch = PatchResult(issue_id="discount-fix", diff_content=SAMPLE_PATCH)
     second_patch = PatchResult(issue_id="verification-note", diff_content=SECOND_SAMPLE_PATCH)
     provider = GraphScriptedProvider(
@@ -332,7 +550,7 @@ async def test_repair_subgraph_applies_and_verifies_every_generated_patch(tmp_pa
     patched_snapshots = [
         snapshot for snapshot in result["validation_snapshots"] if snapshot["stage"] == "patched"
     ]
-    assert [snapshot["patch_id"] for snapshot in patched_snapshots] == [first_patch.id, second_patch.id]
+    assert [snapshot["patch_id"] for snapshot in patched_snapshots] == [first_patch.id]
 
 
 @pytest.mark.asyncio

@@ -9,10 +9,13 @@ ALLOWED_ACTIONS_BY_PHASE: dict[ReviewPhase, frozenset[AgentActionName]] = {
     ReviewPhase.discovery: frozenset({
         AgentActionName.retrieve_context,
         AgentActionName.review_code,
+        AgentActionName.request_human,
     }),
     ReviewPhase.repair: frozenset({
         AgentActionName.revise_patch,
+        AgentActionName.accept_patch,
         AgentActionName.abandon_patch,
+        AgentActionName.request_human,
     }),
 }
 

@@ -16,9 +16,13 @@ async def human_required_node(state: ReviewState) -> ReviewState:
         "action": "request_human",
         "reason": "Human approval is required.",
     })
-    message = "Agent requested human review before continuing."
+    request = action.human_request
+    assert request is not None
+    message = "已请求人工确认；在收到回答前不会继续自动修复。"
     logger.info("👤 [人工审批] %s", message)
     return ReviewState(
+        human_request=request.model_dump(mode="json"),
+        repair_enabled=False,
         agent_events=append_event(state, action.action, action.reason, "completed", message),
         step_progress=append_step(state, "human_required", "completed", message),
     )

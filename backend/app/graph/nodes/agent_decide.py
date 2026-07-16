@@ -32,6 +32,9 @@ async def agent_decide_node(state: ReviewState) -> ReviewState:
     if phase == ReviewPhase.discovery and not state.get("changed_files"):
         action = safe_action_for_phase(phase, "没有变更文件，无需额外上下文。")
         return _with_action(state, action, "completed", action.reason)
+    if phase == ReviewPhase.discovery and (state.get("retrieval_no_new_rounds") or 0) >= 2:
+        action = safe_action_for_phase(phase, "连续两轮检索没有新增信息，强制进入审查收敛。")
+        return _with_action(state, action, "completed", action.reason)
     if phase == ReviewPhase.discovery and not budget.can_consume(context_retrievals=1):
         action = safe_action_for_phase(phase, "上下文检索预算已耗尽，开始诊断。")
         return _with_action(state, action, "completed", action.reason)

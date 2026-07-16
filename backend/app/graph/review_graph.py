@@ -6,6 +6,7 @@ from app.graph.nodes.agent_decide import agent_decide_node
 from app.graph.nodes.baseline import baseline_node
 from app.graph.nodes.context_retrieve import context_retrieve_node
 from app.graph.nodes.diff_parse import diff_parse_node
+from app.graph.nodes.human_required import human_required_node
 from app.graph.nodes.intake import intake_node
 from app.graph.nodes.project_detection import project_detection_node
 from app.graph.nodes.repo_index import repo_index_node
@@ -32,6 +33,7 @@ def build_review_graph(phase: int | None = None) -> StateGraph:
     graph.add_node("static_analysis", static_analysis_node)
     graph.add_node("discovery_decide", agent_decide_node)
     graph.add_node("review", review_node)
+    graph.add_node("human_required", human_required_node)
     graph.add_node("verification", verification_node)
     graph.add_node("repair_graph", build_repair_graph().compile())
     graph.add_node("report", report_node)
@@ -46,15 +48,20 @@ def build_review_graph(phase: int | None = None) -> StateGraph:
     graph.add_conditional_edges(
         "baseline",
         route_baseline_validation,
-        {"continue": "context_retrieve", "report": "report"},
+        {"continue": "static_analysis", "report": "report"},
     )
-    graph.add_edge("context_retrieve", "static_analysis")
     graph.add_edge("static_analysis", "discovery_decide")
     graph.add_conditional_edges(
         "discovery_decide",
         route_discovery_action,
-        {"context_retrieve": "context_retrieve", "review": "review"},
+        {
+            "context_retrieve": "context_retrieve",
+            "review": "review",
+            "human_required": "human_required",
+        },
     )
+    graph.add_edge("context_retrieve", "discovery_decide")
+    graph.add_edge("human_required", "report")
     graph.add_edge("review", "verification")
     graph.add_edge("verification", "repair_graph")
     graph.add_edge("repair_graph", "report")

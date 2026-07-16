@@ -27,6 +27,8 @@ def route_discovery_action(state: dict[str, Any]) -> str:
         return "review"
     if action.action == AgentActionName.retrieve_context:
         return "context_retrieve"
+    if action.action == AgentActionName.request_human:
+        return "human_required"
     return "review"
 
 
@@ -41,8 +43,12 @@ def route_repair_action(state: dict[str, Any]) -> str:
         return "repair_exit"
     if action.action == AgentActionName.revise_patch:
         return "generate_patch"
+    if action.action == AgentActionName.accept_patch:
+        return "accept_patch"
     if action.action == AgentActionName.abandon_patch:
         return "abandon_patch"
+    if action.action == AgentActionName.request_human:
+        return "human_required"
     return "repair_exit"
 
 
@@ -55,8 +61,6 @@ def route_repair_assessment(state: dict[str, Any]) -> str:
     """已通过验证的当前补丁可继续处理同批队列；其余情况交还 Agent 判断。"""
     if not state.get("repair_enabled"):
         return "repair_exit"
-    if state.get("active_patch_validation_passed") and state.get("pending_patch_ids"):
-        return "apply_patch"
     return "repair_decide"
 
 

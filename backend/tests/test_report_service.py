@@ -28,6 +28,9 @@ def test_report_with_issue() -> None:
                 description="缺少空值处理。",
                 suggestion="增加显式校验。",
                 confidence=0.8,
+                evidence="第 2 行缺少空值保护。",
+                evidence_locations=[{"file_path": "app.py", "line_no": 2}],
+                affected_behavior="空输入可能引发异常。",
             )
         ],
     )
@@ -36,4 +39,3 @@ def test_report_with_issue() -> None:
 
     assert "可能空值异常" in report
     assert "app.py:2" in report
-

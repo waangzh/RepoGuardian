@@ -76,6 +76,25 @@ export interface ReviewIssue {
   suggestion: string;
   confidence: number;
   auto_fixable: boolean;
+  evidence: string;
+  evidence_locations: EvidenceLocation[];
+  affected_behavior: string;
+  assumptions: string[];
+  related_test_ids: string[];
+  fix_risk: "low" | "medium" | "high";
+  requires_human_confirmation: boolean;
+}
+
+export interface EvidenceLocation {
+  file_path: string;
+  line_no: number;
+}
+
+export interface HumanReviewRequest {
+  missing_information: string[];
+  known_evidence: string[];
+  questions: string[];
+  prohibited_operations: string[];
 }
 
 export interface ContextSnippet {
@@ -199,6 +218,7 @@ export interface ReviewTask {
   patches: PatchResult[];
   test_results: TestRunResult[];
   agent_events: AgentEvent[];
+  human_request?: HumanReviewRequest | null;
   report_markdown?: string | null;
   error?: string | null;
   created_at: string;

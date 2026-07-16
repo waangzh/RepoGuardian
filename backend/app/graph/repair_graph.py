@@ -3,7 +3,9 @@
 from langgraph.graph import END, StateGraph
 
 from app.graph.nodes.agent_decide import agent_decide_node
+from app.graph.nodes.human_required import human_required_node
 from app.graph.nodes.repair_policy import (
+    repair_accept_patch_node,
     repair_apply_patch_node,
     repair_abandon_patch_node,
     repair_assessment_node,
@@ -24,7 +26,9 @@ def build_repair_graph() -> StateGraph:
     graph.add_node("validation", repair_validation_node)
     graph.add_node("repair_assessment", repair_assessment_node)
     graph.add_node("repair_decide", agent_decide_node)
+    graph.add_node("accept_patch", repair_accept_patch_node)
     graph.add_node("abandon_patch", repair_abandon_patch_node)
+    graph.add_node("human_required", human_required_node)
     graph.add_node("repair_exit", lambda state: state)
 
     graph.set_entry_point("repair_policy")
@@ -55,9 +59,13 @@ def build_repair_graph() -> StateGraph:
         route_repair_action,
         {
             "generate_patch": "generate_patch",
+            "accept_patch": "accept_patch",
             "abandon_patch": "abandon_patch",
+            "human_required": "human_required",
             "repair_exit": "repair_exit",
         },
     )
+    graph.add_edge("accept_patch", "repair_exit")
     graph.add_edge("repair_exit", END)
+    graph.add_edge("human_required", "repair_exit")
     return graph

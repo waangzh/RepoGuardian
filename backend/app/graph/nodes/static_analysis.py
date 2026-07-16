@@ -2,7 +2,7 @@ import logging
 
 from app.graph.nodes._events import append_event, append_step
 from app.graph.state import ReviewState
-from app.models.review import AgentAction, CommandId
+from app.models.review import AgentAction, CommandId, ReviewPhase
 from app.tools.static_analyzer import StaticAnalyzerTool
 
 logger = logging.getLogger("RepoGuardian.Node")
@@ -30,6 +30,7 @@ async def static_analysis_node(state: ReviewState) -> ReviewState:
     logger.info("🔬 [静态分析] %s，exit=%s", "通过" if passed else "失败", exit_codes)
     return ReviewState(
         static_results=previous + current,
+        phase=ReviewPhase.discovery,
         agent_events=append_event(state, action.action, action.reason, "completed", message),
         step_progress=append_step(state, "static_analysis", "completed", message),
     )

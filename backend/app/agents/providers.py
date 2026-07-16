@@ -286,11 +286,19 @@ class OpenAICompatibleProvider(LLMProvider):
             "\"id\":\"optional-stable-id\",\"auto_fixable\":true,"
             "\"severity\":\"high\",\"category\":\"correctness\","
             "\"title\":\"问题标题\",\"description\":\"问题说明\","
-            "\"suggestion\":\"修复建议\",\"confidence\":0.85}]}\n"
+            "\"suggestion\":\"修复建议\",\"confidence\":0.85,"
+            "\"evidence\":\"可复核的具体代码事实\","
+            "\"evidence_locations\":[{\"file_path\":\"path/to/file\",\"line_no\":1}],"
+            "\"affected_behavior\":\"可观察的行为影响\",\"assumptions\":[],"
+            "\"related_test_ids\":[\"tests/test_x.py::test_x\"],\"fix_risk\":\"low\","
+            "\"requires_human_confirmation\":false}]}\n"
             "The confidence field must be a number between 0 and 1. Do not use strings "
             "such as high, medium, or low for confidence.\n"
             "severity must be one of: low, medium, high, critical. "
             "category must be one of: correctness, maintainability, performance, security, test.\n"
+            "Every issue must cite a file and valid Head line in evidence_locations. Report only a "
+            "verifiable behavior problem, not generic style advice. auto_fixable may be true only for "
+            "a low-risk local change with concrete evidence and no human confirmation.\n"
             "If there is no clear issue, return {\"issues\":[]}.\n\n"
             f"Diff:\n{limited_diff}"
         )
@@ -298,28 +306,111 @@ class OpenAICompatibleProvider(LLMProvider):
     @staticmethod
     def _build_decision_prompt(state: dict[str, Any]) -> str:
         phase = get_phase(state)
+        context_snippets = state.get("context_snippets") or []
+        retrieval_history = state.get("retrieval_history") or []
+        validation_snapshots = state.get("validation_snapshots") or []
+        validation_deltas = state.get("validation_deltas") or []
+        active_patch_id = state.get("active_patch_id")
+        active_patch = next(
+            (patch for patch in state.get("patches") or [] if patch.get("id") == active_patch_id),
+            None,
+        )
+        if active_patch:
+            active_patch = dict(active_patch)
+            active_patch["diff_content"] = (active_patch.get("diff_content") or "")[:20_000]
+        active_issue = next(
+            (issue for issue in state.get("review_issues") or []
+            if active_patch and issue.get("id") == active_patch.get("issue_id")),
+            None,
+        )
         compact = {
             "phase": phase.value,
-            "changed_files": state.get("changed_files") or [],
-            "context_count": len(state.get("context_snippets") or []),
-            "static_results": state.get("static_results") or [],
-            "review_issues": state.get("review_issues") or [],
-            "patches": state.get("patches") or [],
-            "pending_patch_ids": state.get("pending_patch_ids") or [],
-            "active_patch_id": state.get("active_patch_id"),
-            "test_results": state.get("test_results") or [],
+            "changed_files": [item.get("file_path") for item in state.get("changed_files") or []],
+            "retrieval_catalog": {
+                "files": [item.get("path") for item in (state.get("file_index") or [])[:200]],
+                "symbols": [
+                    {"file": item.get("file"), "symbol": item.get("symbol"), "type": item.get("type")}
+                    for item in (state.get("symbol_index") or [])[:300]
+                ],
+            },
+            "observed_context": {
+                "files": sorted({snippet.get("file") for snippet in context_snippets if snippet.get("file")}),
+                "symbols": sorted({snippet.get("symbol") for snippet in context_snippets if snippet.get("symbol")}),
+                "coverage": {
+                    kind: sum(1 for snippet in context_snippets if snippet.get("relevance") == kind)
+                    for kind in ("caller", "callee", "test")
+                },
+                "truncated": [
+                    {"file": snippet.get("file"), "start_line": snippet.get("start_line")}
+                    for snippet in context_snippets if snippet.get("content", "").endswith("...(truncated)")
+                ],
+                "not_found": [
+                    item.get("plan") for item in retrieval_history
+                    if item.get("new_snippet_count") == 0
+                ][-2:],
+                "previous_plan": retrieval_history[-1].get("plan") if retrieval_history else None,
+                "previous_result": {
+                    key: value for key, value in retrieval_history[-1].items() if key != "plan"
+                } if retrieval_history else None,
+                "no_new_rounds": state.get("retrieval_no_new_rounds") or 0,
+            },
+            "static_analysis_summary": [
+                {"command": item.get("command"), "passed": item.get("passed"), "exit_code": item.get("exit_code")}
+                for item in state.get("static_results") or []
+            ],
+            "baseline_head_failures": [
+                {
+                    "stage": snapshot.get("stage"),
+                    "passed": snapshot.get("passed"),
+                    "failure_count": len(snapshot.get("failure_fingerprints") or []),
+                    "failure_kind": snapshot.get("failure_kind"),
+                }
+                for snapshot in validation_snapshots if snapshot.get("stage") in {"base", "head"}
+            ],
+            "review_issue_ids": [issue.get("id") for issue in state.get("review_issues") or []],
+            "repair_feedback": {
+                "active_patch": active_patch,
+                "original_issue": active_issue,
+                "validation_delta": next(
+                    (delta for delta in reversed(validation_deltas)
+                    if delta.get("patch_id") == active_patch_id),
+                    None,
+                ),
+                "new_failure_fingerprints": [
+                    failure for delta in validation_deltas if delta.get("patch_id") == active_patch_id
+                    for failure in delta.get("introduced_failures", [])
+                ],
+                "resolved_failure_fingerprints": [
+                    failure for delta in validation_deltas if delta.get("patch_id") == active_patch_id
+                    for failure in delta.get("resolved_failures", [])
+                ],
+                "attempts": active_patch.get("attempt_number") if active_patch else 0,
+                "workspace_restored_to_clean_head": state.get("patch_workspace_clean"),
+            },
             "execution_budget": state.get("execution_budget") or {},
-            "agent_events": state.get("agent_events") or [],
         }
         allowed = ", ".join(
             action.value for action in ALLOWED_ACTIONS_BY_PHASE.get(phase, frozenset())
         )
+        phase_rules = (
+            "For retrieve_context, tool_args must be exactly {\"plan\": {...}}. "
+            "The plan must use only listed files/symbols, literal search_terms, bounded max_results and depth. "
+            "Use request_human only when business rules are unavailable, multiple behaviors are safe, "
+            "evidence is insufficient, or a security/funds/permission/data-migration decision needs approval. "
+            "request_human must include human_request with missing_information, known_evidence, questions, "
+            "and prohibited_operations."
+            if phase.value == "discovery" else
+            "For repair choose only revise_patch, accept_patch, abandon_patch, or request_human. "
+            "accept_patch is advisory only: the server independently checks apply success, validation delta, "
+            "policy blockers, patch size, issue evidence, and clean Head restoration."
+        )
         return (
             f"Decide the next action for the '{phase.value}' code review phase.\n"
             f"Allowed actions: {allowed}.\n"
+            f"{phase_rules}\n"
             "Return exactly this JSON shape:\n"
             "{\"action\":\"review_code\",\"reason\":\"中文理由\","
-            "\"target_issue_ids\":[],\"tool_args\":{}}\n\n"
+            "\"target_issue_ids\":[],\"tool_args\":{},\"human_request\":null}\n\n"
             f"Current state JSON:\n{json.dumps(compact, ensure_ascii=False)[:50000]}"
         )
 

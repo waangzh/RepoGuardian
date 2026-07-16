@@ -42,6 +42,9 @@ class ReviewState(TypedDict, total=False):
 
     # ---- 上下文 ----
     context_snippets: list[dict[str, Any]] | None  # CodeSearch 返回的相关代码片段
+    retrieval_history: list[dict[str, Any]] | None
+    retrieval_no_new_rounds: int
+    discovery_stop_reason: str | None
 
     # ---- 静态分析 ----
     static_results: list[dict[str, Any]] | None
@@ -55,6 +58,7 @@ class ReviewState(TypedDict, total=False):
     pending_patch_ids: list[str] | None
     active_patch_id: str | None
     active_patch_validation_passed: bool | None
+    patch_workspace_clean: bool | None
     execution_budget: dict[str, int] | ExecutionBudget
     repair_enabled: bool
 
@@ -70,6 +74,7 @@ class ReviewState(TypedDict, total=False):
 
     # ---- 可观测性 ----
     error: str | None
+    human_request: dict[str, Any] | None
     step_progress: list[dict[str, Any]] | None    # 图步骤进度 [{node, status, message, timestamp}]
     agent_events: list[dict[str, Any]] | None     # Agent 事件日志 [{action, reason, status, ...}]
 

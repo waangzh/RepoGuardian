@@ -115,6 +115,7 @@ async def patched_validation_node(state: ReviewState) -> ReviewState:
         validation_deltas=[item.model_dump(mode="json") for item in updated_deltas],
         validation_blocked=blocked,
         active_patch_validation_passed=patched.passed,
+        patch_workspace_clean=cleanup_error is None,
         patches=[patch.model_dump(mode="json") for patch in updated_patches],
         test_results=[item.model_dump(mode="json") for item in patched.command_results],
         step_progress=append_step(state, "patched_validation", "completed", message),

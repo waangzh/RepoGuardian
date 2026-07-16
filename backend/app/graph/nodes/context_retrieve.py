@@ -1,61 +1,120 @@
+"""按模型提出且已校验的结构化计划读取仓库上下文。"""
+
+import json
 import logging
+from typing import Any
 
 from app.graph.nodes._events import append_event, append_step
 from app.graph.policies import consume_budget
 from app.graph.state import ReviewState
-from app.models.review import AgentAction, ReviewPhase
-from app.tools.code_search import CodeSearchTool
+from app.models.review import AgentAction, ContextRetrievalPlan, ReviewPhase
+from app.tools.code_search import CodeSearchTool, ContextRetrievalPlanError
 
 logger = logging.getLogger("RepoGuardian.Node")
 
 
 async def context_retrieve_node(state: ReviewState) -> ReviewState:
-    """上下文检索节点：为变更符号查找直接代码片段、调用者和测试文件。"""
-    action = AgentAction.model_validate(state.get("next_action") or {
-        "action": "retrieve_context",
-        "reason": "检索相关上下文",
-    })
-    changed_files = state.get("changed_files") or []
-    symbol_index = state.get("symbol_index") or []
-    file_index = state.get("file_index") or []
-    repo_path = state.get("repo_path", "")
+    """执行一次去重的、仅能访问索引资源的检索计划。"""
+    action = AgentAction.model_validate(state.get("next_action") or {})
+    plan = ContextRetrievalPlan.model_validate(action.tool_args["plan"])
+    serialized_plan = json.dumps(plan.model_dump(mode="json"), ensure_ascii=False, sort_keys=True)
+    history = list(state.get("retrieval_history") or [])
+
+    if any(item.get("plan") == serialized_plan for item in history):
+        return _rejected_result(
+            state,
+            action,
+            history,
+            serialized_plan,
+            "重复检索计划已被去重，未执行工具",
+        )
+
     budget = consume_budget(state, context_retrievals=1)
     if budget is None:
-        message = "上下文检索预算已耗尽"
         return ReviewState(
             next_action=None,
-            agent_events=append_event(state, action.action, action.reason, "completed", message),
-            step_progress=append_step(state, "context_retrieve", "completed", message),
-        )
-
-    if not changed_files or not symbol_index:
-        message = "无可检索上下文（无变更文件或符号索引为空）"
-        logger.warning("🔍 [上下文] 跳过: %s", message)
-        return ReviewState(
-            next_action=None,
-            context_snippets=[],
             phase=ReviewPhase.discovery,
-            execution_budget=budget.model_dump(),
-            agent_events=append_event(state, action.action, action.reason, "completed", message),
-            step_progress=append_step(state, "context_retrieve", "completed", message),
+            discovery_stop_reason="context_budget_exhausted",
+            agent_events=append_event(state, action.action, action.reason, "completed", "上下文检索预算已耗尽"),
+            step_progress=append_step(state, "context_retrieve", "completed", "上下文检索预算已耗尽"),
         )
 
-    logger.info("🔍 [上下文] 开始检索 %d 个变更文件的相关上下文...", len(changed_files))
-    result = await CodeSearchTool().retrieve_context(changed_files, symbol_index, file_index, repo_path)
-    # 统计各类型片段数量
-    direct_count = sum(1 for r in result if r.get("relevance") == "direct")
-    caller_count = sum(1 for r in result if r.get("relevance") == "caller")
-    test_count = sum(1 for r in result if r.get("relevance") == "test")
-    message = f"检索到 {len(result)} 个相关上下文片段"
-    logger.info(
-        "🔍 [上下文] 完成: %d 片段（直接=%d, 调用者=%d, 测试=%d）",
-        len(result), direct_count, caller_count, test_count,
-    )
+    failure_fingerprints = [
+        fingerprint
+        for snapshot in state.get("validation_snapshots") or []
+        for fingerprint in snapshot.get("failure_fingerprints", [])
+    ]
+    try:
+        result = await CodeSearchTool().retrieve_context(
+            changed_files=state.get("changed_files") or [],
+            symbol_index=state.get("symbol_index") or [],
+            file_index=state.get("file_index") or [],
+            repo_path=state.get("repo_path", ""),
+            plan=plan,
+            failure_fingerprints=failure_fingerprints,
+        )
+    except (ContextRetrievalPlanError, ValueError) as exc:
+        return _rejected_result(
+            state,
+            action,
+            history,
+            serialized_plan,
+            f"检索计划被服务端拒绝：{exc}",
+            execution_budget=budget.model_dump(),
+        )
+
+    existing = list(state.get("context_snippets") or [])
+    existing_ranges = {
+        (snippet.get("file"), snippet.get("start_line"), snippet.get("end_line"))
+        for snippet in existing
+    }
+    new_snippets = [
+        snippet for snippet in result
+        if (snippet.get("file"), snippet.get("start_line"), snippet.get("end_line"))
+        not in existing_ranges
+    ]
+    no_new_rounds = (state.get("retrieval_no_new_rounds") or 0) + 1 if not new_snippets else 0
+    history.append({
+        "plan": serialized_plan,
+        "result_count": len(result),
+        "new_snippet_count": len(new_snippets),
+        "truncated_count": sum(
+            1 for snippet in result if snippet.get("content", "").endswith("...(truncated)")
+        ),
+        "status": "completed",
+    })
+    message = f"按计划检索到 {len(result)} 个片段，新增 {len(new_snippets)} 个"
     return ReviewState(
         next_action=None,
-        context_snippets=result,
+        context_snippets=existing + new_snippets,
+        retrieval_history=history,
+        retrieval_no_new_rounds=no_new_rounds,
         phase=ReviewPhase.discovery,
         execution_budget=budget.model_dump(),
         agent_events=append_event(state, action.action, action.reason, "completed", message),
         step_progress=append_step(state, "context_retrieve", "completed", message),
     )
+
+
+def _rejected_result(
+    state: ReviewState,
+    action: AgentAction,
+    history: list[dict[str, Any]],
+    serialized_plan: str,
+    message: str,
+    *,
+    execution_budget: dict[str, Any] | None = None,
+) -> ReviewState:
+    """拒绝计划也计为无新增信息，防止模型以无效计划形成循环。"""
+    history.append({"plan": serialized_plan, "result_count": 0, "new_snippet_count": 0, "status": "rejected"})
+    result: dict[str, Any] = {
+        "next_action": None,
+        "retrieval_history": history,
+        "retrieval_no_new_rounds": (state.get("retrieval_no_new_rounds") or 0) + 1,
+        "phase": ReviewPhase.discovery,
+        "agent_events": append_event(state, action.action, action.reason, "rejected", message),
+        "step_progress": append_step(state, "context_retrieve", "completed", message),
+    }
+    if execution_budget is not None:
+        result["execution_budget"] = execution_budget
+    return ReviewState(**result)

@@ -145,6 +145,10 @@ class ScriptedProvider(LLMProvider):
             suggestion="无需修改。",
             confidence=0.2,
             auto_fixable=self._auto_fixable,
+            evidence="变更文件第一行对应测试审查证据。",
+            evidence_locations=[{"file_path": changed_files[0].file_path, "line_no": 1}],
+            affected_behavior="用于验证受控审查结果传递。",
+            fix_risk="low" if self._auto_fixable else "high",
         )]
 
     async def generate_patch(

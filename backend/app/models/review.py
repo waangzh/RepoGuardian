@@ -9,10 +9,11 @@
 
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import PurePosixPath
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, HttpUrl, model_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +79,7 @@ class AgentActionName(str, Enum):
     finish_report = "finish_report"
     request_human = "request_human"
     revise_patch = "revise_patch"
+    accept_patch = "accept_patch"
     abandon_patch = "abandon_patch"
 
 
@@ -108,6 +110,129 @@ class PatchStatus(str, Enum):
     validation_failed = "validation_failed"
     abandoned = "abandoned"
     superseded = "superseded"
+
+
+class RetrievalRelevanceType(str, Enum):
+    """服务端支持的、可审计的上下文关联类型。"""
+
+    direct = "direct"
+    caller = "caller"
+    callee = "callee"
+    test = "test"
+    module_config = "module_config"
+    text = "text"
+    adjacent = "adjacent"
+    type_definition = "type_definition"
+    import_source = "import_source"
+    failure_location = "failure_location"
+
+
+class FixRisk(str, Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+
+
+def _validate_repo_relative_path(value: str) -> str:
+    """只接受与仓库索引格式一致的 POSIX 相对路径。"""
+    if not isinstance(value, str) or not value or len(value) > 260:
+        raise ValueError("repository path must be a non-empty relative path")
+    if "\\" in value or "\x00" in value or value.startswith(("/", "~")) or ":" in value:
+        raise ValueError("repository path must use a safe POSIX relative path")
+    path = PurePosixPath(value)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError("repository path traversal is not allowed")
+    if path.as_posix() != value:
+        raise ValueError("repository path must be normalized")
+    return value
+
+
+class ContextRetrievalPlan(BaseModel):
+    """模型提出、服务端归一化并按索引执行的上下文检索计划。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=500)
+    target_files: list[str] = Field(default_factory=list, max_length=12)
+    target_symbols: list[str] = Field(default_factory=list, max_length=12)
+    search_terms: list[str] = Field(default_factory=list, max_length=8)
+    relevance_types: list[RetrievalRelevanceType] = Field(min_length=1, max_length=10)
+    include_callers: bool = False
+    include_callees: bool = False
+    include_tests: bool = False
+    max_results: int = Field(default=12, ge=1, le=20)
+    depth: int = Field(default=1, ge=0, le=2)
+
+    @field_validator("target_files")
+    @classmethod
+    def validate_target_files(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(_validate_repo_relative_path(value) for value in values))
+
+    @field_validator("target_symbols")
+    @classmethod
+    def validate_target_symbols(cls, values: list[str]) -> list[str]:
+        import re
+
+        symbol_pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
+        if any(not symbol_pattern.fullmatch(value) for value in values):
+            raise ValueError("target symbols must be indexed symbol names")
+        return list(dict.fromkeys(values))
+
+    @field_validator("search_terms")
+    @classmethod
+    def validate_search_terms(cls, values: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for value in values:
+            if not isinstance(value, str) or not value.strip() or len(value) > 120:
+                raise ValueError("search terms must be short non-empty literals")
+            if any(ord(char) < 32 for char in value):
+                raise ValueError("search terms cannot contain control characters")
+            cleaned.append(value.strip())
+        return list(dict.fromkeys(cleaned))
+
+    @field_validator("max_results", mode="before")
+    @classmethod
+    def clamp_max_results(cls, value: Any) -> int:
+        if isinstance(value, bool):
+            raise ValueError("max_results must be an integer")
+        value = int(value)
+        if value < 1:
+            raise ValueError("max_results must be positive")
+        return min(value, 20)
+
+    @field_validator("depth", mode="before")
+    @classmethod
+    def clamp_depth(cls, value: Any) -> int:
+        if isinstance(value, bool):
+            raise ValueError("depth must be an integer")
+        value = int(value)
+        if value < 0:
+            raise ValueError("depth must not be negative")
+        return min(value, 2)
+
+    @model_validator(mode="after")
+    def require_a_safe_target(self) -> "ContextRetrievalPlan":
+        if not (self.target_files or self.target_symbols or self.search_terms):
+            raise ValueError("retrieval plan requires a file, symbol, or literal search term")
+        return self
+
+
+class HumanReviewRequest(BaseModel):
+    """必须人工确认时向调用方暴露的最小结构化信息。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    missing_information: list[str] = Field(min_length=1, max_length=8)
+    known_evidence: list[str] = Field(min_length=1, max_length=12)
+    questions: list[str] = Field(min_length=1, max_length=8)
+    prohibited_operations: list[str] = Field(min_length=1, max_length=8)
+
+    @field_validator("missing_information", "known_evidence", "questions", "prohibited_operations")
+    @classmethod
+    def validate_items(cls, values: list[str]) -> list[str]:
+        if any(not isinstance(value, str) or not value.strip() or len(value) > 500 for value in values):
+            raise ValueError("human review fields must contain short non-empty text")
+        return list(dict.fromkeys(value.strip() for value in values))
 
 
 class FailureKind(str, Enum):
@@ -249,6 +374,54 @@ class ReviewIssue(BaseModel):
     suggestion: str
     confidence: float = Field(ge=0, le=1)   # 0-1，LLM 置信度
     auto_fixable: bool = False               # 是否可自动修复
+    evidence: str = Field(min_length=3, max_length=2_000)
+    evidence_locations: list["EvidenceLocation"] = Field(min_length=1, max_length=12)
+    affected_behavior: str = Field(min_length=3, max_length=1_000)
+    assumptions: list[str] = Field(default_factory=list, max_length=8)
+    related_test_ids: list[str] = Field(default_factory=list, max_length=12)
+    fix_risk: FixRisk = FixRisk.high
+    requires_human_confirmation: bool = False
+
+    @field_validator("file_path")
+    @classmethod
+    def validate_file_path(cls, value: str) -> str:
+        return _validate_repo_relative_path(value)
+
+    @field_validator("line_no")
+    @classmethod
+    def validate_line_no(cls, value: int | None) -> int | None:
+        if value is not None and value < 1:
+            raise ValueError("line_no must be positive")
+        return value
+
+    @field_validator("assumptions", "related_test_ids")
+    @classmethod
+    def validate_short_text_lists(cls, values: list[str]) -> list[str]:
+        if any(not isinstance(value, str) or not value.strip() or len(value) > 500 for value in values):
+            raise ValueError("issue text lists must contain short non-empty values")
+        return list(dict.fromkeys(value.strip() for value in values))
+
+    @model_validator(mode="after")
+    def restrict_auto_fix_to_low_risk_evidence(self) -> "ReviewIssue":
+        if self.auto_fixable and (
+            self.fix_risk != FixRisk.low or self.requires_human_confirmation
+        ):
+            raise ValueError("only low-risk issues without human confirmation are auto-fixable")
+        return self
+
+
+class EvidenceLocation(BaseModel):
+    """问题证据在当前 Head 工作树中的精确位置。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    file_path: str
+    line_no: int = Field(ge=1)
+
+    @field_validator("file_path")
+    @classmethod
+    def validate_file_path(cls, value: str) -> str:
+        return _validate_repo_relative_path(value)
 
 
 class AgentAction(BaseModel):
@@ -257,6 +430,9 @@ class AgentAction(BaseModel):
     reason: str                                    # 选择该操作的中文理由
     target_issue_ids: list[str] = Field(default_factory=list)
     tool_args: dict[str, Any] = Field(default_factory=dict)
+    human_request: HumanReviewRequest | None = None
+
+    model_config = ConfigDict(extra="forbid")
 
     @model_validator(mode="after")
     def reject_free_form_shell_command(self) -> "AgentAction":
@@ -269,6 +445,23 @@ class AgentAction(BaseModel):
                 CommandId(command_id)
             except ValueError as exc:
                 raise ValueError(f"unknown command_id: {command_id}") from exc
+        if self.action == AgentActionName.retrieve_context:
+            if set(self.tool_args) != {"plan"}:
+                raise ValueError("retrieve_context requires tool_args.plan only")
+            plan = ContextRetrievalPlan.model_validate(self.tool_args["plan"])
+            self.tool_args = {"plan": plan.model_dump(mode="json")}
+        elif self.action == AgentActionName.apply_patch:
+            patch_id = self.tool_args.get("patch_id")
+            if set(self.tool_args) != {"patch_id"} or not isinstance(patch_id, str) or not patch_id:
+                raise ValueError("apply_patch requires a server-selected patch_id only")
+        elif self.tool_args:
+            raise ValueError(f"tool_args are not allowed for action '{self.action.value}'")
+
+        if self.action == AgentActionName.request_human:
+            if self.human_request is None:
+                raise ValueError("request_human requires a structured human_request")
+        elif self.human_request is not None:
+            raise ValueError("human_request is only allowed for request_human")
         return self
 
 
@@ -414,6 +607,7 @@ class ReviewTask(BaseModel):
     patches: list[PatchResult] = Field(default_factory=list)
     test_results: list[TestRunResult] = Field(default_factory=list)
     agent_events: list[AgentEvent] = Field(default_factory=list)
+    human_request: HumanReviewRequest | None = None
     report_markdown: str | None = None
     error: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

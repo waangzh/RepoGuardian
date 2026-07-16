@@ -47,6 +47,7 @@ def rebuild_task_from_state(state: ReviewState) -> ReviewTask:
         patches=rebuild_patches(state.get("patches") or []),
         test_results=rebuild_test_results(state.get("test_results") or []),
         agent_events=rebuild_agent_events(state.get("agent_events") or []),
+        human_request=state.get("human_request"),
         report_markdown=state.get("report_markdown"),
         error=state.get("error"),
         created_at=datetime.now(timezone.utc),

@@ -171,6 +171,7 @@ class ReviewService:
         task.patches = rebuilt.patches
         task.test_results = rebuilt.test_results
         task.agent_events = rebuilt.agent_events
+        task.human_request = rebuilt.human_request
         task.report_markdown = rebuilt.report_markdown
         task.steps = [
             TaskStep(
