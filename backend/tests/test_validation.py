@@ -90,6 +90,18 @@ def test_missing_dependency_is_environment_failure(dependency_missing_result: Ru
     assert blocks_auto_repair(snapshot) is True
 
 
+def test_business_error_text_is_not_misclassified_as_missing_dependency() -> None:
+    result = _result(
+        passed=False,
+        stderr='AssertionError: expected "no such file or directory" in API response',
+        exit_code=1,
+    )
+    snapshot = _snapshot(ValidationStage.head, False, classify_failure([result]))
+
+    assert snapshot.failure_kind == FailureKind.unknown
+    assert blocks_auto_repair(snapshot) is False
+
+
 def test_test_collection_failure_is_classified_and_blocks_repair(collection_error_result: RunResult) -> None:
     snapshot = _snapshot(ValidationStage.head, False, classify_failure([collection_error_result]))
 

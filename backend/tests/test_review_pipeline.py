@@ -234,6 +234,8 @@ index 1111111..2222222 100644
     assert completed.test_results[-1].passed is True
     assert completed.validation_snapshots[-1].stage.value == "patched"
     assert completed.validation_snapshots[-1].passed is True
+    assert completed.validation_snapshots[-1].patch_id == completed.patches[-1].id
+    assert "## 6. 三阶段验证" in completed.report_markdown
 
 
 @pytest.mark.asyncio

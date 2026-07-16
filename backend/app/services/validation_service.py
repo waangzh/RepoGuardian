@@ -20,12 +20,9 @@ _NON_REPAIRABLE_FAILURES = frozenset({
     FailureKind.timeout,
     FailureKind.infrastructure,
 })
-_DEPENDENCY_MARKERS = (
-    "modulenotfounderror",
-    "no module named",
-    "package not found",
-    "command not found",
-    "no such file or directory",
+_DEPENDENCY_ERROR_PREFIXES = (
+    "modulenotfounderror: no module named",
+    "importerror: no module named",
 )
 _INFRASTRUCTURE_MARKERS = (
     "permission denied",
@@ -83,8 +80,13 @@ def classify_failure(results: list[TestRunResult]) -> FailureKind | None:
         return None
     if failure.exit_code == 124:
         return FailureKind.timeout
-    text = f"{failure.stdout}\n{failure.stderr}".lower()
-    if failure.exit_code == 127 or any(marker in text for marker in _DEPENDENCY_MARKERS):
+    lines = [line.strip().lower() for line in f"{failure.stdout}\n{failure.stderr}".splitlines()]
+    text = "\n".join(lines)
+    if failure.exit_code == 127 or any(
+        line.startswith(_DEPENDENCY_ERROR_PREFIXES)
+        or ("python" in line and ": no module named" in line)
+        for line in lines
+    ):
         return FailureKind.dependency_missing
     if failure.command == "python.test.collect":
         return FailureKind.test_collection_error
@@ -106,6 +108,7 @@ def compare_snapshots(previous: ValidationSnapshot, current: ValidationSnapshot)
     return ValidationDelta(
         from_stage=previous.stage,
         to_stage=current.stage,
+        patch_id=current.patch_id,
         previous_passed=previous.passed,
         current_passed=current.passed,
         failure_kind=failure_kind,

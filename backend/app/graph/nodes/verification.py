@@ -41,10 +41,12 @@ async def patched_validation_node(state: ReviewState) -> ReviewState:
     snapshots = [ValidationSnapshot.model_validate(item) for item in state.get("validation_snapshots") or []]
     head_snapshot = next((item for item in snapshots if item.stage == ValidationStage.head), None)
     profile_data = state.get("project_profile")
+    active_patch_id = state.get("active_patch_id")
     if head_snapshot is None or not profile_data:
         return ReviewState(
             phase=ReviewPhase.validation,
             validation_blocked=True,
+            active_patch_validation_passed=False,
             step_progress=append_step(state, "patched_validation", "failed", "缺少 Head 基线，无法验证补丁"),
         )
 
@@ -55,6 +57,7 @@ async def patched_validation_node(state: ReviewState) -> ReviewState:
         patched = ValidationSnapshot(
             stage=ValidationStage.patched,
             sha=head_snapshot.sha,
+            patch_id=active_patch_id,
             passed=False,
             failure_kind=FailureKind.unknown,
             failure_detail="project adapter is unavailable",
@@ -64,6 +67,7 @@ async def patched_validation_node(state: ReviewState) -> ReviewState:
         patched = await ValidationService(adapter, executor).run_stage(
             state.get("repo_path", ""), profile, ValidationStage.patched, head_snapshot.sha
         )
+        patched.patch_id = active_patch_id
 
     delta = compare_snapshots(head_snapshot, patched)
     updated_snapshots = snapshots + [patched]
@@ -79,6 +83,7 @@ async def patched_validation_node(state: ReviewState) -> ReviewState:
         validation_snapshots=[item.model_dump(mode="json") for item in updated_snapshots],
         validation_deltas=[item.model_dump(mode="json") for item in updated_deltas],
         validation_blocked=blocked,
+        active_patch_validation_passed=patched.passed,
         test_results=[item.model_dump(mode="json") for item in patched.command_results],
         step_progress=append_step(state, "patched_validation", "completed", message),
     )

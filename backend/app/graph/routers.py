@@ -49,6 +49,15 @@ def route_repair_entry(state: dict[str, Any]) -> str:
     return "generate_patch" if state.get("repair_enabled") else "repair_exit"
 
 
+def route_repair_assessment(state: dict[str, Any]) -> str:
+    """已通过验证的当前补丁可继续处理同批队列；其余情况交还 Agent 判断。"""
+    if not state.get("repair_enabled"):
+        return "repair_exit"
+    if state.get("active_patch_validation_passed") and state.get("pending_patch_ids"):
+        return "apply_patch"
+    return "repair_decide"
+
+
 def route_baseline_validation(state: dict[str, Any]) -> str:
     """只有成功恢复到 Head 工作树后才继续读取代码并调用模型。"""
     return "continue" if state.get("validation_ready") else "report"

@@ -305,6 +305,8 @@ class OpenAICompatibleProvider(LLMProvider):
             "static_results": state.get("static_results") or [],
             "review_issues": state.get("review_issues") or [],
             "patches": state.get("patches") or [],
+            "pending_patch_ids": state.get("pending_patch_ids") or [],
+            "active_patch_id": state.get("active_patch_id"),
             "test_results": state.get("test_results") or [],
             "execution_budget": state.get("execution_budget") or {},
             "agent_events": state.get("agent_events") or [],
@@ -327,7 +329,10 @@ class OpenAICompatibleProvider(LLMProvider):
             "diff_text": (state.get("diff_text") or "")[:50000],
             "context_snippets": state.get("context_snippets") or [],
             "review_issues": state.get("review_issues") or [],
+            "patches": state.get("patches") or [],
             "test_results": state.get("test_results") or [],
+            "validation_deltas": state.get("validation_deltas") or [],
+            "active_patch_id": state.get("active_patch_id"),
             "target_issue_ids": (state.get("next_action") or {}).get("target_issue_ids", []),
         }
         return (

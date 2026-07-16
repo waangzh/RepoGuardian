@@ -15,6 +15,7 @@ class ReportService:
         _append_change_summary(lines, task)
         _append_issue_summary(lines, task)
         _append_static_results(lines, task)
+        _append_validation_results(lines, task)
         _append_patch_results(lines, task)
         _append_test_results(lines, task)
         _append_agent_events(lines, task)
@@ -118,9 +119,49 @@ def _append_static_results(lines: list[str], task: ReviewTask) -> None:
     lines.append("")
 
 
+def _append_validation_results(lines: list[str], task: ReviewTask) -> None:
+    """展示 Base、Head 与各补丁的验证快照和差异，保留故障归因。"""
+    lines.extend(["## 6. 三阶段验证", ""])
+    if not task.validation_snapshots:
+        lines.extend(["未运行。", ""])
+        return
+
+    lines.extend([
+        "| 阶段 | SHA | Patch | 状态 | 失败类型 | 命令 |",
+        "|---|---|---|---|---|---|",
+    ])
+    for snapshot in task.validation_snapshots:
+        commands = ", ".join(
+            f"{result.command} ({'通过' if result.passed else '失败'}, exit {result.exit_code})"
+            for result in snapshot.command_results
+        ) or "未运行"
+        lines.append(
+            f"| {snapshot.stage.value} | `{snapshot.sha[:8]}` | "
+            f"`{(snapshot.patch_id or '')[:8]}` | {'通过' if snapshot.passed else '失败'} | "
+            f"{snapshot.failure_kind.value if snapshot.failure_kind else '-'} | {commands} |"
+        )
+        if snapshot.failure_detail:
+            lines.append(f"> {snapshot.stage.value}：{snapshot.failure_detail}")
+    lines.append("")
+
+    if task.validation_deltas:
+        lines.extend([
+            "| 比较 | Patch | 新增失败 | 已解决失败 | 结论 |",
+            "|---|---|---|---|---|",
+        ])
+        for delta in task.validation_deltas:
+            outcome = delta.failure_kind.value if delta.failure_kind else "通过"
+            lines.append(
+                f"| {delta.from_stage.value} → {delta.to_stage.value} | "
+                f"`{(delta.patch_id or '')[:8]}` | {'是' if delta.introduced_failure else '否'} | "
+                f"{'是' if delta.resolved_failure else '否'} | {outcome} |"
+            )
+        lines.append("")
+
+
 def _append_patch_results(lines: list[str], task: ReviewTask) -> None:
-    """6. 自动修复结果表格。"""
-    lines.extend(["## 6. 自动修复结果", ""])
+    """7. 自动修复结果表格。"""
+    lines.extend(["## 7. 自动修复结果", ""])
     if not task.patches:
         lines.extend(["未生成 patch。", ""])
         return
@@ -133,8 +174,8 @@ def _append_patch_results(lines: list[str], task: ReviewTask) -> None:
 
 
 def _append_test_results(lines: list[str], task: ReviewTask) -> None:
-    """7. 测试结果表格。"""
-    lines.extend(["## 7. 测试结果", ""])
+    """8. 测试结果表格。"""
+    lines.extend(["## 8. 测试结果", ""])
     if not task.test_results:
         lines.extend(["未运行。", ""])
         return
@@ -148,8 +189,8 @@ def _append_test_results(lines: list[str], task: ReviewTask) -> None:
 
 
 def _append_agent_events(lines: list[str], task: ReviewTask) -> None:
-    """8. Agent 决策日志表格。"""
-    lines.extend(["## 8. Agent 决策日志", ""])
+    """9. Agent 决策日志表格。"""
+    lines.extend(["## 9. Agent 决策日志", ""])
     if not task.agent_events:
         lines.extend(["无。", ""])
         return
@@ -160,9 +201,9 @@ def _append_agent_events(lines: list[str], task: ReviewTask) -> None:
 
 
 def _append_task_info(lines: list[str], task: ReviewTask) -> None:
-    """9. 任务元信息。"""
+    """10. 任务元信息。"""
     lines.extend([
-        "## 9. 任务信息",
+        "## 10. 任务信息",
         "",
         f"- 任务 ID：`{task.id}`",
         f"- 状态：{task.status.value}",

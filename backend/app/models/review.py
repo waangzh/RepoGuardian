@@ -307,6 +307,7 @@ class ValidationSnapshot(BaseModel):
 
     stage: ValidationStage
     sha: str = Field(min_length=1)
+    patch_id: str | None = None
     command_results: list[TestRunResult] = Field(default_factory=list)
     passed: bool
     failure_kind: FailureKind | None = None
@@ -318,6 +319,7 @@ class ValidationDelta(BaseModel):
 
     from_stage: ValidationStage
     to_stage: ValidationStage
+    patch_id: str | None = None
     previous_passed: bool
     current_passed: bool
     failure_kind: FailureKind | None = None

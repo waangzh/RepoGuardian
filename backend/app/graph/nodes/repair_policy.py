@@ -50,31 +50,80 @@ async def repair_generate_patch_node(state: ReviewState) -> ReviewState:
 
 
 async def repair_apply_patch_node(state: ReviewState) -> ReviewState:
+    patches_by_id = {
+        item.get("id"): item
+        for item in state.get("patches") or []
+        if item.get("id")
+    }
+    patch_id = next(
+        (
+            candidate_id
+            for candidate_id in state.get("pending_patch_ids") or []
+            if patches_by_id.get(candidate_id, {}).get("status") == "generated"
+        ),
+        None,
+    )
+    if patch_id is None:
+        return ReviewState(
+            phase=ReviewPhase.repair,
+            repair_enabled=False,
+            active_patch_id=None,
+            active_patch_validation_passed=False,
+            pending_patch_ids=[],
+            step_progress=append_step(state, "patch_apply", "failed", "没有本轮可应用的候选补丁"),
+        )
     action = AgentAction(
         action=AgentActionName.apply_patch,
-        reason="在任务临时 clone 中应用最新候选补丁",
+        reason="在任务临时 clone 中应用本轮候选补丁",
+        tool_args={"patch_id": patch_id},
     )
-    return await patch_node(_with_action(state, action))
+    result = await patch_node(_with_action(state, action))
+    return ReviewState(
+        **result,
+        active_patch_id=patch_id,
+        active_patch_validation_passed=None,
+        pending_patch_ids=[
+            candidate_id
+            for candidate_id in state.get("pending_patch_ids") or []
+            if candidate_id != patch_id
+        ],
+    )
 
 
 async def repair_validation_node(state: ReviewState) -> ReviewState:
-    if not any(item.get("status") == "applied" for item in state.get("patches") or []):
+    active_patch_id = state.get("active_patch_id")
+    active_patch = next(
+        (item for item in state.get("patches") or [] if item.get("id") == active_patch_id),
+        None,
+    )
+    if active_patch is None or active_patch.get("status") != "applied":
         return ReviewState(
             phase=ReviewPhase.validation,
             repair_enabled=False,
-            step_progress=append_step(state, "patched_validation", "failed", "没有已应用的补丁"),
+            active_patch_validation_passed=False,
+            step_progress=append_step(state, "patched_validation", "failed", "当前候选补丁未成功应用，跳过验证"),
         )
     return await patched_validation_node(state)
 
 
 async def repair_assessment_node(state: ReviewState) -> ReviewState:
     """验证后恢复 repair 阶段，允许 Agent 仅作修订或放弃判断。"""
-    has_patch = any(item.get("status") == "applied" for item in state.get("patches") or [])
-    has_patch = has_patch and not state.get("validation_blocked", False)
+    active_patch_id = state.get("active_patch_id")
+    active_patch = next(
+        (item for item in state.get("patches") or [] if item.get("id") == active_patch_id),
+        None,
+    )
+    has_verified_patch = (
+        active_patch is not None
+        and active_patch.get("status") == "applied"
+        and state.get("active_patch_validation_passed") is not None
+    )
+    enabled = has_verified_patch and not state.get("validation_blocked", False)
+    message = "补丁验证已完成" if has_verified_patch else "当前补丁未通过应用，修复流程已结束"
     return ReviewState(
         phase=ReviewPhase.repair,
-        repair_enabled=has_patch,
-        step_progress=append_step(state, "repair_assessment", "completed", "补丁验证已完成"),
+        repair_enabled=enabled,
+        step_progress=append_step(state, "repair_assessment", "completed", message),
     )
 
 

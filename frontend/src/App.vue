@@ -7,6 +7,7 @@ import ContextPanel from "./components/ContextPanel.vue";
 import IssueList from "./components/IssueList.vue";
 import ReportPanel from "./components/ReportPanel.vue";
 import TaskTimeline from "./components/TaskTimeline.vue";
+import ValidationPanel from "./components/ValidationPanel.vue";
 import type { ReviewTask } from "./types/review";
 
 const prUrl = ref("");
@@ -165,6 +166,11 @@ onBeforeUnmount(clearPolling);
           :static-results="task?.static_results || []"
           :patches="task?.patches || []"
           :test-results="task?.test_results || []"
+        />
+        <ValidationPanel
+          :profile="task?.project_profile"
+          :snapshots="task?.validation_snapshots || []"
+          :deltas="task?.validation_deltas || []"
         />
         <ContextPanel :snippets="task?.context_snippets || []" />
         <IssueList :issues="task?.issues || []" />

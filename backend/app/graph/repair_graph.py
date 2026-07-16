@@ -10,7 +10,7 @@ from app.graph.nodes.repair_policy import (
     repair_policy_node,
     repair_validation_node,
 )
-from app.graph.routers import route_repair_action, route_repair_entry
+from app.graph.routers import route_repair_action, route_repair_assessment, route_repair_entry
 from app.graph.state import ReviewState
 
 
@@ -36,8 +36,12 @@ def build_repair_graph() -> StateGraph:
     graph.add_edge("validation", "repair_assessment")
     graph.add_conditional_edges(
         "repair_assessment",
-        lambda state: "repair_decide" if state.get("repair_enabled") else "repair_exit",
-        {"repair_decide": "repair_decide", "repair_exit": "repair_exit"},
+        route_repair_assessment,
+        {
+            "apply_patch": "apply_patch",
+            "repair_decide": "repair_decide",
+            "repair_exit": "repair_exit",
+        },
     )
     graph.add_conditional_edges(
         "repair_decide",

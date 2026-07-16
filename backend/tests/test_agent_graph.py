@@ -43,6 +43,20 @@ SAMPLE_PATCH = """diff --git a/pricing.py b/pricing.py
 -    return amount * discount_percent / 100
 +    return amount * (100 - discount_percent) / 100
 """
+SECOND_SAMPLE_PATCH = """diff --git a/verification-note.txt b/verification-note.txt
+new file mode 100644
+--- /dev/null
++++ b/verification-note.txt
+@@ -0,0 +1 @@
++validated
+"""
+INVALID_SAMPLE_PATCH = """diff --git a/pricing.py b/pricing.py
+--- a/pricing.py
++++ b/pricing.py
+@@ -20,1 +20,1 @@
+-missing source line
++replacement
+"""
 
 
 class GraphScriptedProvider(LLMProvider):
@@ -279,6 +293,49 @@ async def test_repair_subgraph_returns_to_main_flow(tmp_path: Path) -> None:
     assert result["patches"][-1]["status"] == "applied"
     assert result["test_results"][-1]["passed"] is True
     assert result["step_progress"][-1]["node"] == "report"
+
+
+@pytest.mark.asyncio
+async def test_repair_subgraph_applies_and_verifies_every_generated_patch(tmp_path: Path) -> None:
+    first_patch = PatchResult(issue_id="discount-fix", diff_content=SAMPLE_PATCH)
+    second_patch = PatchResult(issue_id="verification-note", diff_content=SECOND_SAMPLE_PATCH)
+    provider = GraphScriptedProvider(
+        actions=[
+            {"action": "review_code", "reason": "开始诊断"},
+            {"action": "abandon_patch", "reason": "所有候选补丁已验证"},
+        ],
+        review_issues=[_auto_fixable_issue()],
+        patches=[first_patch, second_patch],
+    )
+
+    result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
+
+    assert provider.patch_calls == 1
+    assert [patch["status"] for patch in result["patches"]] == ["applied", "applied"]
+    patched_snapshots = [
+        snapshot for snapshot in result["validation_snapshots"] if snapshot["stage"] == "patched"
+    ]
+    assert [snapshot["patch_id"] for snapshot in patched_snapshots] == [first_patch.id, second_patch.id]
+
+
+@pytest.mark.asyncio
+async def test_failed_current_patch_does_not_reuse_previous_patch_validation(tmp_path: Path) -> None:
+    first_patch = PatchResult(issue_id="discount-fix", diff_content=SAMPLE_PATCH)
+    failed_patch = PatchResult(issue_id="invalid", diff_content=INVALID_SAMPLE_PATCH)
+    provider = GraphScriptedProvider(
+        actions=[{"action": "review_code", "reason": "开始诊断"}],
+        review_issues=[_auto_fixable_issue()],
+        patches=[first_patch, failed_patch],
+    )
+
+    result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
+
+    assert [patch["status"] for patch in result["patches"]] == ["applied", "apply_failed"]
+    patched_snapshots = [
+        snapshot for snapshot in result["validation_snapshots"] if snapshot["stage"] == "patched"
+    ]
+    assert [snapshot["patch_id"] for snapshot in patched_snapshots] == [first_patch.id]
+    assert result["active_patch_id"] == failed_patch.id
 
 
 @pytest.mark.asyncio

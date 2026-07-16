@@ -67,6 +67,9 @@ async def _generate_patch(state: ReviewState, action: AgentAction) -> ReviewStat
     logger.info("🩹 [生成 patch] 完成: 生成了 %d 个 patch（累计 %d 个）", len(patch_dicts), len(previous) + len(patch_dicts))
     return ReviewState(
         patches=previous + patch_dicts,
+        pending_patch_ids=[patch["id"] for patch in patch_dicts],
+        active_patch_id=None,
+        active_patch_validation_passed=None,
         execution_budget=budget.model_dump(),
         agent_events=append_event(state, action.action, action.reason, "completed", message),
         step_progress=append_step(state, "patch_generate", "completed", message),

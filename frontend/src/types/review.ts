@@ -122,6 +122,7 @@ export interface ProjectProfile {
 export interface ValidationSnapshot {
   stage: "base" | "head" | "patched";
   sha: string;
+  patch_id?: string | null;
   command_results: TestRunResult[];
   passed: boolean;
   failure_kind?: FailureKind | null;
@@ -131,6 +132,7 @@ export interface ValidationSnapshot {
 export interface ValidationDelta {
   from_stage: "base" | "head" | "patched";
   to_stage: "head" | "patched";
+  patch_id?: string | null;
   previous_passed: boolean;
   current_passed: boolean;
   failure_kind?: FailureKind | null;
