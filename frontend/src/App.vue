@@ -21,7 +21,21 @@ let eventSource: EventSource | undefined;
 
 const statusText = computed(() => {
   if (!task.value) return "等待输入";
-  return task.value.status;
+  const labels: Record<string, string> = {
+    queued: "等待审查",
+    planning: "正在准备审查",
+    reviewing: "正在只读审查",
+    resolving_evidence: "正在补充证据",
+    verifying_issues: "正在核验问题",
+    generating_patches: "正在生成候选修复",
+    validating: "正在验证候选修复",
+    waiting_for_human: "等待人工确认",
+    completed: "审查已完成",
+    completed_with_warnings: "审查已完成（存在警告）",
+    failed: "任务失败",
+    cancelled: "任务已取消",
+  };
+  return labels[task.value.status] ?? `未知状态：${task.value.status}`;
 });
 
 async function submitReview() {
@@ -67,14 +81,14 @@ function startPolling(taskId: string) {
 }
 
 function isTerminalStatus(status: ReviewTask["status"]) {
-  return status === "completed" || status === "failed";
+  return status === "completed" || status === "completed_with_warnings" || status === "failed" || status === "cancelled";
 }
 
 async function refreshTask(taskId: string): Promise<ReviewTask | null> {
   try {
     const next = await getReview(taskId);
     task.value = next;
-    if (next.status === "completed") {
+    if (next.status === "completed" || next.status === "completed_with_warnings") {
       clearPolling();
       report.value = await getReport(taskId);
     }
@@ -138,6 +152,7 @@ onBeforeUnmount(clearPolling);
           <button :disabled="submitting" type="submit">
             {{ submitting ? "提交中" : "开始审查" }}
           </button>
+          <p class="hint">默认只读审查：不会运行项目测试，也不会生成补丁。</p>
           <p v-if="error" class="error">{{ error }}</p>
         </form>
 
@@ -171,6 +186,7 @@ onBeforeUnmount(clearPolling);
           :profile="task?.project_profile"
           :snapshots="task?.validation_snapshots || []"
           :deltas="task?.validation_deltas || []"
+          :results="task?.validation || []"
         />
         <ContextPanel :snippets="task?.context_snippets || []" />
         <IssueList :issues="task?.issues || []" />

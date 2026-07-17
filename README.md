@@ -1,12 +1,12 @@
 # RepoGuardian
 
-> 当前验证语义：Base、Head 与每个候选补丁均有独立快照。每个候选补丁在干净的 PR Head 上执行 `git apply --check`、应用和验证；验证结束后工作树立即复位，因此补丁不会彼此累积或共享副作用。
+> 默认模式为 `review`：只读审查始终可运行，不生成补丁、不运行项目代码，也不依赖验证执行器。
 
-> 执行安全边界：默认执行器为安全拒绝的沙箱占位实现，未配置真实沙箱时不会运行仓库命令，更不会静默回退到宿主机。仅开发或可信仓库可同时设置 `REPOGUARDIAN_EXECUTOR=local` 与 `REPOGUARDIAN_ALLOW_UNSAFE_LOCAL_EXECUTION=true` 显式授权本地执行。
+> `review_and_suggest` 只生成 `unverified` 候选补丁；`review_suggest_and_validate` 才会调用显式选择的验证后端。后端不可用时审查仍会完成并返回 `unsupported` 警告，绝不回退到本地执行。
 
 > 面向 GitHub Pull Request 的 Python 代码审查与受控修复工作台。
 
-RepoGuardian 接收一个 GitHub PR URL，在任务临时 clone 中读取 Base / Head 版本、分析 diff 与相关上下文，并生成结构化问题、受控补丁、验证快照和 Markdown 报告。它把确定性步骤交给 LangGraph 编排，把模型能力限定在审查与修复决策中，让每一步都可观察、可追踪。
+RepoGuardian 接收一个 GitHub PR URL，在任务临时 clone 中读取 PR Head、分析 diff 与相关上下文，并生成结构化问题和 Markdown 报告。默认只读审查不运行目标代码；补丁与验证都是显式可选能力，验证结果与候选补丁状态分开返回。
 
 ## 适用场景
 
@@ -21,8 +21,8 @@ RepoGuardian 接收一个 GitHub PR URL，在任务临时 clone 中读取 Base /
 | PR 准备 | 拉取 PR 元数据，临时 clone 仓库，并生成 Base 与 Head 的统一 diff。 |
 | 仓库理解 | 解析变更 hunk，建立 Python 文件和符号索引，检索直接代码、调用方和测试上下文。 |
 | 受控审查 | 通过 OpenAI 兼容 Provider 输出并校验 `AgentAction`、`ReviewIssue` 与 `PatchResult`。 |
-| 三阶段验证 | 对 Base、Head 与每个已应用补丁分别运行固定验证集，区分既有失败、新增回归和已解决失败。 |
-| 受控修复 | 补丁仅写入任务临时 clone；按队列逐个应用，验证快照与 `patch_id` 一一关联。 |
+| 可选验证 | 验证后端只有在 `review_suggest_and_validate` 模式下运行；不可用时返回 `unsupported`，不影响审查完成。 |
+| 候选修复 | `review_and_suggest` 生成候选补丁并标记为 `unverified`；只有验证结果为 `passed` 才标记为 `verified`。 |
 | 可视化交付 | Vue 控制台展示任务流、Agent 日志、补丁、验证账本；后端提供结构化任务数据与 Markdown 报告。 |
 
 ## 工作流
@@ -34,27 +34,24 @@ flowchart LR
     C --> D[diff_parse]
     D --> E[repo_index]
     E --> F[project_detection]
-    F --> G[baseline: Base / Head]
+    F --> G[discovery_decide]
     G --> H[context_retrieve]
-    H --> I[static_analysis]
-    I --> J[discovery_decide]
-    J --> K[review]
-    K --> L[verification]
-    L --> M[repair subgraph]
-    M --> N[report]
-    N --> O[complete]
+    G --> I[read-only review]
+    H --> G
+    I --> J[issue verification]
+    J --> K[report]
+    K --> L[complete]
 
-    M --> P[repair_policy]
-    P --> Q[generate_patch]
-    Q --> R[apply_patch]
-    R --> S[patched validation]
-    S --> T[repair_assessment]
-    T -->|同批待处理补丁| R
-    T -->|修订或放弃| U[repair_decide]
-    U -->|修订| Q
+    J -->|review_and_suggest| M[generate candidate patch]
+    M --> N[unverified]
+    J -->|review_suggest_and_validate| M
+    M -->|backend available| O[isolated validation]
+    M -->|backend unavailable| N
+    O --> K
+    N --> K
 ```
 
-### 验证语义
+### 可选验证语义
 
 | 阶段 | 工作树 | 目的 |
 | --- | --- | --- |
@@ -62,7 +59,7 @@ flowchart LR
 | `head` | PR 当前版本 | 判断 PR 是否引入回归，并作为后续补丁的比较基准。 |
 | `patched` | Head + 单个已应用补丁 | 确认该补丁的影响；快照和差异均关联具体 `patch_id`。 |
 
-当前 Python 适配器会按固定顺序运行：`pytest --collect-only -q` 与 `pytest -q`。静态分析使用受白名单约束的 `ruff check .`。
+这些快照和命令仅属于显式 `local` 验证后端；默认 `review` 与 `review_and_suggest` 均不会调用它们。验证基础设施不可用时，候选补丁保持 `unverified`，审查状态不会变为失败。
 
 ## 安全与执行边界
 
@@ -138,6 +135,9 @@ npm run dev
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容 API 地址。 |
 | `REPOGUARDIAN_PROVIDER` | `openai` | 支持 `openai`、`deepseek`、`openai-compatible`。 |
 | `REPOGUARDIAN_MODEL` | `gpt-4.1-mini` | 默认模型名；创建任务时可单次覆盖。 |
+| `REPOGUARDIAN_DEFAULT_REVIEW_MODE` | `review` | 默认产品模式；只读审查不会运行目标代码。 |
+| `REPOGUARDIAN_DEFAULT_VALIDATION_BACKEND` | `none` | 默认验证后端；只有显式验证模式会使用它。 |
+| `REPOGUARDIAN_EXECUTOR` | `reject` | `reject`、`local` 或 `gvisor`；拒绝或 gVisor 占位实现均不会回退到本地执行。 |
 | `REPOGUARDIAN_GIT_BIN` | `git` | Git 可执行文件路径或命令名。 |
 | `REPOGUARDIAN_WORKDIR` | `backend/.repoguardian/workspaces` | 临时 clone 工作目录。 |
 | `REPOGUARDIAN_LANGSMITH_TRACING` | `false` | 是否启用 LangSmith 追踪。 |
@@ -170,7 +170,10 @@ Content-Type: application/json
 
 {
   "pr_url": "https://github.com/owner/repo/pull/123",
-  "model": "gpt-4.1-mini"
+  "model": "gpt-4.1-mini",
+  "mode": "review",
+  "generate_patches": false,
+  "validation_backend": "none"
 }
 ```
 
@@ -179,7 +182,19 @@ Content-Type: application/json
 ```json
 {
   "task_id": "4b5b1d5d0f8d4e5590f2ad488da37f10",
-  "status": "pending"
+  "status": "queued"
+}
+```
+
+`GET /api/reviews/{task_id}` 将审查摘要、问题、候选补丁、验证结论和警告分开返回：
+
+```json
+{
+  "review": {"mode": "review", "status": "completed", "completed": true},
+  "issues": [],
+  "patches": [],
+  "validation": [{"backend": "none", "status": "not_requested"}],
+  "warnings": []
 }
 ```
 

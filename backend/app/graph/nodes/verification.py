@@ -33,6 +33,7 @@ async def verification_node(state: ReviewState) -> ReviewState:
     else:
         message = "Base 与 Head 验证结论已固化"
     return ReviewState(
+        status="verifying_issues",
         phase=ReviewPhase.verification,
         validation_blocked=blocked,
         step_progress=append_step(state, "verification", "completed", message),
@@ -45,7 +46,7 @@ async def patched_validation_node(state: ReviewState) -> ReviewState:
     head_snapshot = next((item for item in snapshots if item.stage == ValidationStage.head), None)
     profile_data = state.get("project_profile")
     active_patch_id = state.get("active_patch_id")
-    if head_snapshot is None or not profile_data:
+    if not profile_data:
         return ReviewState(
             phase=ReviewPhase.validation,
             validation_blocked=True,
@@ -54,6 +55,7 @@ async def patched_validation_node(state: ReviewState) -> ReviewState:
         )
 
     profile = ProjectProfile.model_validate(profile_data)
+    validation_sha = head_snapshot.sha if head_snapshot is not None else state.get("head_sha", "unknown-head")
     registry = state.get("_project_registry") or default_project_registry
     adapter = registry.get(profile.adapter_id)
     patched: ValidationSnapshot
@@ -61,7 +63,7 @@ async def patched_validation_node(state: ReviewState) -> ReviewState:
         if adapter is None:
             patched = ValidationSnapshot(
                 stage=ValidationStage.patched,
-                sha=head_snapshot.sha,
+                sha=validation_sha,
                 patch_id=active_patch_id,
                 passed=False,
                 failure_kind=FailureKind.unknown,
@@ -70,13 +72,13 @@ async def patched_validation_node(state: ReviewState) -> ReviewState:
         else:
             executor = state.get("_command_executor") or build_command_executor()
             patched = await ValidationService(adapter, executor).run_stage(
-                state.get("repo_path", ""), profile, ValidationStage.patched, head_snapshot.sha
+                state.get("repo_path", ""), profile, ValidationStage.patched, validation_sha
             )
             patched.patch_id = active_patch_id
     except Exception as exc:
         patched = ValidationSnapshot(
             stage=ValidationStage.patched,
-            sha=head_snapshot.sha,
+            sha=validation_sha,
             patch_id=active_patch_id,
             passed=False,
             failure_kind=FailureKind.infrastructure,
@@ -92,18 +94,26 @@ async def patched_validation_node(state: ReviewState) -> ReviewState:
             f"{patched.failure_detail or 'patched validation completed'}; cleanup failed: {cleanup_error}"
         )
 
-    delta = compare_snapshots(head_snapshot, patched)
+    delta = compare_snapshots(head_snapshot, patched) if head_snapshot is not None else None
     updated_snapshots = snapshots + [patched]
     updated_deltas = [
         ValidationDelta.model_validate(item) for item in state.get("validation_deltas") or []
-    ] + [delta]
+    ] + ([delta] if delta is not None else [])
     blocked = any(blocks_auto_repair(snapshot) for snapshot in updated_snapshots)
     updated_patches = [PatchResult.model_validate(item) for item in state.get("patches") or []]
     for patch in updated_patches:
         if patch.id == active_patch_id:
-            patch.status = (
-                PatchStatus.validation_passed if patched.passed else PatchStatus.validation_failed
-            )
+            if patched.passed:
+                patch.status = PatchStatus.verified
+            elif patched.failure_kind in {
+                FailureKind.dependency_missing,
+                FailureKind.timeout,
+                FailureKind.infrastructure,
+                FailureKind.test_collection_error,
+            }:
+                patch.status = PatchStatus.validation_inconclusive
+            else:
+                patch.status = PatchStatus.validation_failed
             patch.validation_snapshot_id = patched.id
             break
     message = (

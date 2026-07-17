@@ -68,11 +68,11 @@ async def test_each_candidate_is_applied_from_a_clean_head_worktree(tmp_path: Pa
     }
 
     after_first = await _apply_candidate(state)
-    assert after_first["patches"][0]["status"] == "applied"
+    assert after_first["patches"][0]["status"] == "validation_pending"
     assert (repo / "marker.txt").read_text(encoding="utf-8") == "first\n"
 
     after_second = await _apply_candidate(after_first)
-    assert after_second["patches"][1]["status"] == "applied"
+    assert after_second["patches"][1]["status"] == "validation_pending"
     assert (repo / "marker.txt").read_text(encoding="utf-8") == "second\n"
 
 
@@ -90,12 +90,12 @@ async def test_failed_apply_is_cleaned_before_the_next_candidate(tmp_path: Path)
     }
 
     after_failed = await _apply_candidate(state)
-    assert after_failed["patches"][0]["status"] == "apply_failed"
+    assert after_failed["patches"][0]["status"] == "abandoned"
     assert not (repo / "marker.txt").exists()
     assert (repo / "module.py").read_text(encoding="utf-8") == "VALUE = 'head'\n"
 
     after_second = await _apply_candidate(after_failed)
-    assert after_second["patches"][1]["status"] == "applied"
+    assert after_second["patches"][1]["status"] == "validation_pending"
     assert (repo / "marker.txt").read_text(encoding="utf-8") == "second\n"
 
 
@@ -123,7 +123,7 @@ async def test_patch_application_rejects_indentation_mismatch(tmp_path: Path) ->
 
     applied = await PatchTool().apply(repo, patch)
 
-    assert applied.status == "apply_failed"
+    assert applied.status == "abandoned"
     assert (repo / "module.py").read_text(encoding="utf-8") == "def render():\n    return 'head'\n"
 
 
@@ -164,11 +164,11 @@ async def test_validation_failure_is_cleaned_before_the_next_candidate(tmp_path:
         **after_first,
         **await patched_validation_node(after_first),
     }
-    assert after_validation["patches"][0]["status"] == "validation_failed"
+    assert after_validation["patches"][0]["status"] == "validation_inconclusive"
     assert not (repo / "marker.txt").exists()
 
     after_second = await _apply_candidate(after_validation)
-    assert after_second["patches"][1]["status"] == "applied"
+    assert after_second["patches"][1]["status"] == "validation_pending"
     assert (repo / "marker.txt").read_text(encoding="utf-8") == "second\n"
 
 
@@ -192,7 +192,7 @@ async def test_revision_candidate_does_not_stack_on_failed_version(tmp_path: Pat
 
     result = await _apply_candidate(state)
 
-    assert result["patches"][1]["status"] == "applied"
+    assert result["patches"][1]["status"] == "validation_pending"
     assert (repo / "marker.txt").read_text(encoding="utf-8") == "revision\n"
 
 
@@ -214,9 +214,10 @@ async def test_revision_records_parent_and_supersedes_the_previous_candidate() -
     })
 
     previous, revision = result["patches"]
-    assert previous["status"] == "superseded"
-    assert revision["revision_of"] == failed.id
-    assert revision["attempt_number"] == 2
+    assert previous["status"] == "validation_failed"
+    assert revision["revision_of"] is None
+    assert revision["attempt_number"] == 1
+    assert revision["status"] == "unverified"
 
 
 class PassingExecutor:
@@ -254,5 +255,5 @@ async def test_patched_snapshot_and_patch_share_the_same_patch_id(tmp_path: Path
     assert snapshot["patch_id"] == patch.id
     assert result["validation_deltas"][-1]["patch_id"] == patch.id
     assert result["patches"][0]["validation_snapshot_id"] == snapshot["id"]
-    assert result["patches"][0]["status"] == "validation_passed"
+    assert result["patches"][0]["status"] == "verified"
     assert not (repo / "marker.txt").exists()

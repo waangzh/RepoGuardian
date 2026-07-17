@@ -7,13 +7,32 @@ from app.graph.nodes.patch import patch_node, restore_patch_workspace
 from app.graph.nodes.verification import patched_validation_node
 from app.graph.policies import get_execution_budget
 from app.graph.state import ReviewState
-from app.models.review import AgentAction, AgentActionName, PatchResult, PatchStatus, ReviewPhase
+from app.models.review import (
+    AgentAction,
+    AgentActionName,
+    FailureKind,
+    PatchResult,
+    PatchStatus,
+    ReviewMode,
+    ReviewPhase,
+    ValidationBackend,
+    ValidationResult,
+    ValidationSnapshot,
+    ValidationStatus,
+)
 
 
 async def repair_policy_node(state: ReviewState) -> ReviewState:
     """仅让标记为 auto_fixable 的问题进入补丁流程。"""
-    if state.get("validation_blocked"):
-        message = "验证存在环境、依赖、收集、超时或基础设施失败，禁止自动修复"
+    raw_mode = state.get("mode", ReviewMode.review)
+    try:
+        mode = ReviewMode(raw_mode)
+    except ValueError:
+        # Pre-mode graph states retain their historical explicit repair path.
+        mode = ReviewMode.review_suggest_and_validate
+    generate_patches = state.get("generate_patches", raw_mode == "pr_review")
+    if mode == ReviewMode.review or not generate_patches:
+        message = "当前模式未请求候选补丁"
         return ReviewState(
             phase=ReviewPhase.repair,
             repair_enabled=False,
@@ -34,6 +53,7 @@ async def repair_policy_node(state: ReviewState) -> ReviewState:
     message = "存在可自动修复问题" if enabled else "没有可执行的自动修复"
     return ReviewState(
         phase=ReviewPhase.repair,
+        status="generating_patches" if enabled else state.get("status", "reviewing"),
         repair_enabled=enabled,
         step_progress=append_step(state, "repair_policy", "completed", message),
     )
@@ -41,7 +61,7 @@ async def repair_policy_node(state: ReviewState) -> ReviewState:
 
 async def repair_generate_patch_node(state: ReviewState) -> ReviewState:
     action = AgentAction(
-        action=AgentActionName.revise_patch,
+        action=AgentActionName.generate_patch,
         reason="修复策略创建候选补丁",
         target_issue_ids=[
             issue.get("id", "")
@@ -64,7 +84,7 @@ async def repair_apply_patch_node(state: ReviewState) -> ReviewState:
         (
             candidate_id
             for candidate_id in state.get("pending_patch_ids") or []
-            if patches_by_id.get(candidate_id, {}).get("status") == PatchStatus.generated.value
+            if patches_by_id.get(candidate_id, {}).get("status") == PatchStatus.unverified.value
         ),
         None,
     )
@@ -101,7 +121,7 @@ async def repair_validation_node(state: ReviewState) -> ReviewState:
         (item for item in state.get("patches") or [] if item.get("id") == active_patch_id),
         None,
     )
-    if active_patch is None or active_patch.get("status") != PatchStatus.applied.value:
+    if active_patch is None or active_patch.get("status") != PatchStatus.validation_pending.value:
         await restore_patch_workspace(state)
         return ReviewState(
             phase=ReviewPhase.validation,
@@ -110,6 +130,97 @@ async def repair_validation_node(state: ReviewState) -> ReviewState:
             step_progress=append_step(state, "patched_validation", "failed", "当前候选补丁未成功应用，跳过验证"),
         )
     return await patched_validation_node(state)
+
+
+async def repair_mark_unverified_node(state: ReviewState) -> ReviewState:
+    """没有可用验证后端时，候选补丁绝不被标记为已验证。"""
+    patches = [PatchResult.model_validate(item) for item in state.get("patches") or []]
+    for patch in patches:
+        if patch.status in {PatchStatus.suggested, PatchStatus.validation_pending}:
+            patch.status = PatchStatus.unverified
+
+    try:
+        mode = ReviewMode(state.get("mode", ReviewMode.review))
+    except ValueError:
+        mode = ReviewMode.review
+    results = list(state.get("validation_results") or [])
+    warnings = list(state.get("warnings") or [])
+    if mode == ReviewMode.review_suggest_and_validate:
+        backend = ValidationBackend(state.get("validation_backend", ValidationBackend.none))
+        detail = "所选验证后端当前不可用；候选补丁未执行项目测试。"
+        results.append(ValidationResult(
+            backend=backend,
+            status=ValidationStatus.unsupported,
+            detail=detail,
+        ).model_dump(mode="json"))
+        warnings.append(detail)
+    return ReviewState(
+        phase=ReviewPhase.repair,
+        status="generating_patches",
+        patches=[patch.model_dump(mode="json") for patch in patches],
+        validation_results=results,
+        warnings=list(dict.fromkeys(warnings)),
+        step_progress=append_step(state, "patch_finalize", "completed", "候选修复已生成，尚未运行项目测试"),
+    )
+
+
+async def repair_optional_validation_node(state: ReviewState) -> ReviewState:
+    """复用现有隔离补丁和验证生命周期，只由显式 local 后端调用。"""
+    partial_result = await repair_validation_node(state)
+    result = {**state, **partial_result}
+    patches = [PatchResult.model_validate(item) for item in result.get("patches") or []]
+    active_patch_id = result.get("active_patch_id")
+    active_patch = next((patch for patch in patches if patch.id == active_patch_id), None)
+    if active_patch is None:
+        return result
+
+    if active_patch.status == PatchStatus.abandoned:
+        status = ValidationStatus.inconclusive
+        detail = active_patch.error or "候选补丁无法应用，未运行验证。"
+    elif active_patch.status == PatchStatus.verified:
+        status = ValidationStatus.passed
+        detail = "补丁已通过所选验证后端。"
+    elif active_patch.status == PatchStatus.validation_failed:
+        status = ValidationStatus.failed
+        detail = active_patch.error
+    else:
+        latest_snapshot = (result.get("validation_snapshots") or [])[-1:]
+        failure_kind = (
+            ValidationSnapshot.model_validate(latest_snapshot[0]).failure_kind
+            if latest_snapshot else None
+        )
+        if failure_kind in {
+            FailureKind.infrastructure,
+            FailureKind.dependency_missing,
+            FailureKind.test_collection_error,
+        }:
+            status = ValidationStatus.infrastructure_error
+        elif failure_kind == FailureKind.timeout:
+            status = ValidationStatus.timed_out
+        else:
+            status = ValidationStatus.inconclusive
+        detail = active_patch.error or "验证未获得确定结论。"
+        active_patch.status = PatchStatus.validation_inconclusive
+
+    validation_result = ValidationResult(
+        patch_id=active_patch.id,
+        backend=ValidationBackend(state.get("validation_backend", ValidationBackend.local)),
+        status=status,
+        detail=detail,
+        snapshot_id=active_patch.validation_snapshot_id,
+    )
+    active_patch.validation_backend = validation_result.backend
+    active_patch.validation_result_id = validation_result.id
+    updated_patches = [active_patch if patch.id == active_patch.id else patch for patch in patches]
+    result.update({
+        "status": "validating",
+        "patches": [patch.model_dump(mode="json") for patch in updated_patches],
+        "validation_results": list(result.get("validation_results") or []) + [
+            validation_result.model_dump(mode="json")
+        ],
+        "step_progress": append_step(state, "optional_validation", "completed", detail or status.value),
+    })
+    return ReviewState(**result)
 
 
 async def repair_assessment_node(state: ReviewState) -> ReviewState:
@@ -122,9 +233,10 @@ async def repair_assessment_node(state: ReviewState) -> ReviewState:
     has_verified_patch = (
         active_patch is not None
         and active_patch.get("status") in {
-            PatchStatus.apply_failed.value,
-            PatchStatus.validation_passed.value,
+            PatchStatus.abandoned.value,
+            PatchStatus.verified.value,
             PatchStatus.validation_failed.value,
+            PatchStatus.validation_inconclusive.value,
         }
     )
     enabled = has_verified_patch and not state.get("validation_blocked", False)
@@ -143,7 +255,7 @@ async def repair_accept_patch_node(state: ReviewState) -> ReviewState:
     patches = [PatchResult.model_validate(item) for item in state.get("patches") or []]
     if not allowed:
         for patch in patches:
-            if patch.id == active_patch_id and patch.status != PatchStatus.validation_passed:
+            if patch.id == active_patch_id and patch.status != PatchStatus.verified:
                 patch.status = PatchStatus.abandoned
         return ReviewState(
             phase=ReviewPhase.repair,
@@ -156,7 +268,7 @@ async def repair_accept_patch_node(state: ReviewState) -> ReviewState:
         )
 
     for patch in patches:
-        if patch.id != active_patch_id and patch.status == PatchStatus.generated:
+        if patch.id != active_patch_id and patch.status == PatchStatus.unverified:
             patch.status = PatchStatus.abandoned
     return ReviewState(
         phase=ReviewPhase.repair,
@@ -174,7 +286,7 @@ def _can_accept_active_patch(state: ReviewState) -> tuple[bool, str]:
     patch = next(
         (item for item in state.get("patches") or [] if item.get("id") == active_patch_id), None
     )
-    if patch is None or patch.get("status") != PatchStatus.validation_passed.value:
+    if patch is None or patch.get("status") != PatchStatus.verified.value:
         return False, "补丁未成功应用并通过验证"
     if state.get("validation_blocked") or state.get("patch_workspace_clean") is not True:
         return False, "验证策略阻断或工作树未确认恢复到干净 Head"
@@ -225,9 +337,9 @@ async def repair_abandon_patch_node(state: ReviewState) -> ReviewState:
     active_patch_id = state.get("active_patch_id")
     patches = [PatchResult.model_validate(item) for item in state.get("patches") or []]
     for patch in patches:
-        if patch.id == active_patch_id and patch.status != PatchStatus.validation_passed:
+        if patch.id == active_patch_id and patch.status != PatchStatus.verified:
             patch.status = PatchStatus.abandoned
-        elif patch.status == PatchStatus.generated:
+        elif patch.status == PatchStatus.unverified:
             patch.status = PatchStatus.abandoned
             break
     return ReviewState(

@@ -21,6 +21,7 @@ async def human_required_node(state: ReviewState) -> ReviewState:
     message = "已请求人工确认；在收到回答前不会继续自动修复。"
     logger.info("👤 [人工审批] %s", message)
     return ReviewState(
+        status="waiting_for_human",
         human_request=request.model_dump(mode="json"),
         repair_enabled=False,
         agent_events=append_event(state, action.action, action.reason, "completed", message),

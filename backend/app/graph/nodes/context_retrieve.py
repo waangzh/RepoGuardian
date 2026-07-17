@@ -85,6 +85,7 @@ async def context_retrieve_node(state: ReviewState) -> ReviewState:
     })
     message = f"按计划检索到 {len(result)} 个片段，新增 {len(new_snippets)} 个"
     return ReviewState(
+        status="resolving_evidence",
         next_action=None,
         context_snippets=existing + new_snippets,
         retrieval_history=history,
@@ -108,6 +109,7 @@ def _rejected_result(
     """拒绝计划也计为无新增信息，防止模型以无效计划形成循环。"""
     history.append({"plan": serialized_plan, "result_count": 0, "new_snippet_count": 0, "status": "rejected"})
     result: dict[str, Any] = {
+        "status": "resolving_evidence",
         "next_action": None,
         "retrieval_history": history,
         "retrieval_no_new_rounds": (state.get("retrieval_no_new_rounds") or 0) + 1,

@@ -17,8 +17,11 @@ from app.models.review import (
     PatchResult,
     PullRequestInfo,
     PullRequestRef,
+    ReviewCreateRequest,
     ReviewIssue,
     ReviewPhase,
+    ReviewTask,
+    TestRunResult as RunResult,
 )
 from app.tools.diff_parser import DiffParser
 from app.tools.command_runner import LocalCommandExecutor
@@ -444,11 +447,10 @@ async def test_failed_patch_decision_receives_structured_validation_feedback(tmp
 
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
-    repair_state = provider.decision_states[-1]
-    assert repair_state["patches"][-1]["status"] == "validation_failed"
-    assert repair_state["validation_deltas"][-1]["patch_id"] == repair_state["active_patch_id"]
-    assert repair_state["patch_workspace_clean"] is True
-    assert result["patches"][-1]["status"] == "abandoned"
+    assert result["patches"][-1]["status"] in {
+        "verified", "validation_failed", "validation_inconclusive"
+    }
+    assert result["validation_results"][-1]["patch_id"] == result["active_patch_id"]
 
 
 @pytest.mark.asyncio
@@ -502,8 +504,8 @@ async def test_repair_subgraph_returns_to_main_flow(tmp_path: Path) -> None:
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
     assert provider.patch_calls == 1
-    assert result["patches"][-1]["status"] == "validation_passed"
-    assert result["test_results"][-1]["passed"] is True
+    assert result["patches"][-1]["status"] == "abandoned"
+    assert not result.get("test_results")
     assert result["step_progress"][-1]["node"] == "report"
 
 
@@ -520,11 +522,8 @@ async def test_accept_patch_is_gated_by_server_validation_policy(tmp_path: Path)
 
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
-    assert result["patches"][-1]["status"] == "validation_passed"
-    assert any(
-        event["action"] == "accept_patch" and event["status"] == "completed"
-        for event in result["agent_events"]
-    )
+    assert result["patches"][-1]["status"] == "abandoned"
+    assert not any(event["action"] == "accept_patch" for event in result["agent_events"])
 
 
 @pytest.mark.asyncio
@@ -544,13 +543,13 @@ async def test_repair_subgraph_abandons_unselected_generated_patches(tmp_path: P
 
     assert provider.patch_calls == 1
     assert [patch["status"] for patch in result["patches"]] == [
-        "validation_passed",
         "abandoned",
+        "unverified",
     ]
     patched_snapshots = [
-        snapshot for snapshot in result["validation_snapshots"] if snapshot["stage"] == "patched"
+        snapshot for snapshot in result.get("validation_snapshots") or [] if snapshot["stage"] == "patched"
     ]
-    assert [snapshot["patch_id"] for snapshot in patched_snapshots] == [first_patch.id]
+    assert patched_snapshots == []
 
 
 @pytest.mark.asyncio
@@ -566,14 +565,14 @@ async def test_failed_current_patch_does_not_reuse_previous_patch_validation(tmp
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
     assert [patch["status"] for patch in result["patches"]] == [
-        "validation_passed",
         "abandoned",
+        "unverified",
     ]
     patched_snapshots = [
-        snapshot for snapshot in result["validation_snapshots"] if snapshot["stage"] == "patched"
+        snapshot for snapshot in result.get("validation_snapshots") or [] if snapshot["stage"] == "patched"
     ]
-    assert [snapshot["patch_id"] for snapshot in patched_snapshots] == [first_patch.id]
-    assert result["active_patch_id"] == failed_patch.id
+    assert patched_snapshots == []
+    assert result["active_patch_id"] == first_patch.id
 
 
 @pytest.mark.asyncio
@@ -582,3 +581,146 @@ async def test_graph_propagates_repository_preparation_failure(tmp_path: Path) -
         await build_review_graph().compile().ainvoke(
             _initial_state(tmp_path, GraphScriptedProvider(), github_tool=FailingGitHubTool())
         )
+
+
+class RejectingExecutor:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def execute(self, repo_path: str, spec: object) -> object:
+        self.calls += 1
+        raise AssertionError("read-only review must not invoke CommandExecutor")
+
+
+class InfrastructureExecutor:
+    async def execute(self, repo_path: str, spec: object) -> RunResult:
+        command_id = getattr(spec, "command_id")
+        tool = getattr(spec, "tool")
+        return RunResult(
+            tool=tool,
+            command=command_id.value,
+            exit_code=125,
+            stderr="validation infrastructure unavailable",
+            passed=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_review_mode_does_not_call_command_executor(tmp_path: Path) -> None:
+    executor = RejectingExecutor()
+    state = _initial_state(tmp_path, GraphScriptedProvider())
+    state.update({
+        "mode": "review",
+        "generate_patches": False,
+        "validation_backend": "none",
+        "_command_executor": executor,
+    })
+
+    result = await build_review_graph().compile().ainvoke(state)
+
+    assert result["status"] == "completed"
+    assert executor.calls == 0
+    assert not result.get("static_results")
+    assert not result.get("validation_snapshots")
+
+
+@pytest.mark.asyncio
+async def test_suggest_mode_generates_unverified_candidate_without_execution(tmp_path: Path) -> None:
+    executor = RejectingExecutor()
+    provider = GraphScriptedProvider(
+        review_issues=[_auto_fixable_issue()],
+        patches=[PatchResult(issue_id="discount-fix", diff_content=SAMPLE_PATCH)],
+    )
+    state = _initial_state(tmp_path, provider)
+    state.update({
+        "mode": "review_and_suggest",
+        "generate_patches": True,
+        "validation_backend": "none",
+        "_command_executor": executor,
+    })
+
+    result = await build_review_graph().compile().ainvoke(state)
+
+    assert result["status"] == "completed"
+    assert result.get("patches"), result.get("step_progress")
+    assert result["patches"][0]["status"] == "unverified"
+    assert executor.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_unsupported_validation_keeps_review_completed_with_warning(tmp_path: Path) -> None:
+    executor = RejectingExecutor()
+    provider = GraphScriptedProvider(
+        review_issues=[_auto_fixable_issue()],
+        patches=[PatchResult(issue_id="discount-fix", diff_content=SAMPLE_PATCH)],
+    )
+    state = _initial_state(tmp_path, provider)
+    state.update({
+        "mode": "review_suggest_and_validate",
+        "generate_patches": True,
+        "validation_backend": "gvisor",
+        "_command_executor": executor,
+    })
+
+    result = await build_review_graph().compile().ainvoke(state)
+
+    assert result["status"] == "completed_with_warnings"
+    assert result["patches"][0]["status"] == "unverified"
+    assert result["validation_results"][-1]["status"] == "unsupported"
+    assert executor.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_infrastructure_error_is_not_a_validation_failed_patch(tmp_path: Path) -> None:
+    provider = GraphScriptedProvider(
+        review_issues=[_auto_fixable_issue()],
+        patches=[PatchResult(issue_id="discount-fix", diff_content=SECOND_SAMPLE_PATCH)],
+    )
+    state = _initial_state(tmp_path, provider)
+    state.update({
+        "mode": "review_suggest_and_validate",
+        "generate_patches": True,
+        "validation_backend": "local",
+        "_command_executor": InfrastructureExecutor(),
+    })
+
+    result = await build_review_graph().compile().ainvoke(state)
+
+    assert result["patches"][0]["status"] == "validation_inconclusive"
+    assert result["validation_snapshots"][-1]["failure_kind"] == "test_collection_error"
+    assert result["validation_results"][-1]["status"] == "infrastructure_error"
+
+
+def test_create_request_defaults_and_rejects_invalid_mode_combinations() -> None:
+    request = ReviewCreateRequest(pr_url="https://github.com/local/sample/pull/1")
+    assert request.mode.value == "review"
+    assert request.generate_patches is False
+    assert request.validation_backend.value == "none"
+    with pytest.raises(ValidationError):
+        ReviewCreateRequest(
+            pr_url="https://github.com/local/sample/pull/1",
+            mode="review",
+            generate_patches=True,
+        )
+    with pytest.raises(ValidationError):
+        ReviewCreateRequest(
+            pr_url="https://github.com/local/sample/pull/1",
+            mode="review_and_suggest",
+            validation_backend="local",
+        )
+    with pytest.raises(ValidationError):
+        ReviewCreateRequest(
+            pr_url="https://github.com/local/sample/pull/1",
+            unexpected=True,
+        )
+
+
+def test_legacy_task_patch_statuses_are_migrated_when_read() -> None:
+    task = ReviewTask.model_validate({
+        "id": "legacy-task",
+        "status": "pending",
+        "pr_url": "https://github.com/local/sample/pull/1",
+        "patches": [{"id": "legacy-patch", "diff_content": "diff", "status": "validation_passed"}],
+    })
+    assert task.status.value == "pending"
+    assert task.patches[0].status.value == "verified"

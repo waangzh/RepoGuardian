@@ -148,7 +148,7 @@ async def test_langsmith_trace_uses_safe_metadata_and_hides_content_by_default(
     assert config["tags"] == ["repoguardian", "pr_review"]
     assert config["metadata"] == {
         "task_id": "task-123",
-        "mode": "pr_review",
+        "mode": "review",
         "model_override": True,
     }
     assert len(config["callbacks"]) == 1

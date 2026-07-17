@@ -35,7 +35,7 @@ async def test_patch_tool_rejects_empty_diff(tmp_path: Path) -> None:
     patch = PatchResult(diff_content="")
     result = await PatchTool().apply(tmp_path, patch)
 
-    assert result.status == "apply_failed"
+    assert result.status == "abandoned"
 
 
 @pytest.mark.asyncio

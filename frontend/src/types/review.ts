@@ -1,4 +1,33 @@
-export type TaskStatus = "pending" | "running" | "completed" | "failed";
+export type KnownTaskStatus =
+  | "pending"
+  | "running"
+  | "queued"
+  | "planning"
+  | "reviewing"
+  | "resolving_evidence"
+  | "verifying_issues"
+  | "generating_patches"
+  | "validating"
+  | "waiting_for_human"
+  | "completed"
+  | "completed_with_warnings"
+  | "failed"
+  | "cancelled";
+export type TaskStatus = KnownTaskStatus | (string & {});
+export type ReviewMode = "review" | "review_and_suggest" | "review_suggest_and_validate";
+export type ValidationBackend = "none" | "local" | "gvisor";
+export type ValidationStatus =
+  | "not_requested"
+  | "unsupported"
+  | "queued"
+  | "running"
+  | "passed"
+  | "failed"
+  | "infrastructure_error"
+  | "timed_out"
+  | "inconclusive"
+  | "cancelled"
+  | (string & {});
 export type ReviewPhase =
   | "prepare"
   | "project_detection"
@@ -16,6 +45,12 @@ export type Severity = "low" | "medium" | "high" | "critical";
 export interface ReviewCreateResponse {
   task_id: string;
   status: TaskStatus;
+}
+
+export interface ReviewSummary {
+  mode: ReviewMode;
+  status: TaskStatus;
+  completed: boolean;
 }
 
 export interface TaskStep {
@@ -177,21 +212,34 @@ export interface ValidationDelta {
   resolved_failures: FailureFingerprint[];
 }
 
+export interface ValidationResult {
+  id: string;
+  patch_id?: string | null;
+  backend: ValidationBackend;
+  status: ValidationStatus;
+  detail?: string | null;
+  snapshot_id?: string | null;
+}
+
 export interface PatchResult {
   id: string;
   issue_id?: string | null;
   diff_content: string;
   status:
-    | "generated"
-    | "apply_failed"
-    | "applied"
-    | "validation_passed"
+    | "suggested"
+    | "unverified"
+    | "validation_pending"
+    | "verified"
     | "validation_failed"
+    | "validation_inconclusive"
     | "abandoned"
-    | "superseded";
+    | "superseded"
+    | (string & {});
   revision_of?: string | null;
   attempt_number: number;
   validation_snapshot_id?: string | null;
+  validation_backend?: ValidationBackend | null;
+  validation_result_id?: string | null;
   error?: string | null;
   created_at: string;
 }
@@ -210,6 +258,10 @@ export interface ReviewTask {
   phase: ReviewPhase;
   pr_url: string;
   model?: string | null;
+  mode: ReviewMode;
+  generate_patches: boolean;
+  validation_backend: ValidationBackend;
+  review: ReviewSummary;
   steps: TaskStep[];
   pr?: PullRequestInfo | null;
   changed_files: ChangedFile[];
@@ -228,4 +280,6 @@ export interface ReviewTask {
   project_profile?: ProjectProfile | null;
   validation_snapshots: ValidationSnapshot[];
   validation_deltas: ValidationDelta[];
+  validation: ValidationResult[];
+  warnings: string[];
 }

@@ -28,9 +28,16 @@ class Settings(BaseSettings):
     repoguardian_workdir: Path = Path(__file__).resolve().parent.parent.parent / ".repoguardian" / "workspaces"
     repoguardian_git_bin: str = "git"
 
+    # ---- 产品模式 ----
+    # 默认审查不依赖任何执行器；验证必须由请求显式启用。
+    repoguardian_default_review_mode: Literal[
+        "review", "review_and_suggest", "review_suggest_and_validate"
+    ] = "review"
+    repoguardian_default_validation_backend: Literal["none", "local", "gvisor"] = "none"
+
     # ---- 受控命令执行 ----
-    # 默认拒绝执行：生产环境必须提供真实 SandboxExecutor，绝不静默降级到宿主机。
-    repoguardian_executor: Literal["local", "sandbox"] = "sandbox"
+    # reject 和 gvisor 均不会回退到宿主机。sandbox 是旧配置值的兼容别名。
+    repoguardian_executor: Literal["reject", "local", "gvisor", "sandbox"] = "reject"
     repoguardian_allow_unsafe_local_execution: bool = False
     repoguardian_sandbox_network: bool = False
     repoguardian_sandbox_memory_mb: int = 512

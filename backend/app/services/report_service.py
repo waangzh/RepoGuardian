@@ -139,8 +139,17 @@ def _append_static_results(lines: list[str], task: ReviewTask) -> None:
 def _append_validation_results(lines: list[str], task: ReviewTask) -> None:
     """展示 Base、Head 与各补丁的验证快照和差异，保留故障归因。"""
     lines.extend(["## 6. 三阶段验证", ""])
+    if task.validation:
+        lines.extend(["| 后端 | Patch | 状态 | 详情 |", "|---|---|---|---|"])
+        for result in task.validation:
+            lines.append(
+                f"| {result.backend.value} | `{(result.patch_id or '')[:8]}` | "
+                f"{result.status.value} | {result.detail or ''} |"
+            )
+        lines.append("")
     if not task.validation_snapshots:
-        lines.extend(["未运行。", ""])
+        if not task.validation:
+            lines.extend(["未请求验证。", ""])
         return
 
     lines.extend([
@@ -178,7 +187,7 @@ def _append_validation_results(lines: list[str], task: ReviewTask) -> None:
 
 def _append_patch_results(lines: list[str], task: ReviewTask) -> None:
     """7. 自动修复结果表格。"""
-    lines.extend(["## 7. 自动修复结果", ""])
+    lines.extend(["## 7. 候选修复结果", ""])
     if not task.patches:
         lines.extend(["未生成 patch。", ""])
         return
@@ -188,6 +197,8 @@ def _append_patch_results(lines: list[str], task: ReviewTask) -> None:
         lines.append(
             f"| `{patch.id[:8]}` | `{patch.issue_id or ''}` | {status} | {patch.error or ''} |"
         )
+        if status == "unverified":
+            lines.append("> 候选修复，尚未运行项目测试。")
     lines.append("")
 
 

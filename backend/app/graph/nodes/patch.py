@@ -75,7 +75,7 @@ async def _generate_patch(state: ReviewState, action: AgentAction) -> ReviewStat
     patch_dicts: list[dict[str, Any]] = []
     for patch in patches:
         candidate = patch.model_copy(update={
-            "status": PatchStatus.generated,
+            "status": PatchStatus.unverified,
             "error": None,
             "revision_of": revision_of,
             "attempt_number": attempt_number,
@@ -113,19 +113,19 @@ async def _apply_patch(state: ReviewState, action: AgentAction) -> ReviewState:
         await prepare_patch_workspace(state)
         applied = await PatchTool().apply(state.get("repo_path", ""), patch)
     except Exception as exc:
-        patch.status = PatchStatus.apply_failed
+        patch.status = PatchStatus.abandoned
         patch.error = f"patch workspace preparation failed: {type(exc).__name__}: {exc}"
         applied = patch
     finally:
-        if applied is None or applied.status != PatchStatus.applied:
+        if applied is None or applied.status != PatchStatus.validation_pending:
             cleanup_error = await restore_patch_workspace(state)
             if cleanup_error and applied is not None:
                 applied.error = f"{applied.error or 'patch application failed'}; cleanup failed: {cleanup_error}"
     assert applied is not None
     updated = [applied if item.id == applied.id else item for item in patches]
     message = f"Patch {applied.id[:8]} {applied.status}."
-    status = "completed" if applied.status == PatchStatus.applied else "failed"
-    if applied.status == PatchStatus.applied:
+    status = "completed" if applied.status == PatchStatus.validation_pending else "failed"
+    if applied.status == PatchStatus.validation_pending:
         logger.info("🩹 [应用 patch] 成功: patch %s 已应用", applied.id[:8])
     else:
         logger.error("🩹 [应用 patch] 失败: patch %s → %s", applied.id[:8], applied.error)
@@ -140,11 +140,11 @@ def _select_patch(patches: list[PatchResult], patch_id: str | None) -> PatchResu
     """选 patch 策略：优先按 ID 精确匹配，否则选最后一个 status=generated 的。"""
     if patch_id:
         for patch in patches:
-            if patch.id == patch_id and patch.status == PatchStatus.generated:
+            if patch.id == patch_id and patch.status == PatchStatus.unverified:
                 return patch
         return None
     for patch in reversed(patches):
-        if patch.status == PatchStatus.generated:
+        if patch.status == PatchStatus.unverified:
             return patch
     return None
 

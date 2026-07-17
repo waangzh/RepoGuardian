@@ -18,11 +18,15 @@ from app.models.review import (
     PullRequestInfo,
     PullRequestRef,
     RepoSnapshot,
+    ReviewMode,
     ReviewPhase,
     ReviewIssue,
+    ReviewSummary,
     ReviewTask,
     TestRunResult,
     ValidationDelta,
+    ValidationBackend,
+    ValidationResult,
     ValidationSnapshot,
 )
 
@@ -35,6 +39,14 @@ def rebuild_task_from_state(state: ReviewState) -> ReviewTask:
         phase=ReviewPhase(state.get("phase") or ReviewPhase.completed),
         pr_url=state.get("pr_url", ""),
         model=state.get("model"),
+        mode=rebuild_review_mode(state.get("mode")),
+        generate_patches=bool(state.get("generate_patches", False)),
+        validation_backend=rebuild_validation_backend(state.get("validation_backend")),
+        review=ReviewSummary(
+            mode=rebuild_review_mode(state.get("mode")),
+            status=state.get("status", "completed"),
+            completed=state.get("status") in {"completed", "completed_with_warnings"},
+        ),
         pr=rebuild_pr_info(state.get("pr_info") or {}),
         changed_files=rebuild_changed_files(state.get("changed_files") or []),
         issues=rebuild_issues(state.get("review_issues") or []),
@@ -44,11 +56,13 @@ def rebuild_task_from_state(state: ReviewState) -> ReviewTask:
         static_results=rebuild_test_results(state.get("static_results") or []),
         validation_snapshots=rebuild_validation_snapshots(state.get("validation_snapshots") or []),
         validation_deltas=rebuild_validation_deltas(state.get("validation_deltas") or []),
+        validation=rebuild_validation_results(state.get("validation_results") or []),
         patches=rebuild_patches(state.get("patches") or []),
         test_results=rebuild_test_results(state.get("test_results") or []),
         agent_events=rebuild_agent_events(state.get("agent_events") or []),
         human_request=state.get("human_request"),
         report_markdown=state.get("report_markdown"),
+        warnings=list(state.get("warnings") or []),
         error=state.get("error"),
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
@@ -77,6 +91,21 @@ def rebuild_pr_info(data: dict) -> PullRequestInfo:
             repo_clone_url=head.get("repo_clone_url", ""),
         ),
     )
+
+
+def rebuild_review_mode(value: object) -> ReviewMode:
+    """将 pre-mode state 的 pr_review 读为新的安全默认模式。"""
+    try:
+        return ReviewMode(value or ReviewMode.review)
+    except ValueError:
+        return ReviewMode.review
+
+
+def rebuild_validation_backend(value: object) -> ValidationBackend:
+    try:
+        return ValidationBackend(value or ValidationBackend.none)
+    except ValueError:
+        return ValidationBackend.none
 
 
 def rebuild_changed_files(data: list[dict]) -> list[ChangedFile]:
@@ -161,6 +190,11 @@ def rebuild_validation_snapshots(data: list[dict]) -> list[ValidationSnapshot]:
 def rebuild_validation_deltas(data: list[dict]) -> list[ValidationDelta]:
     """从图状态恢复阶段间的验证差异。"""
     return [ValidationDelta.model_validate(item) for item in data]
+
+
+def rebuild_validation_results(data: list[dict]) -> list[ValidationResult]:
+    """读取新的 API 验证结论；旧 state 没有该字段时保持空列表。"""
+    return [ValidationResult.model_validate(item) for item in data]
 
 
 def rebuild_patches(data: list[dict]) -> list[PatchResult]:

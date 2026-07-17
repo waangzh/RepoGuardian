@@ -4,6 +4,8 @@ from typing import Any
 
 from app.graph.policies import get_phase, validate_action_for_phase
 from app.models.review import AgentAction, AgentActionName, ReviewPhase
+from app.models.review import ReviewMode, ValidationBackend
+from app.tools.command_runner import RejectedSandboxExecutor
 
 
 def _read_action(state: dict[str, Any]) -> AgentAction | None:
@@ -55,6 +57,29 @@ def route_repair_action(state: dict[str, Any]) -> str:
 def route_repair_entry(state: dict[str, Any]) -> str:
     """修复策略仅在存在可自动修复问题且预算可用时创建补丁。"""
     return "generate_patch" if state.get("repair_enabled") else "repair_exit"
+
+
+def route_repair_after_generation(state: dict[str, Any]) -> str:
+    """仅在显式选择且真实后端可用时才进入执行型补丁验证。"""
+    raw_mode = state.get("mode", ReviewMode.review)
+    try:
+        mode = ReviewMode(raw_mode)
+    except ValueError:
+        mode = ReviewMode.review_suggest_and_validate
+    try:
+        backend = ValidationBackend(
+            state.get("validation_backend", ValidationBackend.local if raw_mode == "pr_review" else ValidationBackend.none)
+        )
+    except ValueError:
+        backend = ValidationBackend.none
+    executor = state.get("_command_executor")
+    backend_available = (
+        mode == ReviewMode.review_suggest_and_validate
+        and backend == ValidationBackend.local
+        and executor is not None
+        and not isinstance(executor, RejectedSandboxExecutor)
+    )
+    return "apply_patch" if backend_available else "mark_unverified"
 
 
 def route_repair_assessment(state: dict[str, Any]) -> str:

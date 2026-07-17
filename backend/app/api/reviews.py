@@ -101,7 +101,12 @@ async def stream_review(task_id: str, request: Request) -> EventSourceResponse:
                     }
                 last_step_count = current_count
 
-            if task.status in ("completed", "failed"):
+            if task.status.value in {
+                "completed",
+                "completed_with_warnings",
+                "failed",
+                "cancelled",
+            }:
                 yield {"event": "done", "data": json.dumps({"status": task.status})}
                 break
 

@@ -32,11 +32,11 @@ class PatchTool(BaseTool):
 
         # 前置校验
         if not patch.diff_content.strip():
-            patch.status = PatchStatus.apply_failed
+            patch.status = PatchStatus.abandoned
             patch.error = "Patch diff is empty"
             return patch
         if not (repo / ".git").exists():
-            patch.status = PatchStatus.apply_failed
+            patch.status = PatchStatus.abandoned
             patch.error = "Repository path is not a git worktree"
             return patch
 
@@ -44,11 +44,11 @@ class PatchTool(BaseTool):
         try:
             check = await _run_git_apply(repo, patch.diff_content, check_only=True)
         except subprocess.TimeoutExpired:
-            patch.status = PatchStatus.apply_failed
+            patch.status = PatchStatus.abandoned
             patch.error = "git apply --check timed out"
             return patch
         if check.returncode != 0:
-            patch.status = PatchStatus.apply_failed
+            patch.status = PatchStatus.abandoned
             patch.error = (check.stderr or check.stdout or "git apply --check failed")[-8000:]
             return patch
 
@@ -56,15 +56,15 @@ class PatchTool(BaseTool):
         try:
             applied = await _run_git_apply(repo, patch.diff_content, check_only=False)
         except subprocess.TimeoutExpired:
-            patch.status = PatchStatus.apply_failed
+            patch.status = PatchStatus.abandoned
             patch.error = "git apply timed out"
             return patch
         if applied.returncode != 0:
-            patch.status = PatchStatus.apply_failed
+            patch.status = PatchStatus.abandoned
             patch.error = (applied.stderr or applied.stdout or "git apply failed")[-8000:]
             return patch
 
-        patch.status = PatchStatus.applied
+        patch.status = PatchStatus.validation_pending
         patch.error = None
         return patch
 

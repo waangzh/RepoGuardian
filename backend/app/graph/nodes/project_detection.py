@@ -22,7 +22,9 @@ async def project_detection_node(state: ReviewState) -> ReviewState:
     else:
         message = "未检测到受支持的项目适配器"
     return ReviewState(
-        phase=ReviewPhase.project_detection,
+        # 后续的 agent_decide 只允许在 discovery 阶段运行；项目检测本身
+        # 已由独立步骤记录，不能再把 phase 留在 project_detection。
+        phase=ReviewPhase.discovery,
         project_adapter_id=profile.adapter_id if profile else None,
         project_profile=profile.model_dump(mode="json") if profile else None,
         step_progress=append_step(

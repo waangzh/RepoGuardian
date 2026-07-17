@@ -165,6 +165,7 @@ def build_command_executor() -> CommandExecutor:
             allow_unsafe=settings.repoguardian_allow_unsafe_local_execution,
             max_output_chars=settings.repoguardian_sandbox_max_output_chars,
         )
+    # gVisor remains a safe placeholder: it never falls back to local execution.
     return RejectedSandboxExecutor(
         SandboxSpec(
             cpu_limit=settings.repoguardian_sandbox_cpus,

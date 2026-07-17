@@ -22,10 +22,51 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, mod
 
 class TaskStatus(str, Enum):
     """审查任务生命周期状态。"""
+    # pending/running are retained only so in-memory tasks created by older
+    # releases can still be read while clients migrate to the granular states.
     pending = "pending"
     running = "running"
+    queued = "queued"
+    planning = "planning"
+    reviewing = "reviewing"
+    resolving_evidence = "resolving_evidence"
+    verifying_issues = "verifying_issues"
+    generating_patches = "generating_patches"
+    validating = "validating"
+    waiting_for_human = "waiting_for_human"
     completed = "completed"
+    completed_with_warnings = "completed_with_warnings"
     failed = "failed"
+    cancelled = "cancelled"
+
+
+class ReviewMode(str, Enum):
+    """产品级审查模式；默认路径永远不执行目标仓库代码。"""
+
+    review = "review"
+    review_and_suggest = "review_and_suggest"
+    review_suggest_and_validate = "review_suggest_and_validate"
+
+
+class ValidationBackend(str, Enum):
+    """允许由 API 选择的验证后端名称，而不是任意命令或 Docker 参数。"""
+
+    none = "none"
+    local = "local"
+    gvisor = "gvisor"
+
+
+class ValidationStatus(str, Enum):
+    not_requested = "not_requested"
+    unsupported = "unsupported"
+    queued = "queued"
+    running = "running"
+    passed = "passed"
+    failed = "failed"
+    infrastructure_error = "infrastructure_error"
+    timed_out = "timed_out"
+    inconclusive = "inconclusive"
+    cancelled = "cancelled"
 
 
 class ReviewPhase(str, Enum):
@@ -103,13 +144,15 @@ class ValidationStage(str, Enum):
 class PatchStatus(str, Enum):
     """候选补丁在独立验证生命周期中的受验证状态。"""
 
-    generated = "generated"
-    apply_failed = "apply_failed"
-    applied = "applied"
-    validation_passed = "validation_passed"
+    suggested = "suggested"
+    unverified = "unverified"
+    validation_pending = "validation_pending"
+    verified = "verified"
     validation_failed = "validation_failed"
+    validation_inconclusive = "validation_inconclusive"
     abandoned = "abandoned"
     superseded = "superseded"
+
 
 
 class RetrievalRelevanceType(str, Enum):
@@ -285,10 +328,40 @@ class ExecutionBudget(BaseModel):
 # API 请求/响应
 # ---------------------------------------------------------------------------
 
+def _default_review_mode() -> ReviewMode:
+    """延迟读取配置，避免领域模型与 Settings 在模块导入时互相依赖。"""
+    from app.core.config import settings
+
+    return ReviewMode(settings.repoguardian_default_review_mode)
+
+
+def _default_validation_backend() -> ValidationBackend:
+    from app.core.config import settings
+
+    return ValidationBackend(settings.repoguardian_default_validation_backend)
+
+
 class ReviewCreateRequest(BaseModel):
     """POST /api/reviews 请求体。"""
     pr_url: HttpUrl
     model: str | None = None
+    mode: ReviewMode = Field(default_factory=_default_review_mode)
+    generate_patches: bool = False
+    validation_backend: ValidationBackend = Field(default_factory=_default_validation_backend)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_product_policy(self) -> "ReviewCreateRequest":
+        if self.mode == ReviewMode.review:
+            if self.generate_patches:
+                raise ValueError("mode=review does not allow generate_patches=true")
+            if self.validation_backend != ValidationBackend.none:
+                raise ValueError("mode=review requires validation_backend=none")
+        elif self.mode == ReviewMode.review_and_suggest:
+            if self.validation_backend != ValidationBackend.none:
+                raise ValueError("mode=review_and_suggest requires validation_backend=none")
+        return self
 
 
 class ReviewCreateResponse(BaseModel):
@@ -552,17 +625,42 @@ class ValidationDelta(BaseModel):
     resolved_failures: list[FailureFingerprint] = Field(default_factory=list)
 
 
+class ValidationResult(BaseModel):
+    """面向 API 的验证结论，与旧的 Base/Head 快照解耦。"""
+
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    patch_id: str | None = None
+    backend: ValidationBackend = ValidationBackend.none
+    status: ValidationStatus
+    detail: str | None = None
+    snapshot_id: str | None = None
+
+
 class PatchResult(BaseModel):
     """一个自动修复 patch。"""
     id: str = Field(default_factory=lambda: uuid4().hex)
     issue_id: str | None = None          # 关联的 ReviewIssue ID
     diff_content: str                    # unified diff 内容
-    status: PatchStatus = PatchStatus.generated
+    status: PatchStatus = PatchStatus.unverified
     revision_of: str | None = None
     attempt_number: int = Field(default=1, ge=1)
     validation_snapshot_id: str | None = None
+    validation_backend: ValidationBackend | None = None
+    validation_result_id: str | None = None
     error: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def migrate_legacy_status(cls, value: PatchStatus | str) -> PatchStatus | str:
+        """读取旧任务时归一化旧补丁状态，避免继续向 API 暴露混合语义。"""
+        legacy_statuses = {
+            "generated": PatchStatus.suggested,
+            "applied": PatchStatus.validation_pending,
+            "apply_failed": PatchStatus.abandoned,
+            "validation_passed": PatchStatus.verified,
+        }
+        return legacy_statuses.get(value, value)
 
 
 class ContextSnippet(BaseModel):
@@ -583,6 +681,14 @@ class RepoSnapshot(BaseModel):
     total_files: int
 
 
+class ReviewSummary(BaseModel):
+    """API 中与 issues/patches/validation 并列的只读审查结果摘要。"""
+
+    mode: ReviewMode = ReviewMode.review
+    status: TaskStatus = TaskStatus.queued
+    completed: bool = False
+
+
 # ---------------------------------------------------------------------------
 # 聚合根
 # ---------------------------------------------------------------------------
@@ -590,10 +696,14 @@ class RepoSnapshot(BaseModel):
 class ReviewTask(BaseModel):
     """审查任务聚合根，聚合所有阶段的产出，供前端完整展示。"""
     id: str
-    status: TaskStatus = TaskStatus.pending
+    status: TaskStatus = TaskStatus.queued
     phase: ReviewPhase = ReviewPhase.prepare
     pr_url: str
     model: str | None = None
+    mode: ReviewMode = ReviewMode.review
+    generate_patches: bool = False
+    validation_backend: ValidationBackend = ValidationBackend.none
+    review: ReviewSummary = Field(default_factory=ReviewSummary)
     steps: list[TaskStep] = Field(default_factory=list)
     pr: PullRequestInfo | None = None
     changed_files: list[ChangedFile] = Field(default_factory=list)
@@ -604,11 +714,13 @@ class ReviewTask(BaseModel):
     static_results: list[TestRunResult] = Field(default_factory=list)
     validation_snapshots: list[ValidationSnapshot] = Field(default_factory=list)
     validation_deltas: list[ValidationDelta] = Field(default_factory=list)
+    validation: list[ValidationResult] = Field(default_factory=list)
     patches: list[PatchResult] = Field(default_factory=list)
     test_results: list[TestRunResult] = Field(default_factory=list)
     agent_events: list[AgentEvent] = Field(default_factory=list)
     human_request: HumanReviewRequest | None = None
     report_markdown: str | None = None
+    warnings: list[str] = Field(default_factory=list)
     error: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

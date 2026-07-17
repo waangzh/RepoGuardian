@@ -131,7 +131,7 @@ class PatchOrm(Base):
     task_id: Mapped[str] = mapped_column(String(32), ForeignKey("review_tasks.id"), index=True)
     issue_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("review_issues.id"), nullable=True)
     diff_content: Mapped[str] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(String(32), default="generated")  # generated / applied / apply_failed
+    status: Mapped[str] = mapped_column(String(32), default="unverified")
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc)
     )

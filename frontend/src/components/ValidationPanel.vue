@@ -1,10 +1,16 @@
 <script setup lang="ts">
-import type { ProjectProfile, ValidationDelta, ValidationSnapshot } from "../types/review";
+import type {
+  ProjectProfile,
+  ValidationDelta,
+  ValidationResult,
+  ValidationSnapshot,
+} from "../types/review";
 
 defineProps<{
   profile?: ProjectProfile | null;
   snapshots: ValidationSnapshot[];
   deltas: ValidationDelta[];
+  results: ValidationResult[];
 }>();
 
 const stageLabel: Record<ValidationSnapshot["stage"], string> = {
@@ -15,6 +21,22 @@ const stageLabel: Record<ValidationSnapshot["stage"], string> = {
 
 function commandSummary(snapshot: ValidationSnapshot): string {
   return snapshot.command_results.map((result) => result.command).join(" · ") || "未运行命令";
+}
+
+function validationStatusText(status: ValidationResult["status"]): string {
+  const labels: Record<string, string> = {
+    not_requested: "未请求验证",
+    unsupported: "验证环境不支持",
+    queued: "等待验证",
+    running: "正在验证",
+    passed: "已通过所选验证后端",
+    failed: "测试失败",
+    infrastructure_error: "验证基础设施失败",
+    timed_out: "验证超时",
+    inconclusive: "验证结果不确定",
+    cancelled: "验证已取消",
+  };
+  return labels[status] ?? `未知验证状态：${status}`;
 }
 </script>
 
@@ -33,6 +55,17 @@ function commandSummary(snapshot: ValidationSnapshot): string {
       <span v-if="profile.detected_files.length">· {{ profile.detected_files.join("、") }}</span>
     </p>
     <div v-if="snapshots.length === 0" class="empty">尚无验证快照</div>
+
+    <div v-if="results.length" class="validation-results">
+      <h3>验证结论</h3>
+      <article v-for="result in results" :key="result.id" class="validation-snapshot">
+        <div class="validation-snapshot-head">
+          <strong>{{ result.backend }}</strong>
+          <span>{{ validationStatusText(result.status) }}</span>
+        </div>
+        <p v-if="result.detail" class="validation-detail">{{ result.detail }}</p>
+      </article>
+    </div>
 
     <article
       v-for="snapshot in snapshots"

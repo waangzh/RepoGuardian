@@ -1,4 +1,9 @@
-import type { ReviewCreateResponse, ReviewTask } from "../types/review";
+import type {
+  ReviewCreateResponse,
+  ReviewMode,
+  ReviewTask,
+  ValidationBackend,
+} from "../types/review";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
@@ -17,10 +22,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export async function createReview(prUrl: string, model?: string): Promise<ReviewCreateResponse> {
+export async function createReview(
+  prUrl: string,
+  model?: string,
+  mode: ReviewMode = "review",
+  generatePatches = false,
+  validationBackend: ValidationBackend = "none",
+): Promise<ReviewCreateResponse> {
   return request<ReviewCreateResponse>("/api/reviews", {
     method: "POST",
-    body: JSON.stringify({ pr_url: prUrl, model: model || null })
+    body: JSON.stringify({
+      pr_url: prUrl,
+      model: model || null,
+      mode,
+      generate_patches: generatePatches,
+      validation_backend: validationBackend,
+    })
   });
 }
 

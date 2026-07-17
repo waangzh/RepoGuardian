@@ -13,8 +13,10 @@ from app.models.review import ExecutionBudget, ReviewPhase
 class ReviewState(TypedDict, total=False):
     # ---- 基础标识 ----
     task_id: str
-    mode: str          # 审查模式，当前固定 "pr_review"
-    status: str         # pending → running → completed / failed
+    mode: str
+    status: str
+    generate_patches: bool
+    validation_backend: str
     phase: ReviewPhase
 
     # ---- 输入 ----
@@ -68,6 +70,8 @@ class ReviewState(TypedDict, total=False):
     validation_deltas: list[dict[str, Any]] | None
     validation_blocked: bool
     validation_ready: bool
+    validation_results: list[dict[str, Any]] | None
+    warnings: list[str] | None
 
     # ---- 输出 ----
     report_markdown: str | None  # 最终 Markdown 报告

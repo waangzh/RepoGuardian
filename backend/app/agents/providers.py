@@ -431,7 +431,7 @@ class OpenAICompatibleProvider(LLMProvider):
             "If no issue can be fixed safely, return {\"patches\":[]}.\n"
             "Return JSON shape:\n"
             "{\"patches\":[{\"issue_id\":\"issue-id\",\"diff_content\":\"diff --git ...\","
-            "\"status\":\"generated\"}]}\n\n"
+            "\"status\":\"unverified\"}]}\n\n"
             f"State JSON:\n{json.dumps(compact, ensure_ascii=False)[:60000]}"
         )
 

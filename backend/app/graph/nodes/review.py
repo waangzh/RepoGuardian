@@ -31,6 +31,7 @@ async def review_node(state: ReviewState) -> ReviewState:
         message = "无变更文件，跳过 LLM 审查"
         logger.warning("✍️ [审查] 跳过: 无变更文件")
         return ReviewState(
+            status="reviewing",
             review_issues=[],
             agent_events=append_event(state, action.action, action.reason, "completed", message),
             step_progress=append_step(state, "review", "completed", message),
@@ -45,6 +46,7 @@ async def review_node(state: ReviewState) -> ReviewState:
     if budget is None:
         message = "诊断或模型调用预算已耗尽，跳过 LLM 审查"
         return ReviewState(
+            status="reviewing",
             review_issues=[],
             agent_events=append_event(state, action.action, action.reason, "completed", message),
             step_progress=append_step(state, "review", "completed", message),
@@ -75,6 +77,7 @@ async def review_node(state: ReviewState) -> ReviewState:
         message += f"，拒绝 {rejected_issue_count} 个无法映射到 Head 的问题"
     logger.info("✍️ [审查] 完成: %d 个问题（严重性分布: %s）", len(issues_dicts), severity_counts)
     return ReviewState(
+        status="reviewing",
         review_issues=issues_dicts,
         execution_budget=budget.model_dump(),
         agent_events=append_event(state, action.action, action.reason, "completed", message),

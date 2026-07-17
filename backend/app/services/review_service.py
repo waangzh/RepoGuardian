@@ -17,11 +17,15 @@ from app.graph.state import ReviewState
 from app.models.review import (
     ExecutionBudget,
     ReviewCreateRequest,
+    ReviewMode,
     ReviewPhase,
     ReviewTask,
     StepStatus,
     TaskStatus,
     TaskStep,
+    ValidationBackend,
+    ValidationResult,
+    ValidationStatus,
 )
 from app.services.report_service import ReportService
 from app.services.review_rebuild import rebuild_task_from_state
@@ -71,16 +75,29 @@ class ReviewService:
         self._diff_parser = diff_parser
         self._provider = provider
         self._report_service = report_service
-        self._command_executor = command_executor or build_command_executor()
+        # 只读审查不构造也不使用执行器；仅显式验证模式才会注入它。
+        self._command_executor = command_executor
         self._tasks: dict[str, ReviewTask] = {}
 
     def create_task(self, request: ReviewCreateRequest) -> ReviewTask:
         """创建审查任务并异步启动图执行。"""
         task = ReviewTask(
             id=uuid4().hex,
-            status=TaskStatus.pending,
+            status=TaskStatus.queued,
             pr_url=str(request.pr_url),
             model=request.model,
+            mode=request.mode,
+            generate_patches=request.generate_patches,
+            validation_backend=request.validation_backend,
+            review={"mode": request.mode, "status": TaskStatus.queued, "completed": False},
+            validation=[ValidationResult(
+                backend=request.validation_backend,
+                status=(
+                    ValidationStatus.not_requested
+                    if request.mode != ReviewMode.review_suggest_and_validate
+                    else ValidationStatus.queued
+                ),
+            )],
             steps=[TaskStep(name="queued", message="任务已创建")],
         )
         self._tasks[task.id] = task
@@ -101,15 +118,20 @@ class ReviewService:
         5. 始终清理临时克隆仓库
         """
         task = self._tasks[task_id]
-        task.status = TaskStatus.running
+        task.status = TaskStatus.planning
+        task.review.status = task.status
         self._touch(task)
 
         logger.info("🚀 开始执行审查图，任务 %s", task_id[:8])
 
         initial_state: ReviewState = {
             "task_id": task_id,
-            "mode": "pr_review",
-            "status": "running",
+            "mode": task.mode.value,
+            "status": TaskStatus.planning.value,
+            "generate_patches": task.generate_patches,
+            "validation_backend": task.validation_backend.value,
+            "validation_results": [item.model_dump(mode="json") for item in task.validation],
+            "warnings": [],
             "pr_url": task.pr_url,
             "model": task.model,
             "execution_budget": ExecutionBudget().model_dump(),
@@ -118,7 +140,12 @@ class ReviewService:
             "_git_tool": self._git_tool,
             "_diff_parser": self._diff_parser,
             "_provider": self._provider,
-            "_command_executor": self._command_executor,
+            "_command_executor": (
+                self._command_executor or build_command_executor()
+                if task.mode == ReviewMode.review_suggest_and_validate
+                and task.validation_backend == ValidationBackend.local
+                else None
+            ),
         }
 
         result = None
@@ -127,7 +154,7 @@ class ReviewService:
             compiled = graph.compile()
             run_metadata = {
                 "task_id": task_id,
-                "mode": "pr_review",
+                "mode": task.mode.value,
                 "model_override": task.model is not None,
             }
             run_config: dict[str, Any] = {
@@ -157,8 +184,12 @@ class ReviewService:
     def _sync_result_to_task(self, task: ReviewTask, result: dict) -> None:
         """将图的扁平字典状态重建为 Pydantic 模型并写回 ReviewTask。"""
         rebuilt = rebuild_task_from_state(result)
-        task.status = TaskStatus.completed
+        task.status = rebuilt.status
         task.phase = rebuilt.phase
+        task.mode = rebuilt.mode
+        task.generate_patches = rebuilt.generate_patches
+        task.validation_backend = rebuilt.validation_backend
+        task.review = rebuilt.review
         task.pr = rebuilt.pr
         task.changed_files = rebuilt.changed_files
         task.issues = rebuilt.issues
@@ -168,11 +199,13 @@ class ReviewService:
         task.static_results = rebuilt.static_results
         task.validation_snapshots = rebuilt.validation_snapshots
         task.validation_deltas = rebuilt.validation_deltas
+        task.validation = rebuilt.validation
         task.patches = rebuilt.patches
         task.test_results = rebuilt.test_results
         task.agent_events = rebuilt.agent_events
         task.human_request = rebuilt.human_request
         task.report_markdown = rebuilt.report_markdown
+        task.warnings = rebuilt.warnings
         task.steps = [
             TaskStep(
                 name=step.get("node", f"step_{index}"),

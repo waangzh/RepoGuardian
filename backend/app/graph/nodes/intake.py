@@ -16,7 +16,7 @@ async def intake_node(state: ReviewState) -> ReviewState:
     return ReviewState(
         task_id=task_id,
         mode=state.get("mode", "pr_review"),
-        status="running",
+        status="planning",
         pr_url=state.get("pr_url"),
         model=state.get("model"),
         step_progress=append_step(state, "intake", "completed", "已接收 PR URL"),

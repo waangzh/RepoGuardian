@@ -27,4 +27,7 @@ async def report_node(state: ReviewState) -> ReviewState:
 
 async def complete_node(state: ReviewState) -> ReviewState:
     """报告发布完成后才将任务标记为 completed。"""
-    return ReviewState(status="completed", phase=ReviewPhase.completed)
+    return ReviewState(
+        status="completed_with_warnings" if state.get("warnings") else "completed",
+        phase=ReviewPhase.completed,
+    )

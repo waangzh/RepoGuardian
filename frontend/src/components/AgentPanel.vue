@@ -7,6 +7,14 @@ defineProps<{
   patches: PatchResult[];
   testResults: TestRunResult[];
 }>();
+
+function patchStatusText(status: PatchResult["status"]): string {
+  if (status === "unverified" || status === "suggested") return "候选修复，尚未运行项目测试。";
+  if (status === "verified") return "已通过所选验证后端。";
+  if (status === "validation_failed") return "验证后端报告测试失败。";
+  if (status === "validation_inconclusive") return "验证结果不确定。";
+  return status;
+}
 </script>
 
 <template>
@@ -46,6 +54,7 @@ defineProps<{
           <span>{{ patch.status }}</span>
           <small v-if="patch.issue_id">{{ patch.issue_id }}</small>
         </summary>
+        <p>{{ patchStatusText(patch.status) }}</p>
         <p v-if="patch.error" class="error">{{ patch.error }}</p>
         <pre>{{ patch.diff_content }}</pre>
       </details>

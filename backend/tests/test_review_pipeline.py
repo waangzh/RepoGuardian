@@ -251,7 +251,13 @@ index 1111111..2222222 100644
     )
 
     task = service.create_task(
-        ReviewCreateRequest(pr_url="https://github.com/local/sample/pull/1", model=None)
+        ReviewCreateRequest(
+            pr_url="https://github.com/local/sample/pull/1",
+            model=None,
+            mode="review_suggest_and_validate",
+            generate_patches=True,
+            validation_backend="local",
+        )
     )
     await _wait_for_task(service, task.id)
     completed = service.get_task(task.id)
@@ -259,7 +265,7 @@ index 1111111..2222222 100644
     assert completed is not None
     assert completed.status == TaskStatus.completed, completed.error
     assert completed.patches
-    assert completed.patches[-1].status == "validation_passed"
+    assert completed.patches[-1].status == "verified"
     assert completed.test_results
     assert completed.test_results[-1].passed is True
     assert completed.validation_snapshots[-1].stage.value == "patched"
@@ -306,7 +312,13 @@ index 1111111..2222222 100644
     )
 
     task = service.create_task(
-        ReviewCreateRequest(pr_url="https://github.com/local/sample/pull/1", model=None)
+        ReviewCreateRequest(
+            pr_url="https://github.com/local/sample/pull/1",
+            model=None,
+            mode="review_suggest_and_validate",
+            generate_patches=True,
+            validation_backend="local",
+        )
     )
     await _wait_for_task(service, task.id)
     completed = service.get_task(task.id)
@@ -315,7 +327,7 @@ index 1111111..2222222 100644
     assert completed.status == TaskStatus.completed, completed.error
     assert completed.changed_files[0].file_path == "pricing.py"
     assert completed.issues
-    assert completed.patches[-1].status == "validation_passed"
+    assert completed.patches[-1].status == "verified"
     assert completed.test_results[-1].passed is True
     assert completed.report_markdown is not None
 
