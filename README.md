@@ -25,31 +25,9 @@ RepoGuardian 接收一个 GitHub PR URL，在任务临时 clone 中读取 PR Hea
 | 候选修复 | `review_and_suggest` 生成候选补丁并标记为 `unverified`；只有验证结果为 `passed` 才标记为 `verified`。 |
 | 可视化交付 | Vue 控制台展示任务流、Agent 日志、补丁、验证账本；后端提供结构化任务数据与 Markdown 报告。 |
 
-## 工作流
+## 架构图
+<img width="973" height="665" alt="image" src="https://github.com/user-attachments/assets/0619ebba-d95b-4964-ae12-4ab8a7b66d67" />
 
-```mermaid
-flowchart LR
-    A[GitHub PR URL] --> B[intake]
-    B --> C[repo_prepare]
-    C --> D[diff_parse]
-    D --> E[repo_index]
-    E --> F[project_detection]
-    F --> G[discovery_decide]
-    G --> H[context_retrieve]
-    G --> I[read-only review]
-    H --> G
-    I --> J[issue verification]
-    J --> K[report]
-    K --> L[complete]
-
-    J -->|review_and_suggest| M[generate candidate patch]
-    M --> N[unverified]
-    J -->|review_suggest_and_validate| M
-    M -->|backend available| O[isolated validation]
-    M -->|backend unavailable| N
-    O --> K
-    N --> K
-```
 
 ### 可选验证语义
 
