@@ -21,6 +21,9 @@ from app.models.review import (
     ReviewMode,
     ReviewPhase,
     ReviewIssue,
+    ReviewUnit,
+    ReviewUnitResult,
+    ExcludedReviewFile,
     ReviewSummary,
     ReviewTask,
     TestRunResult,
@@ -49,6 +52,13 @@ def rebuild_task_from_state(state: ReviewState) -> ReviewTask:
         ),
         pr=rebuild_pr_info(state.get("pr_info") or {}),
         changed_files=rebuild_changed_files(state.get("changed_files") or []),
+        review_units=[ReviewUnit.model_validate(item) for item in state.get("review_units") or []],
+        review_unit_results=[
+            ReviewUnitResult.model_validate(item) for item in state.get("review_unit_results") or []
+        ],
+        excluded_files=[
+            ExcludedReviewFile.model_validate(item) for item in state.get("excluded_files") or []
+        ],
         issues=rebuild_issues(state.get("review_issues") or []),
         context_snippets=rebuild_context_snippets(state.get("context_snippets") or []),
         repo_snapshot=rebuild_repo_snapshot(state.get("project_meta") or {}),
@@ -132,6 +142,7 @@ def rebuild_changed_files(data: list[dict]) -> list[ChangedFile]:
             ))
         result.append(ChangedFile(
             file_path=file_data.get("file_path", ""),
+            old_file_path=file_data.get("old_file_path"),
             change_type=file_data.get("change_type", "modified"),
             additions=file_data.get("additions", 0),
             deletions=file_data.get("deletions", 0),
@@ -150,6 +161,7 @@ def rebuild_context_snippets(data: list[dict]) -> list[ContextSnippet]:
             content=item.get("content", ""),
             relevance=item.get("relevance", "adjacent"),
             symbol=item.get("symbol"),
+            review_unit_id=item.get("review_unit_id"),
         )
         for item in data
     ]

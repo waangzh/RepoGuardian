@@ -94,14 +94,68 @@ export interface DiffHunk {
 
 export interface ChangedFile {
   file_path: string;
+  old_file_path?: string | null;
   change_type: string;
   additions: number;
   deletions: number;
   hunks: DiffHunk[];
 }
 
+export type ReviewUnitComplexity = "small" | "medium" | "large";
+export type ReviewUnitStatus =
+  | "pending"
+  | "planning"
+  | "reviewing"
+  | "completed"
+  | "failed"
+  | "timed_out"
+  | "cancelled";
+
+export interface PlannedChangedFile {
+  file_path: string;
+  old_file_path?: string | null;
+  change_type: string;
+  additions: number;
+  deletions: number;
+  classifications: string[];
+  included: boolean;
+  excluded_reason?: string | null;
+}
+
+export interface ExcludedReviewFile {
+  file_path: string;
+  reason: string;
+  classifications: string[];
+}
+
+export interface ReviewUnit {
+  id: string;
+  primary_files: string[];
+  related_files: string[];
+  diff_hunk_ids: string[];
+  changed_symbols: string[];
+  rule_ids: string[];
+  risk_tags: string[];
+  estimated_tokens: number;
+  complexity: ReviewUnitComplexity;
+  fingerprint: string;
+  grouping_reason: string;
+}
+
+export interface ReviewPreviewResponse {
+  changed_files: PlannedChangedFile[];
+  review_units: ReviewUnit[];
+  excluded_files: ExcludedReviewFile[];
+  matched_rules: string[];
+  risk_tags: string[];
+  estimated_model_calls: number;
+  estimated_tokens: number;
+  warnings: string[];
+}
+
 export interface ReviewIssue {
   id: string;
+  review_unit_id?: string | null;
   file_path: string;
   line_no: number | null;
   severity: Severity;
@@ -139,6 +193,7 @@ export interface ContextSnippet {
   content: string;
   relevance: string;
   symbol?: string | null;
+  review_unit_id?: string | null;
 }
 
 export interface RepoSnapshot {
@@ -249,7 +304,26 @@ export interface AgentEvent {
   reason: string;
   status: string;
   message?: string | null;
+  review_unit_id?: string | null;
   created_at: string;
+}
+
+export interface ReviewUnitResult {
+  review_unit_id: string;
+  status: ReviewUnitStatus;
+  plan_skipped: boolean;
+  issues: ReviewIssue[];
+  context_snippets: ContextSnippet[];
+  messages: AgentEvent[];
+  tool_events: Array<{
+    review_unit_id: string;
+    tool: string;
+    status: string;
+    result_count: number;
+    detail?: string | null;
+  }>;
+  execution_budget: Record<string, number>;
+  error?: string | null;
 }
 
 export interface ReviewTask {
@@ -265,6 +339,9 @@ export interface ReviewTask {
   steps: TaskStep[];
   pr?: PullRequestInfo | null;
   changed_files: ChangedFile[];
+  review_units: ReviewUnit[];
+  review_unit_results: ReviewUnitResult[];
+  excluded_files: ExcludedReviewFile[];
   issues: ReviewIssue[];
   static_results: TestRunResult[];
   patches: PatchResult[];

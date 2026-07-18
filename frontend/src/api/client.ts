@@ -1,7 +1,9 @@
 import type {
   ReviewCreateResponse,
   ReviewMode,
+  ReviewPreviewResponse,
   ReviewTask,
+  ReviewUnitResult,
   ValidationBackend,
 } from "../types/review";
 
@@ -41,8 +43,28 @@ export async function createReview(
   });
 }
 
+export async function previewReview(prUrl: string): Promise<ReviewPreviewResponse> {
+  return request<ReviewPreviewResponse>("/api/reviews/preview", {
+    method: "POST",
+    body: JSON.stringify({ pr_url: prUrl }),
+  });
+}
+
 export async function getReview(taskId: string): Promise<ReviewTask> {
   return request<ReviewTask>(`/api/reviews/${taskId}`);
+}
+
+export async function retryReviewUnit(
+  taskId: string,
+  unitId: string,
+): Promise<ReviewUnitResult> {
+  return request<ReviewUnitResult>(`/api/reviews/${taskId}/units/${unitId}/retry`, {
+    method: "POST",
+  });
+}
+
+export async function cancelReview(taskId: string): Promise<{ task_id: string; status: string }> {
+  return request(`/api/reviews/${taskId}/cancel`, { method: "POST" });
 }
 
 export async function getReport(taskId: string): Promise<string> {

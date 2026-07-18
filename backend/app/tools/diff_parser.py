@@ -46,16 +46,25 @@ class DiffParser:
                     )
                 )
 
+            source_path = patched_file.source_file.removeprefix("a/")
+            target_path = patched_file.target_file.removeprefix("b/")
             if patched_file.is_added_file:
                 change_type = "added"
             elif patched_file.is_removed_file:
                 change_type = "deleted"
+            elif source_path != target_path:
+                change_type = "renamed"
             else:
                 change_type = "modified"
 
             files.append(
                 ChangedFile(
                     file_path=patched_file.path,
+                    old_file_path=(
+                        source_path
+                        if source_path not in {patched_file.path, "/dev/null"}
+                        else None
+                    ),
                     change_type=change_type,
                     additions=additions,
                     deletions=deletions,
@@ -64,4 +73,3 @@ class DiffParser:
             )
 
         return files
-

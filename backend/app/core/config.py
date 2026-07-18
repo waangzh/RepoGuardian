@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     ] = "review"
     repoguardian_default_validation_backend: Literal["none", "local", "gvisor"] = "none"
 
+    # ---- Review Unit Planner / 调度 ----
+    repoguardian_review_unit_concurrency: int = 4
+    repoguardian_review_unit_timeout_seconds: int = 180
+    repoguardian_review_unit_small_max_changed_lines: int = 30
+    repoguardian_review_unit_large_min_changed_lines: int = 400
+    repoguardian_review_unit_max_lines_per_read: int = 240
+    repoguardian_review_unit_max_search_results: int = 12
+
     # ---- 受控命令执行 ----
     # reject 和 gvisor 均不会回退到宿主机。sandbox 是旧配置值的兼容别名。
     repoguardian_executor: Literal["reject", "local", "gvisor", "sandbox"] = "reject"

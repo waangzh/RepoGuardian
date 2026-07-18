@@ -84,6 +84,22 @@ class ReviewPhase(str, Enum):
     failed = "failed"
 
 
+class ReviewUnitComplexity(str, Enum):
+    small = "small"
+    medium = "medium"
+    large = "large"
+
+
+class ReviewUnitStatus(str, Enum):
+    pending = "pending"
+    planning = "planning"
+    reviewing = "reviewing"
+    completed = "completed"
+    failed = "failed"
+    timed_out = "timed_out"
+    cancelled = "cancelled"
+
+
 class StepStatus(str, Enum):
     """单个图节点的执行状态。"""
     pending = "pending"
@@ -370,6 +386,13 @@ class ReviewCreateResponse(BaseModel):
     status: TaskStatus
 
 
+class ReviewPreviewRequest(BaseModel):
+    """仅执行确定性 PR 分析，不创建任务或调用模型。"""
+
+    pr_url: HttpUrl
+    model_config = ConfigDict(extra="forbid")
+
+
 class TaskStep(BaseModel):
     """图节点执行步骤记录。"""
     name: str
@@ -425,10 +448,92 @@ class DiffHunk(BaseModel):
 class ChangedFile(BaseModel):
     """一个文件的 diff 解析结果。"""
     file_path: str
+    old_file_path: str | None = None
     change_type: str   # added / modified / deleted
     additions: int
     deletions: int
     hunks: list[DiffHunk] = Field(default_factory=list)
+
+
+class PlannedChangedFile(BaseModel):
+    """Planner 对变更文件作出的确定性分类和纳入结论。"""
+
+    file_path: str
+    old_file_path: str | None = None
+    change_type: str
+    additions: int = Field(ge=0)
+    deletions: int = Field(ge=0)
+    classifications: list[str] = Field(default_factory=list)
+    included: bool
+    excluded_reason: str | None = None
+
+
+class ExcludedReviewFile(BaseModel):
+    file_path: str
+    reason: str
+    classifications: list[str] = Field(default_factory=list)
+
+
+class ReviewUnit(BaseModel):
+    """由确定性 Planner 生成的最小独立审查单元。"""
+
+    id: str
+    primary_files: list[str] = Field(min_length=1)
+    related_files: list[str] = Field(default_factory=list)
+    diff_hunk_ids: list[str] = Field(default_factory=list)
+    changed_symbols: list[str] = Field(default_factory=list)
+    rule_ids: list[str] = Field(default_factory=list)
+    risk_tags: list[str] = Field(default_factory=list)
+    estimated_tokens: int = Field(ge=0)
+    complexity: ReviewUnitComplexity
+    fingerprint: str
+    grouping_reason: str
+
+    @model_validator(mode="after")
+    def validate_file_roles(self) -> "ReviewUnit":
+        self.primary_files = list(dict.fromkeys(self.primary_files))
+        primary = set(self.primary_files)
+        self.related_files = [
+            path for path in dict.fromkeys(self.related_files) if path not in primary
+        ]
+        return self
+
+
+class ReviewToolScope(BaseModel):
+    """单个 Unit 的不可扩张工具权限。"""
+
+    review_unit_id: str
+    commentable_files: set[str]
+    readable_files: set[str]
+    max_lines_per_read: int = Field(gt=0)
+    max_search_results: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def require_commentable_subset(self) -> "ReviewToolScope":
+        if not self.commentable_files <= self.readable_files:
+            raise ValueError("commentable_files must be a subset of readable_files")
+        return self
+
+
+class ReviewPlan(BaseModel):
+    planner_version: str
+    changed_files: list[PlannedChangedFile] = Field(default_factory=list)
+    review_units: list[ReviewUnit] = Field(default_factory=list)
+    excluded_files: list[ExcludedReviewFile] = Field(default_factory=list)
+    matched_rules: list[str] = Field(default_factory=list)
+    risk_tags: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ReviewPreviewResponse(BaseModel):
+    changed_files: list[PlannedChangedFile] = Field(default_factory=list)
+    review_units: list[ReviewUnit] = Field(default_factory=list)
+    excluded_files: list[ExcludedReviewFile] = Field(default_factory=list)
+    matched_rules: list[str] = Field(default_factory=list)
+    risk_tags: list[str] = Field(default_factory=list)
+    estimated_model_calls: int = Field(ge=0)
+    estimated_tokens: int = Field(ge=0)
+    warnings: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +543,7 @@ class ChangedFile(BaseModel):
 class ReviewIssue(BaseModel):
     """LLM 审查发现的一个代码问题。"""
     id: str = Field(default_factory=lambda: uuid4().hex)
+    review_unit_id: str | None = None
     file_path: str
     line_no: int | None = None
     severity: Severity
@@ -544,7 +650,16 @@ class AgentEvent(BaseModel):
     reason: str
     status: str         # selected / completed / failed
     message: str | None = None
+    review_unit_id: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ReviewUnitToolEvent(BaseModel):
+    review_unit_id: str
+    tool: str
+    status: str
+    result_count: int = Field(default=0, ge=0)
+    detail: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -671,6 +786,19 @@ class ContextSnippet(BaseModel):
     content: str
     relevance: str         # direct / caller / test / adjacent
     symbol: str | None = None
+    review_unit_id: str | None = None
+
+
+class ReviewUnitResult(BaseModel):
+    review_unit_id: str
+    status: ReviewUnitStatus = ReviewUnitStatus.pending
+    plan_skipped: bool = False
+    issues: list[ReviewIssue] = Field(default_factory=list)
+    context_snippets: list[ContextSnippet] = Field(default_factory=list)
+    messages: list[AgentEvent] = Field(default_factory=list)
+    tool_events: list[ReviewUnitToolEvent] = Field(default_factory=list)
+    execution_budget: ExecutionBudget = Field(default_factory=ExecutionBudget)
+    error: str | None = None
 
 
 class RepoSnapshot(BaseModel):
@@ -707,6 +835,9 @@ class ReviewTask(BaseModel):
     steps: list[TaskStep] = Field(default_factory=list)
     pr: PullRequestInfo | None = None
     changed_files: list[ChangedFile] = Field(default_factory=list)
+    review_units: list[ReviewUnit] = Field(default_factory=list)
+    review_unit_results: list[ReviewUnitResult] = Field(default_factory=list)
+    excluded_files: list[ExcludedReviewFile] = Field(default_factory=list)
     issues: list[ReviewIssue] = Field(default_factory=list)
     context_snippets: list[ContextSnippet] = Field(default_factory=list)
     repo_snapshot: RepoSnapshot | None = None
