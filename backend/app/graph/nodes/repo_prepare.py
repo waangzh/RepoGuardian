@@ -19,6 +19,9 @@ async def repo_prepare_node(state: ReviewState) -> ReviewState:
     pr_info = await github.fetch_pr(state["pr_url"])
     logger.info("📥 [准备] PR #%d: %s/%s → clone + diff...", pr_info.number, pr_info.owner, pr_info.repo)
     repo_path, diff_text = await asyncio.to_thread(git_tool.clone_and_diff, pr_info)
+    prepared_callback = state.get("_repo_prepared_callback")
+    if callable(prepared_callback):
+        prepared_callback(repo_path)
     logger.info("📥 [准备] 克隆完成: %s，diff 长度: %d 字符", repo_path, len(diff_text))
 
     return ReviewState(

@@ -16,7 +16,14 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.agents.providers import build_provider
 from app.core.config import settings
-from app.models.review import ReviewCreateRequest, ReviewCreateResponse, ReviewTask
+from app.models.review import (
+    ReviewCreateRequest,
+    ReviewCreateResponse,
+    ReviewPreviewRequest,
+    ReviewPreviewResponse,
+    ReviewTask,
+    ReviewUnitResult,
+)
 from app.services.report_service import ReportService
 from app.services.review_service import ReviewService
 from app.tools.diff_parser import DiffParser
@@ -49,6 +56,33 @@ async def create_review(request: ReviewCreateRequest) -> ReviewCreateResponse:
     """创建审查任务，后台启动 LangGraph 执行，立即返回 202。"""
     task = get_review_service().create_task(request)
     return ReviewCreateResponse(task_id=task.id, status=task.status)
+
+
+@router.post("/preview", response_model=ReviewPreviewResponse)
+async def preview_review(request: ReviewPreviewRequest) -> ReviewPreviewResponse:
+    """返回确定性 Review Unit 计划；不会调用 LLM、执行器或目标代码。"""
+    return await get_review_service().preview(request)
+
+
+@router.post("/{task_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
+async def cancel_review(task_id: str) -> dict[str, str]:
+    service = get_review_service()
+    if service.get_task(task_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    if not service.cancel_task(task_id):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Task is not running")
+    return {"task_id": task_id, "status": "cancelled"}
+
+
+@router.post("/{task_id}/units/{unit_id}/retry", response_model=ReviewUnitResult)
+async def retry_review_unit(task_id: str, unit_id: str) -> ReviewUnitResult:
+    """只重试指定 Review Unit，不重新运行其他成功 Unit。"""
+    try:
+        return await get_review_service().retry_unit(task_id, unit_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task or unit not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
 
 
 @router.get("/{task_id}", response_model=ReviewTask)

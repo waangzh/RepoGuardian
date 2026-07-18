@@ -70,3 +70,20 @@ class GitHubTool:
             ),
         )
 
+    async def fetch_diff(self, pr_url: str) -> str:
+        """直接获取 PR unified diff，供无克隆、无 LLM 的 Preview 使用。"""
+        owner, repo, number = parse_pr_url(pr_url)
+        headers = {
+            "Accept": "application/vnd.github.v3.diff",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{number}"
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.get(url, headers=headers)
+        if response.status_code >= 400:
+            raise GitHubToolError(
+                f"GitHub diff 请求失败：{response.status_code} {response.text[:300]}"
+            )
+        return response.text

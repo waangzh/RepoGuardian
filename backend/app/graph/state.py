@@ -36,6 +36,10 @@ class ReviewState(TypedDict, total=False):
     # ---- Diff ----
     diff_text: str | None                          # 原始 unified diff
     changed_files: list[dict[str, Any]] | None     # DiffParser 解析后的 ChangedFile 列表
+    review_plan: dict[str, Any] | None
+    review_units: list[dict[str, Any]] | None
+    review_unit_results: list[dict[str, Any]] | None
+    excluded_files: list[dict[str, Any]] | None
 
     # ---- 仓库索引 ----
     file_index: list[dict[str, Any]] | None     # [{path, language, size, imports}, ...]
@@ -89,3 +93,6 @@ class ReviewState(TypedDict, total=False):
     _provider: Any
     _command_executor: Any
     _project_registry: Any
+    _review_planner: Any
+    _review_unit_executor: Any
+    _repo_prepared_callback: Any

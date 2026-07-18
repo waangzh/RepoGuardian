@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from app.models.review import ContextRetrievalPlan, RetrievalRelevanceType
+from app.models.review import ContextRetrievalPlan, RetrievalRelevanceType, ReviewToolScope
 from app.tools.base import BaseTool
 from app.tools.git_tool import GitTool
 
@@ -25,6 +25,7 @@ class CodeSearchTool(BaseTool):
             repo_path=kwargs["repo_path"],
             plan=kwargs.get("plan"),
             failure_fingerprints=kwargs.get("failure_fingerprints"),
+            scope=kwargs.get("scope"),
         )
         return {"context_snippets": snippets}
 
@@ -36,9 +37,28 @@ class CodeSearchTool(BaseTool):
         repo_path: str,
         plan: ContextRetrievalPlan | dict[str, Any] | None = None,
         failure_fingerprints: list[dict[str, Any]] | None = None,
+        scope: ReviewToolScope | dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """执行字面量、索引驱动的检索；绝不把模型文本转换为 Shell 或正则。"""
+        normalized_scope = (
+            scope if isinstance(scope, ReviewToolScope)
+            else ReviewToolScope.model_validate(scope) if scope is not None else None
+        )
+        if normalized_scope is not None:
+            readable = normalized_scope.readable_files
+            file_index = [item for item in file_index if item.get("path") in readable]
+            symbol_index = [item for item in symbol_index if item.get("file") in readable]
+            changed_files = [item for item in changed_files if item.get("file_path") in readable]
         normalized_plan = _normalize_plan(plan, changed_files)
+        if normalized_scope is not None:
+            unknown = set(normalized_plan.target_files) - normalized_scope.readable_files
+            if unknown:
+                raise ContextRetrievalPlanError(
+                    f"target files are outside review unit scope: {sorted(unknown)}"
+                )
+            normalized_plan.max_results = min(
+                normalized_plan.max_results, normalized_scope.max_search_results
+            )
         _validate_plan_against_indexes(normalized_plan, file_index, symbol_index)
         git_tool = GitTool()
         snippets: list[dict[str, Any]] = []
@@ -129,7 +149,14 @@ class CodeSearchTool(BaseTool):
                 target_files,
             )
 
-        return _dedupe_and_limit(snippets, normalized_plan.max_results)
+        result = _dedupe_and_limit(snippets, normalized_plan.max_results)
+        if normalized_scope is not None:
+            for snippet in result:
+                lines = snippet.get("content", "").splitlines()
+                if len(lines) > normalized_scope.max_lines_per_read:
+                    snippet["content"] = "\n".join(lines[:normalized_scope.max_lines_per_read]) + "\n...(truncated)"
+                snippet["review_unit_id"] = normalized_scope.review_unit_id
+        return result
 
 
 def _normalize_plan(
