@@ -10,7 +10,7 @@
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
@@ -123,6 +123,32 @@ class IssueCategory(str, Enum):
     performance = "performance"
     security = "security"
     test = "test"
+
+
+class IssueStatus(str, Enum):
+    """问题从模型候选到发布前的服务端状态。"""
+
+    candidate = "candidate"
+    evidence_resolved = "evidence_resolved"
+    confirmed = "confirmed"
+    dismissed = "dismissed"
+    needs_human = "needs_human"
+    published = "published"
+
+
+class EvidenceResolutionMethod(str, Enum):
+    diff_exact = "diff_exact"
+    diff_normalized = "diff_normalized"
+    file_exact = "file_exact"
+    symbol_assisted = "symbol_assisted"
+    unresolved = "unresolved"
+
+
+class CommentPlacement(str, Enum):
+    inline = "inline"
+    summary = "summary"
+    suppressed = "suppressed"
+    needs_human = "needs_human"
 
 
 class AgentActionName(str, Enum):
@@ -435,12 +461,23 @@ class ChangedLine(BaseModel):
     content: str
 
 
+class DiffLine(BaseModel):
+    """hunk 中按原始顺序保存的双侧行。"""
+
+    kind: Literal["added", "context", "deleted"]
+    content: str
+    old_line_no: int | None = None
+    new_line_no: int | None = None
+
+
 class DiffHunk(BaseModel):
     """diff 中的一个 hunk（连续变更块）。"""
     old_start: int
     old_length: int
     new_start: int
     new_length: int
+    hunk_id: str = ""
+    lines: list[DiffLine] = Field(default_factory=list)
     added_lines: list[ChangedLine] = Field(default_factory=list)
     removed_lines: list[ChangedLine] = Field(default_factory=list)
 
@@ -452,6 +489,7 @@ class ChangedFile(BaseModel):
     change_type: str   # added / modified / deleted
     additions: int
     deletions: int
+    is_binary: bool = False
     hunks: list[DiffHunk] = Field(default_factory=list)
 
 
@@ -540,40 +578,155 @@ class ReviewPreviewResponse(BaseModel):
 # 审查产物
 # ---------------------------------------------------------------------------
 
-class ReviewIssue(BaseModel):
-    """LLM 审查发现的一个代码问题。"""
-    id: str = Field(default_factory=lambda: uuid4().hex)
-    review_unit_id: str | None = None
+class EvidenceCandidate(BaseModel):
+    """未唯一定位时保留的只读候选位置，便于调试和人工确认。"""
+
+    model_config = ConfigDict(extra="forbid")
+
     file_path: str
-    line_no: int | None = None
-    severity: Severity
-    category: IssueCategory
-    title: str
-    description: str
-    suggestion: str
-    confidence: float = Field(ge=0, le=1)   # 0-1，LLM 置信度
-    auto_fixable: bool = False               # 是否可自动修复
-    evidence: str = Field(min_length=3, max_length=2_000)
-    evidence_locations: list["EvidenceLocation"] = Field(min_length=1, max_length=12)
-    affected_behavior: str = Field(min_length=3, max_length=1_000)
-    assumptions: list[str] = Field(default_factory=list, max_length=8)
-    related_test_ids: list[str] = Field(default_factory=list, max_length=12)
-    fix_risk: FixRisk = FixRisk.high
-    requires_human_confirmation: bool = False
+    side: Literal["head", "base"]
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    hunk_id: str | None = None
+
+
+class EvidenceAnchor(BaseModel):
+    """模型提供代码片段，位置与哈希只能由服务端解析写入。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    file_path: str
+    existing_code: str = Field(min_length=1, max_length=8_000)
+    symbol: str | None = None
+    expected_side: Literal["head", "base", "either"] = "head"
+    expected_hunk_id: str | None = None
+    context_before: list[str] = Field(default_factory=list, max_length=12)
+    context_after: list[str] = Field(default_factory=list, max_length=12)
+    resolved_start_line: int | None = Field(default=None, ge=1)
+    resolved_end_line: int | None = Field(default=None, ge=1)
+    resolution_method: EvidenceResolutionMethod = EvidenceResolutionMethod.unresolved
+    match_count: int = Field(default=0, ge=0)
+    anchor_hash: str | None = None
+    resolved_side: Literal["head", "base"] | None = None
+    candidate_locations: list[EvidenceCandidate] = Field(default_factory=list)
+    unresolved_reason: str | None = None
 
     @field_validator("file_path")
     @classmethod
     def validate_file_path(cls, value: str) -> str:
         return _validate_repo_relative_path(value)
 
-    @field_validator("line_no")
+    @field_validator("context_before", "context_after")
     @classmethod
-    def validate_line_no(cls, value: int | None) -> int | None:
-        if value is not None and value < 1:
-            raise ValueError("line_no must be positive")
-        return value
+    def validate_context(cls, values: list[str]) -> list[str]:
+        if any(not isinstance(value, str) or len(value) > 1_000 for value in values):
+            raise ValueError("anchor context lines must be short strings")
+        return values
 
-    @field_validator("assumptions", "related_test_ids")
+    @model_validator(mode="after")
+    def validate_resolved_range(self) -> "EvidenceAnchor":
+        if (self.resolved_start_line is None) != (self.resolved_end_line is None):
+            raise ValueError("resolved line range must be complete")
+        if (
+            self.resolved_start_line is not None
+            and self.resolved_end_line is not None
+            and self.resolved_end_line < self.resolved_start_line
+        ):
+            raise ValueError("resolved_end_line must not precede resolved_start_line")
+        return self
+
+
+class EvidenceAnchorInput(BaseModel):
+    """LLM 可填写的证据字段白名单。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    file_path: str
+    existing_code: str = Field(min_length=1, max_length=8_000)
+    symbol: str | None = None
+    expected_side: Literal["head", "base", "either"] = "head"
+    expected_hunk_id: str | None = None
+    context_before: list[str] = Field(default_factory=list, max_length=12)
+    context_after: list[str] = Field(default_factory=list, max_length=12)
+
+    @field_validator("file_path")
+    @classmethod
+    def validate_file_path(cls, value: str) -> str:
+        return _validate_repo_relative_path(value)
+
+
+class ReviewIssueInput(BaseModel):
+    """严格的模型输出结构；行号仅兼容读取且不会进入领域模型。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    category: IssueCategory
+    severity: Severity
+    confidence: float = Field(ge=0, le=1)
+    affected_behavior: str = Field(min_length=3, max_length=1_000)
+    failure_scenario: str = Field(min_length=3, max_length=2_000)
+    recommendation: str = Field(min_length=1, max_length=2_000)
+    primary_evidence: EvidenceAnchorInput
+    supporting_evidence: list[EvidenceAnchorInput] = Field(default_factory=list, max_length=12)
+    assumptions: list[str] = Field(default_factory=list, max_length=8)
+    related_tests: list[str] = Field(default_factory=list, max_length=12)
+    requires_human_confirmation: bool = False
+    auto_fix_eligible: bool = False
+    line_number: int | None = Field(default=None, ge=1, deprecated=True)
+    line_no: int | None = Field(default=None, ge=1, deprecated=True)
+
+    def to_issue(self, review_unit_id: str = "unassigned") -> "ReviewIssue":
+        def anchor(value: EvidenceAnchorInput) -> EvidenceAnchor:
+            return EvidenceAnchor(
+                **value.model_dump(),
+                resolution_method=EvidenceResolutionMethod.unresolved,
+            )
+
+        return ReviewIssue(
+            review_unit_id=review_unit_id,
+            title=self.title,
+            category=self.category,
+            severity=self.severity,
+            confidence=self.confidence,
+            affected_behavior=self.affected_behavior,
+            failure_scenario=self.failure_scenario,
+            recommendation=self.recommendation,
+            primary_evidence=anchor(self.primary_evidence),
+            supporting_evidence=[anchor(item) for item in self.supporting_evidence],
+            assumptions=self.assumptions,
+            related_tests=self.related_tests,
+            requires_human_confirmation=self.requires_human_confirmation,
+            auto_fix_eligible=self.auto_fix_eligible,
+            status=IssueStatus.candidate,
+        )
+
+
+class ReviewIssue(BaseModel):
+    """可追溯的审查问题；发布位置完全来自服务端证据解析。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    review_unit_id: str
+    title: str
+    category: IssueCategory
+    severity: Severity
+    confidence: float = Field(ge=0, le=1)
+    affected_behavior: str = Field(min_length=3, max_length=1_000)
+    failure_scenario: str = Field(min_length=3, max_length=2_000)
+    recommendation: str = Field(min_length=1, max_length=2_000)
+    primary_evidence: EvidenceAnchor
+    supporting_evidence: list[EvidenceAnchor] = Field(default_factory=list, max_length=12)
+    assumptions: list[str] = Field(default_factory=list, max_length=8)
+    related_tests: list[str] = Field(default_factory=list, max_length=12)
+    requires_human_confirmation: bool = False
+    auto_fix_eligible: bool = False
+    status: IssueStatus = IssueStatus.candidate
+    placement: CommentPlacement = CommentPlacement.suppressed
+    unresolved_reason: str | None = None
+
+    @field_validator("assumptions", "related_tests")
     @classmethod
     def validate_short_text_lists(cls, values: list[str]) -> list[str]:
         if any(not isinstance(value, str) or not value.strip() or len(value) > 500 for value in values):
@@ -581,11 +734,9 @@ class ReviewIssue(BaseModel):
         return list(dict.fromkeys(value.strip() for value in values))
 
     @model_validator(mode="after")
-    def restrict_auto_fix_to_low_risk_evidence(self) -> "ReviewIssue":
-        if self.auto_fixable and (
-            self.fix_risk != FixRisk.low or self.requires_human_confirmation
-        ):
-            raise ValueError("only low-risk issues without human confirmation are auto-fixable")
+    def restrict_auto_fix_to_resolved_evidence(self) -> "ReviewIssue":
+        if self.auto_fix_eligible and self.requires_human_confirmation:
+            raise ValueError("issues requiring human confirmation are not auto-fix eligible")
         return self
 
 

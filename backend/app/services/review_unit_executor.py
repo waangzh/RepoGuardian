@@ -296,14 +296,7 @@ class ReviewUnitExecutor:
         accepted: list[ReviewIssue] = []
         seen: set[str] = set()
         for issue in model_issues:
-            if issue.id in seen or issue.file_path not in scope.commentable_files:
-                continue
-            if issue.line_no is None or issue.line_no < 1:
-                continue
-            if any(
-                location.file_path not in scope.readable_files
-                for location in issue.evidence_locations
-            ):
+            if issue.id in seen:
                 continue
             seen.add(issue.id)
             accepted.append(issue.model_copy(update={"review_unit_id": unit.id}))

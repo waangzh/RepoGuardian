@@ -82,9 +82,12 @@ def _append_issue_summary(lines: list[str], task: ReviewTask) -> None:
         lines.extend(["无。", ""])
         return
     for index, issue in enumerate(task.issues, start=1):
-        location = issue.file_path
-        if issue.line_no is not None:
-            location = f"{location}:{issue.line_no}"
+        anchor = issue.primary_evidence
+        location = anchor.file_path
+        if anchor.resolved_start_line is not None:
+            location = f"{location}:{anchor.resolved_start_line}"
+            if anchor.resolved_end_line != anchor.resolved_start_line:
+                location += f"-{anchor.resolved_end_line}"
         lines.extend([
             f"### 4.{index} {issue.title}",
             "",
@@ -93,18 +96,23 @@ def _append_issue_summary(lines: list[str], task: ReviewTask) -> None:
             f"- 风险等级：{issue.severity.value}",
             f"- 类型：{issue.category.value}",
             f"- 置信度：{issue.confidence:.2f}",
-            f"- 可自动修复：{'是' if issue.auto_fixable else '否'}",
-            f"- 修复风险：{issue.fix_risk.value}",
+            f"- 评论位置：{issue.placement.value}",
+            f"- 问题状态：{issue.status.value}",
+            f"- 可自动修复：{'是' if issue.auto_fix_eligible else '否'}",
             f"- 需要人工确认：{'是' if issue.requires_human_confirmation else '否'}",
             "",
             "问题说明：",
-            issue.description,
+            issue.failure_scenario,
             "",
             "代码证据：",
-            issue.evidence,
+            anchor.existing_code,
             "",
             "证据位置：",
-            ", ".join(f"`{item.file_path}:{item.line_no}`" for item in issue.evidence_locations),
+            (
+                f"`{location}` ({anchor.resolution_method.value}, {anchor.resolved_side or '-'})"
+                if anchor.resolved_start_line is not None
+                else f"未定位：{issue.unresolved_reason or anchor.unresolved_reason or 'unknown'}"
+            ),
             "",
             "受影响行为：",
             issue.affected_behavior,
@@ -113,10 +121,10 @@ def _append_issue_summary(lines: list[str], task: ReviewTask) -> None:
             "; ".join(issue.assumptions) or "无",
             "",
             "相关测试：",
-            ", ".join(issue.related_test_ids) or "无",
+            ", ".join(issue.related_tests) or "无",
             "",
             "修复建议：",
-            issue.suggestion,
+            issue.recommendation,
             "",
         ])
 

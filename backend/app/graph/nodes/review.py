@@ -7,9 +7,8 @@ from app.agents.providers import build_provider
 from app.graph.nodes._events import append_event, append_step
 from app.graph.policies import consume_budget
 from app.graph.state import ReviewState
-from app.models.review import AgentAction, ChangedFile, ChangedLine, PullRequestInfo
+from app.models.review import AgentAction, ChangedFile, PullRequestInfo
 from app.models.review import ReviewIssue
-from app.tools.git_tool import GitTool
 
 logger = logging.getLogger("RepoGuardian.Node")
 
@@ -66,7 +65,7 @@ async def review_node(state: ReviewState) -> ReviewState:
     logger.debug("✍️ [审查] 增强 diff 总长度: %d 字符", len(enhanced_diff))
 
     model_issues = await agent.review(pr_info, changed_files, enhanced_diff, state.get("model"))
-    issues, rejected_issue_count = _filter_head_mapped_issues(model_issues, state)
+    issues, rejected_issue_count = _filter_candidate_issues(model_issues)
     issues_dicts = [issue.model_dump(mode="json") for issue in issues]
     # 按严重性统计
     severity_counts: dict[str, int] = {}
@@ -74,7 +73,7 @@ async def review_node(state: ReviewState) -> ReviewState:
         severity_counts[issue.severity] = severity_counts.get(issue.severity, 0) + 1
     message = f"发现 {len(issues_dicts)} 个问题"
     if rejected_issue_count:
-        message += f"，拒绝 {rejected_issue_count} 个无法映射到 Head 的问题"
+        message += f"，拒绝 {rejected_issue_count} 个重复问题"
     logger.info("✍️ [审查] 完成: %d 个问题（严重性分布: %s）", len(issues_dicts), severity_counts)
     return ReviewState(
         status="reviewing",
@@ -85,34 +84,13 @@ async def review_node(state: ReviewState) -> ReviewState:
     )
 
 
-def _filter_head_mapped_issues(
-    issues: list[ReviewIssue], state: ReviewState
-) -> tuple[list[ReviewIssue], int]:
-    """仅保留能映射到当前 Head、具有唯一 ID 和具体证据的位置的问题。"""
-    indexed_files = {item.get("path") for item in state.get("file_index") or []}
-    git_tool = GitTool()
-    line_counts: dict[str, int] = {}
+def _filter_candidate_issues(issues: list[ReviewIssue]) -> tuple[list[ReviewIssue], int]:
+    """模型阶段只去重；路径、side 与行号由后续确定性节点处理。"""
     accepted: list[ReviewIssue] = []
     issue_ids: set[str] = set()
     rejected = 0
-
-    def location_is_valid(file_path: str, line_no: int) -> bool:
-        if file_path not in indexed_files:
-            return False
-        if file_path not in line_counts:
-            content = git_tool.get_file_content(state.get("repo_path", ""), file_path)
-            line_counts[file_path] = len(content.splitlines())
-        return 1 <= line_no <= line_counts[file_path]
-
     for issue in issues:
-        locations = list(issue.evidence_locations)
-        if issue.line_no is None:
-            rejected += 1
-            continue
-        if issue.id in issue_ids or not location_is_valid(issue.file_path, issue.line_no):
-            rejected += 1
-            continue
-        if any(not location_is_valid(location.file_path, location.line_no) for location in locations):
+        if issue.id in issue_ids:
             rejected += 1
             continue
         issue_ids.add(issue.id)
@@ -176,33 +154,4 @@ def _rebuild_pr_info(data: dict) -> PullRequestInfo:
 
 
 def _rebuild_changed_files(data: list[dict]) -> list[ChangedFile]:
-    from app.models.review import DiffHunk
-
-    result: list[ChangedFile] = []
-    for file_data in data:
-        hunks = []
-        for hunk_data in file_data.get("hunks", []):
-            added = [
-                ChangedLine(line_no=line.get("line_no"), content=line.get("content", ""))
-                for line in hunk_data.get("added_lines", [])
-            ]
-            removed = [
-                ChangedLine(line_no=line.get("line_no"), content=line.get("content", ""))
-                for line in hunk_data.get("removed_lines", [])
-            ]
-            hunks.append(DiffHunk(
-                old_start=hunk_data.get("old_start", 0),
-                old_length=hunk_data.get("old_length", 0),
-                new_start=hunk_data.get("new_start", 0),
-                new_length=hunk_data.get("new_length", 0),
-                added_lines=added,
-                removed_lines=removed,
-            ))
-        result.append(ChangedFile(
-            file_path=file_data.get("file_path", ""),
-            change_type=file_data.get("change_type", "modified"),
-            additions=file_data.get("additions", 0),
-            deletions=file_data.get("deletions", 0),
-            hunks=hunks,
-        ))
-    return result
+    return [ChangedFile.model_validate(item) for item in data]

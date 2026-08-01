@@ -135,20 +135,28 @@ class ScriptedProvider(LLMProvider):
     ) -> list[ReviewIssue]:
         if not changed_files:
             return []
+        first_hunk = changed_files[0].hunks[0]
+        if first_hunk.added_lines:
+            code = first_hunk.added_lines[0].content
+            side = "head"
+        else:
+            code = first_hunk.removed_lines[0].content
+            side = "base"
         return [ReviewIssue(
-            file_path=changed_files[0].file_path,
-            line_no=1,
+            review_unit_id="unassigned",
             severity="low",
             category="maintainability",
             title="测试审查问题",
-            description="用于验证审查图状态传递。",
-            suggestion="无需修改。",
+            failure_scenario="用于验证审查图状态传递。",
+            recommendation="无需修改。",
             confidence=0.2,
-            auto_fixable=self._auto_fixable,
-            evidence="变更文件第一行对应测试审查证据。",
-            evidence_locations=[{"file_path": changed_files[0].file_path, "line_no": 1}],
+            auto_fix_eligible=self._auto_fixable,
+            primary_evidence={
+                "file_path": changed_files[0].file_path,
+                "existing_code": code,
+                "expected_side": side,
+            },
             affected_behavior="用于验证受控审查结果传递。",
-            fix_risk="low" if self._auto_fixable else "high",
         )]
 
     async def generate_patch(

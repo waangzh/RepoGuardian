@@ -88,8 +88,17 @@ export interface DiffHunk {
   old_length: number;
   new_start: number;
   new_length: number;
+  hunk_id: string;
+  lines: DiffLine[];
   added_lines: ChangedLine[];
   removed_lines: ChangedLine[];
+}
+
+export interface DiffLine {
+  kind: "added" | "context" | "deleted";
+  content: string;
+  old_line_no?: number | null;
+  new_line_no?: number | null;
 }
 
 export interface ChangedFile {
@@ -98,6 +107,7 @@ export interface ChangedFile {
   change_type: string;
   additions: number;
   deletions: number;
+  is_binary: boolean;
   hunks: DiffHunk[];
 }
 
@@ -155,28 +165,49 @@ export interface ReviewPreviewResponse {
 
 export interface ReviewIssue {
   id: string;
-  review_unit_id?: string | null;
-  file_path: string;
-  line_no: number | null;
+  review_unit_id: string;
   severity: Severity;
   category: string;
   title: string;
-  description: string;
-  suggestion: string;
   confidence: number;
-  auto_fixable: boolean;
-  evidence: string;
-  evidence_locations: EvidenceLocation[];
   affected_behavior: string;
+  failure_scenario: string;
+  recommendation: string;
+  primary_evidence: EvidenceAnchor;
+  supporting_evidence: EvidenceAnchor[];
   assumptions: string[];
-  related_test_ids: string[];
-  fix_risk: "low" | "medium" | "high";
+  related_tests: string[];
   requires_human_confirmation: boolean;
+  auto_fix_eligible: boolean;
+  status: "candidate" | "evidence_resolved" | "confirmed" | "dismissed" | "needs_human" | "published";
+  placement: "inline" | "summary" | "suppressed" | "needs_human";
+  unresolved_reason?: string | null;
 }
 
-export interface EvidenceLocation {
+export interface EvidenceCandidate {
   file_path: string;
-  line_no: number;
+  side: "head" | "base";
+  start_line: number;
+  end_line: number;
+  hunk_id?: string | null;
+}
+
+export interface EvidenceAnchor {
+  file_path: string;
+  existing_code: string;
+  symbol?: string | null;
+  expected_side: "head" | "base" | "either";
+  expected_hunk_id?: string | null;
+  context_before: string[];
+  context_after: string[];
+  resolved_start_line?: number | null;
+  resolved_end_line?: number | null;
+  resolution_method: "diff_exact" | "diff_normalized" | "file_exact" | "symbol_assisted" | "unresolved";
+  match_count: number;
+  anchor_hash?: string | null;
+  resolved_side?: "head" | "base" | null;
+  candidate_locations: EvidenceCandidate[];
+  unresolved_reason?: string | null;
 }
 
 export interface HumanReviewRequest {

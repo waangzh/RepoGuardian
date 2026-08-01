@@ -20,6 +20,7 @@ from app.models.review import (
     ReviewUnit,
     ReviewUnitComplexity,
 )
+from app.tools.diff_parser import stable_hunk_id
 
 PLANNER_VERSION = "review-unit-planner-v1"
 
@@ -198,13 +199,17 @@ class DeterministicReviewPlanner:
 
     @staticmethod
     def hunk_id(file_path: str, index: int, hunk: dict[str, Any]) -> str:
-        payload = json.dumps(
-            {"file": file_path, "index": index, "hunk": hunk},
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
+        del index  # 兼容旧调用签名；稳定 ID 不依赖 hunk 在文件中的序号。
+        if hunk.get("hunk_id"):
+            return str(hunk["hunk_id"])
+        return stable_hunk_id(
+            file_path,
+            int(hunk.get("old_start", 0)),
+            int(hunk.get("old_length", 0)),
+            int(hunk.get("new_start", 0)),
+            int(hunk.get("new_length", 0)),
+            list(hunk.get("lines") or []),
         )
-        return f"hunk-{hashlib.sha256(payload.encode()).hexdigest()[:16]}"
 
     @classmethod
     def normalized_unit_diff(

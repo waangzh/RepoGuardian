@@ -88,12 +88,11 @@ async def test_provider_parses_decision_review_and_patch_results(
 ) -> None:
     fake_chat.responses = [
         AIMessage(content='{"action":"review_code","reason":"审查变更"}'),
-        AIMessage(content="""{"issues":[{"file_path":"app.py","line_no":10,
+        AIMessage(content="""{"issues":[{"line_no":10,
             "severity":"high","category":"correctness","title":"空值未处理",
-            "description":"存在空值风险。","suggestion":"增加空值检查。",
-            "confidence":"high","evidence":"app.py 第 10 行未处理空值。",
-            "evidence_locations":[{"file_path":"app.py","line_no":10}],
-            "affected_behavior":"空输入可能失败。"}]}"""),
+            "failure_scenario":"存在空值风险。","recommendation":"增加空值检查。",
+            "confidence":"high","primary_evidence":{"file_path":"app.py",
+            "existing_code":"value = item.name"},"affected_behavior":"空输入可能失败。"}]}"""),
         AIMessage(content='{"patches":[{"diff_content":"diff --git a/app.py b/app.py","status":"generated"}]}'),
     ]
     provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
@@ -112,6 +111,7 @@ async def test_provider_parses_decision_review_and_patch_results(
 
     assert action.action == "review_code"
     assert issues[0].confidence == 0.85
+    assert issues[0].primary_evidence.resolved_start_line is None
     assert patches[0].diff_content == "diff --git a/app.py b/app.py"
     assert [instance.kwargs["max_tokens"] for instance in fake_chat.instances] == [1200, 4096, 4096]
 
@@ -143,11 +143,10 @@ def test_provider_rejects_non_string_ai_message_content() -> None:
 
 def test_openai_provider_parses_json_object_with_issues() -> None:
     provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
-    content = """{"issues":[{"file_path":"app.py","line_no":10,"severity":"high",
-    "category":"correctness","title":"空值未处理","description":"存在空值风险。",
-    "suggestion":"增加空值检查。","confidence":0.8,
-    "evidence":"app.py 第 10 行未处理空值。",
-    "evidence_locations":[{"file_path":"app.py","line_no":10}],
+    content = """{"issues":[{"line_no":10,"severity":"high",
+    "category":"correctness","title":"空值未处理","failure_scenario":"存在空值风险。",
+    "recommendation":"增加空值检查。","confidence":0.8,
+    "primary_evidence":{"file_path":"app.py","existing_code":"value = item.name"},
     "affected_behavior":"空输入可能失败。"}]}"""
 
     issues = provider._parse_issues(content)
@@ -159,14 +158,14 @@ def test_openai_provider_parses_json_object_with_issues() -> None:
 def test_openai_provider_normalizes_confidence_values() -> None:
     provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
     content = """{"issues":[
-    {"file_path":"app.py","line_no":10,"severity":"high","category":"correctness",
-    "title":"空值未处理","description":"存在空值风险。","suggestion":"增加空值检查。",
-    "confidence":"high","evidence":"app.py 第 10 行未处理空值。",
-    "evidence_locations":[{"file_path":"app.py","line_no":10}],"affected_behavior":"空输入可能失败。"},
-    {"file_path":"app.py","line_no":20,"severity":"medium","category":"test",
-    "title":"缺少测试","description":"新增逻辑缺少测试。","suggestion":"补充测试。",
-    "confidence":"75%","evidence":"app.py 第 20 行缺少覆盖。",
-    "evidence_locations":[{"file_path":"app.py","line_no":20}],"affected_behavior":"回归无法验证。"}]}"""
+    {"line_no":10,"severity":"high","category":"correctness",
+    "title":"空值未处理","failure_scenario":"存在空值风险。","recommendation":"增加空值检查。",
+    "confidence":"high","primary_evidence":{"file_path":"app.py","existing_code":"value = item.name"},
+    "affected_behavior":"空输入可能失败。"},
+    {"line_no":20,"severity":"medium","category":"test",
+    "title":"缺少测试","failure_scenario":"新增逻辑缺少测试。","recommendation":"补充测试。",
+    "confidence":"75%","primary_evidence":{"file_path":"app.py","existing_code":"return value"},
+    "affected_behavior":"回归无法验证。"}]}"""
 
     issues = provider._parse_issues(content)
 
