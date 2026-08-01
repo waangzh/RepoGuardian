@@ -25,10 +25,7 @@ function commandSummary(snapshot: ValidationSnapshot): string {
 
 function validationStatusText(status: ValidationResult["status"]): string {
   const labels: Record<string, string> = {
-    not_requested: "未请求验证",
     unsupported: "验证环境不支持",
-    queued: "等待验证",
-    running: "正在验证",
     passed: "已通过所选验证后端",
     failed: "测试失败",
     infrastructure_error: "验证基础设施失败",
@@ -63,7 +60,9 @@ function validationStatusText(status: ValidationResult["status"]): string {
           <strong>{{ result.backend }}</strong>
           <span>{{ validationStatusText(result.status) }}</span>
         </div>
-        <p v-if="result.detail" class="validation-detail">{{ result.detail }}</p>
+        <p class="validation-detail">
+          {{ result.trusted ? "可信结果" : "不可信结果" }} · Head {{ result.head_sha.slice(0, 8) }}
+        </p>
       </article>
     </div>
 

@@ -39,7 +39,7 @@ let eventSource: EventSource | undefined;
 
 watch(mode, (next) => {
   generatePatches.value = next !== "review";
-  validationBackend.value = next === "review_suggest_and_validate" ? "local" : "none";
+  validationBackend.value = "none";
 });
 
 const statusText = computed(() => {
@@ -227,8 +227,10 @@ onBeforeUnmount(clearPolling);
           <label v-if="mode === 'review_suggest_and_validate'">
             验证后端
             <select v-model="validationBackend">
-              <option value="local">本地受控后端</option>
-              <option value="gvisor">gVisor</option>
+              <option value="none">不执行验证</option>
+              <option value="user_runner">用户 Runner（未配置）</option>
+              <option value="project_ci">项目 CI（未配置）</option>
+              <option value="gvisor">gVisor（未配置）</option>
             </select>
           </label>
           <label v-if="mode !== 'review'" class="checkbox-row">

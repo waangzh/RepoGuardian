@@ -234,7 +234,7 @@ async def test_review_pipeline_skips_llm_when_diff_is_empty(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_review_pipeline_generates_applies_patch_and_runs_tests(tmp_path: Path) -> None:
+async def test_review_pipeline_generates_unverified_patch_without_running_tests(tmp_path: Path) -> None:
     diff_text = """diff --git a/sample.py b/sample.py
 index 1111111..2222222 100644
 --- a/sample.py
@@ -278,7 +278,7 @@ index 1111111..2222222 100644
             model=None,
             mode="review_suggest_and_validate",
             generate_patches=True,
-            validation_backend="local",
+            validation_backend="none",
         )
     )
     await _wait_for_task(service, task.id)
@@ -287,18 +287,17 @@ index 1111111..2222222 100644
     assert completed is not None
     assert completed.status == TaskStatus.completed, completed.error
     assert completed.patches
-    assert completed.patches[-1].status == "verified"
-    assert completed.test_results
-    assert completed.test_results[-1].passed is True
-    assert completed.validation_snapshots[-1].stage.value == "patched"
-    assert completed.validation_snapshots[-1].passed is True
-    assert completed.validation_snapshots[-1].patch_id == completed.patches[-1].id
+    assert completed.patches[-1].status == "unverified"
+    assert completed.test_results == []
+    assert completed.validation_snapshots == []
+    assert completed.validation[-1].status == "unsupported"
+    assert completed.validation[-1].trusted is True
     assert "## 6. 三阶段验证" in completed.report_markdown
 
 
 @pytest.mark.asyncio
-async def test_existing_review_pipeline_with_sample_python_repository(tmp_path: Path) -> None:
-    """以静态 fixture 保护准备、审查、修复、验证和报告的完整既有链路。"""
+async def test_existing_review_pipeline_keeps_sample_repository_unexecuted(tmp_path: Path) -> None:
+    """以静态 fixture 保护准备、审查、补丁建议和报告链路。"""
     diff_text = """diff --git a/pricing.py b/pricing.py
 index 1111111..2222222 100644
 --- a/pricing.py
@@ -339,7 +338,7 @@ index 1111111..2222222 100644
             model=None,
             mode="review_suggest_and_validate",
             generate_patches=True,
-            validation_backend="local",
+            validation_backend="none",
         )
     )
     await _wait_for_task(service, task.id)
@@ -349,8 +348,9 @@ index 1111111..2222222 100644
     assert completed.status == TaskStatus.completed, completed.error
     assert completed.changed_files[0].file_path == "pricing.py"
     assert completed.issues
-    assert completed.patches[-1].status == "verified"
-    assert completed.test_results[-1].passed is True
+    assert completed.patches[-1].status == "unverified"
+    assert completed.test_results == []
+    assert completed.validation[-1].status == "unsupported"
     assert completed.report_markdown is not None
 
 
