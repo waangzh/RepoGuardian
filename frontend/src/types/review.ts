@@ -323,8 +323,13 @@ export interface ValidationResult {
 
 export interface PatchResult {
   id: string;
-  issue_id?: string | null;
-  diff_content: string;
+  issue_ids: string[];
+  title: string;
+  rationale: string;
+  unified_diff: string;
+  touched_files: string[];
+  risk: "low" | "medium" | "high";
+  assumptions: string[];
   status:
     | "suggested"
     | "unverified"
@@ -337,9 +342,23 @@ export interface PatchResult {
     | (string & {});
   revision_of?: string | null;
   attempt_number: number;
+  head_sha: string;
+  patch_sha?: string | null;
   validation_snapshot_id?: string | null;
-  validation_backend?: ValidationBackend | null;
+  validation_backend?: string | null;
   validation_result_id?: string | null;
+  apply_check: {
+    status: "not_checked" | "passed" | "failed";
+    detail: string;
+    checked_head_sha?: string | null;
+    worktree_clean?: boolean | null;
+  };
+  presentation?: {
+    inline_suggestion?: string | null;
+    full_diff?: string | null;
+    warning: string;
+  } | null;
+  stale: boolean;
   error?: string | null;
   created_at: string;
 }
@@ -404,5 +423,13 @@ export interface ReviewTask {
   validation_snapshots: ValidationSnapshot[];
   validation_deltas: ValidationDelta[];
   validation: ValidationResult[];
+  patch_eligibility: Array<{
+    issue_id: string;
+    eligible: boolean;
+    reasons: string[];
+    allowed_files: string[];
+    max_files: number;
+    max_changed_lines: number;
+  }>;
   warnings: string[];
 }

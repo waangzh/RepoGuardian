@@ -267,6 +267,7 @@ class ReviewService:
         task.validation_snapshots = rebuilt.validation_snapshots
         task.validation_deltas = rebuilt.validation_deltas
         task.validation = rebuilt.validation
+        task.patch_eligibility = rebuilt.patch_eligibility
         task.patches = rebuilt.patches
         task.test_results = rebuilt.test_results
         task.agent_events = rebuilt.agent_events

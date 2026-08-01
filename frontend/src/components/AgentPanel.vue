@@ -50,13 +50,22 @@ function patchStatusText(status: PatchResult["status"]): string {
       <div v-if="patches.length === 0" class="empty">未生成 patch</div>
       <details v-for="patch in patches" :key="patch.id" class="patch-block">
         <summary>
-          <strong>{{ patch.id.slice(0, 8) }}</strong>
+          <strong>{{ patch.title }}</strong>
           <span>{{ patch.status }}</span>
-          <small v-if="patch.issue_id">{{ patch.issue_id }}</small>
+          <small>{{ patch.id.slice(0, 8) }}</small>
         </summary>
-        <p>{{ patchStatusText(patch.status) }}</p>
+        <p class="patch-warning">{{ patch.presentation?.warning || patchStatusText(patch.status) }}</p>
+        <p><strong>关联 Issue：</strong>{{ patch.issue_ids.join(", ") }}</p>
+        <p><strong>文件：</strong>{{ patch.touched_files.join(", ") }}</p>
+        <p><strong>风险：</strong>{{ patch.risk }}</p>
+        <p><strong>假设：</strong>{{ patch.assumptions.join("；") || "无" }}</p>
+        <p><strong>apply-check：</strong>{{ patch.apply_check.status }} — {{ patch.apply_check.detail }}</p>
+        <p><strong>validation：</strong>{{ patch.status === "verified" ? "verified" : "unverified" }}</p>
+        <p><strong>Head SHA：</strong><code>{{ patch.head_sha }}</code></p>
+        <p><strong>是否过期：</strong>{{ patch.stale ? "是，需重新生成或检查" : "否" }}</p>
+        <p>{{ patch.rationale }}</p>
         <p v-if="patch.error" class="error">{{ patch.error }}</p>
-        <pre>{{ patch.diff_content }}</pre>
+        <pre>{{ patch.unified_diff }}</pre>
       </details>
     </div>
 

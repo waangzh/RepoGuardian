@@ -395,7 +395,15 @@ async def _wait_for_task(service: ReviewService, task_id: str) -> None:
     # Base、Head 与 Patched 都会运行受控验证，异步图的完成窗口相应扩大。
     for _ in range(400):
         task = service.get_task(task_id)
-        if task and task.status in {TaskStatus.completed, TaskStatus.failed}:
+        if task and task.status in {
+            TaskStatus.completed,
+            TaskStatus.completed_with_warnings,
+            TaskStatus.failed,
+        }:
             return
         await asyncio.sleep(0.05)
-    raise AssertionError("task did not finish")
+    task = service.get_task(task_id)
+    raise AssertionError(
+        f"task did not finish: status={getattr(task, 'status', None)}, "
+        f"phase={getattr(task, 'phase', None)}, steps={getattr(task, 'steps', None)}"
+    )

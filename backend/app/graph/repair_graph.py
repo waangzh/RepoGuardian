@@ -5,6 +5,7 @@ from langgraph.graph import END, StateGraph
 from app.graph.nodes.repair_policy import (
     repair_apply_patch_node,
     repair_assessment_node,
+    repair_check_candidates_node,
     repair_generate_patch_node,
     repair_mark_unverified_node,
     repair_optional_validation_node,
@@ -19,6 +20,7 @@ def build_repair_graph() -> StateGraph:
     graph = StateGraph(ReviewState)
     graph.add_node("repair_policy", repair_policy_node)
     graph.add_node("generate_patch", repair_generate_patch_node)
+    graph.add_node("candidate_check", repair_check_candidates_node)
     graph.add_node("apply_patch", repair_apply_patch_node)
     graph.add_node("mark_unverified", repair_mark_unverified_node)
     graph.add_node("validation", repair_optional_validation_node)
@@ -34,8 +36,9 @@ def build_repair_graph() -> StateGraph:
             "repair_exit": "repair_exit",
         },
     )
+    graph.add_edge("generate_patch", "candidate_check")
     graph.add_conditional_edges(
-        "generate_patch",
+        "candidate_check",
         route_repair_after_generation,
         {
             "mark_unverified": "mark_unverified",

@@ -7,13 +7,23 @@
     - 聚合根：ReviewTask（前端展示的完整状态）
 """
 
+from __future__ import annotations
+
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import PurePosixPath
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +212,14 @@ class PatchStatus(str, Enum):
     validation_inconclusive = "validation_inconclusive"
     abandoned = "abandoned"
     superseded = "superseded"
+
+
+class PatchApplyCheckStatus(str, Enum):
+    """候选补丁的确定性可应用性检查状态，不代表功能验证。"""
+
+    not_checked = "not_checked"
+    passed = "passed"
+    failed = "failed"
 
 
 
@@ -681,6 +699,7 @@ class ReviewIssueInput(BaseModel):
     related_tests: list[str] = Field(default_factory=list, max_length=12)
     requires_human_confirmation: bool = False
     auto_fix_eligible: bool = False
+    fix_risk: FixRisk = FixRisk.low
     line_number: int | None = Field(default=None, ge=1, deprecated=True)
     line_no: int | None = Field(default=None, ge=1, deprecated=True)
 
@@ -706,6 +725,7 @@ class ReviewIssueInput(BaseModel):
             related_tests=self.related_tests,
             requires_human_confirmation=self.requires_human_confirmation,
             auto_fix_eligible=self.auto_fix_eligible,
+            fix_risk=self.fix_risk,
             status=IssueStatus.candidate,
         )
 
@@ -730,6 +750,7 @@ class ReviewIssue(BaseModel):
     related_tests: list[str] = Field(default_factory=list, max_length=12)
     requires_human_confirmation: bool = False
     auto_fix_eligible: bool = False
+    fix_risk: FixRisk = FixRisk.low
     status: IssueStatus = IssueStatus.candidate
     placement: CommentPlacement = CommentPlacement.suppressed
     unresolved_reason: str | None = None
@@ -969,24 +990,99 @@ class ValidationResult(BaseModel):
     snapshot_id: str | None = None
 
 
-class PatchResult(BaseModel):
-    """一个自动修复 patch。"""
+class PatchEligibilityDecision(BaseModel):
+    """服务端对单个 confirmed Issue 作出的补丁生成准入结论。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    issue_id: str
+    eligible: bool
+    reasons: list[str] = Field(default_factory=list)
+    allowed_files: list[str] = Field(default_factory=list)
+    max_files: int = Field(ge=1)
+    max_changed_lines: int = Field(ge=1)
+
+    @field_validator("allowed_files")
+    @classmethod
+    def validate_allowed_files(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(_validate_repo_relative_path(value) for value in values))
+
+
+class PatchApplyCheck(BaseModel):
+    """只描述 git apply 与隔离恢复结果，绝不表达功能正确性。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: PatchApplyCheckStatus = PatchApplyCheckStatus.not_checked
+    detail: str = "尚未执行可应用性检查。"
+    checked_head_sha: str | None = None
+    worktree_clean: bool | None = None
+
+
+class PatchPresentation(BaseModel):
+    """面向 GitHub 或报告的候选补丁展示格式。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    inline_suggestion: str | None = None
+    full_diff: str | None = None
+    warning: str
+
+
+class PatchProposal(BaseModel):
+    """基于确定 Head、尚未执行项目测试的候选补丁。"""
+
+    model_config = ConfigDict(extra="forbid")
+
     id: str = Field(default_factory=lambda: uuid4().hex)
-    issue_id: str | None = None          # 关联的 ReviewIssue ID
-    diff_content: str                    # unified diff 内容
+    issue_ids: list[str] = Field(min_length=1)
+    title: str = Field(min_length=1, max_length=300)
+    rationale: str = Field(min_length=1, max_length=2_000)
+    unified_diff: str = Field(min_length=1)
+    touched_files: list[str] = Field(min_length=1)
+    risk: Literal["low", "medium", "high"]
+    assumptions: list[str] = Field(default_factory=list, max_length=12)
     status: PatchStatus = PatchStatus.unverified
+    head_sha: str = Field(min_length=1)
+    patch_sha: str | None = None
     revision_of: str | None = None
     attempt_number: int = Field(default=1, ge=1)
-    validation_snapshot_id: str | None = None
-    validation_backend: ValidationBackend | None = None
+    validation_backend: str | None = None
     validation_result_id: str | None = None
+    apply_check: PatchApplyCheck = Field(default_factory=PatchApplyCheck)
+    presentation: PatchPresentation | None = None
+    stale: bool = False
+
+    # 兼容阶段 3 的本地验证结果读取；新候选流程不会写入该字段。
+    validation_snapshot_id: str | None = None
     error: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_fields(cls, value: Any) -> Any:
+        """只在领域边界迁移旧字段；新模型输出不经过此兼容入口。"""
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        legacy_diff = data.pop("diff_content", None)
+        legacy_issue = data.pop("issue_id", None)
+        if "unified_diff" not in data and legacy_diff is not None:
+            data["unified_diff"] = legacy_diff
+        if "issue_ids" not in data and legacy_issue:
+            data["issue_ids"] = [legacy_issue]
+        if legacy_diff is not None:
+            data.setdefault("issue_ids", ["legacy-unassigned"])
+            data.setdefault("title", "候选修复")
+            data.setdefault("rationale", "由阶段 3 兼容数据迁移。")
+            data.setdefault("touched_files", ["legacy-unknown"])
+            data.setdefault("risk", "low")
+            data.setdefault("head_sha", "legacy-head")
+        return data
 
     @field_validator("status", mode="before")
     @classmethod
     def migrate_legacy_status(cls, value: PatchStatus | str) -> PatchStatus | str:
-        """读取旧任务时归一化旧补丁状态，避免继续向 API 暴露混合语义。"""
         legacy_statuses = {
             "generated": PatchStatus.suggested,
             "applied": PatchStatus.validation_pending,
@@ -994,6 +1090,118 @@ class PatchResult(BaseModel):
             "validation_passed": PatchStatus.verified,
         }
         return legacy_statuses.get(value, value)
+
+    @field_validator("issue_ids")
+    @classmethod
+    def validate_issue_ids(cls, values: list[str]) -> list[str]:
+        cleaned = list(dict.fromkeys(value.strip() for value in values if value.strip()))
+        if not cleaned:
+            raise ValueError("issue_ids cannot be empty")
+        return cleaned
+
+    @field_validator("touched_files")
+    @classmethod
+    def validate_touched_files(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(_validate_repo_relative_path(value) for value in values))
+
+    @computed_field(return_type=str | None)
+    @property
+    def issue_id(self) -> str | None:
+        """阶段 3 单 Issue 调用方的只读兼容属性。"""
+        return self.issue_ids[0] if self.issue_ids else None
+
+    @computed_field(return_type=str)
+    @property
+    def diff_content(self) -> str:
+        """阶段 3 调用方的只读兼容属性。"""
+        return self.unified_diff
+
+
+class PatchResult(PatchProposal):
+    """阶段 3 构造方式的兼容适配器；新代码应使用 PatchProposal。"""
+
+    issue_ids: list[str] = Field(default_factory=lambda: ["legacy-unassigned"])
+    title: str = "候选修复"
+    rationale: str = "由兼容补丁生成接口创建。"
+    unified_diff: str = ""
+    touched_files: list[str] = Field(default_factory=lambda: ["legacy-unknown"])
+    risk: Literal["low", "medium", "high"] = "low"
+    head_sha: str = "legacy-head"
+
+class PatchRelatedSymbol(BaseModel):
+    """补丁 prompt 可见的索引符号白名单。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    file: str
+    symbol: str
+    type: str
+    lines: tuple[int, int]
+    signature: str = ""
+
+    @field_validator("file")
+    @classmethod
+    def validate_file(cls, value: str) -> str:
+        return _validate_repo_relative_path(value)
+
+
+class PatchGenerationRequest(BaseModel):
+    """传给 Provider 的最小、不可扩张补丁生成输入。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    issue: ReviewIssue
+    primary_evidence: EvidenceAnchor
+    supporting_evidence: list[EvidenceAnchor] = Field(default_factory=list, max_length=12)
+    related_symbols: list[PatchRelatedSymbol] = Field(default_factory=list, max_length=12)
+    limited_context: list[ContextSnippet] = Field(default_factory=list, max_length=12)
+    allowed_files: list[str] = Field(min_length=1)
+    max_files: int = Field(ge=1, le=10)
+    max_changed_lines: int = Field(ge=1, le=1_000)
+    head_sha: str = Field(min_length=1)
+    prohibited_operations: list[str] = Field(min_length=1, max_length=20)
+
+    @field_validator("allowed_files")
+    @classmethod
+    def validate_allowed_files(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(_validate_repo_relative_path(value) for value in values))
+
+
+class PatchGenerationCandidate(BaseModel):
+    """LLM 可返回的补丁字段白名单；ID、状态与 Head 均由服务端写入。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    issue_ids: list[str] = Field(min_length=1, max_length=8)
+    title: str = Field(min_length=1, max_length=300)
+    rationale: str = Field(min_length=1, max_length=2_000)
+    unified_diff: str = Field(min_length=1)
+    touched_files: list[str] = Field(min_length=1, max_length=10)
+    risk: Literal["low", "medium", "high"]
+    assumptions: list[str] = Field(default_factory=list, max_length=12)
+
+    @field_validator("touched_files")
+    @classmethod
+    def validate_touched_files(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(_validate_repo_relative_path(value) for value in values))
+
+
+class PatchGenerationAbandon(BaseModel):
+    """无法安全修复时的显式模型输出。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    issue_ids: list[str] = Field(min_length=1, max_length=8)
+    reason: str = Field(min_length=1, max_length=2_000)
+
+
+class PatchGenerationResponse(BaseModel):
+    """Provider 对外部模型响应执行严格 schema 校验。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    patches: list[PatchGenerationCandidate] = Field(default_factory=list, max_length=20)
+    abandons: list[PatchGenerationAbandon] = Field(default_factory=list, max_length=20)
 
 
 class ContextSnippet(BaseModel):
@@ -1089,7 +1297,8 @@ class ReviewTask(BaseModel):
     validation_snapshots: list[ValidationSnapshot] = Field(default_factory=list)
     validation_deltas: list[ValidationDelta] = Field(default_factory=list)
     validation: list[ValidationResult] = Field(default_factory=list)
-    patches: list[PatchResult] = Field(default_factory=list)
+    patch_eligibility: list[PatchEligibilityDecision] = Field(default_factory=list)
+    patches: list[PatchProposal] = Field(default_factory=list)
     test_results: list[TestRunResult] = Field(default_factory=list)
     agent_events: list[AgentEvent] = Field(default_factory=list)
     human_request: HumanReviewRequest | None = None

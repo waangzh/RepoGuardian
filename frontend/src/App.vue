@@ -63,6 +63,9 @@ function subscribeOrPoll(taskId: string) {
       onStepProgress: () => {
         void refreshTask(taskId);
       },
+      onPatchUpdate: () => {
+        void refreshTask(taskId);
+      },
       onDone: () => {
         window.setTimeout(() => void refreshTask(taskId), 500);
       },

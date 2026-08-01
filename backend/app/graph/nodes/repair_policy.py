@@ -3,7 +3,7 @@
 from typing import Any
 
 from app.graph.nodes._events import append_event, append_step
-from app.graph.nodes.patch import patch_node, restore_patch_workspace
+from app.graph.nodes.patch import patch_node, prepare_patch_workspace, restore_patch_workspace
 from app.graph.nodes.verification import patched_validation_node
 from app.graph.policies import get_execution_budget
 from app.graph.state import ReviewState
@@ -12,18 +12,24 @@ from app.models.review import (
     AgentActionName,
     FailureKind,
     PatchResult,
+    PatchEligibilityDecision,
+    PatchProposal,
     PatchStatus,
     ReviewMode,
+    ReviewIssue,
     ReviewPhase,
     ValidationBackend,
     ValidationResult,
     ValidationSnapshot,
     ValidationStatus,
 )
+from app.services.patch_eligibility import PatchEligibilityPolicy, decisions_by_issue
+from app.services.patch_presentation import build_patch_presentation
+from app.tools.patch_tool import PatchTool
 
 
 async def repair_policy_node(state: ReviewState) -> ReviewState:
-    """仅让证据已解析且标记为 auto_fix_eligible 的问题进入补丁流程。"""
+    """对 confirmed Issue 执行服务端资格判定并构建最小 Provider 输入。"""
     raw_mode = state.get("mode", ReviewMode.review)
     try:
         mode = ReviewMode(raw_mode)
@@ -38,42 +44,125 @@ async def repair_policy_node(state: ReviewState) -> ReviewState:
             repair_enabled=False,
             step_progress=append_step(state, "repair_policy", "completed", message),
         )
+    if state.get("validation_blocked", False):
+        return ReviewState(
+            phase=ReviewPhase.repair,
+            repair_enabled=False,
+            patch_eligibility=[],
+            patch_generation_requests=[],
+            step_progress=append_step(state, "repair_policy", "completed", "验证策略已阻断候选补丁"),
+        )
     budget = get_execution_budget(state)
-    candidates = [
-        issue for issue in state.get("review_issues") or []
-        if issue.get("auto_fix_eligible", issue.get("auto_fixable", False))
-        and issue.get("status", "confirmed") in {"evidence_resolved", "confirmed"}
-        and issue.get("fix_risk", "low") == "low"
-        and not issue.get("requires_human_confirmation", False)
-    ]
-    enabled = bool(candidates) and budget.can_consume(
+    issues = [ReviewIssue.model_validate(item) for item in state.get("review_issues") or []]
+    policy = PatchEligibilityPolicy()
+    decisions = policy.evaluate_all(issues)
+    requests = policy.build_requests(
+        issues,
+        decisions,
+        symbol_index=state.get("symbol_index") or [],
+        context_snippets=state.get("context_snippets") or [],
+        head_sha=state.get("head_sha") or "missing-head",
+    )
+    enabled = bool(requests) and budget.can_consume(
         patch_attempts=1,
         model_calls=1,
         token_usage=4_096,
     )
-    message = "存在可自动修复问题" if enabled else "没有可执行的自动修复"
+    message = "存在符合策略的 confirmed Issue" if enabled else "没有符合策略的候选补丁 Issue"
     return ReviewState(
         phase=ReviewPhase.repair,
         status="generating_patches" if enabled else state.get("status", "reviewing"),
         repair_enabled=enabled,
+        patch_eligibility=[decision.model_dump(mode="json") for decision in decisions],
+        patch_generation_requests=[request.model_dump(mode="json") for request in requests],
         step_progress=append_step(state, "repair_policy", "completed", message),
     )
 
 
 async def repair_generate_patch_node(state: ReviewState) -> ReviewState:
+    action_name = (
+        AgentActionName.revise_patch
+        if state.get("active_patch_id")
+        else AgentActionName.generate_patch
+    )
     action = AgentAction(
-        action=AgentActionName.generate_patch,
-        reason="修复策略创建候选补丁",
+        action=action_name,
+        reason="修复策略修订候选补丁" if action_name == AgentActionName.revise_patch else "修复策略创建候选补丁",
         target_issue_ids=[
-            issue.get("id", "")
-            for issue in state.get("review_issues") or []
-            if issue.get("auto_fix_eligible", issue.get("auto_fixable", False))
-            and issue.get("status", "confirmed") in {"evidence_resolved", "confirmed"}
-            and issue.get("fix_risk", "low") == "low"
-            and not issue.get("requires_human_confirmation", False)
+            item.get("issue_id", "")
+            for item in state.get("patch_eligibility") or []
+            if item.get("eligible")
         ],
     )
     return await patch_node(_with_action(state, action))
+
+
+async def repair_check_candidates_node(state: ReviewState) -> ReviewState:
+    """逐个隔离检查候选补丁；只运行 Git，不调用 CommandExecutor 或目标代码。"""
+    decisions = decisions_by_issue([
+        PatchEligibilityDecision.model_validate(item)
+        for item in state.get("patch_eligibility") or []
+    ])
+    pending = set(state.get("pending_patch_ids") or [])
+    patches = [PatchProposal.model_validate(item) for item in state.get("patches") or []]
+    checked: list[PatchProposal] = []
+    active_patch_id: str | None = None
+    for patch in patches:
+        if patch.id not in pending:
+            checked.append(patch)
+            continue
+        decision = decisions.get(patch.issue_ids[0]) if len(patch.issue_ids) == 1 else None
+        if decision is None:
+            patch.status = PatchStatus.abandoned
+            patch.error = "Patch 未关联唯一的服务端资格决策"
+            patch.presentation = build_patch_presentation(patch)
+            checked.append(patch)
+            continue
+
+        cleanup_error: str | None = None
+        try:
+            await prepare_patch_workspace(state)
+            patch = await PatchTool().check_candidate(
+                state.get("repo_path", ""),
+                patch,
+                decision,
+                state.get("head_sha", ""),
+            )
+        except Exception as exc:
+            patch.status = PatchStatus.abandoned
+            patch.error = f"候选补丁隔离检查失败: {type(exc).__name__}: {exc}"
+        finally:
+            cleanup_error = await restore_patch_workspace(state)
+
+        patch.apply_check.worktree_clean = cleanup_error is None
+        if cleanup_error:
+            patch.status = PatchStatus.abandoned
+            patch.error = f"{patch.error or '候选补丁检查完成'}; Head 恢复失败: {cleanup_error}"
+            patch.apply_check.status = "failed"
+            patch.apply_check.detail = patch.error
+        patch.presentation = build_patch_presentation(patch)
+        if patch.status == PatchStatus.unverified and active_patch_id is None:
+            active_patch_id = patch.id
+        checked.append(patch)
+
+    passed = sum(patch.status == PatchStatus.unverified for patch in checked if patch.id in pending)
+    return ReviewState(
+        phase=ReviewPhase.repair,
+        status="generating_patches",
+        patches=[patch.model_dump(mode="json") for patch in checked],
+        active_patch_id=active_patch_id,
+        active_patch_validation_passed=False,
+        patch_workspace_clean=all(
+            patch.apply_check.worktree_clean is not False for patch in checked if patch.id in pending
+        ),
+        warnings=list(state.get("warnings") or []),
+        step_progress=append_step(
+            state,
+            "patch_apply_check",
+            "completed",
+            f"{passed} 个候选补丁通过可应用性检查；尚未运行项目测试",
+        ),
+    )
 
 
 async def repair_apply_patch_node(state: ReviewState) -> ReviewState:

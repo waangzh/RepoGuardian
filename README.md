@@ -20,9 +20,9 @@ RepoGuardian 接收一个 GitHub PR URL，在任务临时 clone 中读取 PR Hea
 | --- | --- |
 | PR 准备 | 拉取 PR 元数据，临时 clone 仓库，并生成 Base 与 Head 的统一 diff。 |
 | 仓库理解 | 解析变更 hunk，建立 Python 文件和符号索引，检索直接代码、调用方和测试上下文。 |
-| 受控审查 | 通过 OpenAI 兼容 Provider 输出并校验 `AgentAction`、`ReviewIssue` 与 `PatchResult`。 |
+| 受控审查 | 通过 OpenAI 兼容 Provider 输出并校验 `AgentAction`、`ReviewIssue` 与严格的补丁生成响应。 |
 | 可选验证 | 验证后端只有在 `review_suggest_and_validate` 模式下运行；不可用时返回 `unsupported`，不影响审查完成。 |
-| 候选修复 | `review_and_suggest` 生成候选补丁并标记为 `unverified`；只有验证结果为 `passed` 才标记为 `verified`。 |
+| 候选修复 | `review_and_suggest` 只为符合 `PatchEligibilityPolicy` 的 confirmed Issue 生成候选补丁，完成确定性 apply-check 后仍标记为 `unverified`。 |
 | 可视化交付 | Vue 控制台展示任务流、Agent 日志、补丁、验证账本；后端提供结构化任务数据与 Markdown 报告。 |
 
 ## 架构图
@@ -38,6 +38,22 @@ RepoGuardian 接收一个 GitHub PR URL，在任务临时 clone 中读取 PR Hea
 | `patched` | Head + 单个已应用补丁 | 确认该补丁的影响；快照和差异均关联具体 `patch_id`。 |
 
 这些快照和命令仅属于显式 `local` 验证后端；默认 `review` 与 `review_and_suggest` 均不会调用它们。验证基础设施不可用时，候选补丁保持 `unverified`，审查状态不会变为失败。
+
+### 候选补丁语义
+
+`review_and_suggest` 不运行 pytest、Ruff、项目入口或任何目标代码。每个候选补丁从干净的
+PR Head 开始，依次检查 unified diff 解析、仓库相对路径、`allowed_files`、文件数、变更行数、
+二进制和禁止路径，再执行固定参数的 `git apply --check`。检查器会短暂应用补丁并将实际
+`git diff` 与提议补丁逐行比对，最后恢复干净 Head。每个补丁独立执行，不会累计前一个候选。
+
+`git apply --check` 只说明补丁可应用，不说明功能正确。API、SSE、UI 和 Markdown 报告均展示
+“候选修复，尚未运行项目测试。”；成功候选的状态为 `unverified`。PR Head 与补丁记录的
+`head_sha` 不一致时，候选会标记为 `stale`/`superseded`，必须重新生成或重新检查。
+
+`PatchProposal` 是新的规范字段集合：`issue_ids`、`unified_diff`、`touched_files`、`risk`、
+`assumptions`、`head_sha`、`patch_sha`、`apply_check` 和 `presentation`。为兼容阶段 3 客户端，
+响应暂时保留只读计算字段 `issue_id` 与 `diff_content`；客户端应迁移到复数 Issue ID 和
+`unified_diff`，后续代码不应再写入旧字段。
 
 ## 安全与执行边界
 
@@ -118,6 +134,9 @@ npm run dev
 | `REPOGUARDIAN_ISSUE_VERIFIER_ENABLED` | `true` | 是否对通过确定性策略的候选 Issue 运行独立 verifier；关闭时仅为兼容模式。 |
 | `REPOGUARDIAN_ISSUE_VERIFIER_FAIL_MODE` | `needs_human` | verifier 超时、不可用或 schema 失败时使用 `needs_human` 或保留未验证 `candidate`；绝不按 `keep` 处理。 |
 | `REPOGUARDIAN_ISSUE_VERIFIER_MAX_CALLS_PER_UNIT` | `5` | 每个 Review Unit 的 verifier 最大调用次数。 |
+| `REPOGUARDIAN_PATCH_CONFIDENCE_THRESHOLD` | `0.8` | confirmed Issue 进入候选补丁生成的最低置信度。 |
+| `REPOGUARDIAN_PATCH_MAX_FILES` | `3` | 单个候选补丁允许修改的最大文件数；实际值还会被 Issue 的 `allowed_files` 收紧。 |
+| `REPOGUARDIAN_PATCH_MAX_CHANGED_LINES` | `80` | 单个候选补丁允许的新增与删除行总上限。 |
 | `REPOGUARDIAN_EXECUTOR` | `reject` | `reject`、`local` 或 `gvisor`；拒绝或 gVisor 占位实现均不会回退到本地执行。 |
 | `REPOGUARDIAN_GIT_BIN` | `git` | Git 可执行文件路径或命令名。 |
 | `REPOGUARDIAN_WORKDIR` | `backend/.repoguardian/workspaces` | 临时 clone 工作目录。 |
@@ -140,7 +159,7 @@ REPOGUARDIAN_MODEL=deepseek-v4-pro
 | `POST` | `/api/reviews` | 创建异步审查任务，返回 `202 Accepted`、任务 ID 与初始状态。 |
 | `GET` | `/api/reviews/{task_id}` | 获取任务状态、问题、补丁、验证快照和执行步骤。 |
 | `GET` | `/api/reviews/{task_id}/report` | 获取 UTF-8 Markdown 审查报告。 |
-| `GET` | `/api/reviews/{task_id}/stream` | 通过 SSE 获取步骤进度和完成事件。 |
+| `GET` | `/api/reviews/{task_id}/stream` | 通过 SSE 获取步骤进度、`patch_update` 和完成事件。 |
 | `GET` | `/health` | 服务健康检查。 |
 
 创建任务示例：
@@ -277,9 +296,10 @@ npm run build
 
 - 目前仅提供 Python 项目适配器，验证命令仅覆盖 Ruff 与 pytest。
 - 任务状态保存在进程内存，服务重启或多进程部署后不会恢复。
-- 不会向 GitHub 写回评论、Check Run、建议或 Draft PR。
+- 只生成 GitHub suggestion/full diff 展示数据；不会写回评论、Check Run、建议或 Draft PR。
 - 不会自动提交或推送修复；所有变更仅留在任务临时目录中。
 - 不提供 Docker 沙箱、网络隔离或资源配额。
+- 本阶段不实现 Project CI、User Runner、gVisor、自动测试、自动接受或合并补丁。
 
 ## 许可证
 

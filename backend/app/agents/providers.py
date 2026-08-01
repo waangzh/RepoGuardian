@@ -16,7 +16,10 @@ from app.models.review import (
     IssueDeduplicationDecision,
     IssueVerification,
     IssueVerificationRequest,
+    PatchGenerationRequest,
+    PatchGenerationResponse,
     PatchResult,
+    PatchStatus,
     PullRequestInfo,
     ReviewIssue,
     ReviewIssueInput,
@@ -94,6 +97,7 @@ class OpenAICompatibleProvider(LLMProvider):
         self._disable_thinking = disable_thinking
         self._issue_adapter = TypeAdapter(list[ReviewIssueInput])
         self._patch_adapter = TypeAdapter(list[PatchResult])
+        self._patch_request_adapter = TypeAdapter(list[PatchGenerationRequest])
 
     async def decide(self, state: dict[str, Any], model: str | None) -> AgentAction:
         if not self._api_key:
@@ -171,12 +175,37 @@ class OpenAICompatibleProvider(LLMProvider):
         )
         elapsed = time.monotonic() - t0
         raw = self._load_json(content)
-        patches = raw.get("patches", raw) if isinstance(raw, dict) else raw
         try:
-            result = self._patch_adapter.validate_python(patches)
+            raw_requests = state.get("patch_generation_requests") or []
+            if raw_requests:
+                requests = self._patch_request_adapter.validate_python(raw_requests)
+                response = PatchGenerationResponse.model_validate(raw)
+                request_by_issue = {request.issue.id: request for request in requests}
+                result: list[PatchResult] = []
+                for candidate in response.patches:
+                    if len(candidate.issue_ids) != 1:
+                        raise ValueError("multi-Issue patch was not authorized by the server")
+                    request = request_by_issue.get(candidate.issue_ids[0])
+                    if request is None:
+                        raise ValueError("patch references an Issue outside the eligible request set")
+                    result.append(PatchResult(
+                        issue_ids=candidate.issue_ids,
+                        title=candidate.title,
+                        rationale=candidate.rationale,
+                        unified_diff=candidate.unified_diff,
+                        touched_files=candidate.touched_files,
+                        risk=candidate.risk,
+                        assumptions=candidate.assumptions,
+                        status=PatchStatus.suggested,
+                        head_sha=request.head_sha,
+                    ))
+            else:
+                # 阶段 3 Provider 测试与第三方实现的兼容入口；新图不会走到这里。
+                patches = raw.get("patches", raw) if isinstance(raw, dict) else raw
+                result = self._patch_adapter.validate_python(patches)
             logger.info("🌐 [LLM补丁] API 响应 %.2f 秒，生成 %d 个 patch", elapsed, len(result))
             return result
-        except ValidationError as exc:
+        except (ValidationError, ValueError) as exc:
             raise LLMProviderError(f"Patch schema validation failed: {exc}") from exc
 
     async def verify_issue(
@@ -397,10 +426,11 @@ class OpenAICompatibleProvider(LLMProvider):
         )
         if active_patch:
             active_patch = dict(active_patch)
-            active_patch["diff_content"] = (active_patch.get("diff_content") or "")[:20_000]
+            active_patch["unified_diff"] = (active_patch.get("unified_diff") or active_patch.get("diff_content") or "")[:20_000]
         active_issue = next(
             (issue for issue in state.get("review_issues") or []
-            if active_patch and issue.get("id") == active_patch.get("issue_id")),
+            if active_patch and issue.get("id") in (active_patch.get("issue_ids") or [active_patch.get("issue_id")])
+            ),
             None,
         )
         compact = {
@@ -496,23 +526,27 @@ class OpenAICompatibleProvider(LLMProvider):
 
     @staticmethod
     def _build_patch_prompt(state: dict[str, Any]) -> str:
-        compact = {
-            "diff_text": (state.get("diff_text") or "")[:50000],
-            "context_snippets": state.get("context_snippets") or [],
-            "review_issues": state.get("review_issues") or [],
-            "patches": state.get("patches") or [],
-            "test_results": state.get("test_results") or [],
-            "validation_deltas": state.get("validation_deltas") or [],
-            "active_patch_id": state.get("active_patch_id"),
-            "target_issue_ids": (state.get("next_action") or {}).get("target_issue_ids", []),
-        }
+        requests = TypeAdapter(list[PatchGenerationRequest]).validate_python(
+            state.get("patch_generation_requests") or []
+        )
+        compact = [request.model_dump(mode="json") for request in requests]
         return (
-            "Generate minimal unified diff patches for clearly auto-fixable issues only. "
-            "If no issue can be fixed safely, return {\"patches\":[]}.\n"
-            "Return JSON shape:\n"
-            "{\"patches\":[{\"issue_id\":\"issue-id\",\"diff_content\":\"diff --git ...\","
-            "\"status\":\"unverified\"}]}\n\n"
-            f"State JSON:\n{json.dumps(compact, ensure_ascii=False)[:60000]}"
+            "Generate one minimal candidate patch per eligible request. The input contains only a "
+            "confirmed Issue, resolved evidence, indexed symbols, bounded context, allowed_files, "
+            "size limits, the server-selected Head SHA, and prohibited operations.\n"
+            "The unified_diff field must contain a standard unified diff and must not be wrapped in "
+            "Markdown. Never modify files outside allowed_files. Do not add dependencies unless the "
+            "Issue is explicitly a dependency defect. Do not modify lockfiles or CI/workflows unless "
+            "that exact file is allowed. Avoid broad refactors, preserve existing style, and never "
+            "claim tests passed. If a safe fix is unavailable, emit an abandon item instead of "
+            "inventing a patch.\n"
+            "Return exactly this JSON shape and no Markdown:\n"
+            "{\"patches\":[{\"issue_ids\":[\"issue-id\"],\"title\":\"title\","
+            "\"rationale\":\"reason\",\"unified_diff\":\"diff --git ...\","
+            "\"touched_files\":[\"path\"],\"risk\":\"low|medium|high\","
+            "\"assumptions\":[]}],\"abandons\":[{\"issue_ids\":[\"issue-id\"],"
+            "\"reason\":\"cannot fix safely\"}]}\n\n"
+            f"Bounded patch requests JSON:\n{json.dumps(compact, ensure_ascii=False)[:60000]}"
         )
 
     @staticmethod
