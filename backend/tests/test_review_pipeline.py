@@ -10,6 +10,8 @@ from app.agents.providers import LLMProvider
 from app.models.review import (
     AgentAction,
     ChangedFile,
+    IssueVerification,
+    IssueVerificationRequest,
     PatchResult,
     PullRequestInfo,
     PullRequestRef,
@@ -149,7 +151,7 @@ class ScriptedProvider(LLMProvider):
             title="测试审查问题",
             failure_scenario="用于验证审查图状态传递。",
             recommendation="无需修改。",
-            confidence=0.2,
+            confidence=0.9 if self._auto_fixable else 0.2,
             auto_fix_eligible=self._auto_fixable,
             primary_evidence={
                 "file_path": changed_files[0].file_path,
@@ -168,6 +170,18 @@ class ScriptedProvider(LLMProvider):
             return []
         raw = self._patch_sequence.pop(0)
         return [raw if isinstance(raw, PatchResult) else PatchResult.model_validate(raw)]
+
+    async def verify_issue(
+        self,
+        request: IssueVerificationRequest,
+        model: str | None,
+    ) -> IssueVerification:
+        del model
+        return IssueVerification(
+            issue_id=request.issue.id,
+            decision="keep",
+            reason="测试 verifier 确认证据成立",
+        )
 
 
 class FailingProvider(ScriptedProvider):

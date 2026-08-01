@@ -4,7 +4,14 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.agents.providers import LLMProviderError, OpenAICompatibleProvider, build_provider
-from app.models.review import ChangedFile, PullRequestInfo, PullRequestRef
+from app.models.review import (
+    ChangedFile,
+    IssueVerificationBudget,
+    IssueVerificationRequest,
+    PullRequestInfo,
+    PullRequestRef,
+    ReviewIssue,
+)
 
 
 class FakeChatOpenAI:
@@ -188,6 +195,75 @@ def test_build_provider_rejects_unknown_provider() -> None:
     for name in ("unknown", "mock"):
         with pytest.raises(ValueError, match="REPOGUARDIAN_PROVIDER"):
             build_provider(name, None, "https://example.com", "model")
+
+
+@pytest.mark.asyncio
+async def test_issue_verifier_uses_strict_bounded_schema(
+    fake_chat: type[FakeChatOpenAI],
+) -> None:
+    issue = ReviewIssue(
+        id="issue-1",
+        review_unit_id="unit-1",
+        title="错误",
+        category="correctness",
+        severity="medium",
+        confidence=0.9,
+        affected_behavior="返回错误结果",
+        failure_scenario="有效输入会返回错误值",
+        recommendation="修复条件",
+        primary_evidence={"file_path": "app.py", "existing_code": "return wrong"},
+    )
+    request = IssueVerificationRequest(
+        issue=issue,
+        primary_evidence=issue.primary_evidence,
+        unit_diff="[]",
+        budget=IssueVerificationBudget(remaining_calls=1),
+    )
+    fake_chat.responses = [AIMessage(content=(
+        '{"issue_id":"issue-1","decision":"keep","reason":"证据成立",'
+        '"contradicting_evidence":[],"adjusted_severity":null}'
+    ))]
+    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
+
+    decision = await provider.verify_issue(request, None)
+
+    assert decision.decision == "keep"
+    assert fake_chat.instances[0].kwargs["max_tokens"] == 1200
+    prompt = fake_chat.instances[0].messages[1].content
+    assert "cannot add an issue" in prompt
+    assert "execute code" in prompt
+
+
+@pytest.mark.asyncio
+async def test_issue_verifier_rejects_extra_output_fields(
+    fake_chat: type[FakeChatOpenAI],
+) -> None:
+    issue = ReviewIssue(
+        id="issue-1",
+        review_unit_id="unit-1",
+        title="错误",
+        category="correctness",
+        severity="medium",
+        confidence=0.9,
+        affected_behavior="返回错误结果",
+        failure_scenario="有效输入会返回错误值",
+        recommendation="修复条件",
+        primary_evidence={"file_path": "app.py", "existing_code": "return wrong"},
+    )
+    request = IssueVerificationRequest(
+        issue=issue,
+        primary_evidence=issue.primary_evidence,
+        unit_diff="[]",
+        budget=IssueVerificationBudget(remaining_calls=1),
+    )
+    fake_chat.responses = [AIMessage(content=(
+        '{"issue_id":"issue-1","decision":"keep","reason":"证据成立",'
+        '"contradicting_evidence":[],"adjusted_severity":null,"issues":[]}'
+    ))]
+    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
+
+    with pytest.raises(LLMProviderError, match="schema validation failed"):
+        await provider.verify_issue(request, None)
 
 
 def _sample_pr() -> PullRequestInfo:

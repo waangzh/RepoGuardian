@@ -24,6 +24,8 @@ from app.models.review import (
     ReviewUnit,
     ReviewUnitResult,
     ExcludedReviewFile,
+    IssueMetrics,
+    IssueStatus,
     ReviewSummary,
     ReviewTask,
     TestRunResult,
@@ -53,13 +55,12 @@ def rebuild_task_from_state(state: ReviewState) -> ReviewTask:
         pr=rebuild_pr_info(state.get("pr_info") or {}),
         changed_files=rebuild_changed_files(state.get("changed_files") or []),
         review_units=[ReviewUnit.model_validate(item) for item in state.get("review_units") or []],
-        review_unit_results=[
-            ReviewUnitResult.model_validate(item) for item in state.get("review_unit_results") or []
-        ],
+        review_unit_results=rebuild_review_unit_results(state.get("review_unit_results") or []),
         excluded_files=[
             ExcludedReviewFile.model_validate(item) for item in state.get("excluded_files") or []
         ],
         issues=rebuild_issues(state.get("review_issues") or []),
+        issue_metrics=IssueMetrics.model_validate(state.get("issue_metrics") or {}),
         context_snippets=rebuild_context_snippets(state.get("context_snippets") or []),
         repo_snapshot=rebuild_repo_snapshot(state.get("project_meta") or {}),
         project_profile=rebuild_project_profile(state.get("project_profile")),
@@ -185,8 +186,26 @@ def rebuild_project_profile(data: dict | None) -> ProjectProfile | None:
 
 
 def rebuild_issues(data: list[dict]) -> list[ReviewIssue]:
-    """从 dict 列表重建 ReviewIssue（使用 Pydantic model_validate）。"""
-    return [ReviewIssue.model_validate(item) for item in data]
+    """API 只公开独立确认或显式需要人工处理的 Issue。"""
+    issues = [ReviewIssue.model_validate(item) for item in data]
+    return [
+        issue for issue in issues
+        if issue.status in {IssueStatus.confirmed, IssueStatus.needs_human}
+    ]
+
+
+def rebuild_review_unit_results(data: list[dict]) -> list[ReviewUnitResult]:
+    """Unit 结果遵循与任务聚合根相同的发布边界。"""
+    results: list[ReviewUnitResult] = []
+    for item in data:
+        result = ReviewUnitResult.model_validate(item)
+        results.append(result.model_copy(update={
+            "issues": [
+                issue for issue in result.issues
+                if issue.status in {IssueStatus.confirmed, IssueStatus.needs_human}
+            ],
+        }))
+    return results
 
 
 def rebuild_test_results(data: list[dict]) -> list[TestRunResult]:

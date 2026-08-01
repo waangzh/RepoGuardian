@@ -13,6 +13,8 @@ from app.graph.routers import route_discovery_action, route_repair_action
 from app.models.review import (
     AgentAction,
     ChangedFile,
+    IssueVerification,
+    IssueVerificationRequest,
     ExecutionBudget,
     PatchResult,
     PullRequestInfo,
@@ -106,6 +108,18 @@ class GraphScriptedProvider(LLMProvider):
     ) -> list[PatchResult]:
         self.patch_calls += 1
         return list(self._patches)
+
+    async def verify_issue(
+        self,
+        request: IssueVerificationRequest,
+        model: str | None,
+    ) -> IssueVerification:
+        del model
+        return IssueVerification(
+            issue_id=request.issue.id,
+            decision="keep",
+            reason="图测试 verifier 确认证据成立",
+        )
 
 
 class FixtureGitHubTool:
@@ -429,8 +443,8 @@ async def test_issue_with_nonexistent_head_file_is_rejected(tmp_path: Path) -> N
 
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
-    assert result["review_issues"][0]["placement"] == "suppressed"
-    assert result["review_issues"][0]["unresolved_reason"] == "primary_evidence_not_in_primary_files"
+    assert result["review_issues"] == []
+    assert result["deterministic_issue_checks"][0]["passed"] is False
 
 
 @pytest.mark.asyncio

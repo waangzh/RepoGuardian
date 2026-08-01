@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -42,6 +43,11 @@ class Settings(BaseSettings):
     repoguardian_review_unit_large_min_changed_lines: int = 400
     repoguardian_review_unit_max_lines_per_read: int = 240
     repoguardian_review_unit_max_search_results: int = 12
+
+    # ---- Issue 确定性策略与独立验证 ----
+    repoguardian_issue_verifier_enabled: bool = True
+    repoguardian_issue_verifier_fail_mode: Literal["needs_human", "candidate"] = "needs_human"
+    repoguardian_issue_verifier_max_calls_per_unit: int = Field(default=5, ge=0, le=100)
 
     # ---- 受控命令执行 ----
     # reject 和 gvisor 均不会回退到宿主机。sandbox 是旧配置值的兼容别名。

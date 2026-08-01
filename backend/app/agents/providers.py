@@ -13,6 +13,9 @@ from app.graph.policies import ALLOWED_ACTIONS_BY_PHASE, get_phase
 from app.models.review import (
     AgentAction,
     ChangedFile,
+    IssueDeduplicationDecision,
+    IssueVerification,
+    IssueVerificationRequest,
     PatchResult,
     PullRequestInfo,
     ReviewIssue,
@@ -48,6 +51,24 @@ class LLMProvider(ABC):
         model: str | None,
     ) -> list[PatchResult]:
         raise NotImplementedError
+
+    async def verify_issue(
+        self,
+        request: IssueVerificationRequest,
+        model: str | None,
+    ) -> IssueVerification:
+        """独立 verifier 能力；未实现时必须显式失败，不能默认 keep。"""
+        del request, model
+        raise LLMProviderError("issue verifier is unavailable")
+
+    async def deduplicate_issues(
+        self,
+        issues: list[ReviewIssue],
+        model: str | None,
+    ) -> IssueDeduplicationDecision:
+        """可选语义去重能力；不可用时由确定性聚合保守收敛。"""
+        del issues, model
+        raise LLMProviderError("semantic issue deduplication is unavailable")
 
 
 class OpenAICompatibleProvider(LLMProvider):
@@ -157,6 +178,49 @@ class OpenAICompatibleProvider(LLMProvider):
             return result
         except ValidationError as exc:
             raise LLMProviderError(f"Patch schema validation failed: {exc}") from exc
+
+    async def verify_issue(
+        self,
+        request: IssueVerificationRequest,
+        model: str | None,
+    ) -> IssueVerification:
+        if not self._api_key:
+            raise LLMProviderError("OPENAI_API_KEY is required for issue verification")
+        content = await self._request_json_content(
+            prompt=self._build_issue_verification_prompt(request),
+            model=model,
+            system=(
+                "You are an independent code review issue verifier. Prefer counterexamples. "
+                "You may only keep, drop, or request human review for the supplied issue. "
+                "Return valid JSON only."
+            ),
+            max_tokens=request.budget.max_output_tokens,
+        )
+        try:
+            return IssueVerification.model_validate(self._load_json(content))
+        except ValidationError as exc:
+            raise LLMProviderError(f"Issue verification schema validation failed: {exc}") from exc
+
+    async def deduplicate_issues(
+        self,
+        issues: list[ReviewIssue],
+        model: str | None,
+    ) -> IssueDeduplicationDecision:
+        if not self._api_key:
+            raise LLMProviderError("OPENAI_API_KEY is required for semantic issue deduplication")
+        content = await self._request_json_content(
+            prompt=self._build_deduplication_prompt(issues),
+            model=model,
+            system=(
+                "You only identify duplicates inside one server-selected candidate group. "
+                "Never create a new root cause. Return valid JSON only."
+            ),
+            max_tokens=1_000,
+        )
+        try:
+            return IssueDeduplicationDecision.model_validate(self._load_json(content))
+        except ValidationError as exc:
+            raise LLMProviderError(f"Issue deduplication schema validation failed: {exc}") from exc
 
     async def _request_json_content(
         self,
@@ -449,6 +513,40 @@ class OpenAICompatibleProvider(LLMProvider):
             "{\"patches\":[{\"issue_id\":\"issue-id\",\"diff_content\":\"diff --git ...\","
             "\"status\":\"unverified\"}]}\n\n"
             f"State JSON:\n{json.dumps(compact, ensure_ascii=False)[:60000]}"
+        )
+
+    @staticmethod
+    def _build_issue_verification_prompt(request: IssueVerificationRequest) -> str:
+        payload = request.model_dump(mode="json")
+        return (
+            "Verify exactly one candidate issue from the bounded input below.\n"
+            "First look for counterexamples and contradicting evidence. Decide whether the claimed "
+            "behavior follows from the supplied evidence. Distinguish a definite defect from missing "
+            "context. Use needs_human when the supplied read-only context is insufficient. Do not keep "
+            "an issue merely because a risk might exist or sounds severe. Never raise severity without "
+            "evidence; adjusted_severity may only lower it. You cannot add an issue, modify primary "
+            "evidence, generate a patch, expand file scope, call tools, execute code, or change unresolved "
+            "evidence to resolved. Contradicting evidence may only quote supplied files and must leave all "
+            "server-owned resolution fields at their defaults.\n"
+            "Return exactly this JSON shape and no Markdown:\n"
+            '{"issue_id":"id","decision":"keep|drop|needs_human","reason":"reason",'
+            '"contradicting_evidence":[],"adjusted_severity":null}\n\n'
+            f"Bounded verifier input JSON:\n{json.dumps(payload, ensure_ascii=False)[:60000]}"
+        )
+
+    @staticmethod
+    def _build_deduplication_prompt(issues: list[ReviewIssue]) -> str:
+        payload = [issue.model_dump(mode="json") for issue in issues]
+        return (
+            "Review only this server-selected candidate duplicate group. Do not merge issues with "
+            "different failure paths merely because their descriptions are similar. Do not merge across "
+            "unrelated anchors. Choose an existing canonical issue, list only actual duplicates, preserve "
+            "supporting evidence, and do not invent a new root cause. An empty duplicate_issue_ids list is "
+            "valid when the group is not truly duplicate.\n"
+            "Return exactly this JSON shape and no Markdown:\n"
+            '{"canonical_issue_id":"existing-id","duplicate_issue_ids":["existing-id"],'
+            '"merged_rationale":"reason"}\n\n'
+            f"Candidate group JSON:\n{json.dumps(payload, ensure_ascii=False)[:50000]}"
         )
 
 
