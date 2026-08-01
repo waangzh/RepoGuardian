@@ -17,6 +17,7 @@ from app.models.review import (
     ContextRetrievalPlan,
     ContextSnippet,
     ExecutionBudget,
+    HumanReviewRequest,
     PullRequestInfo,
     ReviewIssue,
     ReviewPhase,
@@ -29,6 +30,7 @@ from app.models.review import (
 )
 from app.services.review_planner import DeterministicReviewPlanner
 from app.tools.code_search import CodeSearchTool
+from app.graph.checkpointer import unit_thread_config
 
 
 class _ReviewUnitGraphState(TypedDict, total=False):
@@ -53,6 +55,8 @@ class _ReviewUnitGraphState(TypedDict, total=False):
     pending_consumed: bool
     done: bool
     error: str | None
+    needs_human: bool
+    human_request: HumanReviewRequest | None
 
 
 class ReviewUnitExecutor:
@@ -65,6 +69,7 @@ class ReviewUnitExecutor:
         concurrency: int,
         timeout_seconds: int,
         planner: DeterministicReviewPlanner | None = None,
+        checkpointer: Any | None = None,
     ) -> None:
         if concurrency < 1:
             raise ValueError("review unit concurrency must be positive")
@@ -74,7 +79,7 @@ class ReviewUnitExecutor:
         self.concurrency = concurrency
         self.timeout_seconds = timeout_seconds
         self.planner = planner or DeterministicReviewPlanner()
-        self.unit_graph = self._build_unit_graph().compile()
+        self.unit_graph = self._build_unit_graph().compile(checkpointer=checkpointer)
 
     async def execute(
         self,
@@ -151,7 +156,7 @@ class ReviewUnitExecutor:
         budget = self._budget_for(unit)
         skip_plan = self.planner.should_skip_plan(unit, all_changed)
         graph_state: _ReviewUnitGraphState = {
-            "parent_state": state,
+            "parent_state": {key: value for key, value in state.items() if not key.startswith("_")},
             "unit": unit,
             "scope": scope,
             "unit_files": unit_files,
@@ -167,11 +172,16 @@ class ReviewUnitExecutor:
             "legacy_review_action": False,
             "done": False,
         }
-        result = await self.unit_graph.ainvoke(graph_state)
+        config = None
+        if getattr(self.unit_graph, "checkpointer", None) is not None:
+            config = unit_thread_config(str(state.get("task_id") or "unknown"), unit.id)
+        result = await self.unit_graph.ainvoke(graph_state, config=config)
         return ReviewUnitResult(
             review_unit_id=unit.id,
             status=(
-                ReviewUnitStatus.completed
+                ReviewUnitStatus.needs_human
+                if result.get("needs_human")
+                else ReviewUnitStatus.completed
                 if result.get("done") and not result.get("error")
                 else ReviewUnitStatus.failed
             ),
@@ -184,6 +194,7 @@ class ReviewUnitExecutor:
             tool_events=result.get("tool_events") or [],
             execution_budget=result.get("budget") or budget,
             error=result.get("error"),
+            human_request=result.get("human_request"),
         )
 
     def _build_unit_graph(self) -> StateGraph:
@@ -420,7 +431,12 @@ class ReviewUnitExecutor:
     ) -> "_ReviewUnitGraphState":
         action = state["next_action"]
         if action.action == AgentActionName.request_human:
-            return {"done": False, "error": "review unit requires human input"}
+            return {
+                "done": False,
+                "needs_human": True,
+                "error": "review unit requires human input",
+                "human_request": action.human_request,
+            }
         return {
             "done": True,
             "messages": [*state["messages"], AgentEvent(
