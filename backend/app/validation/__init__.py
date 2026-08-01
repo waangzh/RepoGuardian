@@ -12,6 +12,7 @@ from app.validation.backends import NoValidationBackend
 from app.validation.base import ValidationBackend
 from app.validation.registry import ValidationBackendPolicyError, ValidationBackendRegistry
 from app.validation.selector import ValidationBackendSelector
+from app.validation.user_runner import UserRunnerValidationBackend, get_user_runner_service
 
 __all__ = [
     "NoValidationBackend",
@@ -25,4 +26,6 @@ __all__ = [
     "ValidationCapabilities",
     "ValidationCheck",
     "ValidationStatus",
+    "UserRunnerValidationBackend",
+    "get_user_runner_service",
 ]

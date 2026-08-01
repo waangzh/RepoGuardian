@@ -299,7 +299,10 @@ npm run build
 - 只生成 GitHub suggestion/full diff 展示数据；不会写回评论、Check Run、建议或 Draft PR。
 - 不会自动提交或推送修复；所有变更仅留在任务临时目录中。
 - 不提供 Docker 沙箱、网络隔离或资源配额。
-- 本阶段不实现 Project CI、User Runner、gVisor、自动测试、自动接受或合并补丁。
+- Project CI 与 gVisor 仍为不可执行占位后端；User Runner 已支持签名外部验证协议，但
+  RepoGuardian 不负责安装项目环境，也不会自动接受、提交或合并补丁。
+- User Runner 的注册、claim lease、HMAC 结果上传与信任边界见
+  [`docs/user-runner-protocol.md`](docs/user-runner-protocol.md)。
 
 ## 许可证
 

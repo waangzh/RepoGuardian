@@ -11,7 +11,8 @@ node_modules/
 *.egg-info/
 *.tsbuildinfo
 .repoguardian/
-/docs
+/docs/*
+!/docs/user-runner-protocol.md
 .pytest_tmp/
 .pytest_tmp*/
 AGENTS.md

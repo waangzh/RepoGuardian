@@ -19,6 +19,8 @@ from app.graph.state import ReviewState
 from app.models.review import (
     ExecutionBudget,
     IssueMetrics,
+    PatchStatus,
+    PatchValidationResult,
     ReviewCreateRequest,
     ReviewMode,
     ReviewIssue,
@@ -34,12 +36,15 @@ from app.models.review import (
     TaskStatus,
     TaskStep,
     ValidationBackend,
+    ValidationResult,
+    ValidationStatus,
 )
 from app.services.report_service import ReportService
 from app.services.issue_deduplication import IssueDeduplicationService
 from app.services.review_rebuild import rebuild_task_from_state
 from app.services.review_planner import DeterministicReviewPlanner
 from app.services.review_unit_executor import ReviewUnitExecutor
+from app.services.patch_presentation import build_patch_presentation
 from app.tools.diff_parser import DiffParser
 from app.tools.git_tool import GitTool
 from app.tools.github_tool import GitHubTool
@@ -107,6 +112,7 @@ class ReviewService:
             mode=request.mode,
             generate_patches=request.generate_patches,
             validation_backend=request.validation_backend,
+            validation_profile=request.validation_profile,
             review={"mode": request.mode, "status": TaskStatus.queued, "completed": False},
             validation=[],
             steps=[TaskStep(name="queued", message="任务已创建")],
@@ -118,6 +124,54 @@ class ReviewService:
 
     def get_task(self, task_id: str) -> ReviewTask | None:
         return self._tasks.get(task_id)
+
+    def apply_user_runner_result(
+        self,
+        task_id: str,
+        patch_id: str,
+        result: PatchValidationResult,
+    ) -> None:
+        """把已由 UserRunnerService 验真的结果原子地回写到内存任务。"""
+        task = self._tasks.get(task_id)
+        if task is None:
+            raise KeyError(task_id)
+        if task.status == TaskStatus.cancelled:
+            raise ValueError("cancelled review cannot accept validation results")
+        patch = next((item for item in task.patches if item.id == patch_id), None)
+        if patch is None:
+            raise KeyError(patch_id)
+        if (
+            result.backend != ValidationBackend.user_runner.value
+            or not result.trusted
+            or result.trust_source != "user_runner"
+            or result.head_sha != patch.head_sha
+            or result.patch_sha != patch.patch_sha
+        ):
+            raise ValueError("runner result does not match the candidate patch")
+
+        if result.status == ValidationStatus.passed:
+            patch.status = PatchStatus.verified
+        elif result.status == ValidationStatus.failed:
+            patch.status = PatchStatus.validation_failed
+        else:
+            patch.status = PatchStatus.validation_inconclusive
+        patch.validation_backend = result.backend
+        patch.validation_result_id = result.id
+        patch.presentation = build_patch_presentation(patch)
+
+        validation = ValidationResult.model_validate({
+            **result.model_dump(mode="json"),
+            "patch_id": patch.id,
+        })
+        task.validation = [
+            item for item in task.validation
+            if not (
+                item.patch_id == patch.id
+                and item.backend == ValidationBackend.user_runner.value
+            )
+        ]
+        task.validation.append(validation)
+        self._touch(task)
 
     async def preview(self, request: ReviewPreviewRequest) -> ReviewPreviewResponse:
         """只执行 PR 获取、diff 解析和确定性规划。"""
@@ -195,6 +249,7 @@ class ReviewService:
             "status": TaskStatus.planning.value,
             "generate_patches": task.generate_patches,
             "validation_backend": task.validation_backend.value,
+            "validation_profile": task.validation_profile,
             "validation_results": [item.model_dump(mode="json") for item in task.validation],
             "warnings": [],
             "pr_url": task.pr_url,
@@ -265,6 +320,7 @@ class ReviewService:
         task.mode = rebuilt.mode
         task.generate_patches = rebuilt.generate_patches
         task.validation_backend = rebuilt.validation_backend
+        task.validation_profile = rebuilt.validation_profile
         task.review = rebuilt.review
         task.pr = rebuilt.pr
         task.changed_files = rebuilt.changed_files

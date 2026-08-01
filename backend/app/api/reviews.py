@@ -71,6 +71,9 @@ async def cancel_review(task_id: str) -> dict[str, str]:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
     if not service.cancel_task(task_id):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Task is not running")
+    from app.validation.user_runner import get_user_runner_service
+
+    get_user_runner_service().cancel_for_task(task_id)
     return {"task_id": task_id, "status": "cancelled"}
 
 

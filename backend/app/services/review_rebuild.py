@@ -49,6 +49,7 @@ def rebuild_task_from_state(state: ReviewState) -> ReviewTask:
         mode=rebuild_review_mode(state.get("mode")),
         generate_patches=bool(state.get("generate_patches", False)),
         validation_backend=rebuild_validation_backend(state.get("validation_backend")),
+        validation_profile=str(state.get("validation_profile") or "unit"),
         review=ReviewSummary(
             mode=rebuild_review_mode(state.get("mode")),
             status=state.get("status", "completed"),
