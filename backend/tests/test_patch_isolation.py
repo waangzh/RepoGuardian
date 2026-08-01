@@ -214,9 +214,9 @@ async def test_revision_records_parent_and_supersedes_the_previous_candidate() -
     })
 
     previous, revision = result["patches"]
-    assert previous["status"] == "validation_failed"
-    assert revision["revision_of"] is None
-    assert revision["attempt_number"] == 1
+    assert previous["status"] == "superseded"
+    assert revision["revision_of"] == failed.id
+    assert revision["attempt_number"] == 2
     assert revision["status"] == "unverified"
 
 

@@ -60,7 +60,7 @@ def route_repair_entry(state: dict[str, Any]) -> str:
 
 
 def route_repair_after_generation(state: dict[str, Any]) -> str:
-    """仅在显式选择且真实后端可用时才进入执行型补丁验证。"""
+    """apply-check 后仅让显式旧验证模式进入执行型项目验证。"""
     raw_mode = state.get("mode", ReviewMode.review)
     try:
         mode = ReviewMode(raw_mode)
@@ -78,6 +78,10 @@ def route_repair_after_generation(state: dict[str, Any]) -> str:
         and backend == ValidationBackend.local
         and executor is not None
         and not isinstance(executor, RejectedSandboxExecutor)
+        and any(
+            patch.get("status") == "unverified"
+            for patch in state.get("patches") or []
+        )
     )
     return "apply_patch" if backend_available else "mark_unverified"
 

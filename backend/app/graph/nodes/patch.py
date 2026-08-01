@@ -8,7 +8,7 @@ from app.graph.nodes._events import append_event, append_step
 from app.graph.policies import consume_budget
 from app.graph.state import ReviewState
 from app.models.review import AgentAction, AgentActionName, PatchResult, PatchStatus
-from app.tools.patch_tool import PatchTool
+from app.tools.patch_tool import PatchTool, extract_touched_files
 
 logger = logging.getLogger("RepoGuardian.Node")
 
@@ -63,6 +63,11 @@ async def _generate_patch(state: ReviewState, action: AgentAction) -> ReviewStat
     logger.info("🩹 [生成 patch] 调用 LLM 生成修复 diff...")
     patches = await provider.generate_patch(dict(state), state.get("model"))
     previous = [PatchResult.model_validate(item) for item in state.get("patches") or []]
+    eligible_issue_ids = [
+        item.get("issue_id", "")
+        for item in state.get("patch_eligibility") or []
+        if item.get("eligible")
+    ]
     active_patch = next(
         (patch for patch in previous if patch.id == state.get("active_patch_id")), None
     )
@@ -74,9 +79,23 @@ async def _generate_patch(state: ReviewState, action: AgentAction) -> ReviewStat
         attempt_number = active_patch.attempt_number + 1
     patch_dicts: list[dict[str, Any]] = []
     for patch in patches:
+        issue_ids = list(patch.issue_ids)
+        if issue_ids == ["legacy-unassigned"] and len(eligible_issue_ids) == 1:
+            issue_ids = eligible_issue_ids
+        try:
+            touched_files = (
+                extract_touched_files(patch.unified_diff)
+                if patch.touched_files == ["legacy-unknown"]
+                else patch.touched_files
+            )
+        except Exception:
+            touched_files = patch.touched_files
         candidate = patch.model_copy(update={
             "status": PatchStatus.unverified,
             "error": None,
+            "issue_ids": issue_ids,
+            "touched_files": touched_files,
+            "head_sha": state.get("head_sha") or patch.head_sha,
             "revision_of": revision_of,
             "attempt_number": attempt_number,
             "validation_snapshot_id": None,

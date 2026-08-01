@@ -14,6 +14,8 @@ from app.models.review import (
     ContextSnippet,
     DiffHunk,
     PatchResult,
+    PatchEligibilityDecision,
+    PatchStatus,
     ProjectProfile,
     PullRequestInfo,
     PullRequestRef,
@@ -68,7 +70,11 @@ def rebuild_task_from_state(state: ReviewState) -> ReviewTask:
         validation_snapshots=rebuild_validation_snapshots(state.get("validation_snapshots") or []),
         validation_deltas=rebuild_validation_deltas(state.get("validation_deltas") or []),
         validation=rebuild_validation_results(state.get("validation_results") or []),
-        patches=rebuild_patches(state.get("patches") or []),
+        patch_eligibility=[
+            PatchEligibilityDecision.model_validate(item)
+            for item in state.get("patch_eligibility") or []
+        ],
+        patches=rebuild_patches(state.get("patches") or [], state.get("head_sha")),
         test_results=rebuild_test_results(state.get("test_results") or []),
         agent_events=rebuild_agent_events(state.get("agent_events") or []),
         human_request=state.get("human_request"),
@@ -228,9 +234,17 @@ def rebuild_validation_results(data: list[dict]) -> list[ValidationResult]:
     return [ValidationResult.model_validate(item) for item in data]
 
 
-def rebuild_patches(data: list[dict]) -> list[PatchResult]:
+def rebuild_patches(data: list[dict], current_head_sha: str | None = None) -> list[PatchResult]:
     """从 dict 列表重建 PatchResult。"""
-    return [PatchResult.model_validate(item) for item in data]
+    patches = [PatchResult.model_validate(item) for item in data]
+    if current_head_sha:
+        for patch in patches:
+            if patch.head_sha != current_head_sha:
+                patch.stale = True
+                if patch.status in {PatchStatus.suggested, PatchStatus.unverified}:
+                    patch.status = PatchStatus.superseded
+                    patch.error = "PR Head 已更新，候选补丁必须重新生成或重新检查"
+    return patches
 
 
 def rebuild_agent_events(data: list[dict]) -> list[AgentEvent]:

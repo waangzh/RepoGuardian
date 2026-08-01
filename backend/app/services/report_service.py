@@ -209,14 +209,23 @@ def _append_patch_results(lines: list[str], task: ReviewTask) -> None:
     if not task.patches:
         lines.extend(["未生成 patch。", ""])
         return
-    lines.extend(["| Patch | Issue | 状态 | 错误 |", "|---|---|---|---|"])
+    lines.extend([
+        "| Patch | Issues | 文件 | 风险 | apply-check | 验证状态 | Head | 过期 |",
+        "|---|---|---|---|---|---|---|---|",
+    ])
     for patch in task.patches:
         status = patch.status.value
         lines.append(
-            f"| `{patch.id[:8]}` | `{patch.issue_id or ''}` | {status} | {patch.error or ''} |"
+            f"| `{patch.id[:8]}` | `{', '.join(patch.issue_ids)}` | "
+            f"{', '.join(patch.touched_files)} | {patch.risk} | {patch.apply_check.status.value} | "
+            f"{status} | `{patch.head_sha[:8]}` | {'是' if patch.stale else '否'} |"
         )
-        if status == "unverified":
+        if patch.presentation:
+            lines.append(f"> {patch.presentation.warning}")
+        elif status in {"unverified", "suggested"}:
             lines.append("> 候选修复，尚未运行项目测试。")
+        if patch.error:
+            lines.append(f"> apply-check 错误：{patch.error}")
     lines.append("")
 
 

@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     repoguardian_issue_verifier_fail_mode: Literal["needs_human", "candidate"] = "needs_human"
     repoguardian_issue_verifier_max_calls_per_unit: int = Field(default=5, ge=0, le=100)
 
+    # ---- 阶段 4 候选补丁资格与确定性大小上限 ----
+    repoguardian_patch_confidence_threshold: float = Field(default=0.8, ge=0, le=1)
+    repoguardian_patch_max_files: int = Field(default=3, ge=1, le=10)
+    repoguardian_patch_max_changed_lines: int = Field(default=80, ge=1, le=1_000)
+
     # ---- 受控命令执行 ----
     # reject 和 gvisor 均不会回退到宿主机。sandbox 是旧配置值的兼容别名。
     repoguardian_executor: Literal["reject", "local", "gvisor", "sandbox"] = "reject"

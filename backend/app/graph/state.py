@@ -65,6 +65,8 @@ class ReviewState(TypedDict, total=False):
 
     # ---- 自动修复 ----
     patches: list[dict[str, Any]] | None  # PatchResult 列表
+    patch_eligibility: list[dict[str, Any]] | None
+    patch_generation_requests: list[dict[str, Any]] | None
     pending_patch_ids: list[str] | None
     active_patch_id: str | None
     active_patch_validation_passed: bool | None

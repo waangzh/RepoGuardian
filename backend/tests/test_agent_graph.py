@@ -63,6 +63,15 @@ INVALID_SAMPLE_PATCH = """diff --git a/pricing.py b/pricing.py
 -missing source line
 +replacement
 """
+REGRESSIVE_SAMPLE_PATCH = """diff --git a/pricing.py b/pricing.py
+--- a/pricing.py
++++ b/pricing.py
+@@ -1,3 +1,3 @@
+ def calculate_discounted_total(amount: float, discount_percent: float) -> float:
+     \"\"\"Return the total after applying a percentage discount.\"\"\"
+-    return amount * discount_percent / 100
++    return 0
+"""
 
 
 class GraphScriptedProvider(LLMProvider):
@@ -455,7 +464,7 @@ async def test_failed_patch_decision_receives_structured_validation_feedback(tmp
             {"action": "abandon_patch", "reason": "验证反馈表明补丁未解决失败"},
         ],
         review_issues=[_auto_fixable_issue()],
-        patches=[PatchResult(issue_id="discount-fix", diff_content=SECOND_SAMPLE_PATCH)],
+        patches=[PatchResult(issue_id="discount-fix", diff_content=REGRESSIVE_SAMPLE_PATCH)],
     )
 
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
@@ -517,8 +526,8 @@ async def test_repair_subgraph_returns_to_main_flow(tmp_path: Path) -> None:
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
     assert provider.patch_calls == 1
-    assert result["patches"][-1]["status"] == "abandoned"
-    assert not result.get("test_results")
+    assert result["patches"][-1]["status"] == "verified"
+    assert result.get("test_results")
     assert result["step_progress"][-1]["node"] == "report"
 
 
@@ -535,7 +544,7 @@ async def test_accept_patch_is_gated_by_server_validation_policy(tmp_path: Path)
 
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
-    assert result["patches"][-1]["status"] == "abandoned"
+    assert result["patches"][-1]["status"] == "verified"
     assert not any(event["action"] == "accept_patch" for event in result["agent_events"])
 
 
@@ -556,13 +565,14 @@ async def test_repair_subgraph_abandons_unselected_generated_patches(tmp_path: P
 
     assert provider.patch_calls == 1
     assert [patch["status"] for patch in result["patches"]] == [
+        "verified",
         "abandoned",
-        "unverified",
     ]
     patched_snapshots = [
         snapshot for snapshot in result.get("validation_snapshots") or [] if snapshot["stage"] == "patched"
     ]
-    assert patched_snapshots == []
+    assert len(patched_snapshots) == 1
+    assert patched_snapshots[0]["patch_id"] == first_patch.id
 
 
 @pytest.mark.asyncio
@@ -578,13 +588,14 @@ async def test_failed_current_patch_does_not_reuse_previous_patch_validation(tmp
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
     assert [patch["status"] for patch in result["patches"]] == [
+        "verified",
         "abandoned",
-        "unverified",
     ]
     patched_snapshots = [
         snapshot for snapshot in result.get("validation_snapshots") or [] if snapshot["stage"] == "patched"
     ]
-    assert patched_snapshots == []
+    assert len(patched_snapshots) == 1
+    assert patched_snapshots[0]["patch_id"] == first_patch.id
     assert result["active_patch_id"] == first_patch.id
 
 
@@ -687,7 +698,7 @@ async def test_unsupported_validation_keeps_review_completed_with_warning(tmp_pa
 async def test_infrastructure_error_is_not_a_validation_failed_patch(tmp_path: Path) -> None:
     provider = GraphScriptedProvider(
         review_issues=[_auto_fixable_issue()],
-        patches=[PatchResult(issue_id="discount-fix", diff_content=SECOND_SAMPLE_PATCH)],
+        patches=[PatchResult(issue_id="discount-fix", diff_content=REGRESSIVE_SAMPLE_PATCH)],
     )
     state = _initial_state(tmp_path, provider)
     state.update({

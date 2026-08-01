@@ -79,6 +79,7 @@ export function subscribeToEvents(
   taskId: string,
   callbacks: {
     onStepProgress?: (data: { node: string; status: string; message?: string }) => void;
+    onPatchUpdate?: (data: { id: string; status: string; warning?: string | null }) => void;
     onDone?: (data: { status: string }) => void;
     onError?: (data: { message: string }) => void;
   }
@@ -86,6 +87,9 @@ export function subscribeToEvents(
   const es = new EventSource(`${API_BASE}/api/reviews/${taskId}/stream`);
   es.addEventListener("step_progress", (e: MessageEvent) => {
     callbacks.onStepProgress?.(JSON.parse(e.data));
+  });
+  es.addEventListener("patch_update", (e: MessageEvent) => {
+    callbacks.onPatchUpdate?.(JSON.parse(e.data));
   });
   es.addEventListener("done", (e: MessageEvent) => {
     callbacks.onDone?.(JSON.parse(e.data));
