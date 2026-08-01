@@ -1,26 +1,19 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
-import {
-  createReview,
-  getReview,
-  getReport,
-  previewReview,
-  retryReviewUnit,
-  subscribeToEvents,
-} from "./api/client";
-import AgentPanel from "./components/AgentPanel.vue";
+import { createReview, getReport, getReview, previewReview, retryReviewUnit, subscribeToEvents } from "./api/client";
 import ChangedFiles from "./components/ChangedFiles.vue";
 import ContextPanel from "./components/ContextPanel.vue";
 import IssueList from "./components/IssueList.vue";
+import PatchPanel from "./components/PatchPanel.vue";
 import ReportPanel from "./components/ReportPanel.vue";
-import TaskTimeline from "./components/TaskTimeline.vue";
 import ValidationPanel from "./components/ValidationPanel.vue";
-import type {
-  ReviewMode,
-  ReviewPreviewResponse,
-  ReviewTask,
-  ValidationBackend,
-} from "./types/review";
+import AppHeader from "./components/layout/AppHeader.vue";
+import AppSidebar from "./components/layout/AppSidebar.vue";
+import ExecutionTimeline from "./components/review/ExecutionTimeline.vue";
+import ReviewLauncher from "./components/review/ReviewLauncher.vue";
+import ReviewMetrics from "./components/review/ReviewMetrics.vue";
+import ReviewUnitsPanel from "./components/review/ReviewUnitsPanel.vue";
+import type { ReviewMode, ReviewPreviewResponse, ReviewTask, ValidationBackend } from "./types/review";
 
 const prUrl = ref("");
 const model = ref("");
@@ -45,21 +38,27 @@ watch(mode, (next) => {
 const statusText = computed(() => {
   if (!task.value) return "等待输入";
   const labels: Record<string, string> = {
-    queued: "等待审查",
-    planning: "正在准备审查",
-    reviewing: "正在只读审查",
-    resolving_evidence: "正在补充证据",
-    verifying_issues: "正在核验问题",
-    generating_patches: "正在生成候选修复",
-    validating: "正在验证候选修复",
-    waiting_for_human: "等待人工确认",
-    completed: "审查已完成",
-    completed_with_warnings: "审查已完成（存在警告）",
-    failed: "任务失败",
-    cancelled: "任务已取消",
+    pending: "等待审查", queued: "等待审查", planning: "正在准备", reviewing: "正在审查",
+    resolving_evidence: "解析证据", verifying_issues: "核验问题", generating_patches: "生成补丁",
+    validating: "验证补丁", waiting_for_human: "等待人工", completed: "审查已完成",
+    completed_with_warnings: "已完成，有警告", failed: "任务失败", cancelled: "任务已取消",
   };
   return labels[task.value.status] ?? `未知状态：${task.value.status}`;
 });
+
+const statusEnglish = computed(() => {
+  if (!task.value) return "Ready";
+  if (["completed", "completed_with_warnings"].includes(task.value.status)) return "Completed";
+  if (["failed", "cancelled"].includes(task.value.status)) return "Attention";
+  if (task.value.status === "waiting_for_human") return "Human review";
+  return "Running";
+});
+
+const modeText = computed(() => ({
+  review: "只读审查",
+  review_and_suggest: "审查 + 候选补丁",
+  review_suggest_and_validate: "审查 + 补丁 + 验证",
+}[task.value?.mode || mode.value]));
 
 async function submitReview() {
   clearAll();
@@ -68,17 +67,9 @@ async function submitReview() {
   task.value = null;
   submitting.value = true;
   try {
-    const created = await createReview(
-      prUrl.value.trim(),
-      model.value.trim(),
-      mode.value,
-      generatePatches.value,
-      validationBackend.value,
-    );
+    const created = await createReview(prUrl.value.trim(), model.value.trim(), mode.value, generatePatches.value, validationBackend.value);
     const currentTask = await refreshTask(created.task_id);
-    if (currentTask !== null && !isTerminalStatus(currentTask.status)) {
-      subscribeOrPoll(created.task_id);
-    }
+    if (currentTask !== null && !isTerminalStatus(currentTask.status)) subscribeOrPoll(created.task_id);
   } catch (err) {
     error.value = err instanceof Error ? err.message : "创建任务失败";
   } finally {
@@ -90,12 +81,7 @@ async function loadPreview() {
   error.value = null;
   previewing.value = true;
   try {
-    preview.value = await previewReview(
-      prUrl.value.trim(),
-      mode.value,
-      generatePatches.value,
-      validationBackend.value,
-    );
+    preview.value = await previewReview(prUrl.value.trim(), mode.value, generatePatches.value, validationBackend.value);
   } catch (err) {
     error.value = err instanceof Error ? err.message : "Preview 失败";
   } finally {
@@ -120,18 +106,10 @@ async function retryUnit(unitId: string) {
 function subscribeOrPoll(taskId: string) {
   try {
     eventSource = subscribeToEvents(taskId, {
-      onStepProgress: () => {
-        void refreshTask(taskId);
-      },
-      onPatchUpdate: () => {
-        void refreshTask(taskId);
-      },
-      onDone: () => {
-        window.setTimeout(() => void refreshTask(taskId), 500);
-      },
-      onError: () => {
-        startPolling(taskId);
-      },
+      onStepProgress: () => void refreshTask(taskId),
+      onPatchUpdate: () => void refreshTask(taskId),
+      onDone: () => window.setTimeout(() => void refreshTask(taskId), 500),
+      onError: () => startPolling(taskId),
     });
   } catch {
     startPolling(taskId);
@@ -144,11 +122,7 @@ function startPolling(taskId: string) {
 }
 
 function isTerminalStatus(status: ReviewTask["status"]) {
-  return status === "completed" || status === "completed_with_warnings" || status === "failed" || status === "cancelled";
-}
-
-function unitResult(unitId: string) {
-  return task.value?.review_unit_results.find((result) => result.review_unit_id === unitId);
+  return ["completed", "completed_with_warnings", "failed", "cancelled"].includes(status);
 }
 
 async function refreshTask(taskId: string): Promise<ReviewTask | null> {
@@ -182,172 +156,53 @@ function clearPolling() {
   }
 }
 
-function clearAll() {
-  clearPolling();
-}
-
+function clearAll() { clearPolling(); }
 onBeforeUnmount(clearPolling);
 </script>
 
 <template>
-  <main class="shell">
-    <section class="hero">
-      <div>
-        <p class="eyebrow">RepoGuardian</p>
-        <h1>PR Review Control Desk</h1>
-      </div>
-      <div class="status-chip" :data-status="task?.status || 'idle'">{{ statusText }}</div>
-    </section>
+  <div class="app-shell">
+    <AppHeader :status-text="statusText" :status-english="statusEnglish" :status="task?.status || 'idle'" />
+    <div class="app-body">
+      <AppSidebar />
+      <ReviewLauncher
+        v-model:pr-url="prUrl"
+        v-model:model="model"
+        v-model:mode="mode"
+        v-model:generate-patches="generatePatches"
+        v-model:validation-backend="validationBackend"
+        :previewing="previewing"
+        :submitting="submitting"
+        :error="error"
+        :preview="preview"
+        @preview="loadPreview"
+        @submit="submitReview"
+      />
 
-    <section class="workspace">
-      <aside class="left-rail">
-        <form class="panel intake" @submit.prevent="submitReview">
-          <h2>启动审查</h2>
-          <label>
-            GitHub PR URL
-            <input
-              v-model="prUrl"
-              type="url"
-              placeholder="https://github.com/owner/repo/pull/123"
-              required
-            />
-          </label>
-          <label>
-            Model
-            <input v-model="model" type="text" placeholder="使用后端默认模型" />
-          </label>
-          <label>
-            审查模式
-            <select v-model="mode">
-              <option value="review">只读审查</option>
-              <option value="review_and_suggest">审查 + 候选补丁</option>
-              <option value="review_suggest_and_validate">审查 + 补丁 + 验证</option>
-            </select>
-          </label>
-          <label v-if="mode === 'review_suggest_and_validate'">
-            验证后端
-            <select v-model="validationBackend">
-              <option value="none">不执行验证</option>
-              <option value="user_runner">用户 Runner（未配置）</option>
-              <option value="project_ci">项目 CI（未配置）</option>
-              <option value="gvisor">gVisor（未配置）</option>
-            </select>
-          </label>
-          <label v-if="mode !== 'review'" class="checkbox-row">
-            <input v-model="generatePatches" type="checkbox" />
-            生成候选补丁
-          </label>
-          <div class="form-actions">
-            <button :disabled="previewing || !prUrl" type="button" class="secondary" @click="loadPreview">
-              {{ previewing ? "分析中" : "Preview" }}
-            </button>
-            <button :disabled="submitting" type="submit">
-              {{ submitting ? "提交中" : "开始审查" }}
-            </button>
-          </div>
-          <p class="hint">Preview 只做确定性分析，不调用模型，也不执行目标仓库代码。</p>
-          <p v-if="error" class="error">{{ error }}</p>
-        </form>
+      <main class="dashboard-main">
+        <header class="dashboard-heading">
+          <div><p class="eyebrow">AI REVIEW WORKSPACE</p><h1>PR Review Control Desk</h1><p>AI 驱动的 Pull Request 审查控制台，支持审查规划、证据解析、问题验证与候选修复。</p></div>
+        </header>
 
-        <section v-if="preview" class="panel preview-panel">
-          <div class="panel-head">
-            <h2>审查 Preview</h2>
-            <span>{{ preview.review_units.length }} Units</span>
-          </div>
-          <div class="preview-metrics">
-            <strong>{{ preview.included_file_count }}/{{ preview.changed_file_count }}</strong>
-            <span>纳入审查文件</span>
-            <strong>{{ preview.estimated_model_calls }}</strong>
-            <span>预计模型调用</span>
-            <strong>{{ preview.estimated_tokens.toLocaleString() }}</strong>
-            <span>预计 Token</span>
-          </div>
-          <p>模式：{{ preview.mode }} · 候选补丁：{{ preview.patch_generation_enabled ? "开启" : "关闭" }}</p>
-          <p>
-            验证：{{ preview.validation_backend.name }} ·
-            {{ preview.validation_backend.available ? "可用" : "不可用" }}
-          </p>
-          <p v-if="preview.validation_backend.unavailable_reason" class="hint">
-            {{ preview.validation_backend.unavailable_reason }}
-          </p>
-          <div class="tag-list">
-            <span v-for="tag in preview.risk_tags" :key="tag">{{ tag }}</span>
-          </div>
-          <details v-if="preview.review_units.length">
-            <summary>查看 Unit 拆分</summary>
-            <p v-for="unit in preview.review_units" :key="unit.id">
-              {{ unit.primary_files.join("、") }} — {{ unit.grouping_reason }} / {{ unit.complexity }}
-            </p>
-          </details>
-          <details v-if="preview.excluded_files.length">
-            <summary>排除 {{ preview.excluded_files.length }} 个文件</summary>
-            <p v-for="file in preview.excluded_files" :key="file.file_path">
-              {{ file.file_path }} — {{ file.reason }}
-            </p>
-          </details>
+        <section v-if="task?.pr" class="pr-summary">
+          <div class="pr-summary__identity"><span>{{ task.pr.owner }}/{{ task.pr.repo }}</span><strong>#{{ task.pr.number }} {{ task.pr.title }}</strong></div>
+          <div class="pr-summary__meta"><code>{{ task.pr.base.ref }} → {{ task.pr.head.ref }}</code><span>{{ modeText }}</span><span>{{ task.model || "后端默认模型" }}</span><a :href="task.pr.html_url" target="_blank" rel="noreferrer">在 GitHub 查看 ↗</a></div>
         </section>
 
-        <section class="panel" v-if="task">
-          <div class="panel-head">
-            <h2>任务流程</h2>
-            <span>{{ task.id.slice(0, 8) }}</span>
-          </div>
-          <TaskTimeline :steps="task.steps" />
-        </section>
-      </aside>
+        <ReviewMetrics :task="task" />
 
-      <section class="main-grid">
-        <section v-if="task?.pr" class="panel pr-summary">
-          <div>
-            <span>PR #{{ task.pr.number }}</span>
-            <h2>{{ task.pr.title }}</h2>
-            <p>{{ task.pr.owner }}/{{ task.pr.repo }}</p>
-          </div>
-          <a :href="task.pr.html_url" target="_blank" rel="noreferrer">GitHub</a>
+        <section class="dashboard-grid">
+          <ChangedFiles :files="task?.changed_files || []" />
+          <ReviewUnitsPanel :units="task?.review_units || []" :results="task?.review_unit_results || []" :task-status="task?.status" :retrying-unit-id="retryingUnitId" @retry="retryUnit" />
+          <ExecutionTimeline :steps="task?.steps || []" :task-status="task?.status" :mode="task?.mode || mode" :events="task?.agent_events || []" :static-results="task?.static_results || []" :test-results="task?.test_results || []" />
+          <IssueList :issues="task?.issues || []" />
+          <PatchPanel :patches="task?.patches || []" :validations="task?.validation || []" />
+          <ValidationPanel :profile="task?.project_profile" :snapshots="task?.validation_snapshots || []" :deltas="task?.validation_deltas || []" :results="task?.validation || []" />
+          <ContextPanel :snippets="task?.context_snippets || []" />
+          <ReportPanel :markdown="report || task?.report_markdown" />
         </section>
-
-        <ChangedFiles :files="task?.changed_files || []" />
-        <section v-if="task?.review_units.length" class="panel unit-panel">
-          <div class="panel-head">
-            <h2>Review Units</h2>
-            <span>{{ task.review_units.length }}</span>
-          </div>
-          <article v-for="unit in task.review_units" :key="unit.id" class="unit-row">
-            <div>
-              <strong>{{ unit.primary_files.join("、") }}</strong>
-              <p>{{ unit.grouping_reason }} · {{ unit.complexity }}</p>
-            </div>
-            <span v-if="unitResult(unit.id)" :data-status="unitResult(unit.id)?.status">
-              {{ unitResult(unit.id)?.status }}
-            </span>
-            <button
-              v-if="unitResult(unit.id) && isTerminalStatus(task.status)"
-              type="button"
-              class="secondary compact"
-              :disabled="retryingUnitId === unit.id"
-              @click="retryUnit(unit.id)"
-            >
-              {{ retryingUnitId === unit.id ? "重试中" : "重试 Unit" }}
-            </button>
-          </article>
-        </section>
-        <AgentPanel
-          :events="task?.agent_events || []"
-          :static-results="task?.static_results || []"
-          :patches="task?.patches || []"
-          :test-results="task?.test_results || []"
-        />
-        <ValidationPanel
-          :profile="task?.project_profile"
-          :snapshots="task?.validation_snapshots || []"
-          :deltas="task?.validation_deltas || []"
-          :results="task?.validation || []"
-        />
-        <ContextPanel :snippets="task?.context_snippets || []" />
-        <IssueList :issues="task?.issues || []" />
-        <ReportPanel :markdown="report || task?.report_markdown" />
-      </section>
-    </section>
-  </main>
+        <footer class="app-footer"><span>隐私优先 · 数据不出域 · 全流程可追溯</span><span><i /> RepoGuardian v0.1.0</span></footer>
+      </main>
+    </div>
+  </div>
 </template>
-

@@ -5,6 +5,9 @@ import type {
   ValidationResult,
   ValidationSnapshot,
 } from "../types/review";
+import EmptyState from "./common/EmptyState.vue";
+import PanelHeader from "./common/PanelHeader.vue";
+import StatusBadge from "./common/StatusBadge.vue";
 
 defineProps<{
   profile?: ProjectProfile | null;
@@ -35,65 +38,51 @@ function validationStatusText(status: ValidationResult["status"]): string {
   };
   return labels[status] ?? `未知验证状态：${status}`;
 }
+
+function short(value?: string | null): string {
+  return value?.slice(0, 8) || "—";
+}
+
+function time(value?: string | null): string {
+  return value ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "short" }).format(new Date(value)) : "—";
+}
 </script>
 
 <template>
   <section class="panel validation-panel">
-    <div class="panel-head">
-      <div>
-        <p class="eyebrow">Verification ledger</p>
-        <h2>三阶段验证</h2>
-      </div>
-      <span>{{ snapshots.length }} 条</span>
-    </div>
+    <PanelHeader icon="◇" title="验证账本" subtitle="Validation Ledger"><span class="panel-count">{{ results.length }} 条记录</span></PanelHeader>
 
     <p v-if="profile" class="validation-profile">
       {{ profile.adapter_id }} / {{ profile.language }}
       <span v-if="profile.detected_files.length">· {{ profile.detected_files.join("、") }}</span>
     </p>
-    <div v-if="snapshots.length === 0" class="empty">尚无验证快照</div>
+    <EmptyState v-if="!results.length" icon="◇" title="暂无验证记录" description="补丁验证结果会记录在验证账本中，便于追溯来源与可信度。" />
+    <div v-else class="validation-table-wrap">
+      <table class="validation-table">
+        <thead><tr><th>Backend / Patch</th><th>状态</th><th>可信度</th><th>SHA</th><th>时间</th></tr></thead>
+        <tbody>
+          <tr v-for="result in results" :key="result.id">
+            <td><strong>{{ result.backend }}</strong><small>{{ result.profile || "默认 Profile" }} · {{ result.patch_id ? `Patch ${short(result.patch_id)}` : "无 Patch" }}</small></td>
+            <td><StatusBadge :status="result.status" /><small>{{ validationStatusText(result.status) }}</small></td>
+            <td><strong>{{ result.trusted ? "可信结果" : "尚未确认" }}</strong><small>{{ result.trust_source || "无信任来源" }}</small></td>
+            <td><code>H {{ short(result.head_sha) }}</code><code>P {{ short(result.patch_sha) }}</code></td>
+            <td><small>{{ time(result.started_at) }}</small><small>{{ time(result.completed_at) }}</small></td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-for="result in results.filter((item) => item.validation_request_id)" :key="`${result.id}:request`" class="request-id">Request {{ result.validation_request_id }}</p>
+    </div>
 
-    <div v-if="results.length" class="validation-results">
-      <h3>验证结论</h3>
-      <article v-for="result in results" :key="result.id" class="validation-snapshot">
-        <div class="validation-snapshot-head">
-          <strong>{{ result.backend }}</strong>
-          <span>{{ validationStatusText(result.status) }}</span>
-        </div>
-        <p class="validation-detail">
-          {{ result.trusted ? "可信结果" : "不可信结果" }} · Head {{ result.head_sha.slice(0, 8) }}
-        </p>
+    <details v-if="snapshots.length || deltas.length" class="validation-history">
+      <summary>查看历史快照和结果变化（{{ snapshots.length + deltas.length }}）</summary>
+      <article v-for="snapshot in snapshots" :key="`${snapshot.stage}:${snapshot.patch_id || snapshot.sha}`" class="validation-history__row">
+        <div><strong>{{ stageLabel[snapshot.stage] }}</strong><StatusBadge :status="snapshot.passed ? 'passed' : 'failed'" /></div>
+        <p>{{ commandSummary(snapshot) }}</p><small>SHA {{ short(snapshot.sha) }}<template v-if="snapshot.failure_kind"> · {{ snapshot.failure_kind }}</template></small>
       </article>
-    </div>
-
-    <article
-      v-for="snapshot in snapshots"
-      :key="`${snapshot.stage}:${snapshot.patch_id || snapshot.sha}:${snapshot.command_results.length}`"
-      class="validation-snapshot"
-      :data-pass="snapshot.passed"
-    >
-      <div class="validation-snapshot-head">
-        <strong>{{ stageLabel[snapshot.stage] }}</strong>
-        <span :data-pass="snapshot.passed">{{ snapshot.passed ? "通过" : "失败" }}</span>
-      </div>
-      <p>{{ commandSummary(snapshot) }}</p>
-      <small>
-        SHA {{ snapshot.sha.slice(0, 8) }}
-        <template v-if="snapshot.patch_id"> · Patch {{ snapshot.patch_id.slice(0, 8) }}</template>
-        <template v-if="snapshot.failure_kind"> · {{ snapshot.failure_kind }}</template>
-      </small>
-      <p v-if="snapshot.failure_detail" class="validation-detail">{{ snapshot.failure_detail }}</p>
-    </article>
-
-    <div v-if="deltas.length" class="validation-deltas">
-      <h3>结果变化</h3>
-      <div v-for="delta in deltas" :key="`${delta.from_stage}:${delta.to_stage}:${delta.patch_id || ''}`" class="delta-row">
-        <strong>{{ stageLabel[delta.from_stage] }} → {{ stageLabel[delta.to_stage] }}</strong>
-        <span v-if="delta.introduced_failure" class="delta-negative">新增失败</span>
-        <span v-else-if="delta.resolved_failure" class="delta-positive">已解决</span>
-        <span v-else>无状态变化</span>
-        <small v-if="delta.patch_id">Patch {{ delta.patch_id.slice(0, 8) }}</small>
-      </div>
-    </div>
+      <article v-for="delta in deltas" :key="`${delta.from_stage}:${delta.to_stage}:${delta.patch_id || ''}`" class="validation-history__row">
+        <div><strong>{{ stageLabel[delta.from_stage] }} → {{ stageLabel[delta.to_stage] }}</strong><StatusBadge :status="delta.introduced_failure ? 'failed' : delta.resolved_failure ? 'passed' : 'pending'" /></div>
+        <p>{{ delta.introduced_failure ? "新增失败" : delta.resolved_failure ? "已解决失败" : "无状态变化" }}</p>
+      </article>
+    </details>
   </section>
 </template>
