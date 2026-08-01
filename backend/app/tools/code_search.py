@@ -7,6 +7,7 @@ from typing import Any
 from app.models.review import ContextRetrievalPlan, RetrievalRelevanceType, ReviewToolScope
 from app.tools.base import BaseTool
 from app.tools.git_tool import GitTool
+from app.review.tool_scope import ReviewPathPolicyError, validate_repository_file
 
 
 class ContextRetrievalPlanError(ValueError):
@@ -44,6 +45,13 @@ class CodeSearchTool(BaseTool):
             scope if isinstance(scope, ReviewToolScope)
             else ReviewToolScope.model_validate(scope) if scope is not None else None
         )
+        repository_root = Path(repo_path).resolve(strict=True)
+        if normalized_scope is not None and normalized_scope.repository_root is not None:
+            scoped_root = Path(normalized_scope.repository_root).resolve(strict=True)
+            if scoped_root != repository_root:
+                raise ContextRetrievalPlanError("repository root does not match review unit scope")
+        git_tool = GitTool()
+        tracked_files = git_tool.list_tracked_files(repository_root)
         if normalized_scope is not None:
             readable = normalized_scope.readable_files
             file_index = [item for item in file_index if item.get("path") in readable]
@@ -60,7 +68,35 @@ class CodeSearchTool(BaseTool):
                 normalized_plan.max_results, normalized_scope.max_search_results
             )
         _validate_plan_against_indexes(normalized_plan, file_index, symbol_index)
-        git_tool = GitTool()
+        for requested_path in normalized_plan.target_files:
+            try:
+                validate_repository_file(
+                    repository_root,
+                    requested_path,
+                    tracked_files=tracked_files,
+                )
+            except (OSError, ReviewPathPolicyError) as exc:
+                raise ContextRetrievalPlanError(str(exc)) from exc
+        safe_files: set[str] = set()
+        catalog_paths = {
+            path
+            for path in (
+                *[item.get("path") for item in file_index],
+                *[item.get("file") for item in symbol_index],
+                *[item.get("file_path") for item in changed_files],
+            )
+            if isinstance(path, str)
+        }
+        for path in catalog_paths:
+            try:
+                validate_repository_file(repository_root, path, tracked_files=tracked_files)
+            except (OSError, ReviewPathPolicyError):
+                continue
+            safe_files.add(path)
+        file_index = [item for item in file_index if item.get("path") in safe_files]
+        symbol_index = [item for item in symbol_index if item.get("file") in safe_files]
+        changed_files = [item for item in changed_files if item.get("file_path") in safe_files]
+        _validate_plan_against_indexes(normalized_plan, file_index, symbol_index)
         snippets: list[dict[str, Any]] = []
         target_files = set(normalized_plan.target_files)
         target_symbols = set(normalized_plan.target_symbols)
@@ -184,7 +220,10 @@ def _validate_plan_against_indexes(
     file_index: list[dict[str, Any]],
     symbol_index: list[dict[str, Any]],
 ) -> None:
-    indexed_files = {item.get("path") for item in file_index}
+    indexed_files = {
+        *[item.get("path") for item in file_index],
+        *[item.get("file") for item in symbol_index],
+    }
     unknown_files = sorted(set(plan.target_files) - indexed_files) if indexed_files else []
     if unknown_files:
         raise ContextRetrievalPlanError(f"target files are not in repository index: {unknown_files}")

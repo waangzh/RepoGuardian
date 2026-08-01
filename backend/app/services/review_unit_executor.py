@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, TypedDict
+
+from langgraph.graph import END, START, StateGraph
 
 from app.agents.providers import LLMProvider
 from app.models.review import (
@@ -29,6 +31,30 @@ from app.services.review_planner import DeterministicReviewPlanner
 from app.tools.code_search import CodeSearchTool
 
 
+class _ReviewUnitGraphState(TypedDict, total=False):
+    """单个 Review Unit 子图的隔离状态。"""
+
+    parent_state: dict[str, Any]
+    unit: ReviewUnit
+    scope: ReviewToolScope
+    unit_files: list[ChangedFile]
+    unit_diff: str
+    budget: ExecutionBudget
+    skip_plan: bool
+    context: list[dict[str, Any]]
+    issues: list[ReviewIssue]
+    pending_issues: list[ReviewIssue]
+    messages: list[AgentEvent]
+    tool_events: list[ReviewUnitToolEvent]
+    retrieval_fingerprints: list[str]
+    issue_round_completed: bool
+    legacy_review_action: bool
+    next_action: AgentAction | None
+    pending_consumed: bool
+    done: bool
+    error: str | None
+
+
 class ReviewUnitExecutor:
     """使用固定数量 worker 执行 Unit，不按 Unit 数量无限创建任务。"""
 
@@ -48,6 +74,7 @@ class ReviewUnitExecutor:
         self.concurrency = concurrency
         self.timeout_seconds = timeout_seconds
         self.planner = planner or DeterministicReviewPlanner()
+        self.unit_graph = self._build_unit_graph().compile()
 
     async def execute(
         self,
@@ -120,80 +147,290 @@ class ReviewUnitExecutor:
         all_changed = [ChangedFile.model_validate(item) for item in state.get("changed_files") or []]
         by_path = {item.file_path: item for item in all_changed}
         unit_files = self._unit_changed_files(unit, by_path)
-        scope = self.planner.build_scope(unit)
+        scope = self.planner.build_scope(unit, state.get("repo_path") or None)
         budget = self._budget_for(unit)
         skip_plan = self.planner.should_skip_plan(unit, all_changed)
-        messages: list[AgentEvent] = []
-        tool_events: list[ReviewUnitToolEvent] = []
-        context: list[dict[str, Any]] = []
-
-        if not skip_plan:
-            budget = budget.consume(model_calls=1, token_usage=1_200)
-            action = await self.provider.decide(
-                self._unit_state(state, unit, scope, unit_files, budget, context),
-                state.get("model"),
-            )
-            messages.append(self._event(unit.id, action, "selected", action.reason))
-            if action.action == AgentActionName.retrieve_context:
-                plan = ContextRetrievalPlan.model_validate(action.tool_args["plan"])
-                try:
-                    context = await CodeSearchTool().retrieve_context(
-                        changed_files=[item.model_dump(mode="json") for item in unit_files],
-                        symbol_index=state.get("symbol_index") or [],
-                        file_index=state.get("file_index") or [],
-                        repo_path=state.get("repo_path", ""),
-                        plan=plan,
-                        scope=scope,
-                    )
-                    budget = budget.consume(context_retrievals=1)
-                    tool_events.append(ReviewUnitToolEvent(
-                        review_unit_id=unit.id,
-                        tool="code_search",
-                        status="completed",
-                        result_count=len(context),
-                    ))
-                except ValueError as exc:
-                    tool_events.append(ReviewUnitToolEvent(
-                        review_unit_id=unit.id,
-                        tool="code_search",
-                        status="rejected",
-                        detail=str(exc),
-                    ))
-            elif action.action == AgentActionName.request_human:
-                return ReviewUnitResult(
-                    review_unit_id=unit.id,
-                    status=ReviewUnitStatus.failed,
-                    plan_skipped=False,
-                    messages=messages,
-                    tool_events=tool_events,
-                    execution_budget=budget,
-                    error="review unit requires human input",
-                )
-
-        budget = budget.consume(diagnosis_attempts=1, model_calls=1, token_usage=4_096)
-        pr = PullRequestInfo.model_validate(state.get("pr_info") or {})
-        unit_diff = self._unit_diff(unit, by_path)
-        enhanced_diff = self._enhanced_diff(unit_diff, context)
-        model_issues = await self.provider.review(pr, unit_files, enhanced_diff, state.get("model"))
-        issues = self._filter_issues(model_issues, unit, scope)
-        messages.append(AgentEvent(
-            action=AgentActionName.review_code,
-            reason="执行 Unit 独立审查",
-            status="completed",
-            message=f"发现 {len(issues)} 个问题",
-            review_unit_id=unit.id,
-        ))
-        snippets = [ContextSnippet.model_validate(item) for item in context]
+        graph_state: _ReviewUnitGraphState = {
+            "parent_state": state,
+            "unit": unit,
+            "scope": scope,
+            "unit_files": unit_files,
+            "unit_diff": self._unit_diff(unit, by_path),
+            "budget": budget,
+            "skip_plan": skip_plan,
+            "context": [],
+            "issues": [],
+            "messages": [],
+            "tool_events": [],
+            "retrieval_fingerprints": [],
+            "issue_round_completed": False,
+            "legacy_review_action": False,
+            "done": False,
+        }
+        result = await self.unit_graph.ainvoke(graph_state)
         return ReviewUnitResult(
             review_unit_id=unit.id,
-            status=ReviewUnitStatus.completed,
+            status=(
+                ReviewUnitStatus.completed
+                if result.get("done") and not result.get("error")
+                else ReviewUnitStatus.failed
+            ),
             plan_skipped=skip_plan,
-            issues=issues,
-            context_snippets=snippets,
-            messages=messages,
-            tool_events=tool_events,
-            execution_budget=budget,
+            issues=result.get("issues") or [],
+            context_snippets=[
+                ContextSnippet.model_validate(item) for item in result.get("context") or []
+            ],
+            messages=result.get("messages") or [],
+            tool_events=result.get("tool_events") or [],
+            execution_budget=result.get("budget") or budget,
+            error=result.get("error"),
         )
+
+    def _build_unit_graph(self) -> StateGraph:
+        """构造每个 Review Unit 独立运行的有界 LangGraph 子图。"""
+        graph = StateGraph(_ReviewUnitGraphState)
+        graph.add_node("prepare_unit", self._prepare_unit_node)
+        graph.add_node("plan_unit", self._plan_unit_node)
+        graph.add_node("agent_decide", self._agent_decide_node)
+        graph.add_node("execute_read_tool", self._execute_read_tool_node)
+        graph.add_node("report_issue", self._report_issue_node)
+        graph.add_node("collect_issue", self._collect_issue_node)
+        graph.add_node("finish_unit", self._finish_unit_node)
+        graph.add_edge(START, "prepare_unit")
+        graph.add_conditional_edges(
+            "prepare_unit",
+            lambda state: "agent_decide" if state["skip_plan"] else "plan_unit",
+            {"plan_unit": "plan_unit", "agent_decide": "agent_decide"},
+        )
+        graph.add_edge("plan_unit", "agent_decide")
+        graph.add_conditional_edges(
+            "agent_decide",
+            self._route_unit_action,
+            {
+                "retrieve_context": "execute_read_tool",
+                "report_issue": "report_issue",
+                "task_done": "finish_unit",
+                "request_human": "finish_unit",
+            },
+        )
+        graph.add_edge("execute_read_tool", "agent_decide")
+        graph.add_edge("report_issue", "collect_issue")
+        graph.add_edge("collect_issue", "agent_decide")
+        graph.add_edge("finish_unit", END)
+        return graph
+
+    async def _prepare_unit_node(
+        self, state: "_ReviewUnitGraphState"
+    ) -> "_ReviewUnitGraphState":
+        return {"messages": [*state["messages"], AgentEvent(
+            action="prepare_unit",
+            reason="建立不可扩张的 Unit 文件范围与执行预算",
+            status="completed",
+            review_unit_id=state["unit"].id,
+        )]}
+
+    async def _plan_unit_node(
+        self, state: "_ReviewUnitGraphState"
+    ) -> "_ReviewUnitGraphState":
+        action, budget, legacy = await self._decide_unit(state)
+        return {
+            "next_action": action,
+            "budget": budget,
+            "legacy_review_action": state.get("legacy_review_action", False) or legacy,
+            "messages": [*state["messages"], self._event(
+                state["unit"].id, action, "selected", action.reason
+            )],
+        }
+
+    async def _agent_decide_node(
+        self, state: "_ReviewUnitGraphState"
+    ) -> "_ReviewUnitGraphState":
+        pending = state.get("next_action")
+        if pending is not None:
+            return {"next_action": pending, "pending_consumed": True}
+        if state["issue_round_completed"] and state.get("legacy_review_action", False):
+            return {"next_action": AgentAction(
+                action=AgentActionName.task_done,
+                reason="兼容旧 Provider：完成一次结构化问题报告后显式结束 Unit",
+            )}
+        action, budget, legacy = await self._decide_unit(state)
+        return {
+            "next_action": action,
+            "budget": budget,
+            "legacy_review_action": state.get("legacy_review_action", False) or legacy,
+            "messages": [*state["messages"], self._event(
+                state["unit"].id, action, "selected", action.reason
+            )],
+        }
+
+    async def _decide_unit(
+        self, state: "_ReviewUnitGraphState"
+    ) -> tuple[AgentAction, ExecutionBudget, bool]:
+        budget = state["budget"]
+        if not budget.can_consume(model_calls=1, token_usage=600):
+            return AgentAction(action="task_done", reason="Unit 模型调用预算已耗尽"), budget, False
+        budget = budget.consume(model_calls=1, token_usage=600)
+        decision_state = self._unit_state(
+            state["parent_state"], state["unit"], state["scope"],
+            state["unit_files"], budget, state["context"],
+        )
+        decision_state.update({
+            "unit_agent": True,
+            "reported_issue_count": len(state["issues"]),
+            "issue_round_completed": state["issue_round_completed"],
+            "retrieval_history": list(state["retrieval_fingerprints"]),
+        })
+        action = await self.provider.decide(decision_state, state["parent_state"].get("model"))
+        legacy_review = action.action == AgentActionName.review_code
+        if legacy_review:
+            action = AgentAction(
+                action=(
+                    AgentActionName.task_done
+                    if state["issue_round_completed"]
+                    else AgentActionName.report_issue
+                ),
+                reason=action.reason,
+            )
+        elif action.action == AgentActionName.finish_report:
+            action = AgentAction(action=AgentActionName.task_done, reason=action.reason)
+        allowed = {
+            AgentActionName.retrieve_context,
+            AgentActionName.report_issue,
+            AgentActionName.task_done,
+            AgentActionName.request_human,
+        }
+        if action.action not in allowed:
+            action = AgentAction(action=AgentActionName.task_done, reason="Unit 动作不在只读白名单")
+        return action, budget, legacy_review
+
+    @staticmethod
+    def _route_unit_action(state: "_ReviewUnitGraphState") -> str:
+        action = state["next_action"].action
+        return action.value
+
+    async def _execute_read_tool_node(
+        self, state: "_ReviewUnitGraphState"
+    ) -> "_ReviewUnitGraphState":
+        action = state["next_action"]
+        budget = state["budget"]
+        events = list(state["tool_events"])
+        if not budget.can_consume(context_retrievals=1):
+            events.append(ReviewUnitToolEvent(
+                review_unit_id=state["unit"].id,
+                tool="code_search",
+                status="rejected",
+                detail="context retrieval budget exhausted",
+            ))
+            return {"next_action": None, "tool_events": events}
+        plan = ContextRetrievalPlan.model_validate(action.tool_args["plan"])
+        fingerprint = plan.model_dump_json()
+        if fingerprint in state["retrieval_fingerprints"]:
+            events.append(ReviewUnitToolEvent(
+                review_unit_id=state["unit"].id,
+                tool="code_search",
+                status="rejected",
+                detail="duplicate retrieval plan",
+            ))
+            return {"next_action": None, "tool_events": events}
+        budget = budget.consume(context_retrievals=1)
+        try:
+            snippets = await CodeSearchTool().retrieve_context(
+                changed_files=[item.model_dump(mode="json") for item in state["unit_files"]],
+                symbol_index=state["parent_state"].get("symbol_index") or [],
+                file_index=state["parent_state"].get("file_index") or [],
+                repo_path=state["parent_state"].get("repo_path", ""),
+                plan=plan,
+                scope=state["scope"],
+            )
+            existing = {
+                (item.get("file"), item.get("start_line"), item.get("end_line"))
+                for item in state["context"]
+            }
+            new_items = [
+                item for item in snippets
+                if (item.get("file"), item.get("start_line"), item.get("end_line")) not in existing
+            ]
+            events.append(ReviewUnitToolEvent(
+                review_unit_id=state["unit"].id,
+                tool="code_search",
+                status="completed",
+                result_count=len(new_items),
+            ))
+            return {
+                "next_action": None,
+                "budget": budget,
+                "context": [*state["context"], *new_items],
+                "retrieval_fingerprints": [*state["retrieval_fingerprints"], fingerprint],
+                "tool_events": events,
+            }
+        except ValueError as exc:
+            events.append(ReviewUnitToolEvent(
+                review_unit_id=state["unit"].id,
+                tool="code_search",
+                status="rejected",
+                detail=str(exc),
+            ))
+            return {
+                "next_action": None,
+                "budget": budget,
+                "retrieval_fingerprints": [*state["retrieval_fingerprints"], fingerprint],
+                "tool_events": events,
+            }
+
+    async def _report_issue_node(
+        self, state: "_ReviewUnitGraphState"
+    ) -> "_ReviewUnitGraphState":
+        budget = state["budget"]
+        if not budget.can_consume(diagnosis_attempts=1, model_calls=1, token_usage=4_096):
+            return {"pending_issues": [], "next_action": None}
+        budget = budget.consume(diagnosis_attempts=1, model_calls=1, token_usage=4_096)
+        pr = PullRequestInfo.model_validate(state["parent_state"].get("pr_info") or {})
+        model_issues = await self.provider.review(
+            pr,
+            state["unit_files"],
+            self._enhanced_diff(state["unit_diff"], state["context"]),
+            state["parent_state"].get("model"),
+        )
+        return {"pending_issues": model_issues, "budget": budget}
+
+    async def _collect_issue_node(
+        self, state: "_ReviewUnitGraphState"
+    ) -> "_ReviewUnitGraphState":
+        accepted = self._filter_issues(
+            state.get("pending_issues") or [], state["unit"], state["scope"]
+        )
+        known = {issue.id for issue in state["issues"]}
+        accepted = [issue for issue in accepted if issue.id not in known]
+        return {
+            "next_action": None,
+            "pending_issues": [],
+            "issues": [*state["issues"], *accepted],
+            "issue_round_completed": True,
+            "messages": [*state["messages"], AgentEvent(
+                action=AgentActionName.report_issue,
+                reason="执行 Unit 独立审查并收集结构化问题",
+                status="completed",
+                message=f"本轮报告 {len(accepted)} 个问题",
+                review_unit_id=state["unit"].id,
+            )],
+        }
+
+    async def _finish_unit_node(
+        self, state: "_ReviewUnitGraphState"
+    ) -> "_ReviewUnitGraphState":
+        action = state["next_action"]
+        if action.action == AgentActionName.request_human:
+            return {"done": False, "error": "review unit requires human input"}
+        return {
+            "done": True,
+            "messages": [*state["messages"], AgentEvent(
+                action=AgentActionName.task_done,
+                reason=action.reason,
+                status="completed",
+                message="Review Unit 显式结束",
+                review_unit_id=state["unit"].id,
+            )],
+        }
 
     @staticmethod
     def _budget_for(unit: ReviewUnit) -> ExecutionBudget:
@@ -202,7 +439,7 @@ class ReviewUnitExecutor:
                 max_context_retrievals=0,
                 max_diagnosis_attempts=1,
                 max_patch_attempts=0,
-                max_model_calls=1,
+                max_model_calls=3,
                 max_token_usage=max(6_000, unit.estimated_tokens + 4_096),
             )
         if unit.complexity == ReviewUnitComplexity.medium:
@@ -210,14 +447,14 @@ class ReviewUnitExecutor:
                 max_context_retrievals=1,
                 max_diagnosis_attempts=1,
                 max_patch_attempts=0,
-                max_model_calls=2,
+                max_model_calls=4,
                 max_token_usage=max(12_000, unit.estimated_tokens + 6_000),
             )
         return ExecutionBudget(
             max_context_retrievals=2,
             max_diagnosis_attempts=1,
             max_patch_attempts=0,
-            max_model_calls=3,
+                max_model_calls=6,
             max_token_usage=max(20_000, unit.estimated_tokens + 8_000),
         )
 

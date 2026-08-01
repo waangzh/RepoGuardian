@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any
 
 from app.tools.base import BaseTool
+from app.review.tool_scope import ReviewPathPolicyError, validate_repository_file
+from app.tools.git_tool import GitTool
 
 # 扫描时跳过的目录和文件
 _IGNORED_DIRS = frozenset({
@@ -60,6 +62,8 @@ class RepoIndexer(BaseTool):
         """遍历仓库目录，构建文件级索引（路径、语言、大小、导入）。"""
         index: list[dict[str, Any]] = []
         root = Path(repo_path)
+        tracked_files = GitTool().list_tracked_files(root)
+        enforce_tracked = (root / ".git").exists()
         for dirpath, dirnames, filenames in os.walk(root):
             rel_dir = Path(dirpath).relative_to(root)
             # 跳过忽略目录
@@ -72,6 +76,12 @@ class RepoIndexer(BaseTool):
                     continue
                 file_path_obj = Path(dirpath) / filename
                 rel_path = file_path_obj.relative_to(root).as_posix()
+                if enforce_tracked and rel_path not in tracked_files:
+                    continue
+                try:
+                    validate_repository_file(root, rel_path, tracked_files=tracked_files)
+                except (OSError, ReviewPathPolicyError):
+                    continue
                 try:
                     stat = file_path_obj.stat()
                     size = stat.st_size
@@ -91,6 +101,8 @@ class RepoIndexer(BaseTool):
         """使用 tree-sitter 解析 Python 文件，提取函数/类/方法符号。"""
         index: list[dict[str, Any]] = []
         root = Path(repo_path)
+        tracked_files = GitTool().list_tracked_files(root)
+        enforce_tracked = (root / ".git").exists()
         for dirpath, _, filenames in os.walk(root):
             rel_dir = Path(dirpath).relative_to(root)
             if rel_dir.parts and rel_dir.parts[0] in _IGNORED_DIRS:
@@ -100,6 +112,12 @@ class RepoIndexer(BaseTool):
                     continue
                 file_path_obj = Path(dirpath) / filename
                 rel_path = file_path_obj.relative_to(root).as_posix()
+                if enforce_tracked and rel_path not in tracked_files:
+                    continue
+                try:
+                    validate_repository_file(root, rel_path, tracked_files=tracked_files)
+                except (OSError, ReviewPathPolicyError):
+                    continue
                 try:
                     symbols = _parse_python_symbols(str(file_path_obj), rel_path)
                 except Exception:
@@ -117,7 +135,7 @@ class RepoIndexer(BaseTool):
             f["language"] == "python" for f in file_index
         ) else "unknown"
 
-        framework = _detect_framework(repo_path)
+        framework = _detect_framework(repo_path, file_index)
         test_dirs = _find_test_dirs(repo_path)
         config_files: list[str] = []
         for cfg in _PY_CONFIG_FILES:
@@ -170,9 +188,21 @@ def _extract_imports(file_path: Path) -> list[str]:
     return sorted(set(imports))
 
 
-def _detect_framework(repo_path: str) -> str | None:
+def _detect_framework(
+    repo_path: str, file_index: list[dict[str, Any]] | None = None
+) -> str | None:
     """通过扫描所有 .py 文件的 import 语句检测使用的 Web 框架。"""
     all_imports: set[str] = set()
+    if file_index is not None:
+        all_imports = {
+            str(imported).lower()
+            for item in file_index
+            for imported in item.get("imports", [])
+        }
+        for framework, hints in _FRAMEWORK_HINTS.items():
+            if hints & all_imports:
+                return framework
+        return None
     root = Path(repo_path)
     for dirpath, _, filenames in os.walk(root):
         rel = Path(dirpath).relative_to(root)

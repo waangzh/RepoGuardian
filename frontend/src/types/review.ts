@@ -153,6 +153,9 @@ export interface ReviewUnit {
 }
 
 export interface ReviewPreviewResponse {
+  mode: ReviewMode;
+  changed_file_count: number;
+  included_file_count: number;
   changed_files: PlannedChangedFile[];
   review_units: ReviewUnit[];
   excluded_files: ExcludedReviewFile[];
@@ -160,6 +163,12 @@ export interface ReviewPreviewResponse {
   risk_tags: string[];
   estimated_model_calls: number;
   estimated_tokens: number;
+  patch_generation_enabled: boolean;
+  validation_backend: {
+    name: ValidationBackend;
+    available: boolean;
+    unavailable_reason?: string | null;
+  };
   warnings: string[];
 }
 
@@ -408,6 +417,7 @@ export interface ReviewTask {
   review_unit_results: ReviewUnitResult[];
   excluded_files: ExcludedReviewFile[];
   issues: ReviewIssue[];
+  issue_metrics: IssueMetrics;
   static_results: TestRunResult[];
   patches: PatchResult[];
   test_results: TestRunResult[];

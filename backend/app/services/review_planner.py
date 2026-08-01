@@ -135,7 +135,7 @@ class DeterministicReviewPlanner:
                     classifications=tags,
                 ))
 
-        drafts = self._group_files(included, classified)
+        drafts = self._group_files(included, classified, file_index or [], symbol_index or [])
         by_path = {item.file_path: item for item in included}
         hunk_ids = {
             item.file_path: [self.hunk_id(item.file_path, index, hunk.model_dump(mode="json"))
@@ -155,7 +155,11 @@ class DeterministicReviewPlanner:
             )
             for draft in drafts
         ]
-        units.sort(key=lambda unit: (unit.primary_files, unit.diff_hunk_ids, unit.id))
+        units.sort(
+            key=lambda unit: (
+                unit.primary_files, unit.diff_hunk_ids, unit.changed_symbols, unit.id
+            )
+        )
         self._validate_primary_ownership(units)
         warnings = []
         if excluded:
@@ -170,11 +174,14 @@ class DeterministicReviewPlanner:
             warnings=warnings,
         )
 
-    def build_scope(self, unit: ReviewUnit) -> ReviewToolScope:
+    def build_scope(
+        self, unit: ReviewUnit, repository_root: str | None = None
+    ) -> ReviewToolScope:
         return ReviewToolScope(
             review_unit_id=unit.id,
             commentable_files=set(unit.primary_files),
             readable_files=set(unit.primary_files) | set(unit.related_files),
+            repository_root=repository_root,
             max_lines_per_read=self.max_lines_per_read,
             max_search_results=self.max_search_results,
         )
@@ -239,6 +246,8 @@ class DeterministicReviewPlanner:
         self,
         files: list[ChangedFile],
         classified: dict[str, list[str]],
+        file_index: list[dict[str, Any]],
+        symbol_index: list[dict[str, Any]],
     ) -> list[_UnitDraft]:
         drafts: list[_UnitDraft] = []
         remaining = {item.file_path: item for item in files}
@@ -248,6 +257,13 @@ class DeterministicReviewPlanner:
             drafts.append(_UnitDraft(tuple(deletions), "deletion_group"))
             for path in deletions:
                 remaining.pop(path)
+
+        self._append_related_pairs(
+            drafts, remaining, classified, file_index, "migration", "migration_with_model"
+        )
+        self._append_related_pairs(
+            drafts, remaining, classified, file_index, "api", "api_with_model"
+        )
 
         for special, reason in (
             ("migration", "migration_file"),
@@ -291,11 +307,75 @@ class DeterministicReviewPlanner:
                 self.hunk_id(path, index, hunk.model_dump(mode="json"))
                 for index, hunk in enumerate(item.hunks)
             )
-            if changed_lines >= self.large_min_changed_lines and len(ids) > 1:
-                drafts.extend(_UnitDraft((path,), "large_file_hunk_split", (hid,)) for hid in ids)
+            if changed_lines >= self.large_min_changed_lines:
+                changed_symbols = self._changed_symbols([path], {path: item}, symbol_index)
+                if len(changed_symbols) > 1:
+                    drafts.extend(
+                        _UnitDraft(
+                            (path,), "large_file_symbol_split", ids, (symbol,)
+                        )
+                        for symbol in changed_symbols
+                    )
+                elif len(ids) > 1:
+                    drafts.extend(
+                        _UnitDraft((path,), "large_file_hunk_split", (hid,)) for hid in ids
+                    )
+                else:
+                    drafts.append(_UnitDraft((path,), "single_file"))
             else:
                 drafts.append(_UnitDraft((path,), "single_file"))
         return drafts
+
+    @classmethod
+    def _append_related_pairs(
+        cls,
+        drafts: list[_UnitDraft],
+        remaining: dict[str, ChangedFile],
+        classified: dict[str, list[str]],
+        file_index: list[dict[str, Any]],
+        source_tag: str,
+        reason: str,
+    ) -> None:
+        """按 import 和实体名确定性配对 API/migration 与直接 model。"""
+        indexed = {item.get("path"): item for item in file_index if item.get("path")}
+        source_paths = sorted(path for path in remaining if source_tag in classified[path])
+        model_paths = sorted(path for path in remaining if "model" in classified[path])
+        for source in source_paths:
+            if source not in remaining:
+                continue
+            imports = {
+                str(item).casefold().split(".")[-1]
+                for item in (indexed.get(source) or {}).get("imports", [])
+            }
+            source_tokens = cls._entity_tokens(source)
+            ranked: list[tuple[int, str]] = []
+            for model in model_paths:
+                if model not in remaining or model == source:
+                    continue
+                model_stem = PurePosixPath(model).stem.casefold()
+                shared = source_tokens & cls._entity_tokens(model)
+                score = (4 if model_stem in imports else 0) + len(shared)
+                if score > 0:
+                    ranked.append((score, model))
+            if ranked:
+                model = sorted(ranked, key=lambda item: (-item[0], item[1]))[0][1]
+                drafts.append(_UnitDraft((source, model), reason))
+                remaining.pop(source)
+                remaining.pop(model)
+
+    @staticmethod
+    def _entity_tokens(path: str) -> set[str]:
+        ignored = {
+            "add", "alter", "api", "app", "backend", "controller", "create", "db",
+            "frontend", "handler", "lib", "migration", "migrations", "model", "models",
+            "remove", "route", "routes", "schema", "schemas", "src", "table", "update",
+            "version", "versions",
+        }
+        tokens = {
+            token for token in re.split(r"[^a-z0-9]+", path.casefold())
+            if len(token) > 2 and not token.isdigit() and token not in ignored
+        }
+        return tokens | {token[:-1] for token in tokens if token.endswith("s") and len(token) > 3}
 
     def _build_unit(
         self,
@@ -313,6 +393,8 @@ class DeterministicReviewPlanner:
             hid for path in primary for hid in all_hunk_ids.get(path, [])
         ))
         symbols = self._changed_symbols(primary, changed_by_path, symbol_index)
+        if draft.symbol_filter:
+            symbols = [symbol for symbol in symbols if symbol in set(draft.symbol_filter)]
         rules = sorted({rule for path in primary for rule in self._rules(classified[path])})
         risks = sorted({risk for path in primary for risk in self._risks(path, classified[path])})
         if symbols and any("test" not in classified[path] for path in primary):
@@ -336,6 +418,7 @@ class DeterministicReviewPlanner:
             "primary_files": primary,
             "hunk_ids": selected_hunks,
             "grouping_reason": draft.grouping_reason,
+            "symbols": symbols,
             "planner_version": PLANNER_VERSION,
         }
         unit_id = "ru-" + self._digest(identity)[:16]
@@ -382,6 +465,13 @@ class DeterministicReviewPlanner:
             tags.add("dependency")
         if path.startswith(".github/workflows/"):
             tags.update({"workflow", "config"})
+        parts = set(PurePosixPath(path).parts)
+        if parts & {"api", "routes", "routers", "controllers", "handlers"}:
+            tags.add("api")
+        if parts & {"models", "schemas", "dto", "types"} or re.search(
+            r"(?:_model|_schema|_dto)$", PurePosixPath(path).stem
+        ):
+            tags.add("model")
         if re.search(r"(^|/)(migrations?|alembic/versions|db/migrate)(/|$)", path):
             tags.add("migration")
         if name in _CONFIG_NAMES or PurePosixPath(path).suffix in {".ini", ".cfg"}:
@@ -407,6 +497,7 @@ class DeterministicReviewPlanner:
             "test": "review.tests", "dependency": "review.dependencies",
             "migration": "review.migrations", "workflow": "review.workflows",
             "deleted": "review.deletions", "config": "review.configuration",
+            "api": "review.api", "model": "review.models",
         }
         rules.update(rule for tag, rule in mapping.items() if tag in tags)
         return rules
@@ -531,7 +622,10 @@ class DeterministicReviewPlanner:
                 owners[path].append(unit)
         accidental = {
             path: items for path, items in owners.items()
-            if len(items) > 1 and any(item.grouping_reason != "large_file_hunk_split" for item in items)
+            if len(items) > 1 and any(
+                item.grouping_reason not in {"large_file_hunk_split", "large_file_symbol_split"}
+                for item in items
+            )
         }
         if accidental:
             raise ValueError(f"primary files assigned to multiple units: {sorted(accidental)}")

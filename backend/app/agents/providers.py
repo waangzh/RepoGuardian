@@ -499,10 +499,20 @@ class OpenAICompatibleProvider(LLMProvider):
             },
             "execution_budget": state.get("execution_budget") or {},
         }
-        allowed = ", ".join(
-            action.value for action in ALLOWED_ACTIONS_BY_PHASE.get(phase, frozenset())
+        unit_agent = bool(state.get("unit_agent"))
+        allowed = (
+            "retrieve_context, report_issue, task_done"
+            if unit_agent
+            else ", ".join(
+                action.value for action in ALLOWED_ACTIONS_BY_PHASE.get(phase, frozenset())
+            )
         )
         phase_rules = (
+            "This is an isolated Review Unit. Use only read-only retrieve_context calls; "
+            "use report_issue once the evidence is sufficient, then always call task_done. "
+            "Zero reported issues is valid. Never request shell, network, patch, or test execution. "
+            "For retrieve_context, tool_args must be exactly {\"plan\": {...}}."
+            if unit_agent else
             "For retrieve_context, tool_args must be exactly {\"plan\": {...}}. "
             "The plan must use only listed files/symbols, literal search_terms, bounded max_results and depth. "
             "Use request_human only when business rules are unavailable, multiple behaviors are safe, "
@@ -519,7 +529,8 @@ class OpenAICompatibleProvider(LLMProvider):
             f"Allowed actions: {allowed}.\n"
             f"{phase_rules}\n"
             "Return exactly this JSON shape:\n"
-            "{\"action\":\"review_code\",\"reason\":\"中文理由\","
+            f"{{\"action\":\"{'report_issue' if unit_agent else 'review_code'}\","
+            "\"reason\":\"中文理由\","
             "\"target_issue_ids\":[],\"tool_args\":{},\"human_request\":null}\n\n"
             f"Current state JSON:\n{json.dumps(compact, ensure_ascii=False)[:50000]}"
         )

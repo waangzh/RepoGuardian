@@ -46,8 +46,8 @@ function patchStatusText(status: PatchResult["status"]): string {
     </div>
 
     <div class="agent-section">
-      <h3>Patch</h3>
-      <div v-if="patches.length === 0" class="empty">未生成 patch</div>
+      <h3>候选补丁</h3>
+      <div v-if="patches.length === 0" class="empty">未生成候选补丁</div>
       <details v-for="patch in patches" :key="patch.id" class="patch-block">
         <summary>
           <strong>{{ patch.title }}</strong>
