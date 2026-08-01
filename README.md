@@ -176,6 +176,22 @@ Content-Type: application/json
 }
 ```
 
+### Issue 证据与行号迁移
+
+Issue API 不再把模型提供的 `line_no` 当作真实位置。`ReviewIssue` 现在通过
+`primary_evidence` / `supporting_evidence` 返回原始代码片段，并由服务端填写：
+
+- `resolution_method`、`resolved_start_line`、`resolved_end_line`；
+- `resolved_side`、`match_count`、`anchor_hash`；
+- Issue 级 `placement`（`inline` / `summary` / `needs_human` / `suppressed`）和
+  `unresolved_reason`。
+
+旧客户端应迁移字段：`file_path` → `primary_evidence.file_path`，`line_no` →
+`primary_evidence.resolved_start_line`，`description` → `failure_scenario`，
+`suggestion` → `recommendation`，`auto_fixable` → `auto_fix_eligible`。
+Provider 输出中的 `line_number` / `line_no` 仅为临时兼容读取字段，服务端会忽略；
+模型不得填写任何 `resolved_*`、`resolution_method`、`match_count` 或 `anchor_hash`。
+
 ## 项目结构
 
 ```text
@@ -184,6 +200,7 @@ RepoGuardian/
 │   ├── app/
 │   │   ├── api/          # FastAPI 路由与 SSE
 │   │   ├── agents/       # Provider 与审查 Agent
+│   │   ├── evidence/     # 双侧 diff index、代码证据定位与评论路由
 │   │   ├── graph/        # LangGraph 状态、节点、路由和修复子图
 │   │   ├── models/       # Pydantic 领域模型
 │   │   ├── projects/     # 项目识别与受控命令适配器

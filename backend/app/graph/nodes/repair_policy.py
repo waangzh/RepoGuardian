@@ -23,7 +23,7 @@ from app.models.review import (
 
 
 async def repair_policy_node(state: ReviewState) -> ReviewState:
-    """仅让标记为 auto_fixable 的问题进入补丁流程。"""
+    """仅让证据已解析且标记为 auto_fix_eligible 的问题进入补丁流程。"""
     raw_mode = state.get("mode", ReviewMode.review)
     try:
         mode = ReviewMode(raw_mode)
@@ -41,8 +41,9 @@ async def repair_policy_node(state: ReviewState) -> ReviewState:
     budget = get_execution_budget(state)
     candidates = [
         issue for issue in state.get("review_issues") or []
-        if issue.get("auto_fixable", False)
-        and issue.get("fix_risk") == "low"
+        if issue.get("auto_fix_eligible", issue.get("auto_fixable", False))
+        and issue.get("status", "confirmed") in {"evidence_resolved", "confirmed"}
+        and issue.get("fix_risk", "low") == "low"
         and not issue.get("requires_human_confirmation", False)
     ]
     enabled = bool(candidates) and budget.can_consume(
@@ -66,8 +67,9 @@ async def repair_generate_patch_node(state: ReviewState) -> ReviewState:
         target_issue_ids=[
             issue.get("id", "")
             for issue in state.get("review_issues") or []
-            if issue.get("auto_fixable", False)
-            and issue.get("fix_risk") == "low"
+            if issue.get("auto_fix_eligible", issue.get("auto_fixable", False))
+            and issue.get("status", "confirmed") in {"evidence_resolved", "confirmed"}
+            and issue.get("fix_risk", "low") == "low"
             and not issue.get("requires_human_confirmation", False)
         ],
     )
@@ -302,13 +304,18 @@ def _can_accept_active_patch(state: ReviewState) -> tuple[bool, str]:
         (item for item in state.get("review_issues") or [] if item.get("id") == patch.get("issue_id")),
         None,
     )
-    if not issue or not issue.get("auto_fixable") or issue.get("fix_risk") != "low":
-        return False, "目标问题不是低风险自动修复项"
-    if issue.get("requires_human_confirmation") or not issue.get("evidence"):
+    if not issue or not issue.get("auto_fix_eligible", issue.get("auto_fixable", False)):
+        return False, "目标问题不是自动修复候选项"
+    primary_evidence = issue.get("primary_evidence") or {}
+    legacy_evidence = issue.get("evidence")
+    if issue.get("requires_human_confirmation") or not (
+        primary_evidence.get("anchor_hash") or legacy_evidence
+    ):
         return False, "目标问题缺少可自动接受的证据"
     resolved_failure = bool(delta.get("resolved_failure"))
     static_evidence = (
-        f"+++ b/{issue.get('file_path')}" in patch.get("diff_content", "")
+        f"+++ b/{primary_evidence.get('file_path') or issue.get('file_path')}"
+        in patch.get("diff_content", "")
         and bool(state.get("static_results"))
         and all(item.get("passed", False) for item in state.get("static_results") or [])
     )

@@ -10,7 +10,14 @@ from langchain_openai import ChatOpenAI
 from pydantic import TypeAdapter, ValidationError
 
 from app.graph.policies import ALLOWED_ACTIONS_BY_PHASE, get_phase
-from app.models.review import AgentAction, ChangedFile, PatchResult, PullRequestInfo, ReviewIssue
+from app.models.review import (
+    AgentAction,
+    ChangedFile,
+    PatchResult,
+    PullRequestInfo,
+    ReviewIssue,
+    ReviewIssueInput,
+)
 
 logger = logging.getLogger("RepoGuardian.LLM")
 
@@ -64,7 +71,7 @@ class OpenAICompatibleProvider(LLMProvider):
         self._base_url = base_url.rstrip("/")
         self._default_model = default_model
         self._disable_thinking = disable_thinking
-        self._issue_adapter = TypeAdapter(list[ReviewIssue])
+        self._issue_adapter = TypeAdapter(list[ReviewIssueInput])
         self._patch_adapter = TypeAdapter(list[PatchResult])
 
     async def decide(self, state: dict[str, Any], model: str | None) -> AgentAction:
@@ -207,7 +214,8 @@ class OpenAICompatibleProvider(LLMProvider):
         normalized_issues = [self._normalize_issue(issue) for issue in raw_issues]
 
         try:
-            return self._issue_adapter.validate_python(normalized_issues)
+            proposals = self._issue_adapter.validate_python(normalized_issues)
+            return [proposal.to_issue() for proposal in proposals]
         except ValidationError as exc:
             raise LLMProviderError(f"LLM issue schema validation failed: {exc}") from exc
 
@@ -274,31 +282,39 @@ class OpenAICompatibleProvider(LLMProvider):
             for file in changed_files
         ]
         limited_diff = diff_text[:60000]
+        primary_files = [file.file_path for file in changed_files]
         return (
             f"PR: {pr.owner}/{pr.repo}#{pr.number}\n"
             f"Title: {pr.title}\n"
             f"Changed files JSON:\n{json.dumps(files_payload, ensure_ascii=False)}\n\n"
             "Review the diff for correctness, security, performance, maintainability, "
-            "and test coverage issues. Return Chinese text for title, description, "
-            "and suggestion when possible.\n"
+            "and test coverage issues. Return Chinese text when possible.\n"
+            f"The current Review Unit primary_files are: {json.dumps(primary_files, ensure_ascii=False)}.\n"
             "Return valid json as a single JSON object with this exact shape:\n"
-            "{\"issues\":[{\"file_path\":\"path/to/file\",\"line_no\":1,"
-            "\"id\":\"optional-stable-id\",\"auto_fixable\":true,"
-            "\"severity\":\"high\",\"category\":\"correctness\","
-            "\"title\":\"问题标题\",\"description\":\"问题说明\","
-            "\"suggestion\":\"修复建议\",\"confidence\":0.85,"
-            "\"evidence\":\"可复核的具体代码事实\","
-            "\"evidence_locations\":[{\"file_path\":\"path/to/file\",\"line_no\":1}],"
-            "\"affected_behavior\":\"可观察的行为影响\",\"assumptions\":[],"
-            "\"related_test_ids\":[\"tests/test_x.py::test_x\"],\"fix_risk\":\"low\","
-            "\"requires_human_confirmation\":false}]}\n"
+            "{\"issues\":[{\"severity\":\"high\",\"category\":\"correctness\","
+            "\"title\":\"问题标题\",\"confidence\":0.85,"
+            "\"affected_behavior\":\"可观察的行为影响\","
+            "\"failure_scenario\":\"触发条件和失败结果\","
+            "\"recommendation\":\"修复建议\","
+            "\"primary_evidence\":{\"file_path\":\"path/to/file\","
+            "\"existing_code\":\"来自实际代码的原样片段\",\"symbol\":null,"
+            "\"expected_side\":\"head\",\"expected_hunk_id\":null,"
+            "\"context_before\":[],\"context_after\":[]},"
+            "\"supporting_evidence\":[],\"assumptions\":[],"
+            "\"related_tests\":[\"tests/test_x.py::test_x\"],"
+            "\"requires_human_confirmation\":false,\"auto_fix_eligible\":false}]}\n"
             "The confidence field must be a number between 0 and 1. Do not use strings "
             "such as high, medium, or low for confidence.\n"
             "severity must be one of: low, medium, high, critical. "
             "category must be one of: correctness, maintainability, performance, security, test.\n"
-            "Every issue must cite a file and valid Head line in evidence_locations. Report only a "
-            "verifiable behavior problem, not generic style advice. auto_fixable may be true only for "
-            "a low-risk local change with concrete evidence and no human confirmation.\n"
+            "Every issue must provide existing_code copied verbatim from actual code. Never rewrite it, "
+            "never put suggested replacement code in existing_code, and never rely on a model-computed "
+            "line number. line_number and line_no are deprecated and ignored by the server. The primary "
+            "evidence file must be in primary_files; supporting evidence may come from related scoped "
+            "context. Evidence anchors may contain only file_path, existing_code, symbol, expected_side, "
+            "expected_hunk_id, context_before, and context_after; resolution fields are server-owned. "
+            "If concrete code evidence cannot be quoted, do not report the issue. Report only a verifiable "
+            "behavior problem, not generic style advice. Zero issues is valid.\n"
             "If there is no clear issue, return {\"issues\":[]}.\n\n"
             f"Diff:\n{limited_diff}"
         )

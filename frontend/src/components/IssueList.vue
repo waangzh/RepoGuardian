@@ -11,6 +11,13 @@ const severityLabel: Record<string, string> = {
   medium: "Medium",
   low: "Low"
 };
+
+const placementLabel: Record<string, string> = {
+  inline: "已定位",
+  summary: "仅摘要",
+  needs_human: "需要人工定位",
+  suppressed: "证据无效"
+};
 </script>
 
 <template>
@@ -31,13 +38,15 @@ const severityLabel: Record<string, string> = {
         <h3>{{ issue.title }}</h3>
       </header>
       <p class="location">
-        {{ issue.file_path }}<template v-if="issue.line_no">:{{ issue.line_no }}</template>
+        {{ issue.primary_evidence.file_path }}<template v-if="issue.primary_evidence.resolved_start_line">:{{ issue.primary_evidence.resolved_start_line }}</template>
+        · {{ placementLabel[issue.placement] }}
       </p>
-      <p>{{ issue.description }}</p>
-      <p class="suggestion">{{ issue.suggestion }}</p>
+      <p>{{ issue.failure_scenario }}</p>
+      <p class="suggestion">{{ issue.recommendation }}</p>
+      <p v-if="issue.unresolved_reason" class="location">{{ issue.unresolved_reason }}</p>
       <footer>
         {{ issue.category }} / confidence {{ issue.confidence.toFixed(2) }} /
-        {{ issue.auto_fixable ? "可自动修复" : "需人工判断" }} / {{ issue.id.slice(0, 8) }}
+        {{ issue.auto_fix_eligible ? "可自动修复" : "需人工判断" }} / {{ issue.id.slice(0, 8) }}
       </footer>
     </article>
   </section>

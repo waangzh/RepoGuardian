@@ -189,19 +189,19 @@ def _initial_state(
 def _auto_fixable_issue() -> ReviewIssue:
     return ReviewIssue(
         id="discount-fix",
-        file_path="pricing.py",
-        line_no=3,
+        review_unit_id="unassigned",
         severity="high",
         category="correctness",
         title="折扣计算错误",
-        description="折扣百分比被直接作为剩余金额使用。",
-        suggestion="使用 100 - discount_percent。",
+        failure_scenario="折扣百分比被直接作为剩余金额使用。",
+        recommendation="使用 100 - discount_percent。",
         confidence=0.95,
-        auto_fixable=True,
-        evidence="第 3 行直接将折扣百分比作为剩余比例计算。",
-        evidence_locations=[{"file_path": "pricing.py", "line_no": 3}],
+        auto_fix_eligible=True,
+        primary_evidence={
+            "file_path": "pricing.py",
+            "existing_code": "return amount * discount_percent / 100",
+        },
         affected_behavior="20% 折扣会返回 20 而不是 80。",
-        fix_risk="low",
     )
 
 
@@ -413,16 +413,14 @@ async def test_request_human_stops_automatic_review_and_repair(tmp_path: Path) -
 async def test_issue_with_nonexistent_head_file_is_rejected(tmp_path: Path) -> None:
     invalid_issue = ReviewIssue(
         id="missing-file",
-        file_path="missing.py",
-        line_no=1,
+        review_unit_id="unassigned",
         severity="high",
         category="correctness",
         title="错误位置",
-        description="模型引用了不存在的文件。",
-        suggestion="不应报告。",
+        failure_scenario="模型引用了不存在的文件。",
+        recommendation="不应报告。",
         confidence=0.9,
-        evidence="missing.py 第 1 行不存在。",
-        evidence_locations=[{"file_path": "missing.py", "line_no": 1}],
+        primary_evidence={"file_path": "missing.py", "existing_code": "missing()"},
         affected_behavior="无法验证。",
     )
     provider = GraphScriptedProvider(
@@ -431,7 +429,8 @@ async def test_issue_with_nonexistent_head_file_is_rejected(tmp_path: Path) -> N
 
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
-    assert result["review_issues"] == []
+    assert result["review_issues"][0]["placement"] == "suppressed"
+    assert result["review_issues"][0]["unresolved_reason"] == "primary_evidence_not_in_primary_files"
 
 
 @pytest.mark.asyncio

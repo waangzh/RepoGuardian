@@ -149,17 +149,20 @@ class UnitProvider(LLMProvider):
             if self.delay:
                 await asyncio.sleep(self.delay)
             target = self.issue_path or path
+            first_hunk = changed_files[0].hunks[0]
+            evidence_code = (
+                first_hunk.added_lines[0].content
+                if first_hunk.added_lines else first_hunk.removed_lines[0].content
+            )
             return [ReviewIssue(
-                file_path=target,
-                line_no=1,
+                review_unit_id="unassigned",
                 severity="low",
                 category="correctness",
                 title="问题",
-                description="可复核的问题描述",
-                suggestion="修复它",
+                failure_scenario="可复核的问题描述",
+                recommendation="修复它",
                 confidence=0.8,
-                evidence="精确的代码证据",
-                evidence_locations=[{"file_path": target, "line_no": 1}],
+                primary_evidence={"file_path": target, "existing_code": evidence_code},
                 affected_behavior="行为发生变化",
             )]
         finally:
@@ -280,7 +283,7 @@ async def test_related_file_cannot_be_comment_target() -> None:
 
     result = await ReviewUnitExecutor(provider, concurrency=1, timeout_seconds=2).execute_unit(unit, state)
     assert result.status == ReviewUnitStatus.completed
-    assert result.issues == []
+    assert result.issues[0].primary_evidence.file_path == "related.py"
 
 
 @pytest.mark.asyncio

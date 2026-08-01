@@ -13,6 +13,7 @@ from app.graph.nodes.repo_prepare import repo_prepare_node
 from app.graph.nodes.report import complete_node, report_node
 from app.graph.nodes.review import review_node
 from app.graph.nodes.review_units import review_plan_node, review_units_node
+from app.graph.nodes.resolve_evidence import resolve_evidence_node
 from app.graph.nodes.verification import verification_node
 from app.graph.repair_graph import build_repair_graph
 from app.graph.routers import route_discovery_action
@@ -32,6 +33,7 @@ def build_review_graph(phase: int | None = None) -> StateGraph:
     graph.add_node("context_retrieve", context_retrieve_node)
     graph.add_node("discovery_decide", agent_decide_node)
     graph.add_node("review", review_node)
+    graph.add_node("resolve_evidence", resolve_evidence_node)
     graph.add_node("human_required", human_required_node)
     graph.add_node("verification", verification_node)
     graph.add_node("repair_graph", build_repair_graph().compile())
@@ -57,7 +59,8 @@ def build_review_graph(phase: int | None = None) -> StateGraph:
     )
     graph.add_edge("context_retrieve", "discovery_decide")
     graph.add_edge("human_required", "report")
-    graph.add_edge("review", "verification")
+    graph.add_edge("review", "resolve_evidence")
+    graph.add_edge("resolve_evidence", "verification")
     graph.add_edge("verification", "repair_graph")
     graph.add_edge("repair_graph", "report")
     graph.add_edge("report", "complete")
@@ -75,6 +78,7 @@ def _build_review_unit_graph() -> StateGraph:
     graph.add_node("project_detection", project_detection_node)
     graph.add_node("review_plan", review_plan_node)
     graph.add_node("review_units", review_units_node)
+    graph.add_node("resolve_evidence", resolve_evidence_node)
     graph.add_node("verification", verification_node)
     graph.add_node("repair_graph", build_repair_graph().compile())
     graph.add_node("report", report_node)
@@ -89,9 +93,10 @@ def _build_review_unit_graph() -> StateGraph:
     graph.add_edge("review_plan", "review_units")
     graph.add_conditional_edges(
         "review_units",
-        lambda state: "report" if state.get("status") == "failed" else "verification",
-        {"report": "report", "verification": "verification"},
+        lambda state: "report" if state.get("status") == "failed" else "resolve_evidence",
+        {"report": "report", "resolve_evidence": "resolve_evidence"},
     )
+    graph.add_edge("resolve_evidence", "verification")
     graph.add_edge("verification", "repair_graph")
     graph.add_edge("repair_graph", "report")
     graph.add_edge("report", "complete")

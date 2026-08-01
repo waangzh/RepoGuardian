@@ -30,7 +30,7 @@ class GitTool:
         """从检出的仓库中直接读取指定文件的指定行范围（非 git 命令，直接文件 I/O）。"""
         full_path = Path(repo_path) / file_path
         try:
-            with open(full_path, "r", encoding="utf-8", errors="replace") as f:
+            with open(full_path, "r", encoding="utf-8", errors="replace", newline="") as f:
                 lines = f.readlines()
         except (OSError, UnicodeDecodeError):
             return ""
@@ -39,6 +39,20 @@ class GitTool:
         start_idx = max(start_line - 1, 0)
         end_idx = min(end_line, len(lines))
         return "".join(lines[start_idx:end_idx])
+
+    def get_file_content_at_revision(
+        self, repo_path: str | Path, revision: str, file_path: str
+    ) -> str | None:
+        """读取服务端选定 revision 的文件，不切换工作树。"""
+        repo_dir = self._validate_worktree(repo_path)
+        completed = subprocess.run(
+            [self._git, "-C", str(repo_dir), "show", f"{revision}:{file_path}"],
+            check=False,
+            capture_output=True,
+        )
+        if completed.returncode != 0 or b"\x00" in completed.stdout:
+            return None
+        return completed.stdout.decode("utf-8", errors="replace")
 
     def clone_and_diff(self, pr: PullRequestInfo) -> tuple[Path, str]:
         """核心操作：clone → fetch base/head refs → 生成 unified diff → checkout head。
