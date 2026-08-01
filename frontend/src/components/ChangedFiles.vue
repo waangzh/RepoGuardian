@@ -1,23 +1,33 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import type { ChangedFile } from "../types/review";
+import EmptyState from "./common/EmptyState.vue";
+import PanelHeader from "./common/PanelHeader.vue";
 
-defineProps<{
+const props = defineProps<{
   files: ChangedFile[];
 }>();
+
+const additions = computed(() => props.files.reduce((sum, file) => sum + file.additions, 0));
+const deletions = computed(() => props.files.reduce((sum, file) => sum + file.deletions, 0));
+
+function extension(path: string): string {
+  const value = path.split(".").pop();
+  return value && value !== path ? value.toUpperCase() : "FILE";
+}
 </script>
 
 <template>
-  <section class="panel">
-    <div class="panel-head">
-      <h2>变更文件</h2>
-      <span>{{ files.length }}</span>
-    </div>
-    <div v-if="files.length === 0" class="empty">暂无 diff 数据</div>
+  <section class="panel changed-files-panel">
+    <PanelHeader icon="▤" title="变更文件" subtitle="Changed Files">
+      <div class="file-totals"><span>{{ files.length }} 个文件</span><b class="text-success">+{{ additions }}</b><b class="text-danger">-{{ deletions }}</b></div>
+    </PanelHeader>
+    <EmptyState v-if="files.length === 0" icon="▱" title="尚未加载变更文件" description="输入 PR URL 并运行 Preview，系统将解析变更并生成 Review Units。" />
     <div v-else class="file-list">
       <div v-for="file in files" :key="file.file_path" class="file-row">
-        <div>
-          <strong>{{ file.file_path }}</strong>
-          <small>{{ file.change_type }}</small>
+        <div class="file-row__main">
+          <code>{{ file.file_path }}</code>
+          <div><span class="file-type">{{ extension(file.file_path) }}</span><small>{{ file.change_type }}<template v-if="file.is_binary"> · binary</template></small></div>
         </div>
         <div class="delta">
           <span class="add">+{{ file.additions }}</span>
@@ -27,4 +37,3 @@ defineProps<{
     </div>
   </section>
 </template>
-
