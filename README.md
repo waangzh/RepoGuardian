@@ -109,12 +109,15 @@ npm run dev
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `GITHUB_TOKEN` | 空 | 可选。用于提高 GitHub API 访问额度或访问受限仓库。 |
-| `OPENAI_API_KEY` | 空 | 运行真实模型审查、决策与补丁生成所必需。 |
+| `OPENAI_API_KEY` | 空 | 运行真实模型审查、独立 Issue verifier、决策与补丁生成所必需。 |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容 API 地址。 |
 | `REPOGUARDIAN_PROVIDER` | `openai` | 支持 `openai`、`deepseek`、`openai-compatible`。 |
 | `REPOGUARDIAN_MODEL` | `gpt-4.1-mini` | 默认模型名；创建任务时可单次覆盖。 |
 | `REPOGUARDIAN_DEFAULT_REVIEW_MODE` | `review` | 默认产品模式；只读审查不会运行目标代码。 |
 | `REPOGUARDIAN_DEFAULT_VALIDATION_BACKEND` | `none` | 默认验证后端；只有显式验证模式会使用它。 |
+| `REPOGUARDIAN_ISSUE_VERIFIER_ENABLED` | `true` | 是否对通过确定性策略的候选 Issue 运行独立 verifier；关闭时仅为兼容模式。 |
+| `REPOGUARDIAN_ISSUE_VERIFIER_FAIL_MODE` | `needs_human` | verifier 超时、不可用或 schema 失败时使用 `needs_human` 或保留未验证 `candidate`；绝不按 `keep` 处理。 |
+| `REPOGUARDIAN_ISSUE_VERIFIER_MAX_CALLS_PER_UNIT` | `5` | 每个 Review Unit 的 verifier 最大调用次数。 |
 | `REPOGUARDIAN_EXECUTOR` | `reject` | `reject`、`local` 或 `gvisor`；拒绝或 gVisor 占位实现均不会回退到本地执行。 |
 | `REPOGUARDIAN_GIT_BIN` | `git` | Git 可执行文件路径或命令名。 |
 | `REPOGUARDIAN_WORKDIR` | `backend/.repoguardian/workspaces` | 临时 clone 工作目录。 |
@@ -170,6 +173,7 @@ Content-Type: application/json
 {
   "review": {"mode": "review", "status": "completed", "completed": true},
   "issues": [],
+  "issue_metrics": {"candidate_issue_count": 0, "confirmed_count": 0, "verifier_call_count": 0},
   "patches": [],
   "validation": [{"backend": "none", "status": "not_requested"}],
   "warnings": []
@@ -191,6 +195,25 @@ Issue API 不再把模型提供的 `line_no` 当作真实位置。`ReviewIssue` 
 `suggestion` → `recommendation`，`auto_fixable` → `auto_fix_eligible`。
 Provider 输出中的 `line_number` / `line_no` 仅为临时兼容读取字段，服务端会忽略；
 模型不得填写任何 `resolved_*`、`resolution_method`、`match_count` 或 `anchor_hash`。
+
+### Issue 确认与去重流水线
+
+模型首次输出只会成为 `candidate`。服务端先通过 Review Unit 范围、唯一 primary
+evidence、side、严重度和自动修复资格等确定性策略；未通过的 Issue 不进入 verifier。
+通过者由独立 verifier 在单 Unit diff、只读上下文、适用规则和明确预算内执行
+`keep` / `drop` / `needs_human` 三选一。随后按 category、文件、anchor、symbol 和
+归一化根因生成候选重复组；完全相同 anchor 可确定性合并，其他组只有在可选语义
+去重明确确认后才合并。最终 `issues` 只返回 `confirmed` 或显式 `needs_human`，并通过
+`source_review_unit_ids`、`source_issue_ids` 和 supporting evidence 保留来源。任务级
+`issue_metrics` 记录候选、过滤、验证、人工、重复、确认、严重度调整及 verifier
+调用/估算 token 数。
+
+兼容性说明：顶层 `issues` 和 `review_unit_results[].issues` 不再返回 `candidate`、
+`evidence_resolved` 或 `dismissed`，客户端应使用 `issue_metrics` 展示过滤统计，并只把
+`confirmed` / `needs_human` 作为可见结果。自定义 `LLMProvider` 可继续实例化，因为
+`verify_issue` 与 `deduplicate_issues` 提供了明确失败的默认实现；迁移时应实现
+`verify_issue`。临时关闭 verifier 可设置 `REPOGUARDIAN_ISSUE_VERIFIER_ENABLED=false`，
+此兼容模式会把通过确定性策略的 Issue 直接确认，不建议作为生产默认值。
 
 ## 项目结构
 

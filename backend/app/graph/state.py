@@ -58,6 +58,10 @@ class ReviewState(TypedDict, total=False):
     # ---- 审查 ----
     next_action: dict[str, Any] | None             # 序列化的当前 AgentAction
     review_issues: list[dict[str, Any]] | None     # LLM 审查发现的问题列表
+    deterministic_issue_checks: list[dict[str, Any]] | None
+    issue_verifications: list[dict[str, Any]] | None
+    issue_deduplication_decisions: list[dict[str, Any]] | None
+    issue_metrics: dict[str, int] | None
 
     # ---- 自动修复 ----
     patches: list[dict[str, Any]] | None  # PatchResult 列表
@@ -95,4 +99,7 @@ class ReviewState(TypedDict, total=False):
     _project_registry: Any
     _review_planner: Any
     _review_unit_executor: Any
+    _issue_policy_service: Any
+    _issue_verifier_service: Any
+    _issue_deduplication_service: Any
     _repo_prepared_callback: Any

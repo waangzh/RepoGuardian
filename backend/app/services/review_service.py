@@ -13,11 +13,15 @@ from langsmith import Client, tracing_context
 from app.agents.providers import LLMProvider
 from app.core.config import settings
 from app.graph.builder import build_review_graph
+from app.graph.nodes.issue_validation import issue_policy_node, issue_verifier_node
+from app.graph.nodes.resolve_evidence import resolve_evidence_node
 from app.graph.state import ReviewState
 from app.models.review import (
     ExecutionBudget,
+    IssueMetrics,
     ReviewCreateRequest,
     ReviewMode,
+    ReviewIssue,
     ReviewPreviewRequest,
     ReviewPreviewResponse,
     ReviewUnitResult,
@@ -32,6 +36,7 @@ from app.models.review import (
     ValidationStatus,
 )
 from app.services.report_service import ReportService
+from app.services.issue_deduplication import IssueDeduplicationService
 from app.services.review_rebuild import rebuild_task_from_state
 from app.services.review_planner import DeterministicReviewPlanner
 from app.services.review_unit_executor import ReviewUnitExecutor
@@ -254,6 +259,7 @@ class ReviewService:
         task.review_unit_results = rebuilt.review_unit_results
         task.excluded_files = rebuilt.excluded_files
         task.issues = rebuilt.issues
+        task.issue_metrics = rebuilt.issue_metrics
         task.context_snippets = rebuilt.context_snippets
         task.repo_snapshot = rebuilt.repo_snapshot
         task.project_profile = rebuilt.project_profile
@@ -336,6 +342,60 @@ class ReviewService:
                     concurrency=1,
                     timeout_seconds=settings.repoguardian_review_unit_timeout_seconds,
                 ).execute_unit(unit, state)
+                aggregated_issues = list(task.issues)
+                retry_metrics = task.issue_metrics
+                lifecycle_warnings: list[str] = []
+                if result.status == ReviewUnitStatus.completed:
+                    lifecycle_state: ReviewState = {
+                        **state,
+                        "base_sha": pr.base.sha,
+                        "review_units": [item.model_dump(mode="json") for item in task.review_units],
+                        "review_unit_results": [result.model_dump(mode="json")],
+                        "review_issues": [item.model_dump(mode="json") for item in result.issues],
+                        "context_snippets": [
+                            item.model_dump(mode="json") for item in result.context_snippets
+                        ],
+                        "warnings": [],
+                        "_git_tool": self._git_tool,
+                        "_provider": self._provider,
+                    }
+                    resolved = await resolve_evidence_node(lifecycle_state)
+                    lifecycle_state = ReviewState(**{**lifecycle_state, **resolved})
+                    checked = await issue_policy_node(lifecycle_state)
+                    lifecycle_state = ReviewState(**{**lifecycle_state, **checked})
+                    verified = await issue_verifier_node(lifecycle_state)
+                    lifecycle_state = ReviewState(**{**lifecycle_state, **verified})
+                    verified_new = [
+                        item for item in lifecycle_state.get("review_issues") or []
+                    ]
+                    existing = [
+                        item for item in task.issues if item.review_unit_id != unit_id
+                    ]
+                    retry_metrics = IssueMetrics.model_validate(
+                        lifecycle_state.get("issue_metrics") or {}
+                    ).model_copy(update={
+                        "candidate_issue_count": max(
+                            len(result.issues), task.issue_metrics.candidate_issue_count
+                        ),
+                    })
+                    deduplicated = await IssueDeduplicationService().aggregate(
+                        [
+                            *existing,
+                            *(ReviewIssue.model_validate(item) for item in verified_new),
+                        ],
+                        self._provider,
+                        task.model,
+                        retry_metrics,
+                    )
+                    aggregated_issues = deduplicated.issues
+                    retry_metrics = deduplicated.metrics
+                    lifecycle_warnings = list(lifecycle_state.get("warnings") or [])
+                    result = result.model_copy(update={
+                        "issues": [
+                            issue for issue in aggregated_issues
+                            if issue.review_unit_id == unit_id
+                        ],
+                    })
             except BaseException:
                 task.status = previous_status
                 task.phase = previous_phase
@@ -351,8 +411,8 @@ class ReviewService:
             task.review_unit_results = [
                 previous[item.id] for item in task.review_units if item.id in previous
             ]
-            task.issues = [item for item in task.issues if item.review_unit_id != unit_id]
-            task.issues.extend(result.issues)
+            task.issues = aggregated_issues
+            task.issue_metrics = retry_metrics
             task.context_snippets = [
                 item for item in task.context_snippets if item.review_unit_id != unit_id
             ] + result.context_snippets
@@ -368,6 +428,7 @@ class ReviewService:
             task.warnings = [
                 warning for warning in task.warnings if "Review Unit" not in warning
             ]
+            task.warnings = list(dict.fromkeys([*task.warnings, *lifecycle_warnings]))
             if failed and completed:
                 task.status = TaskStatus.completed_with_warnings
                 task.warnings.append(

@@ -182,6 +182,20 @@ export interface ReviewIssue {
   status: "candidate" | "evidence_resolved" | "confirmed" | "dismissed" | "needs_human" | "published";
   placement: "inline" | "summary" | "suppressed" | "needs_human";
   unresolved_reason?: string | null;
+  source_review_unit_ids: string[];
+  source_issue_ids: string[];
+}
+
+export interface IssueMetrics {
+  candidate_issue_count: number;
+  deterministic_drop_count: number;
+  verifier_drop_count: number;
+  needs_human_count: number;
+  duplicate_count: number;
+  confirmed_count: number;
+  severity_adjustment_count: number;
+  verifier_call_count: number;
+  verifier_token_count: number;
 }
 
 export interface EvidenceCandidate {
@@ -344,6 +358,7 @@ export interface ReviewUnitResult {
   status: ReviewUnitStatus;
   plan_skipped: boolean;
   issues: ReviewIssue[];
+  issue_metrics: IssueMetrics;
   context_snippets: ContextSnippet[];
   messages: AgentEvent[];
   tool_events: Array<{

@@ -75,6 +75,16 @@ def _append_issue_summary(lines: list[str], task: ReviewTask) -> None:
         )
     else:
         lines.append("未发现有明确证据的代码问题。")
+    metrics = task.issue_metrics
+    lines.append(
+        "Issue 流水线："
+        f"候选 {metrics.candidate_issue_count}，"
+        f"确定性过滤 {metrics.deterministic_drop_count}，"
+        f"verifier 丢弃 {metrics.verifier_drop_count}，"
+        f"需人工 {metrics.needs_human_count}，"
+        f"重复 {metrics.duplicate_count}，"
+        f"确认 {metrics.confirmed_count}。"
+    )
     lines.append("")
 
     lines.extend(["## 4. 详细问题", ""])

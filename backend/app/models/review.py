@@ -136,6 +136,14 @@ class IssueStatus(str, Enum):
     published = "published"
 
 
+class IssueVerificationDecision(str, Enum):
+    """独立 verifier 只能缩小候选集合，不能创建新的问题。"""
+
+    keep = "keep"
+    drop = "drop"
+    needs_human = "needs_human"
+
+
 class EvidenceResolutionMethod(str, Enum):
     diff_exact = "diff_exact"
     diff_normalized = "diff_normalized"
@@ -725,6 +733,8 @@ class ReviewIssue(BaseModel):
     status: IssueStatus = IssueStatus.candidate
     placement: CommentPlacement = CommentPlacement.suppressed
     unresolved_reason: str | None = None
+    source_review_unit_ids: list[str] = Field(default_factory=list)
+    source_issue_ids: list[str] = Field(default_factory=list)
 
     @field_validator("assumptions", "related_tests")
     @classmethod
@@ -737,7 +747,64 @@ class ReviewIssue(BaseModel):
     def restrict_auto_fix_to_resolved_evidence(self) -> "ReviewIssue":
         if self.auto_fix_eligible and self.requires_human_confirmation:
             raise ValueError("issues requiring human confirmation are not auto-fix eligible")
+        if not self.source_review_unit_ids:
+            self.source_review_unit_ids = [self.review_unit_id]
+        else:
+            self.source_review_unit_ids = list(dict.fromkeys(self.source_review_unit_ids))
+        if not self.source_issue_ids:
+            self.source_issue_ids = [self.id]
+        else:
+            self.source_issue_ids = list(dict.fromkeys(self.source_issue_ids))
         return self
+
+
+class DeterministicIssueCheck(BaseModel):
+    """Issue 进入独立 verifier 前的服务端确定性准入结论。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    issue_id: str
+    passed: bool
+    reasons: list[str] = Field(default_factory=list)
+    normalized_severity: Severity | None = None
+
+
+class IssueVerification(BaseModel):
+    """Verifier 的唯一合法输出；不包含新 Issue 或 primary evidence 修改。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    issue_id: str
+    decision: IssueVerificationDecision
+    reason: str = Field(min_length=1, max_length=2_000)
+    contradicting_evidence: list[EvidenceAnchor] = Field(default_factory=list, max_length=12)
+    adjusted_severity: Severity | None = None
+
+
+class IssueDeduplicationDecision(BaseModel):
+    """候选重复组内的受限语义合并结论。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    canonical_issue_id: str
+    duplicate_issue_ids: list[str] = Field(default_factory=list)
+    merged_rationale: str = Field(min_length=1, max_length=2_000)
+
+
+class IssueMetrics(BaseModel):
+    """Issue 筛选、验证和聚合阶段的任务级指标。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_issue_count: int = Field(default=0, ge=0)
+    deterministic_drop_count: int = Field(default=0, ge=0)
+    verifier_drop_count: int = Field(default=0, ge=0)
+    needs_human_count: int = Field(default=0, ge=0)
+    duplicate_count: int = Field(default=0, ge=0)
+    confirmed_count: int = Field(default=0, ge=0)
+    severity_adjustment_count: int = Field(default=0, ge=0)
+    verifier_call_count: int = Field(default=0, ge=0)
+    verifier_token_count: int = Field(default=0, ge=0)
 
 
 class EvidenceLocation(BaseModel):
@@ -940,6 +1007,30 @@ class ContextSnippet(BaseModel):
     review_unit_id: str | None = None
 
 
+class IssueVerificationBudget(BaseModel):
+    """单次 verifier 调用可见的明确只读预算。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    remaining_calls: int = Field(ge=0)
+    max_output_tokens: int = Field(default=1_200, ge=128, le=4_096)
+    max_context_chars: int = Field(default=12_000, ge=0, le=40_000)
+
+
+class IssueVerificationRequest(BaseModel):
+    """独立 verifier 的最小、不可扩张输入。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    issue: ReviewIssue
+    primary_evidence: EvidenceAnchor
+    supporting_evidence: list[EvidenceAnchor] = Field(default_factory=list, max_length=12)
+    unit_diff: str = Field(max_length=60_000)
+    readonly_context: list[ContextSnippet] = Field(default_factory=list, max_length=20)
+    applicable_rules: list[str] = Field(default_factory=list, max_length=20)
+    budget: IssueVerificationBudget
+
+
 class ReviewUnitResult(BaseModel):
     review_unit_id: str
     status: ReviewUnitStatus = ReviewUnitStatus.pending
@@ -990,6 +1081,7 @@ class ReviewTask(BaseModel):
     review_unit_results: list[ReviewUnitResult] = Field(default_factory=list)
     excluded_files: list[ExcludedReviewFile] = Field(default_factory=list)
     issues: list[ReviewIssue] = Field(default_factory=list)
+    issue_metrics: IssueMetrics = Field(default_factory=IssueMetrics)
     context_snippets: list[ContextSnippet] = Field(default_factory=list)
     repo_snapshot: RepoSnapshot | None = None
     project_profile: ProjectProfile | None = None
