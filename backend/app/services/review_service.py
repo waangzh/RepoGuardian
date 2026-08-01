@@ -8,16 +8,19 @@ from typing import Any
 from uuid import uuid4
 
 from langchain_core.tracers.langchain import LangChainTracer
+from langgraph.types import Command
 from langsmith import Client, tracing_context
 
 from app.agents.providers import LLMProvider
 from app.core.config import settings
 from app.graph.builder import build_review_graph
+from app.graph.checkpointer import get_checkpointer, review_thread_config
 from app.graph.nodes.issue_validation import issue_policy_node, issue_verifier_node
 from app.graph.nodes.resolve_evidence import resolve_evidence_node
 from app.graph.state import ReviewState
 from app.models.review import (
     ExecutionBudget,
+    HumanReviewRequest,
     IssueMetrics,
     PatchStatus,
     PatchValidationResult,
@@ -44,6 +47,8 @@ from app.services.issue_deduplication import IssueDeduplicationService
 from app.services.review_rebuild import rebuild_task_from_state
 from app.services.review_planner import DeterministicReviewPlanner
 from app.services.review_unit_executor import ReviewUnitExecutor
+from app.services.review_repository import ReviewRepository
+from app.services.task_queue import ClaimedJob, DatabaseTaskQueue, ReviewWorker
 from app.services.patch_presentation import build_patch_presentation
 from app.tools.diff_parser import DiffParser
 from app.tools.git_tool import GitTool
@@ -88,6 +93,8 @@ class ReviewService:
         report_service: ReportService,
         command_executor: CommandExecutor | None = None,
         validation_backend_selector: ValidationBackendSelector | None = None,
+        repository: ReviewRepository | None = None,
+        task_queue: DatabaseTaskQueue | None = None,
     ) -> None:
         self._github_tool = github_tool
         self._git_tool = git_tool
@@ -97,6 +104,10 @@ class ReviewService:
         # 兼容旧构造签名，但阶段 5A 不把命令执行器注入验证路径。
         self._command_executor = command_executor
         self._validation_backend_selector = validation_backend_selector or ValidationBackendSelector()
+        self._repository = repository
+        self._task_queue = task_queue or (DatabaseTaskQueue() if repository else None)
+        self._worker = ReviewWorker(self._task_queue, self._handle_job) if self._task_queue else None
+        self._worker_task: asyncio.Task[None] | None = None
         self._tasks: dict[str, ReviewTask] = {}
         self._run_tasks: dict[str, asyncio.Task[None]] = {}
         self._retry_locks: dict[str, asyncio.Lock] = {}
@@ -119,11 +130,51 @@ class ReviewService:
         )
         self._tasks[task.id] = task
         logger.info("📋 创建审查任务 %s（PR: %s, 模型: %s）", task.id[:8], request.pr_url, request.model or "默认")
-        self._run_tasks[task.id] = asyncio.create_task(self._run_graph(task.id))
+        if self._repository and self._task_queue:
+            self._repository.create_task(task)
+            self._task_queue.enqueue(task_id=task.id, idempotency_key=f"review:{task.id}:initial")
+            self._ensure_worker_started()
+        else:
+            self._run_tasks[task.id] = asyncio.create_task(self._run_graph(task.id))
         return task
 
     def get_task(self, task_id: str) -> ReviewTask | None:
+        if self._repository:
+            return self._repository.get_task(task_id)
         return self._tasks.get(task_id)
+
+    def list_tasks(self, *, status: str | None, page: int, page_size: int):
+        if not self._repository:
+            items = list(self._tasks.values())
+            if status:
+                items = [item for item in items if item.status.value == status]
+            start = (page - 1) * page_size
+            from app.models.persistence import ReviewTaskListResponse
+            return ReviewTaskListResponse(
+                items=items[start:start + page_size], total=len(items), page=page, page_size=page_size
+            )
+        return self._repository.list_tasks(status=status, page=page, page_size=page_size)
+
+    def get_unit_detail(self, task_id: str, unit_id: str):
+        return self._repository.get_unit(task_id, unit_id) if self._repository else None
+
+    def get_issue_detail(self, task_id: str, issue_id: str):
+        return self._repository.get_issue(task_id, issue_id) if self._repository else None
+
+    def get_patch_detail(self, task_id: str, patch_id: str):
+        return self._repository.get_patch(task_id, patch_id) if self._repository else None
+
+    def get_validation_detail(self, task_id: str, validation_id: str):
+        return self._repository.get_validation(task_id, validation_id) if self._repository else None
+
+    def list_human_request_details(self, task_id: str):
+        return self._repository.list_human_requests(task_id) if self._repository else []
+
+    def get_human_request_detail(self, task_id: str, request_id: str):
+        return (
+            self._repository.get_human_request(task_id, request_id)
+            if self._repository else None
+        )
 
     def apply_user_runner_result(
         self,
@@ -132,7 +183,7 @@ class ReviewService:
         result: PatchValidationResult,
     ) -> None:
         """把已由 UserRunnerService 验真的结果原子地回写到内存任务。"""
-        task = self._tasks.get(task_id)
+        task = self.get_task(task_id)
         if task is None:
             raise KeyError(task_id)
         if task.status == TaskStatus.cancelled:
@@ -172,6 +223,7 @@ class ReviewService:
         ]
         task.validation.append(validation)
         self._touch(task)
+        self._persist(task)
 
     def apply_project_ci_result(
         self,
@@ -180,7 +232,7 @@ class ReviewService:
         result: PatchValidationResult,
     ) -> None:
         """仅接受完成了全部 CI 身份绑定校验的结构化结果。"""
-        task = self._tasks.get(task_id)
+        task = self.get_task(task_id)
         if task is None:
             raise KeyError(task_id)
         patch = next((item for item in task.patches if item.id == patch_id), None)
@@ -223,6 +275,7 @@ class ReviewService:
         ]
         task.validation.append(validation)
         self._touch(task)
+        self._persist(task)
 
     async def preview(self, request: ReviewPreviewRequest) -> ReviewPreviewResponse:
         """只执行 PR 获取、diff 解析和确定性规划。"""
@@ -241,6 +294,8 @@ class ReviewService:
                 head_sha=pr.head.sha,
                 file_index=index["file_index"],
                 symbol_index=index["symbol_index"],
+                model=getattr(request, "model", None) or settings.repoguardian_model,
+                provider=settings.repoguardian_provider,
             )
             backend = self._validation_backend_selector.select(
                 request.validation_backend.value,
@@ -278,7 +333,20 @@ class ReviewService:
         finally:
             _cleanup_repo(Path(repo_path))
 
-    async def _run_graph(self, task_id: str) -> None:
+    async def _handle_job(self, job: ClaimedJob) -> None:
+        if job.kind == "review":
+            await self._run_graph(job.task_id, resume=job.payload.get("resume"))
+            return
+        if job.kind == "unit_retry":
+            await self.retry_unit(job.task_id, str(job.payload["unit_id"]))
+            return
+        raise ValueError(f"unsupported worker job kind: {job.kind}")
+
+    def _ensure_worker_started(self) -> None:
+        if self._worker is not None and (self._worker_task is None or self._worker_task.done()):
+            self._worker_task = asyncio.create_task(self._worker.run_forever())
+
+    async def _run_graph(self, task_id: str, *, resume: dict[str, Any] | None = None) -> None:
         """执行 LangGraph 审查流程的核心方法。
 
         1. 构建初始状态字典（ReviewState），注入所有工具实例
@@ -287,10 +355,13 @@ class ReviewService:
         4. 失败 → 标记任务状态为 failed
         5. 始终清理临时克隆仓库
         """
-        task = self._tasks[task_id]
+        task = self.get_task(task_id) or self._tasks[task_id]
+        if task.status == TaskStatus.cancelled:
+            return
         task.status = TaskStatus.planning
         task.review.status = task.status
         self._touch(task)
+        self._persist(task)
 
         logger.info("🚀 开始执行审查图，任务 %s", task_id[:8])
 
@@ -317,11 +388,24 @@ class ReviewService:
                 task_id, Path(path)
             ),
         }
+        if self._repository:
+            for key in (
+                "_github_tool", "_git_tool", "_diff_parser", "_provider",
+                "_command_executor", "_validation_backend_selector",
+                "_repo_prepared_callback",
+            ):
+                initial_state.pop(key, None)
+            initial_state["_human_interrupt_enabled"] = True
 
         result = None
         try:
             graph = build_review_graph(phase=2)
-            compiled = graph.compile()
+            checkpointer = await get_checkpointer() if self._repository else None
+            compiled = (
+                graph.compile(checkpointer=checkpointer)
+                if self._repository
+                else graph.compile()
+            )
             run_metadata = {
                 "task_id": task_id,
                 "mode": task.mode.value,
@@ -332,19 +416,50 @@ class ReviewService:
                 "tags": ["repoguardian", "pr_review"],
                 "metadata": run_metadata,
             }
+            if self._repository:
+                run_config.update(review_thread_config(task_id))
             tracing, callbacks = _build_langsmith_tracing(run_metadata)
             if callbacks:
                 run_config["callbacks"] = callbacks
             logger.info("📊 开始 ainvoke 执行...")
             with tracing:
-                result = await compiled.ainvoke(initial_state, config=run_config)
+                graph_input: Any = Command(resume=resume) if resume is not None else initial_state
+                result = await compiled.ainvoke(graph_input, config=run_config)
+            interrupt_payload = _extract_interrupt_payload(result)
+            if interrupt_payload and self._repository:
+                request = HumanReviewRequest.model_validate(interrupt_payload["request"])
+                self._sync_result_to_task(task, result)
+                checkpoint_tuple = await checkpointer.aget_tuple(run_config) if checkpointer else None
+                checkpoint_id = (
+                    checkpoint_tuple.config.get("configurable", {}).get("checkpoint_id")
+                    if checkpoint_tuple else None
+                )
+                detail = self._repository.create_human_request(
+                    task_id=task_id,
+                    request=request,
+                    reason=str(interrupt_payload.get("reason") or "human input required"),
+                    request_id=str(interrupt_payload["request_id"]),
+                    checkpoint_id=checkpoint_id,
+                )
+                task.status = TaskStatus.waiting_for_human
+                task.review.status = task.status
+                task.human_request = request
+                self._touch(task)
+                self._repository.save_task(task, checkpoint_id=checkpoint_id)
+                self._repository.save_issue_lifecycle(task_id, result)
+                logger.info("任务 %s 已暂停，等待人工请求 %s", task_id[:8], detail.request_id)
+                return
             logger.info("✅ ainvoke 执行完成，开始同步结果")
             self._sync_result_to_task(task, result)
+            self._persist(task)
+            if self._repository:
+                self._repository.save_issue_lifecycle(task_id, result)
             logger.info("🎉 审查任务 %s 完成", task_id[:8])
         except asyncio.CancelledError:
             task.status = TaskStatus.cancelled
             task.error = None
             self._touch(task)
+            self._persist(task)
             raise
         except Exception as exc:
             logger.error("❌ 审查任务 %s 执行失败: %s", task_id[:8], exc)
@@ -352,13 +467,16 @@ class ReviewService:
             task.phase = ReviewPhase.failed
             task.error = str(exc)
             self._touch(task)
+            self._persist(task)
+            if self._repository:
+                raise
         finally:
             repo_path = (
                 Path(result["repo_path"])
                 if result and result.get("repo_path")
                 else self._repo_paths.get(task_id)
             )
-            if repo_path is not None:
+            if repo_path is not None and task.status != TaskStatus.waiting_for_human:
                 _cleanup_repo(repo_path)
             self._repo_paths.pop(task_id, None)
             self._run_tasks.pop(task_id, None)
@@ -405,6 +523,13 @@ class ReviewService:
         self._touch(task)
 
     def cancel_task(self, task_id: str) -> bool:
+        if self._repository:
+            cancelled = self._repository.cancel_task(task_id)
+            if self._task_queue:
+                self._task_queue.cancel_for_task(task_id)
+            if self._worker:
+                self._worker.cancel_task(task_id)
+            return cancelled
         """取消主任务；取消会沿 await 链传播到所有 Unit worker。"""
         run_task = self._run_tasks.get(task_id)
         if run_task is None or run_task.done():
@@ -414,7 +539,7 @@ class ReviewService:
 
     async def retry_unit(self, task_id: str, unit_id: str) -> ReviewUnitResult:
         """在新的临时 clone 中只重试一个 Unit，并原位替换其聚合结果。"""
-        task = self._tasks.get(task_id)
+        task = self.get_task(task_id)
         if task is None:
             raise KeyError(task_id)
         if task.status not in {
@@ -573,10 +698,42 @@ class ReviewService:
             )
             task.report_markdown = self._report_service.generate(task)
             self._touch(task)
+            self._persist(task)
             return result
 
     def _touch(self, task: ReviewTask) -> None:
         task.updated_at = datetime.now(timezone.utc)
+
+    def _persist(self, task: ReviewTask) -> None:
+        if self._repository:
+            self._repository.save_task(task)
+        else:
+            self._tasks[task.id] = task
+
+    def answer_human_request(
+        self,
+        task_id: str,
+        request_id: str,
+        answer: Any,
+        *,
+        answered_by: str,
+    ):
+        if not self._repository or not self._task_queue:
+            raise ValueError("human request persistence is not configured")
+        detail, replay = self._repository.answer_human_request(
+            task_id=task_id,
+            request_id=request_id,
+            answer=answer,
+            answered_by=answered_by,
+        )
+        if not replay:
+            self._task_queue.enqueue(
+                task_id=task_id,
+                payload={"resume": answer.model_dump(mode="json")},
+                idempotency_key=f"review:{task_id}:human:{request_id}",
+            )
+            self._ensure_worker_started()
+        return detail, replay
 
 
 def _cleanup_repo(repo_path: Path) -> None:
@@ -586,6 +743,17 @@ def _cleanup_repo(repo_path: Path) -> None:
         shutil.rmtree(repo_path, ignore_errors=True)
     except Exception:
         pass
+
+
+def _extract_interrupt_payload(result: Any) -> dict[str, Any] | None:
+    if not isinstance(result, dict):
+        return None
+    interrupts = result.get("__interrupt__") or ()
+    if not interrupts:
+        return None
+    first = interrupts[0]
+    value = getattr(first, "value", first)
+    return value if isinstance(value, dict) else None
 
 
 def _build_langsmith_tracing(

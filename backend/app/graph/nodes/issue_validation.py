@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from app.agents.providers import build_provider
 from app.core.config import settings
 from app.graph.nodes._events import append_step
 from app.graph.state import ReviewState
@@ -90,9 +91,12 @@ async def issue_verifier_node(state: ReviewState) -> ReviewState:
     metrics = IssueMetrics.model_validate(state.get("issue_metrics") or {})
     service: Any = state.get("_issue_verifier_service")
     if service is None:
-        provider = state.get("_provider")
-        if provider is None:
-            raise ValueError("issue verifier requires an injected provider")
+        provider = state.get("_provider") or build_provider(
+            settings.repoguardian_provider,
+            settings.openai_api_key,
+            settings.openai_base_url,
+            settings.repoguardian_model,
+        )
         service = IssueVerifierService(
             provider,
             enabled=settings.repoguardian_issue_verifier_enabled,
@@ -120,9 +124,12 @@ async def issue_verifier_node(state: ReviewState) -> ReviewState:
 async def issue_deduplication_node(state: ReviewState) -> ReviewState:
     issues = [ReviewIssue.model_validate(item) for item in state.get("review_issues") or []]
     metrics = IssueMetrics.model_validate(state.get("issue_metrics") or {})
-    provider = state.get("_provider")
-    if provider is None:
-        raise ValueError("issue deduplication requires an injected provider")
+    provider = state.get("_provider") or build_provider(
+        settings.repoguardian_provider,
+        settings.openai_api_key,
+        settings.openai_base_url,
+        settings.repoguardian_model,
+    )
     service: Any = state.get("_issue_deduplication_service") or IssueDeduplicationService()
     result = await service.aggregate(issues, provider, state.get("model"), metrics)
 

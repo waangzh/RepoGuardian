@@ -66,7 +66,13 @@ def build_review_graph(phase: int | None = None) -> StateGraph:
         },
     )
     graph.add_edge("context_retrieve", "discovery_decide")
-    graph.add_edge("human_required", "report")
+    graph.add_conditional_edges(
+        "human_required",
+        lambda state: (
+            "report" if state.get("status") == "waiting_for_human" else "discovery_decide"
+        ),
+        {"report": "report", "discovery_decide": "discovery_decide"},
+    )
     graph.add_edge("review", "resolve_evidence")
     graph.add_edge("resolve_evidence", "issue_policy")
     graph.add_edge("issue_policy", "issue_verifier")
@@ -89,6 +95,7 @@ def _build_review_unit_graph() -> StateGraph:
     graph.add_node("project_detection", project_detection_node)
     graph.add_node("review_plan", review_plan_node)
     graph.add_node("review_units", review_units_node)
+    graph.add_node("human_required", human_required_node)
     graph.add_node("resolve_evidence", resolve_evidence_node)
     graph.add_node("issue_policy", issue_policy_node)
     graph.add_node("issue_verifier", issue_verifier_node)
@@ -107,8 +114,21 @@ def _build_review_unit_graph() -> StateGraph:
     graph.add_edge("review_plan", "review_units")
     graph.add_conditional_edges(
         "review_units",
-        lambda state: "report" if state.get("status") == "failed" else "resolve_evidence",
-        {"report": "report", "resolve_evidence": "resolve_evidence"},
+        lambda state: (
+            "report" if state.get("status") == "failed"
+            else "human_required" if (state.get("next_action") or {}).get("action") == "request_human"
+            else "resolve_evidence"
+        ),
+        {
+            "report": "report",
+            "human_required": "human_required",
+            "resolve_evidence": "resolve_evidence",
+        },
+    )
+    graph.add_conditional_edges(
+        "human_required",
+        lambda state: "report" if state.get("status") == "waiting_for_human" else "review_units",
+        {"report": "report", "review_units": "review_units"},
     )
     graph.add_edge("resolve_evidence", "issue_policy")
     graph.add_edge("issue_policy", "issue_verifier")

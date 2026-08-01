@@ -6,14 +6,17 @@ from app.graph.nodes._events import append_step
 from app.graph.state import ReviewState
 from app.tools.git_tool import GitTool
 from app.tools.github_tool import GitHubTool
+from app.core.config import settings
 
 logger = logging.getLogger("RepoGuardian.Node")
 
 
 async def repo_prepare_node(state: ReviewState) -> ReviewState:
     """准备节点：从 GitHub 拉取 PR 元数据，克隆仓库并生成 unified diff。"""
-    github: Any = state.get("_github_tool") or GitHubTool()
-    git_tool: Any = state.get("_git_tool") or GitTool()
+    github: Any = state.get("_github_tool") or GitHubTool(settings.github_token)
+    git_tool: Any = state.get("_git_tool") or GitTool(
+        settings.repoguardian_workdir, settings.repoguardian_git_bin
+    )
 
     logger.info("📥 [准备] 开始获取 PR 信息: %s", state["pr_url"])
     pr_info = await github.fetch_pr(state["pr_url"])

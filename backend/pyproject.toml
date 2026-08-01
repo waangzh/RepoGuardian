@@ -15,6 +15,7 @@ dependencies = [
     "langchain-openai>=0.3.0",
     "langsmith>=0.3.0",
     "sqlalchemy[asyncio]>=2.0.30",
+    "alembic>=1.16.0",
     "aiosqlite>=0.20.0",
     "sse-starlette>=2.0.0",
     "tree-sitter>=0.23.0",
@@ -36,3 +37,6 @@ addopts = "--basetemp=.pytest_tmp"
 
 [tool.ruff]
 line-length = 100
+
+[tool.setuptools.packages.find]
+include = ["app*"]

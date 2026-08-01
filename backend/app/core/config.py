@@ -93,6 +93,26 @@ class Settings(BaseSettings):
     # ---- 数据库 ----
     repoguardian_db_path: Path = Path(".repoguardian/repoguardian.db")
     repoguardian_checkpoint_db: Path = Path(".repoguardian/checkpoints.db")
+    repoguardian_worker_poll_seconds: float = Field(default=0.25, ge=0.05, le=60)
+    repoguardian_worker_lease_seconds: int = Field(default=300, ge=5, le=86_400)
+    repoguardian_worker_max_attempts: int = Field(default=3, ge=1, le=20)
+    repoguardian_human_timeout_seconds: int = Field(default=86_400, ge=60, le=2_592_000)
+    repoguardian_human_timeout_policy: Literal["fail", "cancel"] = "fail"
+    repoguardian_human_answer_token: str | None = None
+    repoguardian_artifact_inline_max_bytes: int = Field(default=64_000, ge=1_024, le=1_000_000)
+    repoguardian_artifact_dir: Path = (
+        Path(__file__).resolve().parent.parent.parent / ".repoguardian" / "artifacts"
+    )
+    repoguardian_retention_days: int = Field(default=30, ge=1, le=3650)
+
+    # ---- 可复用结论版本 ----
+    repoguardian_config_version: str = "6A-v1"
+    repoguardian_prompt_version: str = "review-v1"
+    repoguardian_rule_version: str = "rules-v1"
+    repoguardian_tool_schema_version: str = "tools-v1"
+    repoguardian_review_policy_version: str = "review-policy-v1"
+    repoguardian_patch_policy_version: str = "patch-policy-v1"
+    repoguardian_allow_cross_model_reuse: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
