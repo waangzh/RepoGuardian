@@ -39,6 +39,20 @@ class Settings(BaseSettings):
     ] = "none"
     repoguardian_default_validation_profile: str = "unit"
 
+    # ---- Project CI / GitHub Actions ----
+    # 仓库必须显式安装该 workflow；默认不启用 Project CI。
+    repoguardian_project_ci_workflow: str | None = None
+    repoguardian_project_ci_ref: str = "main"
+    repoguardian_project_ci_workflow_name: str = "RepoGuardian Validation"
+    repoguardian_project_ci_profiles: str = "unit=unit"
+    repoguardian_project_ci_allow_fork: bool = False
+    repoguardian_project_ci_timeout_seconds: int = Field(default=3600, ge=60, le=86_400)
+    repoguardian_project_ci_poll_interval_seconds: int = Field(default=30, ge=5, le=300)
+    repoguardian_project_ci_max_patch_input_bytes: int = Field(
+        default=48_000, ge=1_024, le=60_000
+    )
+    repoguardian_github_webhook_secret: str | None = None
+
     # ---- User Runner 协议 ----
     # profile 仅映射服务端注册的逻辑 command_id，不是 shell 字符串。
     repoguardian_runner_profiles: str = "unit=project_unit_tests,lint=project_lint"
@@ -96,4 +110,14 @@ def registered_runner_profiles() -> dict[str, str]:
             profiles[profile_id] = command_id
     if not profiles:
         raise ValueError("REPOGUARDIAN_RUNNER_PROFILES must register at least one profile")
+    return profiles
+
+
+def registered_project_ci_profiles() -> dict[str, str]:
+    """解析 Project CI profile -> 必须成功的检查名称映射。"""
+    profiles: dict[str, str] = {}
+    for item in settings.repoguardian_project_ci_profiles.split(","):
+        profile_id, separator, check_name = item.strip().partition("=")
+        if separator and profile_id and check_name:
+            profiles[profile_id] = check_name
     return profiles
