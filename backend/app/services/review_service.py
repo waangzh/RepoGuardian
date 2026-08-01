@@ -173,6 +173,57 @@ class ReviewService:
         task.validation.append(validation)
         self._touch(task)
 
+    def apply_project_ci_result(
+        self,
+        task_id: str,
+        patch_id: str,
+        result: PatchValidationResult,
+    ) -> None:
+        """仅接受完成了全部 CI 身份绑定校验的结构化结果。"""
+        task = self._tasks.get(task_id)
+        if task is None:
+            raise KeyError(task_id)
+        patch = next((item for item in task.patches if item.id == patch_id), None)
+        if patch is None:
+            raise KeyError(patch_id)
+        if (
+            result.backend != ValidationBackend.project_ci.value
+            or result.head_sha != patch.head_sha
+            or result.patch_sha != patch.patch_sha
+        ):
+            raise ValueError("project CI result does not match the candidate patch")
+        if result.status in {ValidationStatus.passed, ValidationStatus.failed} and (
+            not result.trusted
+            or not (result.trust_source or "").startswith("project_ci:")
+        ):
+            raise ValueError("untrusted project CI result cannot decide candidate correctness")
+        if not (result.trust_source or "").startswith("project_ci"):
+            raise ValueError("project CI trust source is missing")
+
+        if result.status == ValidationStatus.passed:
+            patch.status = PatchStatus.verified
+        elif result.status == ValidationStatus.failed:
+            patch.status = PatchStatus.validation_failed
+        else:
+            patch.status = PatchStatus.validation_inconclusive
+        patch.validation_backend = result.backend
+        patch.validation_result_id = result.id
+        patch.presentation = build_patch_presentation(patch)
+
+        validation = ValidationResult.model_validate({
+            **result.model_dump(mode="json"),
+            "patch_id": patch.id,
+        })
+        task.validation = [
+            item for item in task.validation
+            if not (
+                item.patch_id == patch.id
+                and item.backend == ValidationBackend.project_ci.value
+            )
+        ]
+        task.validation.append(validation)
+        self._touch(task)
+
     async def preview(self, request: ReviewPreviewRequest) -> ReviewPreviewResponse:
         """只执行 PR 获取、diff 解析和确定性规划。"""
         pr_url = str(request.pr_url)

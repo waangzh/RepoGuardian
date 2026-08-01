@@ -1059,6 +1059,7 @@ class PatchValidationRequest(BaseModel):
     repository_clone_url: str | None = None
     repository_fetch_ref: str | None = None
     patch_content: str | None = None
+    is_fork: bool = False
 
 
 class PatchValidationResult(BaseModel):
