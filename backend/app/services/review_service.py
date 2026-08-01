@@ -24,6 +24,7 @@ from app.models.review import (
     ReviewIssue,
     ReviewPreviewRequest,
     ReviewPreviewResponse,
+    ValidationBackendPreview,
     ReviewUnitResult,
     ReviewUnitStatus,
     ReviewPhase,
@@ -142,6 +143,9 @@ class ReviewService:
                 symbol_index=index["symbol_index"],
             )
             return ReviewPreviewResponse(
+                mode=request.mode,
+                changed_file_count=len(plan.changed_files),
+                included_file_count=sum(item.included for item in plan.changed_files),
                 changed_files=plan.changed_files,
                 review_units=plan.review_units,
                 excluded_files=plan.excluded_files,
@@ -151,6 +155,28 @@ class ReviewService:
                     planner.estimated_model_calls(unit) for unit in plan.review_units
                 ),
                 estimated_tokens=sum(unit.estimated_tokens for unit in plan.review_units),
+                patch_generation_enabled=(
+                    request.mode != ReviewMode.review and request.generate_patches
+                ),
+                validation_backend=ValidationBackendPreview(
+                    name=request.validation_backend,
+                    available=(
+                        request.validation_backend == ValidationBackend.none
+                        or (
+                            request.validation_backend == ValidationBackend.local
+                            and self._command_executor is not None
+                        )
+                    ),
+                    unavailable_reason=(
+                        None
+                        if request.validation_backend == ValidationBackend.none
+                        or (
+                            request.validation_backend == ValidationBackend.local
+                            and self._command_executor is not None
+                        )
+                        else "所选验证后端未配置；只读审查仍可执行"
+                    ),
+                ),
                 warnings=plan.warnings,
             )
         finally:

@@ -43,10 +43,20 @@ export async function createReview(
   });
 }
 
-export async function previewReview(prUrl: string): Promise<ReviewPreviewResponse> {
+export async function previewReview(
+  prUrl: string,
+  mode: ReviewMode = "review",
+  generatePatches = false,
+  validationBackend: ValidationBackend = "none",
+): Promise<ReviewPreviewResponse> {
   return request<ReviewPreviewResponse>("/api/reviews/preview", {
     method: "POST",
-    body: JSON.stringify({ pr_url: prUrl }),
+    body: JSON.stringify({
+      pr_url: prUrl,
+      mode,
+      generate_patches: generatePatches,
+      validation_backend: validationBackend,
+    }),
   });
 }
 

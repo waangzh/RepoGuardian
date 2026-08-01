@@ -434,6 +434,85 @@ button:disabled {
   margin-bottom: 10px;
 }
 
+.form-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+button.secondary {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--ink);
+}
+
+button.compact {
+  padding: 7px 10px;
+  width: auto;
+}
+
+.checkbox-row {
+  align-items: center;
+  display: flex;
+  flex-direction: row !important;
+  gap: 8px;
+}
+
+.checkbox-row input {
+  width: auto;
+}
+
+.preview-metrics {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 12px;
+  margin: 12px 0;
+}
+
+.preview-metrics span,
+.unit-row p {
+  color: var(--muted);
+  margin: 0;
+}
+
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag-list span {
+  background: var(--paper-deep);
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.unit-row {
+  align-items: center;
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 11px 0;
+}
+
+.unit-row > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.unit-row > span {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.unit-row > span[data-status="failed"],
+.unit-row > span[data-status="timed_out"] {
+  color: var(--danger);
+}
+
 .agent-row,
 .tool-row {
   display: grid;

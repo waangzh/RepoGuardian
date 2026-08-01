@@ -5,6 +5,11 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.models.review import PullRequestInfo
+from app.review.tool_scope import (
+    ReviewPathPolicyError,
+    list_git_tracked_files,
+    validate_repository_file,
+)
 
 
 class GitToolError(RuntimeError):
@@ -28,7 +33,10 @@ class GitTool:
         self, repo_path: str | Path, file_path: str, start_line: int = 1, end_line: int | None = None
     ) -> str:
         """从检出的仓库中直接读取指定文件的指定行范围（非 git 命令，直接文件 I/O）。"""
-        full_path = Path(repo_path) / file_path
+        try:
+            full_path = validate_repository_file(repo_path, file_path)
+        except (OSError, ReviewPathPolicyError):
+            return ""
         try:
             with open(full_path, "r", encoding="utf-8", errors="replace", newline="") as f:
                 lines = f.readlines()
@@ -39,6 +47,10 @@ class GitTool:
         start_idx = max(start_line - 1, 0)
         end_idx = min(end_line, len(lines))
         return "".join(lines[start_idx:end_idx])
+
+    def list_tracked_files(self, repo_path: str | Path) -> set[str]:
+        """列出仓库索引中的文件，供 RepoIndexer 和只读工具共享。"""
+        return list_git_tracked_files(repo_path, self._git)
 
     def get_file_content_at_revision(
         self, repo_path: str | Path, revision: str, file_path: str

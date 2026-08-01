@@ -182,6 +182,8 @@ class AgentActionName(str, Enum):
     revise_patch = "revise_patch"
     accept_patch = "accept_patch"
     abandon_patch = "abandon_patch"
+    report_issue = "report_issue"
+    task_done = "task_done"
 
 
 class CommandId(str, Enum):
@@ -442,7 +444,20 @@ class ReviewPreviewRequest(BaseModel):
     """仅执行确定性 PR 分析，不创建任务或调用模型。"""
 
     pr_url: HttpUrl
+    mode: ReviewMode = Field(default_factory=_default_review_mode)
+    generate_patches: bool = False
+    validation_backend: ValidationBackend = Field(default_factory=_default_validation_backend)
     model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_product_policy(self) -> "ReviewPreviewRequest":
+        ReviewCreateRequest(
+            pr_url=self.pr_url,
+            mode=self.mode,
+            generate_patches=self.generate_patches,
+            validation_backend=self.validation_backend,
+        )
+        return self
 
 
 class TaskStep(BaseModel):
@@ -569,6 +584,7 @@ class ReviewToolScope(BaseModel):
     review_unit_id: str
     commentable_files: set[str]
     readable_files: set[str]
+    repository_root: str | None = None
     max_lines_per_read: int = Field(gt=0)
     max_search_results: int = Field(gt=0)
 
@@ -590,6 +606,9 @@ class ReviewPlan(BaseModel):
 
 
 class ReviewPreviewResponse(BaseModel):
+    mode: ReviewMode
+    changed_file_count: int = Field(ge=0)
+    included_file_count: int = Field(ge=0)
     changed_files: list[PlannedChangedFile] = Field(default_factory=list)
     review_units: list[ReviewUnit] = Field(default_factory=list)
     excluded_files: list[ExcludedReviewFile] = Field(default_factory=list)
@@ -597,7 +616,15 @@ class ReviewPreviewResponse(BaseModel):
     risk_tags: list[str] = Field(default_factory=list)
     estimated_model_calls: int = Field(ge=0)
     estimated_tokens: int = Field(ge=0)
+    patch_generation_enabled: bool
+    validation_backend: "ValidationBackendPreview"
     warnings: list[str] = Field(default_factory=list)
+
+
+class ValidationBackendPreview(BaseModel):
+    name: ValidationBackend
+    available: bool
+    unavailable_reason: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -872,6 +899,9 @@ class AgentAction(BaseModel):
             patch_id = self.tool_args.get("patch_id")
             if set(self.tool_args) != {"patch_id"} or not isinstance(patch_id, str) or not patch_id:
                 raise ValueError("apply_patch requires a server-selected patch_id only")
+        elif self.action in {AgentActionName.report_issue, AgentActionName.task_done}:
+            if self.tool_args:
+                raise ValueError(f"{self.action.value} does not accept tool_args")
         elif self.tool_args:
             raise ValueError(f"tool_args are not allowed for action '{self.action.value}'")
 
@@ -1289,6 +1319,7 @@ class ReviewTask(BaseModel):
     review_unit_results: list[ReviewUnitResult] = Field(default_factory=list)
     excluded_files: list[ExcludedReviewFile] = Field(default_factory=list)
     issues: list[ReviewIssue] = Field(default_factory=list)
+    issue_metrics: IssueMetrics = Field(default_factory=IssueMetrics)
     issue_metrics: IssueMetrics = Field(default_factory=IssueMetrics)
     context_snippets: list[ContextSnippet] = Field(default_factory=list)
     repo_snapshot: RepoSnapshot | None = None
