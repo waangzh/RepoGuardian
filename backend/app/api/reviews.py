@@ -69,7 +69,12 @@ async def cancel_review(task_id: str) -> dict[str, str]:
     service = get_review_service()
     if service.get_task(task_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
-    if not service.cancel_task(task_id):
+    graph_cancelled = service.cancel_task(task_id)
+    from app.validation.project_ci import get_project_ci_service
+
+    project_ci = get_project_ci_service()
+    ci_cancelled = await project_ci.cancel_for_task(task_id) if project_ci else False
+    if not graph_cancelled and not ci_cancelled:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Task is not running")
     from app.validation.user_runner import get_user_runner_service
 

@@ -4,6 +4,7 @@ from collections.abc import Iterable
 
 from app.validation.backends import NoValidationBackend, UnavailableValidationBackend
 from app.validation.base import ValidationBackend
+from app.validation.project_ci import ProjectCIBackend
 from app.validation.user_runner import UserRunnerValidationBackend
 
 
@@ -16,7 +17,7 @@ class ValidationBackendRegistry:
         configured = list(backends) if backends is not None else [
             NoValidationBackend(),
             UserRunnerValidationBackend(),
-            UnavailableValidationBackend("project_ci", "project CI is not configured"),
+            ProjectCIBackend(),
             UnavailableValidationBackend("gvisor", "gVisor validation is not configured"),
         ]
         self._backends = {backend.name: backend for backend in configured}

@@ -56,6 +56,7 @@ async def optional_validation_node(state: ReviewState) -> ReviewState:
             repository_clone_url=_repository_clone_url(state),
             repository_fetch_ref=_repository_fetch_ref(state),
             patch_content=patch.unified_diff,
+            is_fork=_repository_is_fork(state),
         )
         try:
             if capabilities is None:
@@ -166,3 +167,10 @@ def _repository_clone_url(state: ReviewState) -> str:
 def _repository_fetch_ref(state: ReviewState) -> str | None:
     head = (state.get("pr_info") or {}).get("head") or {}
     return str(head.get("ref")) if head.get("ref") else None
+
+
+def _repository_is_fork(state: ReviewState) -> bool:
+    pr = state.get("pr_info") or {}
+    base_clone = str(pr.get("clone_url") or "").lower()
+    head_clone = str(((pr.get("head") or {}).get("repo_clone_url")) or "").lower()
+    return bool(base_clone and head_clone and base_clone != head_clone)
