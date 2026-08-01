@@ -26,6 +26,10 @@ def test_openapi_exposes_preview_and_retry_contracts() -> None:
     schema = app.openapi()
     assert "/api/reviews/preview" in schema["paths"]
     assert "/api/reviews/{task_id}/units/{unit_id}/retry" in schema["paths"]
+    assert "/api/validation-requests/{request_id}/claim" in schema["paths"]
+    assert "/api/validation-requests/{request_id}/result" in schema["paths"]
+    assert "/api/validation-requests/{request_id}/cancel" in schema["paths"]
+    assert "/api/runners/register" in schema["paths"]
     preview = schema["components"]["schemas"]["ReviewPreviewResponse"]
     assert {
         "mode", "changed_file_count", "included_file_count", "changed_files",

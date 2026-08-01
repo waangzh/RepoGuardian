@@ -4,6 +4,7 @@ from collections.abc import Iterable
 
 from app.validation.backends import NoValidationBackend, UnavailableValidationBackend
 from app.validation.base import ValidationBackend
+from app.validation.user_runner import UserRunnerValidationBackend
 
 
 class ValidationBackendPolicyError(ValueError):
@@ -14,7 +15,7 @@ class ValidationBackendRegistry:
     def __init__(self, backends: Iterable[ValidationBackend] | None = None) -> None:
         configured = list(backends) if backends is not None else [
             NoValidationBackend(),
-            UnavailableValidationBackend("user_runner", "user runner is not configured"),
+            UserRunnerValidationBackend(),
             UnavailableValidationBackend("project_ci", "project CI is not configured"),
             UnavailableValidationBackend("gvisor", "gVisor validation is not configured"),
         ]

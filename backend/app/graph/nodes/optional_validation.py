@@ -52,6 +52,10 @@ async def optional_validation_node(state: ReviewState) -> ReviewState:
             base_sha=state.get("base_sha") or "unknown-base",
             head_sha=patch.head_sha,
             patch_sha=patch.patch_sha or "missing-patch-sha",
+            validation_profile=str(state.get("validation_profile") or "unit"),
+            repository_clone_url=_repository_clone_url(state),
+            repository_fetch_ref=_repository_fetch_ref(state),
+            patch_content=patch.unified_diff,
         )
         try:
             if capabilities is None:
@@ -152,3 +156,13 @@ def _repository_id(state: ReviewState) -> str:
     owner = pr.get("owner")
     repo = pr.get("repo")
     return f"{owner}/{repo}" if owner and repo else str(state.get("pr_url") or "unknown-repository")
+
+
+def _repository_clone_url(state: ReviewState) -> str:
+    pr = state.get("pr_info") or {}
+    return str(pr.get("clone_url") or (pr.get("head") or {}).get("repo_clone_url") or "")
+
+
+def _repository_fetch_ref(state: ReviewState) -> str | None:
+    head = (state.get("pr_info") or {}).get("head") or {}
+    return str(head.get("ref")) if head.get("ref") else None

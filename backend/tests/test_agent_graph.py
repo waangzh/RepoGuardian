@@ -564,7 +564,7 @@ async def test_repair_subgraph_abandons_unselected_generated_patches(tmp_path: P
     assert provider.patch_calls == 1
     assert [patch["status"] for patch in result["patches"]] == [
         "unverified",
-        "unverified",
+        "abandoned",
     ]
     patched_snapshots = [
         snapshot for snapshot in result.get("validation_snapshots") or [] if snapshot["stage"] == "patched"

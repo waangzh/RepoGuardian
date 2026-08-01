@@ -37,6 +37,15 @@ class Settings(BaseSettings):
     repoguardian_default_validation_backend: Literal[
         "none", "user_runner", "project_ci", "gvisor"
     ] = "none"
+    repoguardian_default_validation_profile: str = "unit"
+
+    # ---- User Runner 协议 ----
+    # profile 仅映射服务端注册的逻辑 command_id，不是 shell 字符串。
+    repoguardian_runner_profiles: str = "unit=project_unit_tests,lint=project_lint"
+    repoguardian_runner_registration_token: str | None = None
+    repoguardian_runner_claim_timeout_seconds: int = Field(default=600, ge=30, le=86_400)
+    repoguardian_runner_request_timeout_seconds: int = Field(default=7200, ge=60, le=604_800)
+    repoguardian_runner_max_log_summary_chars: int = Field(default=8_000, ge=0, le=20_000)
 
     # ---- Review Unit Planner / 调度 ----
     repoguardian_review_unit_concurrency: int = 4
@@ -76,3 +85,15 @@ class Settings(BaseSettings):
 
 # 全局配置单例
 settings = Settings()
+
+
+def registered_runner_profiles() -> dict[str, str]:
+    """解析服务端预注册 profile；值始终是逻辑 command_id。"""
+    profiles: dict[str, str] = {}
+    for item in settings.repoguardian_runner_profiles.split(","):
+        profile_id, separator, command_id = item.strip().partition("=")
+        if separator and profile_id and command_id:
+            profiles[profile_id] = command_id
+    if not profiles:
+        raise ValueError("REPOGUARDIAN_RUNNER_PROFILES must register at least one profile")
+    return profiles
