@@ -116,7 +116,8 @@ export type ReviewUnitStatus =
   | "completed"
   | "failed"
   | "timed_out"
-  | "cancelled";
+  | "cancelled"
+  | "needs_human";
 
 export interface PlannedChangedFile {
   file_path: string;
@@ -414,6 +415,7 @@ export interface ReviewUnitResult {
   }>;
   execution_budget: Record<string, number>;
   error?: string | null;
+  human_request?: HumanReviewRequest | null;
 }
 
 export interface ReviewTask {

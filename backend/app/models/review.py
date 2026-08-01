@@ -106,6 +106,7 @@ class ReviewUnitStatus(str, Enum):
     failed = "failed"
     timed_out = "timed_out"
     cancelled = "cancelled"
+    needs_human = "needs_human"
 
 
 class StepStatus(str, Enum):
@@ -1354,6 +1355,7 @@ class ReviewUnitResult(BaseModel):
     tool_events: list[ReviewUnitToolEvent] = Field(default_factory=list)
     execution_budget: ExecutionBudget = Field(default_factory=ExecutionBudget)
     error: str | None = None
+    human_request: HumanReviewRequest | None = None
 
 
 class RepoSnapshot(BaseModel):

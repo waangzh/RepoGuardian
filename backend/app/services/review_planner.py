@@ -11,6 +11,7 @@ from pathlib import PurePosixPath
 from typing import Any, Iterable
 
 from app.core.config import settings
+from app.services.fingerprints import unit_fingerprint
 from app.models.review import (
     ChangedFile,
     ExcludedReviewFile,
@@ -102,6 +103,8 @@ class DeterministicReviewPlanner:
         head_sha: str,
         file_index: list[dict[str, Any]] | None = None,
         symbol_index: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        provider: str | None = None,
     ) -> ReviewPlan:
         files = [
             item if isinstance(item, ChangedFile) else ChangedFile.model_validate(item)
@@ -152,6 +155,8 @@ class DeterministicReviewPlanner:
                 head_sha,
                 file_index or [],
                 symbol_index or [],
+                model or settings.repoguardian_model,
+                provider or settings.repoguardian_provider,
             )
             for draft in drafts
         ]
@@ -387,6 +392,8 @@ class DeterministicReviewPlanner:
         head_sha: str,
         file_index: list[dict[str, Any]],
         symbol_index: list[dict[str, Any]],
+        model: str,
+        provider: str,
     ) -> ReviewUnit:
         primary = list(draft.primary_files)
         selected_hunks = list(draft.hunk_ids or (
@@ -422,15 +429,21 @@ class DeterministicReviewPlanner:
             "planner_version": PLANNER_VERSION,
         }
         unit_id = "ru-" + self._digest(identity)[:16]
-        fingerprint = self._digest({
-            "base_sha": base_sha,
-            "head_sha": head_sha,
-            "normalized_unit_diff": normalized,
-            "primary_files": primary,
-            "related_files": related,
-            "rule_ids": rules,
-            "planner_version": PLANNER_VERSION,
-        })
+        fingerprint = unit_fingerprint(
+            base_sha=base_sha,
+            head_sha=head_sha,
+            normalized_unit_diff=normalized,
+            primary_files=primary,
+            related_files=related,
+            rule_ids=rules,
+            rule_version=settings.repoguardian_rule_version,
+            prompt_version=settings.repoguardian_prompt_version,
+            tool_schema_version=settings.repoguardian_tool_schema_version,
+            planner_version=PLANNER_VERSION,
+            review_policy_version=settings.repoguardian_review_policy_version,
+            model=model,
+            provider=provider,
+        )
         return ReviewUnit(
             id=unit_id,
             primary_files=primary,

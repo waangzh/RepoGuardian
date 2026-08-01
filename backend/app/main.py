@@ -1,12 +1,28 @@
 import logging
 import sys
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.reviews import router as reviews_router
+from app.api.reviews import get_review_service, router as reviews_router
 from app.api.validation_requests import router as validation_requests_router
 from app.api.project_ci import router as project_ci_router
+from app.graph.checkpointer import close_checkpointer
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    service = get_review_service()
+    service._ensure_worker_started()
+    try:
+        yield
+    finally:
+        if service._worker:
+            service._worker.stop()
+        if service._worker_task:
+            await service._worker_task
+        await close_checkpointer()
 
 # ---------------------------------------------------------------------------
 # 统一日志配置：所有模块共享同一 Logger，控制台输出中文流程日志
@@ -23,7 +39,7 @@ logging.getLogger("tree_sitter").setLevel(logging.WARNING)
 logging.getLogger("asyncio").setLevel(logging.WARNING)
 
 
-app = FastAPI(title="RepoGuardian API", version="0.1.0")
+app = FastAPI(title="RepoGuardian API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
