@@ -1,95 +1,92 @@
 # RepoGuardian
 
-> 默认模式为 `review`：只读审查始终可运行，不生成补丁、不运行项目代码，也不依赖验证执行器。
+> 面向 GitHub Pull Request 的 AI 代码审查与受控修复工作台。
 
-> `review_and_suggest` 只生成 `unverified` 候选补丁；`review_suggest_and_validate` 才会调用显式选择的验证后端。后端不可用时审查仍会完成并返回 `unsupported` 警告，绝不回退到本地执行。
+RepoGuardian 接收一个 GitHub PR URL，在隔离的任务临时目录中准备代码、理解 diff、拆分审查单元，并通过 LangGraph 编排模型审查、证据定位、问题确认、候选补丁和可选验证。最终结果同时以结构化 API、实时事件、Vue 控制台和 Markdown 报告交付。
 
-> 面向 GitHub Pull Request 的 Python 代码审查与受控修复工作台。
+项目默认采用只读审查模式：**不运行目标仓库代码，不生成补丁，也不会提交、推送或写回真实仓库**。
 
-RepoGuardian 接收一个 GitHub PR URL，在任务临时 clone 中读取 PR Head、分析 diff 与相关上下文，并生成结构化问题和 Markdown 报告。默认只读审查不运行目标代码；补丁与验证都是显式可选能力，验证结果与候选补丁状态分开返回。
+> [!IMPORTANT]
+> RepoGuardian 当前处于早期开发阶段，主要支持 Python 项目，尚未声明开源许可证，也未提供可执行的容器沙箱。请先阅读[安全与信任边界](#安全与信任边界)和[当前限制](#当前限制)。
 
-## 适用场景
+## 目录
 
-- 需要在合并前快速审查 Python PR 的正确性、可维护性、性能、安全性与测试覆盖。
-- 希望将静态分析、测试、模型审查和补丁验证汇总到一份报告。
-- 希望试验自动修复，但不允许系统提交、推送或改写真实仓库。
+- [为什么使用 RepoGuardian](#为什么使用-repoguardian)
+- [核心能力](#核心能力)
+- [工作模式](#工作模式)
+- [快速开始](#快速开始)
+- [工作流与架构](#工作流与架构)
+- [验证后端](#验证后端)
+- [API 概览](#api-概览)
+- [配置](#配置)
+- [安全与信任边界](#安全与信任边界)
+- [项目结构](#项目结构)
+- [开发与验证](#开发与验证)
+- [当前限制](#当前限制)
+
+## 为什么使用 RepoGuardian
+
+- **先规划再审查**：确定性分析变更文件，按符号、依赖关系和规模拆分 Review Unit，支持 Preview 和单 Unit 重试。
+- **结论必须有证据**：模型给出的行号不被直接信任；服务端重新解析 Base/Head diff，通过代码片段和 anchor 定位可发布位置。
+- **Agent 能力受策略约束**：模型输出经过 JSON 解析和 Pydantic 校验，工具范围、调用预算、问题确认和补丁资格均由服务端控制。
+- **修复与验证解耦**：候选补丁先经过路径、规模和 `git apply --check` 等确定性检查；只有显式验证模式才调用外部验证后端。
+- **任务可追踪、可恢复**：任务、Review Unit、Issue、Patch、验证结果和队列状态写入 SQLite；LangGraph checkpoint 支持人工中断后继续执行。
 
 ## 核心能力
 
-| 能力 | 说明 |
+| 能力 | 当前实现 |
 | --- | --- |
-| PR 准备 | 拉取 PR 元数据，临时 clone 仓库，并生成 Base 与 Head 的统一 diff。 |
-| 仓库理解 | 解析变更 hunk，建立 Python 文件和符号索引，检索直接代码、调用方和测试上下文。 |
-| 受控审查 | 通过 OpenAI 兼容 Provider 输出并校验 `AgentAction`、`ReviewIssue` 与严格的补丁生成响应。 |
-| 可选验证 | 验证后端只有在 `review_suggest_and_validate` 模式下运行；不可用时返回 `unsupported`，不影响审查完成。 |
-| 候选修复 | `review_and_suggest` 只为符合 `PatchEligibilityPolicy` 的 confirmed Issue 生成候选补丁，完成确定性 apply-check 后仍标记为 `unverified`。 |
-| 可视化交付 | Vue 控制台展示任务流、Agent 日志、补丁、验证账本；后端提供结构化任务数据与 Markdown 报告。 |
+| PR 准备 | 读取 GitHub PR 元数据，在任务工作目录 clone 仓库并生成 Base/Head unified diff。 |
+| 审查 Preview | 不调用模型、不运行目标代码，预览纳入文件、Review Unit、风险标签和预估模型消耗。 |
+| 仓库理解 | 基于 Tree-sitter 建立 Python 文件与符号索引，检索变更代码、调用方和测试上下文。 |
+| 并行审查 | 确定性拆分 Review Unit，受控并发执行；失败 Unit 可独立重试。 |
+| Issue 质量控制 | 依次完成证据解析、确定性策略过滤、独立 verifier 和去重，仅发布已确认或需人工判断的问题。 |
+| 候选补丁 | 仅为满足 `PatchEligibilityPolicy` 的 confirmed Issue 生成受限 unified diff，并在干净 Head 上独立检查。 |
+| 可选验证 | 支持 User Runner 与 Project CI；结果与 `head_sha`、`patch_sha`、profile 和验证来源绑定。 |
+| 持久化执行 | SQLite 任务存储、数据库租约队列、重试与 dead-letter、LangGraph checkpoint、外置大文本 artifact。 |
+| 可视化交付 | Vue 控制台展示 Preview、任务阶段、Agent 事件、Issue、补丁、验证结果和 Markdown 报告。 |
 
-## 架构图
-<img width="973" height="665" alt="image" src="https://github.com/user-attachments/assets/0619ebba-d95b-4964-ae12-4ab8a7b66d67" />
+## 工作模式
 
+三种模式具有明确的产品边界：
 
-### 可选验证语义
+| 模式 | 候选补丁 | 目标代码执行 | 验证后端 |
+| --- | --- | --- | --- |
+| `review` | 不允许 | 不执行 | 强制为 `none` |
+| `review_and_suggest` | 需显式设置 `generate_patches=true` | 不执行；仅做 Git 可应用性检查 | 强制为 `none` |
+| `review_suggest_and_validate` | 需显式设置 `generate_patches=true` | 仅由显式选择的验证后端决定 | `none`、`user_runner`、`project_ci` 或 `gvisor` |
 
-| 阶段 | 工作树 | 目的 |
-| --- | --- | --- |
-| `base` | PR 合并前版本 | 建立原有测试状态，避免把历史失败归因给 PR。 |
-| `head` | PR 当前版本 | 判断 PR 是否引入回归，并作为后续补丁的比较基准。 |
-| `patched` | Head + 单个已应用补丁 | 确认该补丁的影响；快照和差异均关联具体 `patch_id`。 |
-
-这些快照和命令仅属于显式 `local` 验证后端；默认 `review` 与 `review_and_suggest` 均不会调用它们。验证基础设施不可用时，候选补丁保持 `unverified`，审查状态不会变为失败。
-
-### 候选补丁语义
-
-`review_and_suggest` 不运行 pytest、Ruff、项目入口或任何目标代码。每个候选补丁从干净的
-PR Head 开始，依次检查 unified diff 解析、仓库相对路径、`allowed_files`、文件数、变更行数、
-二进制和禁止路径，再执行固定参数的 `git apply --check`。检查器会短暂应用补丁并将实际
-`git diff` 与提议补丁逐行比对，最后恢复干净 Head。每个补丁独立执行，不会累计前一个候选。
-
-`git apply --check` 只说明补丁可应用，不说明功能正确。API、SSE、UI 和 Markdown 报告均展示
-“候选修复，尚未运行项目测试。”；成功候选的状态为 `unverified`。PR Head 与补丁记录的
-`head_sha` 不一致时，候选会标记为 `stale`/`superseded`，必须重新生成或重新检查。
-
-`PatchProposal` 是新的规范字段集合：`issue_ids`、`unified_diff`、`touched_files`、`risk`、
-`assumptions`、`head_sha`、`patch_sha`、`apply_check` 和 `presentation`。为兼容阶段 3 客户端，
-响应暂时保留只读计算字段 `issue_id` 与 `diff_content`；客户端应迁移到复数 Issue ID 和
-`unified_diff`，后续代码不应再写入旧字段。
-
-## 安全与执行边界
-
-- 模型不能提供任意 shell 命令；命令 ID 必须经 Pydantic 校验并由项目适配器解析。
-- 补丁先执行 `git apply --check`，再应用到任务临时 clone；**不会 commit、push 或写回用户仓库**。
-- 执行环境不会继承宿主机的 API Key、Token、代理等大多数环境变量。
-- Agent 决策、上下文检索、诊断与补丁生成均受执行预算限制；超限后收敛为报告。
-- LangSmith 追踪默认关闭；即使开启，也默认不上传 prompt、diff、代码上下文或模型输出。
-
-> 仍需注意：当前静态分析与 pytest 在宿主机的临时 clone 中执行，尚未提供容器、网络隔离或资源配额。请仅在可信的运行环境中审查不可信仓库。
+`review_and_suggest` 生成的补丁始终是 `unverified`。`git apply --check` 只表示补丁可以应用，不代表功能正确。验证后端不可用时，审查仍会完成并记录 `unsupported`、`infrastructure_error` 或 `inconclusive`，不会静默回退到本地执行。
 
 ## 快速开始
 
-### 1. 创建 Python 环境
+### 环境要求
+
+- Git
+- Conda
+- Python 3.11+（`environment.yml` 固定为 Python 3.12）
+- Node.js 18+ 与 npm
+- 一个 OpenAI 或 OpenAI 兼容服务的 API Key
+
+以下命令以 PowerShell 为例。
+
+### 1. 安装后端
 
 ```powershell
 git clone https://github.com/waangzh/RepoGuardian.git
 cd RepoGuardian
 conda env create -f environment.yml
 conda activate repoguardian
+Copy-Item .env.example backend\.env
 ```
 
-如果环境已存在，安装或更新后端依赖：
+如果 Conda 环境已经存在，可单独安装或更新后端依赖：
 
 ```powershell
 python -m pip install -e .\backend[test]
 ```
 
-### 2. 配置服务端
-
-```powershell
-cd backend
-Copy-Item ..\.env.example .env
-```
-
-在 `backend/.env` 中至少填写模型服务的 Key：
+编辑 `backend/.env`，至少配置模型服务：
 
 ```env
 REPOGUARDIAN_PROVIDER=openai
@@ -98,15 +95,24 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 REPOGUARDIAN_MODEL=gpt-4.1-mini
 ```
 
-启动后端：
+初始化数据库并启动 API：
 
 ```powershell
+cd backend
+alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
-服务默认运行于 <http://127.0.0.1:8000>；健康检查为 <http://127.0.0.1:8000/health>。
+后端默认地址为 <http://127.0.0.1:8000>：
 
-### 3. 启动前端
+- 健康检查：<http://127.0.0.1:8000/health>
+- Swagger UI：<http://127.0.0.1:8000/docs>
+- OpenAPI JSON：<http://127.0.0.1:8000/openapi.json>
+
+> [!NOTE]
+> 数据库表只通过 Alembic migration 创建。未执行 `alembic upgrade head` 时，服务会明确拒绝启动，而不会自动建表。
+
+### 2. 启动前端
 
 在另一个终端执行：
 
@@ -116,157 +122,210 @@ npm install
 npm run dev
 ```
 
-打开 Vite 输出的地址（通常为 <http://localhost:5173>），输入 PR URL 即可创建审查任务。
+打开 Vite 输出的地址（通常是 <http://localhost:5173>），输入 GitHub PR URL。建议先点击 **Preview** 检查审查范围和预计消耗，再创建任务。
 
-## 配置参考
+### 3. 创建第一个只读审查
 
-后端从 `backend/.env` 读取配置；可从仓库根目录的 `.env.example` 复制生成。
+也可以直接调用 API：
 
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `GITHUB_TOKEN` | 空 | 可选。用于提高 GitHub API 访问额度或访问受限仓库。 |
-| `OPENAI_API_KEY` | 空 | 运行真实模型审查、独立 Issue verifier、决策与补丁生成所必需。 |
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容 API 地址。 |
-| `REPOGUARDIAN_PROVIDER` | `openai` | 支持 `openai`、`deepseek`、`openai-compatible`。 |
-| `REPOGUARDIAN_MODEL` | `gpt-4.1-mini` | 默认模型名；创建任务时可单次覆盖。 |
-| `REPOGUARDIAN_DEFAULT_REVIEW_MODE` | `review` | 默认产品模式；只读审查不会运行目标代码。 |
-| `REPOGUARDIAN_DEFAULT_VALIDATION_BACKEND` | `none` | 默认验证后端；只有显式验证模式会使用它。 |
-| `REPOGUARDIAN_ISSUE_VERIFIER_ENABLED` | `true` | 是否对通过确定性策略的候选 Issue 运行独立 verifier；关闭时仅为兼容模式。 |
-| `REPOGUARDIAN_ISSUE_VERIFIER_FAIL_MODE` | `needs_human` | verifier 超时、不可用或 schema 失败时使用 `needs_human` 或保留未验证 `candidate`；绝不按 `keep` 处理。 |
-| `REPOGUARDIAN_ISSUE_VERIFIER_MAX_CALLS_PER_UNIT` | `5` | 每个 Review Unit 的 verifier 最大调用次数。 |
-| `REPOGUARDIAN_PATCH_CONFIDENCE_THRESHOLD` | `0.8` | confirmed Issue 进入候选补丁生成的最低置信度。 |
-| `REPOGUARDIAN_PATCH_MAX_FILES` | `3` | 单个候选补丁允许修改的最大文件数；实际值还会被 Issue 的 `allowed_files` 收紧。 |
-| `REPOGUARDIAN_PATCH_MAX_CHANGED_LINES` | `80` | 单个候选补丁允许的新增与删除行总上限。 |
-| `REPOGUARDIAN_EXECUTOR` | `reject` | `reject`、`local` 或 `gvisor`；拒绝或 gVisor 占位实现均不会回退到本地执行。 |
-| `REPOGUARDIAN_GIT_BIN` | `git` | Git 可执行文件路径或命令名。 |
-| `REPOGUARDIAN_WORKDIR` | `backend/.repoguardian/workspaces` | 临时 clone 工作目录。 |
-| `REPOGUARDIAN_LANGSMITH_TRACING` | `false` | 是否启用 LangSmith 追踪。 |
-| `REPOGUARDIAN_LANGSMITH_INCLUDE_CONTENT` | `false` | 是否上传审查内容；默认关闭。 |
+```powershell
+$body = @{
+  pr_url = "https://github.com/owner/repo/pull/123"
+  mode = "review"
+  generate_patches = $false
+  validation_backend = "none"
+} | ConvertTo-Json
 
-### DeepSeek 示例
-
-```env
-REPOGUARDIAN_PROVIDER=deepseek
-OPENAI_API_KEY=your-deepseek-key
-OPENAI_BASE_URL=https://api.deepseek.com
-REPOGUARDIAN_MODEL=deepseek-v4-pro
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://127.0.0.1:8000/api/reviews `
+  -ContentType "application/json" `
+  -Body $body
 ```
 
-## API
+服务返回 `202 Accepted` 和任务 ID；可通过任务查询接口或 SSE 事件流跟踪进度。
+
+## 工作流与架构
+
+当前服务实际运行 Review Unit 主图。准备阶段是确定性的，模型审查只在限定的 Unit 和工具范围内执行；Issue 经过服务端证据与策略流水线后，才可能进入修复子图。
+
+```mermaid
+flowchart TD
+    A["GitHub PR URL"] --> B["准备临时仓库与 diff"]
+    B --> C["索引仓库并识别项目"]
+    C --> D["确定性 Review Plan"]
+    D --> E["并行执行 Review Units"]
+    E --> F["证据定位"]
+    F --> G["策略过滤 · 独立验证 · 去重"]
+    G --> H{"审查模式"}
+    H -->|review| M["生成结构化结果与 Markdown 报告"]
+    H -->|review_and_suggest| I["补丁资格策略与生成"]
+    H -->|review_suggest_and_validate| I
+    I --> J["隔离 apply-check"]
+    J -->|仅建议| M
+    J -->|显式验证| K["User Runner / Project CI / gVisor"]
+    K --> L["绑定验证结论与补丁状态"]
+    L --> M
+
+    Q[("SQLite 任务与租约队列")] -.-> D
+    Q -.-> E
+    P[("LangGraph Checkpoint")] -.-> E
+    P -.-> N["人工请求与恢复"]
+    E -.-> N
+    N -.-> E
+```
+
+主要分层：
+
+- **FastAPI API 层**：创建、预览、查询、取消、重试、明细、SSE、人工回答和验证协议端点。
+- **服务层**：任务编排、持久化、Review Unit 执行、Issue 策略、补丁准入、验证和报告生成。
+- **LangGraph 层**：Review Unit 主图、人工中断、证据确认流水线和受控修复子图。
+- **工具层**：GitHub、Git、diff、仓库索引、代码搜索、PatchTool 和固定命令执行器。
+- **存储层**：SQLAlchemy + SQLite 保存业务状态，LangGraph SQLite saver 保存节点级恢复状态，大文本可外置到本地 artifact 目录。
+
+## 验证后端
+
+验证只在 `review_suggest_and_validate` 模式中运行，且只处理通过 apply-check 的候选补丁。
+
+| 后端 | 状态 | 信任边界 |
+| --- | --- | --- |
+| `none` | 默认 | 不执行验证；显式验证模式下返回不支持结论。 |
+| `user_runner` | 已实现 | 在用户控制的环境执行已注册 profile；使用 Bearer 身份认证、claim lease、HMAC 结果签名和幂等提交。 |
+| `project_ci` | 已实现，需配置 | 调用目标仓库显式安装的 GitHub Actions workflow；不创建临时分支，不要求 Contents write。 |
+| `gvisor` | 占位 | 当前不可执行，也不会回退到宿主机本地执行。 |
+
+协议与部署细节：
+
+- [User Runner 验证协议](docs/user-runner-protocol.md)
+- [Project CI 验证协议](docs/project-ci-validation.md)
+
+无论使用哪种后端，只有仓库、Head SHA、Patch SHA、profile 和信任来源全部匹配的结果，才可能把补丁标记为 `verified`。验证超时或基础设施失败不会把整个审查任务改成失败。
+
+## API 概览
+
+### 审查任务
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| `POST` | `/api/reviews` | 创建异步审查任务，返回 `202 Accepted`、任务 ID 与初始状态。 |
-| `GET` | `/api/reviews/{task_id}` | 获取任务状态、问题、补丁、验证快照和执行步骤。 |
-| `GET` | `/api/reviews/{task_id}/report` | 获取 UTF-8 Markdown 审查报告。 |
-| `GET` | `/api/reviews/{task_id}/stream` | 通过 SSE 获取步骤进度、`patch_update` 和完成事件。 |
-| `GET` | `/health` | 服务健康检查。 |
+| `POST` | `/api/reviews/preview` | 确定性预览审查范围，不创建任务、不调用模型。 |
+| `POST` | `/api/reviews` | 创建异步审查任务，返回 `202 Accepted`。 |
+| `GET` | `/api/reviews` | 按状态分页查询持久化任务。 |
+| `GET` | `/api/reviews/{task_id}` | 获取任务聚合结果。 |
+| `POST` | `/api/reviews/{task_id}/cancel` | 取消队列、图执行及关联验证请求。 |
+| `POST` | `/api/reviews/{task_id}/units/{unit_id}/retry` | 只重试指定 Review Unit。 |
+| `GET` | `/api/reviews/{task_id}/report` | 获取 UTF-8 Markdown 报告。 |
+| `GET` | `/api/reviews/{task_id}/stream` | 通过 SSE 接收步骤、补丁和完成事件。 |
 
-创建任务示例：
+服务还提供 Review Unit、Issue、Patch、Validation 和 Human Request 的明细接口，以及 User Runner、Project CI 的协议接口。完整 schema 以运行中的 [Swagger UI](http://127.0.0.1:8000/docs) 为准。
 
-```http
-POST /api/reviews
-Content-Type: application/json
+创建任务请求的核心字段：
 
+```json
 {
   "pr_url": "https://github.com/owner/repo/pull/123",
-  "model": "gpt-4.1-mini",
+  "model": null,
   "mode": "review",
   "generate_patches": false,
-  "validation_backend": "none"
+  "validation_backend": "none",
+  "validation_profile": "unit"
 }
 ```
 
-响应：
+请求体禁止未知字段。服务端会根据 `mode` 重新约束 `generate_patches` 与 `validation_backend`，不会直接信任客户端组合。
 
-```json
-{
-  "task_id": "4b5b1d5d0f8d4e5590f2ad488da37f10",
-  "status": "queued"
-}
+## 配置
+
+后端使用 Pydantic Settings 从启动目录的 `.env` 读取配置。推荐始终在 `backend/` 目录启动 Alembic、Uvicorn 和 pytest；默认数据库、checkpoint、artifact 与临时仓库也位于 `backend/.repoguardian/`。
+
+常用变量如下，完整清单及默认值见 [`.env.example`](.env.example)。
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `GITHUB_TOKEN` | 空 | 提高 GitHub API 限额、访问授权仓库；Project CI 必需。 |
+| `OPENAI_API_KEY` | 空 | 模型审查、Issue verifier 和候选补丁生成所需。 |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容 API 地址。 |
+| `REPOGUARDIAN_PROVIDER` | `openai` | `openai`、`deepseek` 或 `openai-compatible`。 |
+| `REPOGUARDIAN_MODEL` | `gpt-4.1-mini` | 默认模型；创建任务时可单次覆盖。 |
+| `REPOGUARDIAN_DEFAULT_REVIEW_MODE` | `review` | 默认产品模式。 |
+| `REPOGUARDIAN_DEFAULT_VALIDATION_BACKEND` | `none` | 默认验证后端。 |
+| `REPOGUARDIAN_PROJECT_CI_WORKFLOW` | 空 | 目标仓库中的 Project CI workflow；留空即禁用。 |
+| `REPOGUARDIAN_RUNNER_PROFILES` | `unit=project_unit_tests,lint=project_lint` | User Runner 允许的 profile 到逻辑命令 ID 映射。 |
+| `REPOGUARDIAN_HUMAN_ANSWER_TOKEN` | 空 | 回答人工请求 API 的 Bearer token。 |
+| `REPOGUARDIAN_EXECUTOR` | `reject` | 内建命令执行器；`gvisor` 仍为不可执行占位。 |
+| `REPOGUARDIAN_ALLOW_UNSAFE_LOCAL_EXECUTION` | `false` | 是否显式允许宿主机执行；不建议在不可信仓库上启用。 |
+| `REPOGUARDIAN_WORKER_MAX_ATTEMPTS` | `3` | 数据库任务队列最大尝试次数。 |
+| `REPOGUARDIAN_RETENTION_DAYS` | `30` | 任务与 artifact 保留期限。 |
+| `REPOGUARDIAN_LANGSMITH_TRACING` | `false` | 是否启用 LangSmith 追踪。 |
+| `REPOGUARDIAN_LANGSMITH_INCLUDE_CONTENT` | `false` | 是否在追踪中包含 prompt、diff、上下文或模型输出。 |
+
+DeepSeek 或其他 OpenAI 兼容服务示例：
+
+```env
+REPOGUARDIAN_PROVIDER=deepseek
+OPENAI_API_KEY=your-provider-key
+OPENAI_BASE_URL=https://api.deepseek.com
+REPOGUARDIAN_MODEL=your-model-name
 ```
 
-`GET /api/reviews/{task_id}` 将审查摘要、问题、候选补丁、验证结论和警告分开返回：
+新增配置项时请同步更新 `.env.example`。
 
-```json
-{
-  "review": {"mode": "review", "status": "completed", "completed": true},
-  "issues": [],
-  "issue_metrics": {"candidate_issue_count": 0, "confirmed_count": 0, "verifier_call_count": 0},
-  "patches": [],
-  "validation": [{"backend": "none", "status": "not_requested"}],
-  "warnings": []
-}
-```
+## 安全与信任边界
 
-### Issue 证据与行号迁移
+- **默认不执行代码**：`review` 和 `review_and_suggest` 不运行 pytest、Ruff、项目入口或其他目标代码。
+- **没有任意 shell 入口**：模型只能选择 schema 允许的 action 和逻辑命令 ID；服务端适配器解析为固定 argv，并使用 `shell=false` 执行。
+- **补丁不触碰真实仓库**：所有检查只发生在任务临时 clone；系统不会 commit、push、创建 Draft PR 或写回 GitHub review comment。
+- **候选补丁相互隔离**：每个补丁从干净 PR Head 开始，受 `allowed_files`、禁止路径、文件数和变更行数限制，结束后恢复工作树。
+- **外部验证不接收服务端秘密**：User Runner 不会收到 LLM Key 或 RepoGuardian GitHub Token；Project CI 执行不可信代码的 job 不授予仓库权限或长期秘密。
+- **结果需要完整绑定**：验证状态必须与 task、patch、Head SHA、Patch SHA、profile 和可信来源一致；无法验证的结果不会标记为通过。
+- **追踪默认最小化**：LangSmith 默认关闭；启用追踪后仍默认排除 prompt、diff、代码上下文和模型输出。
+- **持久化不等于生产隔离**：SQLite、checkpoint 和本地 artifact 提供恢复与审计能力，不提供容器、网络隔离、资源配额或多租户安全边界。
 
-Issue API 不再把模型提供的 `line_no` 当作真实位置。`ReviewIssue` 现在通过
-`primary_evidence` / `supporting_evidence` 返回原始代码片段，并由服务端填写：
-
-- `resolution_method`、`resolved_start_line`、`resolved_end_line`；
-- `resolved_side`、`match_count`、`anchor_hash`；
-- Issue 级 `placement`（`inline` / `summary` / `needs_human` / `suppressed`）和
-  `unresolved_reason`。
-
-旧客户端应迁移字段：`file_path` → `primary_evidence.file_path`，`line_no` →
-`primary_evidence.resolved_start_line`，`description` → `failure_scenario`，
-`suggestion` → `recommendation`，`auto_fixable` → `auto_fix_eligible`。
-Provider 输出中的 `line_number` / `line_no` 仅为临时兼容读取字段，服务端会忽略；
-模型不得填写任何 `resolved_*`、`resolution_method`、`match_count` 或 `anchor_hash`。
-
-### Issue 确认与去重流水线
-
-模型首次输出只会成为 `candidate`。服务端先通过 Review Unit 范围、唯一 primary
-evidence、side、严重度和自动修复资格等确定性策略；未通过的 Issue 不进入 verifier。
-通过者由独立 verifier 在单 Unit diff、只读上下文、适用规则和明确预算内执行
-`keep` / `drop` / `needs_human` 三选一。随后按 category、文件、anchor、symbol 和
-归一化根因生成候选重复组；完全相同 anchor 可确定性合并，其他组只有在可选语义
-去重明确确认后才合并。最终 `issues` 只返回 `confirmed` 或显式 `needs_human`，并通过
-`source_review_unit_ids`、`source_issue_ids` 和 supporting evidence 保留来源。任务级
-`issue_metrics` 记录候选、过滤、验证、人工、重复、确认、严重度调整及 verifier
-调用/估算 token 数。
-
-兼容性说明：顶层 `issues` 和 `review_unit_results[].issues` 不再返回 `candidate`、
-`evidence_resolved` 或 `dismissed`，客户端应使用 `issue_metrics` 展示过滤统计，并只把
-`confirmed` / `needs_human` 作为可见结果。自定义 `LLMProvider` 可继续实例化，因为
-`verify_issue` 与 `deduplicate_issues` 提供了明确失败的默认实现；迁移时应实现
-`verify_issue`。临时关闭 verifier 可设置 `REPOGUARDIAN_ISSUE_VERIFIER_ENABLED=false`，
-此兼容模式会把通过确定性策略的 Issue 直接确认，不建议作为生产默认值。
+> [!WARNING]
+> 仓库代码可能是不可信的。除非你理解执行位置和凭据边界，否则不要启用宿主机本地执行。优先使用经过审查的 Project CI workflow 或用户自主管理的 Runner，并为它们配置最小权限、固定 profile 和短期凭据。
 
 ## 项目结构
 
 ```text
 RepoGuardian/
 ├── backend/
+│   ├── alembic/          # 数据库 migration
 │   ├── app/
-│   │   ├── api/          # FastAPI 路由与 SSE
-│   │   ├── agents/       # Provider 与审查 Agent
-│   │   ├── evidence/     # 双侧 diff index、代码证据定位与评论路由
-│   │   ├── graph/        # LangGraph 状态、节点、路由和修复子图
-│   │   ├── models/       # Pydantic 领域模型
-│   │   ├── projects/     # 项目识别与受控命令适配器
-│   │   ├── services/     # 任务编排、验证与报告
-│   │   └── tools/        # GitHub、Git、索引、搜索、patch 与命令执行
-│   └── tests/
+│   │   ├── api/          # FastAPI 路由、SSE 与验证协议
+│   │   ├── agents/       # LLM Provider 与审查 Agent
+│   │   ├── core/         # 配置和数据库基础设施
+│   │   ├── evidence/     # 双侧 diff 索引与证据定位
+│   │   ├── graph/        # LangGraph 主图、修复子图、节点与 checkpoint
+│   │   ├── models/       # Pydantic 模型与 SQLAlchemy ORM
+│   │   ├── projects/     # 项目识别和固定命令适配器
+│   │   ├── services/     # 任务、持久化、审查、验证和报告编排
+│   │   ├── tools/        # GitHub、Git、diff、索引、搜索和 patch 工具
+│   │   └── validation/   # 验证后端注册、选择与实现
+│   └── tests/            # 后端单元与集成测试
 ├── frontend/
 │   └── src/
-│       ├── api/          # API 客户端
-│       ├── components/   # Vue 展示组件
-│       └── types/        # 与后端响应同步的类型定义
-├── docs/                 # 架构基线、设计目标与 ADR
-├── environment.yml
-└── .env.example
+│       ├── api/          # API 与 SSE 客户端
+│       ├── components/   # 任务、Issue、Patch、验证和报告组件
+│       └── types/        # 与后端响应同步的 TypeScript 类型
+├── docs/                 # 验证协议与设计文档
+├── .env.example
+└── environment.yml
 ```
 
-## 验证与开发
+## 开发与验证
 
-后端测试：
+后端完整测试：
 
 ```powershell
 conda activate repoguardian
 cd backend
 pytest
+```
+
+后端单文件测试：
+
+```powershell
+cd backend
+pytest tests/test_provider.py -v
 ```
 
 前端构建检查：
@@ -276,34 +335,23 @@ cd frontend
 npm run build
 ```
 
-提交前的最小验证：
+提交约定：
 
-```powershell
-conda activate repoguardian
-cd backend
-pytest
-cd ..\frontend
-npm run build
-```
-
-变更约定：
-
-- 后端 Pydantic 响应字段变更时，同步更新 `frontend/src/types/review.ts`。
-- 图节点、命令执行或补丁流程变更时，补充 `backend/tests/` 回归用例。
-- 提交信息使用中文 Conventional Commits，例如 `fix(validation): 修复补丁验证状态错配`。
+- 修改图节点时，至少确保 `test_review_pipeline.py` 与 `test_agent_graph.py` 通过。
+- 修改命令执行、静态分析、Patch 或验证逻辑时，同步检查白名单、安全边界和对应测试。
+- 修改后端 Pydantic 响应字段时，同步更新 `frontend/src/types/review.ts`。
+- 提交信息使用一行中文 Conventional Commits，例如 `fix(validation): 修复补丁验证状态错配`。
 
 ## 当前限制
 
-- 目前仅提供 Python 项目适配器，验证命令仅覆盖 Ruff 与 pytest。
-- 任务状态保存在进程内存，服务重启或多进程部署后不会恢复。
-- 只生成 GitHub suggestion/full diff 展示数据；不会写回评论、Check Run、建议或 Draft PR。
-- 不会自动提交或推送修复；所有变更仅留在任务临时目录中。
-- 不提供 Docker 沙箱、网络隔离或资源配额。
-- Project CI 与 gVisor 仍为不可执行占位后端；User Runner 已支持签名外部验证协议，但
-  RepoGuardian 不负责安装项目环境，也不会自动接受、提交或合并补丁。
-- User Runner 的注册、claim lease、HMAC 结果上传与信任边界见
-  [`docs/user-runner-protocol.md`](docs/user-runner-protocol.md)。
+- 只接收 GitHub Pull Request URL；尚未适配 GitLab、Bitbucket 或本地 diff。
+- 当前只提供 Python 项目适配器；内建固定命令主要覆盖 Ruff 与 pytest。
+- 不写回 GitHub review comment、Check Run、suggestion 或 Draft PR，也不会自动提交、推送或合并补丁。
+- `gvisor` 仍是不可执行占位后端；项目未提供 Docker 沙箱、默认网络隔离或硬资源配额。
+- 默认持久化使用本地 SQLite 与文件 artifact，尚未提供面向多租户、高可用部署的远程存储方案。
+- Project CI 需要目标仓库主动安装并维护固定 workflow；User Runner 需要用户自行提供受控执行环境和凭据。
+- 当前没有公开 benchmark，模型审查结果仍需工程师复核，尤其是安全问题和自动修复建议。
 
 ## 许可证
 
-当前仓库尚未声明许可证。若计划开源分发，请先补充 `LICENSE` 文件。
+当前仓库尚未包含 `LICENSE` 文件。这意味着代码不应被视为已获得开源使用、修改或再分发授权；计划公开分发前，请先选择并添加合适的许可证。
