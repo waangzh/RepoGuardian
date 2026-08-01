@@ -409,6 +409,12 @@ def _default_validation_backend() -> ValidationBackend:
     return ValidationBackend(settings.repoguardian_default_validation_backend)
 
 
+def _default_validation_profile() -> str:
+    from app.core.config import settings
+
+    return settings.repoguardian_default_validation_profile
+
+
 class ReviewCreateRequest(BaseModel):
     """POST /api/reviews 请求体。"""
     pr_url: HttpUrl
@@ -416,6 +422,7 @@ class ReviewCreateRequest(BaseModel):
     mode: ReviewMode = Field(default_factory=_default_review_mode)
     generate_patches: bool = False
     validation_backend: ValidationBackend = Field(default_factory=_default_validation_backend)
+    validation_profile: str = Field(default_factory=_default_validation_profile)
 
     model_config = ConfigDict(extra="forbid")
 
@@ -427,6 +434,11 @@ class ReviewCreateRequest(BaseModel):
             self.validation_backend = ValidationBackend.none
         elif self.mode == ReviewMode.review_and_suggest:
             self.validation_backend = ValidationBackend.none
+        elif self.validation_backend == ValidationBackend.user_runner:
+            from app.core.config import registered_runner_profiles
+
+            if self.validation_profile not in registered_runner_profiles():
+                raise ValueError("validation_profile is not registered by server policy")
         return self
 
 
@@ -443,6 +455,7 @@ class ReviewPreviewRequest(BaseModel):
     mode: ReviewMode = Field(default_factory=_default_review_mode)
     generate_patches: bool = False
     validation_backend: ValidationBackend = Field(default_factory=_default_validation_backend)
+    validation_profile: str = Field(default_factory=_default_validation_profile)
     model_config = ConfigDict(extra="forbid")
 
     @model_validator(mode="after")
@@ -452,8 +465,10 @@ class ReviewPreviewRequest(BaseModel):
             mode=self.mode,
             generate_patches=self.generate_patches,
             validation_backend=self.validation_backend,
+            validation_profile=self.validation_profile,
         )
         self.validation_backend = normalized.validation_backend
+        self.validation_profile = normalized.validation_profile
         return self
 
 
@@ -1041,6 +1056,9 @@ class PatchValidationRequest(BaseModel):
     head_sha: str
     patch_sha: str
     validation_profile: str | None = None
+    repository_clone_url: str | None = None
+    repository_fetch_ref: str | None = None
+    patch_content: str | None = None
 
 
 class PatchValidationResult(BaseModel):
@@ -1058,6 +1076,14 @@ class PatchValidationResult(BaseModel):
     new_failures: list[str] = Field(default_factory=list)
     environment_fingerprint: str | None = None
     trusted: bool
+    trust_source: str | None = None
+    runner_id: str | None = None
+    validation_request_id: str | None = None
+    profile: str | None = None
+    exit_status: int | None = None
+    duration_ms: int | None = Field(default=None, ge=0)
+    log_summary: str | None = None
+    artifact_references: list[str] = Field(default_factory=list)
     started_at: datetime | None = None
     completed_at: datetime | None = None
 
@@ -1363,6 +1389,7 @@ class ReviewTask(BaseModel):
     mode: ReviewMode = ReviewMode.review
     generate_patches: bool = False
     validation_backend: ValidationBackend = ValidationBackend.none
+    validation_profile: str = Field(default_factory=_default_validation_profile)
     review: ReviewSummary = Field(default_factory=ReviewSummary)
     steps: list[TaskStep] = Field(default_factory=list)
     pr: PullRequestInfo | None = None

@@ -334,6 +334,14 @@ export interface ValidationResult {
   new_failures: string[];
   environment_fingerprint?: string | null;
   trusted: boolean;
+  trust_source?: string | null;
+  runner_id?: string | null;
+  validation_request_id?: string | null;
+  profile?: string | null;
+  exit_status?: number | null;
+  duration_ms?: number | null;
+  log_summary?: string | null;
+  artifact_references: string[];
   started_at?: string | null;
   completed_at?: string | null;
 }
@@ -417,6 +425,7 @@ export interface ReviewTask {
   mode: ReviewMode;
   generate_patches: boolean;
   validation_backend: ValidationBackend;
+  validation_profile: string;
   review: ReviewSummary;
   steps: TaskStep[];
   pr?: PullRequestInfo | null;

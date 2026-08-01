@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.reviews import router as reviews_router
+from app.api.validation_requests import router as validation_requests_router
 
 # ---------------------------------------------------------------------------
 # 统一日志配置：所有模块共享同一 Logger，控制台输出中文流程日志
@@ -32,9 +33,9 @@ app.add_middleware(
 )
 
 app.include_router(reviews_router, prefix="/api")
+app.include_router(validation_requests_router, prefix="/api")
 
 
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
-

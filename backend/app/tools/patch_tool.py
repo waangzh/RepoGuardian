@@ -132,9 +132,7 @@ class PatchTool(BaseTool):
             )
 
         patch.status = PatchStatus.unverified
-        patch.patch_sha = hashlib.sha256(
-            _normalize_diff(patch.unified_diff).encode("utf-8")
-        ).hexdigest()
+        patch.patch_sha = normalized_patch_sha(patch.unified_diff)
         patch.apply_check = PatchApplyCheck(
             status=PatchApplyCheckStatus.passed,
             detail="git apply --check 与应用后 diff 一致；这不代表补丁功能正确。",
@@ -336,3 +334,8 @@ def _diff_signature(diff_content: str) -> tuple[Any, ...]:
 
 def _normalize_diff(diff_content: str) -> str:
     return diff_content.replace("\r\n", "\n").rstrip("\n") + "\n"
+
+
+def normalized_patch_sha(diff_content: str) -> str:
+    """返回 RepoGuardian 跨平台统一使用的 patch SHA-256。"""
+    return hashlib.sha256(_normalize_diff(diff_content).encode("utf-8")).hexdigest()

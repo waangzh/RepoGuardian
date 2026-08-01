@@ -17,6 +17,7 @@ class ReviewState(TypedDict, total=False):
     status: str
     generate_patches: bool
     validation_backend: str
+    validation_profile: str
     phase: ReviewPhase
 
     # ---- 输入 ----
