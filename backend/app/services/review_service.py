@@ -22,6 +22,7 @@ from app.models.review import (
     ReviewCreateRequest,
     ReviewMode,
     ReviewIssue,
+    RepositorySnapshot,
     ReviewPreviewRequest,
     ReviewPreviewResponse,
     ValidationBackendPreview,
@@ -33,8 +34,6 @@ from app.models.review import (
     TaskStatus,
     TaskStep,
     ValidationBackend,
-    ValidationResult,
-    ValidationStatus,
 )
 from app.services.report_service import ReportService
 from app.services.issue_deduplication import IssueDeduplicationService
@@ -45,7 +44,8 @@ from app.tools.diff_parser import DiffParser
 from app.tools.git_tool import GitTool
 from app.tools.github_tool import GitHubTool
 from app.tools.repo_indexer import RepoIndexer
-from app.tools.command_runner import CommandExecutor, build_command_executor
+from app.tools.command_runner import CommandExecutor
+from app.validation.selector import ValidationBackendSelector
 
 logger = logging.getLogger("RepoGuardian.Service")
 
@@ -82,14 +82,16 @@ class ReviewService:
         provider: LLMProvider,
         report_service: ReportService,
         command_executor: CommandExecutor | None = None,
+        validation_backend_selector: ValidationBackendSelector | None = None,
     ) -> None:
         self._github_tool = github_tool
         self._git_tool = git_tool
         self._diff_parser = diff_parser
         self._provider = provider
         self._report_service = report_service
-        # 只读审查不构造也不使用执行器；仅显式验证模式才会注入它。
+        # 兼容旧构造签名，但阶段 5A 不把命令执行器注入验证路径。
         self._command_executor = command_executor
+        self._validation_backend_selector = validation_backend_selector or ValidationBackendSelector()
         self._tasks: dict[str, ReviewTask] = {}
         self._run_tasks: dict[str, asyncio.Task[None]] = {}
         self._retry_locks: dict[str, asyncio.Lock] = {}
@@ -106,14 +108,7 @@ class ReviewService:
             generate_patches=request.generate_patches,
             validation_backend=request.validation_backend,
             review={"mode": request.mode, "status": TaskStatus.queued, "completed": False},
-            validation=[ValidationResult(
-                backend=request.validation_backend,
-                status=(
-                    ValidationStatus.not_requested
-                    if request.mode != ReviewMode.review_suggest_and_validate
-                    else ValidationStatus.queued
-                ),
-            )],
+            validation=[],
             steps=[TaskStep(name="queued", message="任务已创建")],
         )
         self._tasks[task.id] = task
@@ -142,6 +137,16 @@ class ReviewService:
                 file_index=index["file_index"],
                 symbol_index=index["symbol_index"],
             )
+            backend = self._validation_backend_selector.select(
+                request.validation_backend.value,
+                request.mode,
+            )
+            capabilities = await backend.capabilities(RepositorySnapshot(
+                language=index.get("project_meta", {}).get("language", "unknown"),
+                framework=index.get("project_meta", {}).get("framework"),
+                test_framework=index.get("project_meta", {}).get("test_framework"),
+                total_files=len(index["file_index"]),
+            ))
             return ReviewPreviewResponse(
                 mode=request.mode,
                 changed_file_count=len(plan.changed_files),
@@ -159,23 +164,9 @@ class ReviewService:
                     request.mode != ReviewMode.review and request.generate_patches
                 ),
                 validation_backend=ValidationBackendPreview(
-                    name=request.validation_backend,
-                    available=(
-                        request.validation_backend == ValidationBackend.none
-                        or (
-                            request.validation_backend == ValidationBackend.local
-                            and self._command_executor is not None
-                        )
-                    ),
-                    unavailable_reason=(
-                        None
-                        if request.validation_backend == ValidationBackend.none
-                        or (
-                            request.validation_backend == ValidationBackend.local
-                            and self._command_executor is not None
-                        )
-                        else "所选验证后端未配置；只读审查仍可执行"
-                    ),
+                    name=ValidationBackend(backend.name),
+                    available=capabilities.available,
+                    unavailable_reason=capabilities.unavailable_reason,
                 ),
                 warnings=plan.warnings,
             )
@@ -214,12 +205,8 @@ class ReviewService:
             "_git_tool": self._git_tool,
             "_diff_parser": self._diff_parser,
             "_provider": self._provider,
-            "_command_executor": (
-                self._command_executor or build_command_executor()
-                if task.mode == ReviewMode.review_suggest_and_validate
-                and task.validation_backend == ValidationBackend.local
-                else None
-            ),
+            "_command_executor": None,
+            "_validation_backend_selector": self._validation_backend_selector,
             "_repo_prepared_callback": lambda path: self._repo_paths.__setitem__(
                 task_id, Path(path)
             ),

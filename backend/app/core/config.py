@@ -34,7 +34,9 @@ class Settings(BaseSettings):
     repoguardian_default_review_mode: Literal[
         "review", "review_and_suggest", "review_suggest_and_validate"
     ] = "review"
-    repoguardian_default_validation_backend: Literal["none", "local", "gvisor"] = "none"
+    repoguardian_default_validation_backend: Literal[
+        "none", "user_runner", "project_ci", "gvisor"
+    ] = "none"
 
     # ---- Review Unit Planner / 调度 ----
     repoguardian_review_unit_concurrency: int = 4

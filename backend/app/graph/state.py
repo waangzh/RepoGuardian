@@ -104,4 +104,5 @@ class ReviewState(TypedDict, total=False):
     _issue_policy_service: Any
     _issue_verifier_service: Any
     _issue_deduplication_service: Any
+    _validation_backend_selector: Any
     _repo_prepared_callback: Any

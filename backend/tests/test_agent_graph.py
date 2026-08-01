@@ -469,10 +469,8 @@ async def test_failed_patch_decision_receives_structured_validation_feedback(tmp
 
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
-    assert result["patches"][-1]["status"] in {
-        "verified", "validation_failed", "validation_inconclusive"
-    }
-    assert result["validation_results"][-1]["patch_id"] == result["active_patch_id"]
+    assert result["patches"][-1]["status"] == "unverified"
+    assert not result.get("validation_results")
 
 
 @pytest.mark.asyncio
@@ -526,8 +524,8 @@ async def test_repair_subgraph_returns_to_main_flow(tmp_path: Path) -> None:
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
     assert provider.patch_calls == 1
-    assert result["patches"][-1]["status"] == "verified"
-    assert result.get("test_results")
+    assert result["patches"][-1]["status"] == "unverified"
+    assert not result.get("test_results")
     assert result["step_progress"][-1]["node"] == "report"
 
 
@@ -544,7 +542,7 @@ async def test_accept_patch_is_gated_by_server_validation_policy(tmp_path: Path)
 
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
-    assert result["patches"][-1]["status"] == "verified"
+    assert result["patches"][-1]["status"] == "unverified"
     assert not any(event["action"] == "accept_patch" for event in result["agent_events"])
 
 
@@ -565,14 +563,13 @@ async def test_repair_subgraph_abandons_unselected_generated_patches(tmp_path: P
 
     assert provider.patch_calls == 1
     assert [patch["status"] for patch in result["patches"]] == [
-        "verified",
-        "abandoned",
+        "unverified",
+        "unverified",
     ]
     patched_snapshots = [
         snapshot for snapshot in result.get("validation_snapshots") or [] if snapshot["stage"] == "patched"
     ]
-    assert len(patched_snapshots) == 1
-    assert patched_snapshots[0]["patch_id"] == first_patch.id
+    assert patched_snapshots == []
 
 
 @pytest.mark.asyncio
@@ -588,14 +585,13 @@ async def test_failed_current_patch_does_not_reuse_previous_patch_validation(tmp
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
     assert [patch["status"] for patch in result["patches"]] == [
-        "verified",
+        "unverified",
         "abandoned",
     ]
     patched_snapshots = [
         snapshot for snapshot in result.get("validation_snapshots") or [] if snapshot["stage"] == "patched"
     ]
-    assert len(patched_snapshots) == 1
-    assert patched_snapshots[0]["patch_id"] == first_patch.id
+    assert patched_snapshots == []
     assert result["active_patch_id"] == first_patch.id
 
 
@@ -704,15 +700,14 @@ async def test_infrastructure_error_is_not_a_validation_failed_patch(tmp_path: P
     state.update({
         "mode": "review_suggest_and_validate",
         "generate_patches": True,
-        "validation_backend": "local",
+        "validation_backend": "gvisor",
         "_command_executor": InfrastructureExecutor(),
     })
 
     result = await build_review_graph().compile().ainvoke(state)
 
-    assert result["patches"][0]["status"] == "validation_inconclusive"
-    assert result["validation_snapshots"][-1]["failure_kind"] == "test_collection_error"
-    assert result["validation_results"][-1]["status"] == "infrastructure_error"
+    assert result["patches"][0]["status"] == "unverified"
+    assert result["validation_results"][-1]["status"] == "unsupported"
 
 
 def test_create_request_defaults_and_rejects_invalid_mode_combinations() -> None:

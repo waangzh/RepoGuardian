@@ -4,8 +4,7 @@ from typing import Any
 
 from app.graph.policies import get_phase, validate_action_for_phase
 from app.models.review import AgentAction, AgentActionName, ReviewPhase
-from app.models.review import ReviewMode, ValidationBackend
-from app.tools.command_runner import RejectedSandboxExecutor
+from app.models.review import ReviewMode
 
 
 def _read_action(state: dict[str, Any]) -> AgentAction | None:
@@ -60,30 +59,18 @@ def route_repair_entry(state: dict[str, Any]) -> str:
 
 
 def route_repair_after_generation(state: dict[str, Any]) -> str:
-    """apply-check 后仅让显式旧验证模式进入执行型项目验证。"""
+    """仅在显式验证模式且存在候选补丁时进入统一验证节点。"""
     raw_mode = state.get("mode", ReviewMode.review)
     try:
         mode = ReviewMode(raw_mode)
     except ValueError:
-        mode = ReviewMode.review_suggest_and_validate
-    try:
-        backend = ValidationBackend(
-            state.get("validation_backend", ValidationBackend.local if raw_mode == "pr_review" else ValidationBackend.none)
-        )
-    except ValueError:
-        backend = ValidationBackend.none
-    executor = state.get("_command_executor")
-    backend_available = (
+        # 旧状态没有显式验证授权，按只生成候选补丁处理。
+        mode = ReviewMode.review_and_suggest
+    should_validate = (
         mode == ReviewMode.review_suggest_and_validate
-        and backend == ValidationBackend.local
-        and executor is not None
-        and not isinstance(executor, RejectedSandboxExecutor)
-        and any(
-            patch.get("status") == "unverified"
-            for patch in state.get("patches") or []
-        )
+        and any(patch.get("status") == "unverified" for patch in state.get("patches") or [])
     )
-    return "apply_patch" if backend_available else "mark_unverified"
+    return "validation" if should_validate else "mark_unverified"
 
 
 def route_repair_assessment(state: dict[str, Any]) -> str:

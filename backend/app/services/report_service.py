@@ -158,11 +158,14 @@ def _append_validation_results(lines: list[str], task: ReviewTask) -> None:
     """展示 Base、Head 与各补丁的验证快照和差异，保留故障归因。"""
     lines.extend(["## 6. 三阶段验证", ""])
     if task.validation:
-        lines.extend(["| 后端 | Patch | 状态 | 详情 |", "|---|---|---|---|"])
+        lines.extend(["| 后端 | Patch | 状态 | 可信 | 检查 |", "|---|---|---|---|---|"])
         for result in task.validation:
+            checks = "; ".join(
+                f"{check.name}: {check.status.value}" for check in result.checks
+            )
             lines.append(
-                f"| {result.backend.value} | `{(result.patch_id or '')[:8]}` | "
-                f"{result.status.value} | {result.detail or ''} |"
+                f"| {result.backend} | `{(result.patch_id or '')[:8]}` | "
+                f"{result.status.value} | {'是' if result.trusted else '否'} | {checks} |"
             )
         lines.append("")
     if not task.validation_snapshots:

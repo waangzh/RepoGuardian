@@ -62,21 +62,19 @@ class ValidationBackend(str, Enum):
     """允许由 API 选择的验证后端名称，而不是任意命令或 Docker 参数。"""
 
     none = "none"
-    local = "local"
+    user_runner = "user_runner"
+    project_ci = "project_ci"
     gvisor = "gvisor"
 
 
 class ValidationStatus(str, Enum):
-    not_requested = "not_requested"
-    unsupported = "unsupported"
-    queued = "queued"
-    running = "running"
     passed = "passed"
     failed = "failed"
+    unsupported = "unsupported"
     infrastructure_error = "infrastructure_error"
     timed_out = "timed_out"
-    inconclusive = "inconclusive"
     cancelled = "cancelled"
+    inconclusive = "inconclusive"
 
 
 class ReviewPhase(str, Enum):
@@ -426,11 +424,9 @@ class ReviewCreateRequest(BaseModel):
         if self.mode == ReviewMode.review:
             if self.generate_patches:
                 raise ValueError("mode=review does not allow generate_patches=true")
-            if self.validation_backend != ValidationBackend.none:
-                raise ValueError("mode=review requires validation_backend=none")
+            self.validation_backend = ValidationBackend.none
         elif self.mode == ReviewMode.review_and_suggest:
-            if self.validation_backend != ValidationBackend.none:
-                raise ValueError("mode=review_and_suggest requires validation_backend=none")
+            self.validation_backend = ValidationBackend.none
         return self
 
 
@@ -451,12 +447,13 @@ class ReviewPreviewRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_product_policy(self) -> "ReviewPreviewRequest":
-        ReviewCreateRequest(
+        normalized = ReviewCreateRequest(
             pr_url=self.pr_url,
             mode=self.mode,
             generate_patches=self.generate_patches,
             validation_backend=self.validation_backend,
         )
+        self.validation_backend = normalized.validation_backend
         return self
 
 
@@ -1009,15 +1006,66 @@ class ValidationDelta(BaseModel):
     resolved_failures: list[FailureFingerprint] = Field(default_factory=list)
 
 
-class ValidationResult(BaseModel):
-    """面向 API 的验证结论，与旧的 Base/Head 快照解耦。"""
+class ValidationCheck(BaseModel):
+    """验证后端报告的单项结构化检查。"""
 
-    id: str = Field(default_factory=lambda: uuid4().hex)
-    patch_id: str | None = None
-    backend: ValidationBackend = ValidationBackend.none
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
     status: ValidationStatus
     detail: str | None = None
-    snapshot_id: str | None = None
+
+
+class ValidationCapabilities(BaseModel):
+    """由服务端声明的验证后端安全能力。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    available: bool
+    supported_languages: list[str] = Field(default_factory=list)
+    supported_profiles: list[str] = Field(default_factory=list)
+    executes_untrusted_code: bool
+    requires_user_configuration: bool
+    unavailable_reason: str | None = None
+
+
+class PatchValidationRequest(BaseModel):
+    """传给服务端所选验证后端的不可变标识。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    patch_id: str
+    repository_id: str
+    base_sha: str
+    head_sha: str
+    patch_sha: str
+    validation_profile: str | None = None
+
+
+class PatchValidationResult(BaseModel):
+    """后端无关的补丁验证结果，也是 API 的公开结构。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    backend: str = Field(min_length=1)
+    status: ValidationStatus
+    head_sha: str
+    patch_sha: str
+    checks: list[ValidationCheck] = Field(default_factory=list)
+    resolved_failures: list[str] = Field(default_factory=list)
+    new_failures: list[str] = Field(default_factory=list)
+    environment_fingerprint: str | None = None
+    trusted: bool
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class ValidationResult(PatchValidationResult):
+    """保留给 ReviewTask.validation 的兼容名称。"""
+
+    patch_id: str | None = None
 
 
 class PatchEligibilityDecision(BaseModel):
@@ -1287,6 +1335,10 @@ class RepoSnapshot(BaseModel):
     framework: str | None = None
     test_framework: str | None = None
     total_files: int
+
+
+class RepositorySnapshot(RepoSnapshot):
+    """传给验证后端的只读仓库能力快照。"""
 
 
 class ReviewSummary(BaseModel):

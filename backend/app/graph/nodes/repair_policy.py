@@ -4,13 +4,11 @@ from typing import Any
 
 from app.graph.nodes._events import append_event, append_step
 from app.graph.nodes.patch import patch_node, prepare_patch_workspace, restore_patch_workspace
-from app.graph.nodes.verification import patched_validation_node
 from app.graph.policies import get_execution_budget
 from app.graph.state import ReviewState
 from app.models.review import (
     AgentAction,
     AgentActionName,
-    FailureKind,
     PatchResult,
     PatchEligibilityDecision,
     PatchProposal,
@@ -18,10 +16,6 @@ from app.models.review import (
     ReviewMode,
     ReviewIssue,
     ReviewPhase,
-    ValidationBackend,
-    ValidationResult,
-    ValidationSnapshot,
-    ValidationStatus,
 )
 from app.services.patch_eligibility import PatchEligibilityPolicy, decisions_by_issue
 from app.services.patch_presentation import build_patch_presentation
@@ -206,23 +200,6 @@ async def repair_apply_patch_node(state: ReviewState) -> ReviewState:
     )
 
 
-async def repair_validation_node(state: ReviewState) -> ReviewState:
-    active_patch_id = state.get("active_patch_id")
-    active_patch = next(
-        (item for item in state.get("patches") or [] if item.get("id") == active_patch_id),
-        None,
-    )
-    if active_patch is None or active_patch.get("status") != PatchStatus.validation_pending.value:
-        await restore_patch_workspace(state)
-        return ReviewState(
-            phase=ReviewPhase.validation,
-            repair_enabled=not state.get("validation_blocked", False),
-            active_patch_validation_passed=False,
-            step_progress=append_step(state, "patched_validation", "failed", "当前候选补丁未成功应用，跳过验证"),
-        )
-    return await patched_validation_node(state)
-
-
 async def repair_mark_unverified_node(state: ReviewState) -> ReviewState:
     """没有可用验证后端时，候选补丁绝不被标记为已验证。"""
     patches = [PatchResult.model_validate(item) for item in state.get("patches") or []]
@@ -230,88 +207,12 @@ async def repair_mark_unverified_node(state: ReviewState) -> ReviewState:
         if patch.status in {PatchStatus.suggested, PatchStatus.validation_pending}:
             patch.status = PatchStatus.unverified
 
-    try:
-        mode = ReviewMode(state.get("mode", ReviewMode.review))
-    except ValueError:
-        mode = ReviewMode.review
-    results = list(state.get("validation_results") or [])
-    warnings = list(state.get("warnings") or [])
-    if mode == ReviewMode.review_suggest_and_validate:
-        backend = ValidationBackend(state.get("validation_backend", ValidationBackend.none))
-        detail = "所选验证后端当前不可用；候选补丁未执行项目测试。"
-        results.append(ValidationResult(
-            backend=backend,
-            status=ValidationStatus.unsupported,
-            detail=detail,
-        ).model_dump(mode="json"))
-        warnings.append(detail)
     return ReviewState(
         phase=ReviewPhase.repair,
         status="generating_patches",
         patches=[patch.model_dump(mode="json") for patch in patches],
-        validation_results=results,
-        warnings=list(dict.fromkeys(warnings)),
         step_progress=append_step(state, "patch_finalize", "completed", "候选修复已生成，尚未运行项目测试"),
     )
-
-
-async def repair_optional_validation_node(state: ReviewState) -> ReviewState:
-    """复用现有隔离补丁和验证生命周期，只由显式 local 后端调用。"""
-    partial_result = await repair_validation_node(state)
-    result = {**state, **partial_result}
-    patches = [PatchResult.model_validate(item) for item in result.get("patches") or []]
-    active_patch_id = result.get("active_patch_id")
-    active_patch = next((patch for patch in patches if patch.id == active_patch_id), None)
-    if active_patch is None:
-        return result
-
-    if active_patch.status == PatchStatus.abandoned:
-        status = ValidationStatus.inconclusive
-        detail = active_patch.error or "候选补丁无法应用，未运行验证。"
-    elif active_patch.status == PatchStatus.verified:
-        status = ValidationStatus.passed
-        detail = "补丁已通过所选验证后端。"
-    elif active_patch.status == PatchStatus.validation_failed:
-        status = ValidationStatus.failed
-        detail = active_patch.error
-    else:
-        latest_snapshot = (result.get("validation_snapshots") or [])[-1:]
-        failure_kind = (
-            ValidationSnapshot.model_validate(latest_snapshot[0]).failure_kind
-            if latest_snapshot else None
-        )
-        if failure_kind in {
-            FailureKind.infrastructure,
-            FailureKind.dependency_missing,
-            FailureKind.test_collection_error,
-        }:
-            status = ValidationStatus.infrastructure_error
-        elif failure_kind == FailureKind.timeout:
-            status = ValidationStatus.timed_out
-        else:
-            status = ValidationStatus.inconclusive
-        detail = active_patch.error or "验证未获得确定结论。"
-        active_patch.status = PatchStatus.validation_inconclusive
-
-    validation_result = ValidationResult(
-        patch_id=active_patch.id,
-        backend=ValidationBackend(state.get("validation_backend", ValidationBackend.local)),
-        status=status,
-        detail=detail,
-        snapshot_id=active_patch.validation_snapshot_id,
-    )
-    active_patch.validation_backend = validation_result.backend
-    active_patch.validation_result_id = validation_result.id
-    updated_patches = [active_patch if patch.id == active_patch.id else patch for patch in patches]
-    result.update({
-        "status": "validating",
-        "patches": [patch.model_dump(mode="json") for patch in updated_patches],
-        "validation_results": list(result.get("validation_results") or []) + [
-            validation_result.model_dump(mode="json")
-        ],
-        "step_progress": append_step(state, "optional_validation", "completed", detail or status.value),
-    })
-    return ReviewState(**result)
 
 
 async def repair_assessment_node(state: ReviewState) -> ReviewState:

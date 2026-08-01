@@ -15,14 +15,11 @@ export type KnownTaskStatus =
   | "cancelled";
 export type TaskStatus = KnownTaskStatus | (string & {});
 export type ReviewMode = "review" | "review_and_suggest" | "review_suggest_and_validate";
-export type ValidationBackend = "none" | "local" | "gvisor";
+export type ValidationBackend = "none" | "user_runner" | "project_ci" | "gvisor";
 export type ValidationStatus =
-  | "not_requested"
-  | "unsupported"
-  | "queued"
-  | "running"
   | "passed"
   | "failed"
+  | "unsupported"
   | "infrastructure_error"
   | "timed_out"
   | "inconclusive"
@@ -324,10 +321,21 @@ export interface ValidationDelta {
 export interface ValidationResult {
   id: string;
   patch_id?: string | null;
-  backend: ValidationBackend;
+  backend: string;
   status: ValidationStatus;
-  detail?: string | null;
-  snapshot_id?: string | null;
+  head_sha: string;
+  patch_sha: string;
+  checks: Array<{
+    name: string;
+    status: ValidationStatus;
+    detail?: string | null;
+  }>;
+  resolved_failures: string[];
+  new_failures: string[];
+  environment_fingerprint?: string | null;
+  trusted: boolean;
+  started_at?: string | null;
+  completed_at?: string | null;
 }
 
 export interface PatchResult {
