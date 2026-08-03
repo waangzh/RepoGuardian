@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from threading import RLock
@@ -26,6 +27,14 @@ from app.models.runner import (
     ValidationRequestSummary,
 )
 from app.tools.patch_tool import normalized_patch_sha
+from app.services.external_validation_repository import (
+    ExternalValidationRepository,
+    RunnerCredentialCipher,
+    RunnerCredentialDecryptionError,
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 class UserRunnerError(RuntimeError):
@@ -106,7 +115,7 @@ class SubmittedRunnerResult:
 
 
 class UserRunnerService:
-    """进程内 Runner 协议状态；与当前 ReviewTask 的内存生命周期保持一致。"""
+    """可恢复的 Runner 注册、请求租约与结果幂等协调器。"""
 
     def __init__(
         self,
@@ -117,6 +126,8 @@ class UserRunnerService:
         clock: Callable[[], datetime] | None = None,
         redact_values: tuple[str, ...] = (),
         max_log_summary_chars: int = 8_000,
+        repository: ExternalValidationRepository | None = None,
+        credential_secret: str | None = None,
     ) -> None:
         if not profiles:
             raise ValueError("at least one validation profile must be registered")
@@ -126,6 +137,10 @@ class UserRunnerService:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._redact_values = tuple(value for value in redact_values if value)
         self._max_log_summary_chars = max_log_summary_chars
+        self._repository = repository
+        self._credential_cipher = (
+            RunnerCredentialCipher(credential_secret) if credential_secret else None
+        )
         self._runners: dict[str, _RegisteredRunner] = {}
         self._requests: dict[str, _ValidationRequest] = {}
         self._request_keys: dict[tuple[str, str, str], str] = {}
@@ -133,10 +148,20 @@ class UserRunnerService:
             tuple[str, str], tuple[bytes, RunnerResultReceipt]
         ] = {}
         self._lock = RLock()
+        self._restore()
 
     @property
     def profile_ids(self) -> tuple[str, ...]:
         return tuple(self._profiles)
+
+    @property
+    def registered_runner_count(self) -> int:
+        with self._lock:
+            return sum(1 for runner in self._runners.values() if runner.public.enabled)
+
+    def registrations(self) -> list[RunnerRegistration]:
+        with self._lock:
+            return [runner.public.model_copy(deep=True) for runner in self._runners.values()]
 
     def register(self, request: RunnerRegistrationRequest) -> RunnerRegistration:
         api_token = request.api_token.get_secret_value()
@@ -172,6 +197,18 @@ class UserRunnerService:
                 if not same_credentials or existing.public != public:
                     raise ValidationRequestConflict("runner_id is already registered")
                 return existing.public
+            if self._repository is not None:
+                if self._credential_cipher is None:
+                    raise RunnerAuthorizationError(
+                        "persistent runner registration requires a configured admin token"
+                    )
+                self._repository.save_runner(
+                    public,
+                    api_token_hash=registered.api_token_hash,
+                    encrypted_hmac_secret=self._credential_cipher.encrypt(
+                        registered.hmac_secret
+                    ),
+                )
             self._runners[request.runner_id] = registered
         return public
 
@@ -216,6 +253,7 @@ class UserRunnerService:
             )
             self._requests[record.request_id] = record
             self._request_keys[key] = record.request_id
+            self._save_request(record)
             return record.summary()
 
     def claim(self, request_id: str, api_token: str) -> ValidationClaim:
@@ -250,6 +288,9 @@ class UserRunnerService:
                     record.expires_at,
                 )
             record.status = ValidationRequestStatus.claimed
+            self._save_request(record)
+            if self._repository is not None:
+                self._repository.touch_runner(runner.public.runner_id, now)
             return self._claim_payload(record)
 
     def submit_result(
@@ -333,6 +374,14 @@ class UserRunnerService:
             record.result = result
             record.status = ValidationRequestStatus.completed
             receipt = RunnerResultReceipt(request_id=record.request_id, result=result)
+            if self._repository is not None:
+                self._repository.save_user_result(
+                    self._request_payload(record),
+                    runner_id=submission.runner_id,
+                    idempotency_key=submission.idempotency_key,
+                    fingerprint=fingerprint,
+                    receipt=receipt.model_dump(mode="json"),
+                )
             self._result_idempotency[idempotency_key] = (fingerprint, receipt)
             return SubmittedRunnerResult(
                 receipt=receipt,
@@ -348,6 +397,7 @@ class UserRunnerService:
             record.status = ValidationRequestStatus.cancelled
             record.claimed_at = None
             record.claim_expires_at = None
+            self._save_request(record)
             return record.summary()
 
     def cancel_for_task(self, task_id: str) -> None:
@@ -360,11 +410,15 @@ class UserRunnerService:
                     record.status = ValidationRequestStatus.cancelled
                     record.claimed_at = None
                     record.claim_expires_at = None
+                    self._save_request(record)
 
     def get_summary(self, request_id: str) -> ValidationRequestSummary:
         with self._lock:
             record = self._get_request(request_id)
+            previous_status = record.status
             self._expire_request(record, self._now())
+            if record.status != previous_status:
+                self._save_request(record)
             return record.summary()
 
     def authenticate(self, api_token: str) -> _RegisteredRunner:
@@ -483,3 +537,83 @@ class UserRunnerService:
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
+
+    def _save_request(self, record: _ValidationRequest) -> None:
+        if self._repository is not None:
+            self._repository.save_user_request(self._request_payload(record))
+
+    @staticmethod
+    def _request_payload(record: _ValidationRequest) -> dict[str, object]:
+        return {
+            "request_id": record.request_id,
+            "task_id": record.task_id,
+            "patch_id": record.patch_id,
+            "repository_id": record.repository_id,
+            "clone_url": record.clone_url,
+            "fetch_ref": record.fetch_ref,
+            "base_sha": record.base_sha,
+            "head_sha": record.head_sha,
+            "patch_sha": record.patch_sha,
+            "patch_content": record.patch_content,
+            "profile": record.profile,
+            "created_at": record.created_at,
+            "expires_at": record.expires_at,
+            "status": record.status.value,
+            "runner_id": record.runner_id,
+            "claimed_at": record.claimed_at,
+            "claim_expires_at": record.claim_expires_at,
+            "result": record.result.model_dump(mode="json") if record.result else None,
+        }
+
+    def _restore(self) -> None:
+        if self._repository is None:
+            return
+        if self._credential_cipher is not None:
+            for stored in self._repository.load_runners():
+                try:
+                    hmac_secret = self._credential_cipher.decrypt(
+                        stored["encrypted_hmac_secret"]
+                    )
+                except RunnerCredentialDecryptionError:
+                    logger.warning(
+                        "跳过无法解密的 Runner 注册：%s", stored["public"].runner_id
+                    )
+                    continue
+                self._runners[stored["public"].runner_id] = _RegisteredRunner(
+                    public=stored["public"],
+                    api_token_hash=stored["api_token_hash"],
+                    hmac_secret=hmac_secret,
+                )
+        for stored in self._repository.load_user_requests():
+            result = (
+                PatchValidationResult.model_validate(stored["result"])
+                if stored.get("result")
+                else None
+            )
+            record = _ValidationRequest(
+                request_id=stored["request_id"],
+                task_id=stored["task_id"],
+                patch_id=stored["patch_id"],
+                repository_id=stored["repository_id"],
+                clone_url=stored["clone_url"],
+                fetch_ref=stored.get("fetch_ref"),
+                base_sha=stored["base_sha"],
+                head_sha=stored["head_sha"],
+                patch_sha=stored["patch_sha"],
+                patch_content=stored["patch_content"],
+                profile=stored["profile"],
+                created_at=stored["created_at"],
+                expires_at=stored["expires_at"],
+                status=ValidationRequestStatus(stored["status"]),
+                runner_id=stored.get("runner_id"),
+                claimed_at=stored.get("claimed_at"),
+                claim_expires_at=stored.get("claim_expires_at"),
+                result=result,
+            )
+            self._requests[record.request_id] = record
+            self._request_keys[(record.task_id, record.patch_id, record.profile)] = record.request_id
+        for stored in self._repository.load_runner_result_idempotency():
+            receipt = RunnerResultReceipt.model_validate(stored["receipt"])
+            self._result_idempotency[
+                (stored["runner_id"], stored["idempotency_key"])
+            ] = (stored["fingerprint"], receipt)

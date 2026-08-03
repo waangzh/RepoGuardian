@@ -1,10 +1,20 @@
 <script setup lang="ts">
+import type { AppPage } from "../../types/operations";
+
+defineProps<{
+  modelValue: AppPage;
+}>();
+
+const emit = defineEmits<{
+  "update:modelValue": [page: AppPage];
+}>();
+
 const items = [
-  { icon: "⌘", label: "控制台", active: true, disabled: false },
-  { icon: "◷", label: "审查历史", active: false, disabled: true },
-  { icon: "✓", label: "验证后端", active: false, disabled: true },
-  { icon: "⚙", label: "设置", active: false, disabled: true },
-];
+  { id: "dashboard", icon: "⌘", label: "控制台" },
+  { id: "history", icon: "◷", label: "审查历史" },
+  { id: "validation", icon: "✓", label: "验证后端" },
+  { id: "settings", icon: "⚙", label: "设置" },
+] satisfies Array<{ id: AppPage; icon: string; label: string }>;
 </script>
 
 <template>
@@ -14,10 +24,10 @@ const items = [
       :key="item.label"
       type="button"
       class="sidebar-item"
-      :class="{ 'is-active': item.active }"
-      :disabled="item.disabled"
-      :aria-current="item.active ? 'page' : undefined"
-      :title="item.disabled ? `${item.label}暂未提供` : item.label"
+      :class="{ 'is-active': modelValue === item.id }"
+      :aria-current="modelValue === item.id ? 'page' : undefined"
+      :title="item.label"
+      @click="emit('update:modelValue', item.id)"
     >
       <span aria-hidden="true">{{ item.icon }}</span>
       <small>{{ item.label }}</small>
