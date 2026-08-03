@@ -114,7 +114,13 @@ class Settings(BaseSettings):
     repoguardian_patch_policy_version: str = "patch-policy-v1"
     repoguardian_allow_cross_model_reuse: bool = False
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # Windows 编辑器常会给 UTF-8 .env 写入 BOM；utf-8-sig 会安全移除 BOM，
+    # 避免首个配置键被解析成 ``\ufeffGITHUB_TOKEN`` 之类的隐藏键名。
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8-sig",
+        extra="ignore",
+    )
 
 
 # 全局配置单例

@@ -415,7 +415,7 @@ def test_alembic_migration_upgrades_and_rolls_back(tmp_path: Path) -> None:
     env = {**os.environ, "REPOGUARDIAN_DB_PATH": str(database)}
     backend = Path(__file__).parents[1]
     subprocess.run(
-        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        [sys.executable, "-m", "alembic", "upgrade", "20260801_0001"],
         cwd=backend, env=env, check=True, capture_output=True, text=True,
     )
     with sqlite3.connect(database) as connection:
@@ -424,7 +424,30 @@ def test_alembic_migration_upgrades_and_rolls_back(tmp_path: Path) -> None:
         )}
         version = connection.execute("select version_num from alembic_version").fetchone()
     assert {"review_tasks", "review_units", "human_requests", "worker_jobs"} <= tables
+    assert "runner_registrations" not in tables
     assert version == ("20260801_0001",)
+
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=backend, env=env, check=True, capture_output=True, text=True,
+    )
+    with sqlite3.connect(database) as connection:
+        tables = {row[0] for row in connection.execute(
+            "select name from sqlite_master where type='table'"
+        )}
+        version = connection.execute("select version_num from alembic_version").fetchone()
+    assert {
+        "review_tasks",
+        "review_units",
+        "human_requests",
+        "worker_jobs",
+        "runner_registrations",
+        "user_validation_requests",
+        "runner_result_idempotency",
+        "project_ci_requests",
+        "project_ci_webhook_deliveries",
+    } <= tables
+    assert version == ("20260804_0002",)
     subprocess.run(
         [sys.executable, "-m", "alembic", "downgrade", "base"],
         cwd=backend, env=env, check=True, capture_output=True, text=True,
