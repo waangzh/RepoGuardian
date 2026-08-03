@@ -10,6 +10,7 @@ import asyncio
 from pathlib import Path
 
 import aiosqlite
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from app.core.config import settings
@@ -17,6 +18,13 @@ from app.core.config import settings
 _checkpointer: AsyncSqliteSaver | None = None
 _connection: aiosqlite.Connection | None = None
 _lock = asyncio.Lock()
+
+
+def _checkpoint_serializer() -> JsonPlusSerializer:
+    """仅允许恢复审查状态中确实使用的自定义枚举类型。"""
+    return JsonPlusSerializer(
+        allowed_msgpack_modules=[("app.models.review", "ReviewPhase")]
+    )
 
 
 async def get_checkpointer() -> AsyncSqliteSaver:
@@ -28,7 +36,10 @@ async def get_checkpointer() -> AsyncSqliteSaver:
             path = Path(settings.repoguardian_checkpoint_db).resolve()
             path.parent.mkdir(parents=True, exist_ok=True)
             _connection = await aiosqlite.connect(path.as_posix())
-            _checkpointer = AsyncSqliteSaver(_connection)
+            _checkpointer = AsyncSqliteSaver(
+                _connection,
+                serde=_checkpoint_serializer(),
+            )
             await _checkpointer.setup()
     return _checkpointer
 

@@ -6,6 +6,11 @@ import type {
   ReviewUnitResult,
   ValidationBackend,
 } from "../types/review";
+import type {
+  ReviewTaskListResponse,
+  SystemDiagnostics,
+  ValidationBackendInfo,
+} from "../types/operations";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
@@ -62,6 +67,27 @@ export async function previewReview(
 
 export async function getReview(taskId: string): Promise<ReviewTask> {
   return request<ReviewTask>(`/api/reviews/${taskId}`);
+}
+
+export async function listReviews(options: {
+  status?: string;
+  page?: number;
+  pageSize?: number;
+} = {}): Promise<ReviewTaskListResponse> {
+  const params = new URLSearchParams({
+    page: String(options.page ?? 1),
+    page_size: String(options.pageSize ?? 20),
+  });
+  if (options.status) params.set("status", options.status);
+  return request<ReviewTaskListResponse>(`/api/reviews?${params.toString()}`);
+}
+
+export async function getValidationBackends(): Promise<ValidationBackendInfo[]> {
+  return request<ValidationBackendInfo[]>("/api/validation/backends");
+}
+
+export async function getSystemDiagnostics(): Promise<SystemDiagnostics> {
+  return request<SystemDiagnostics>("/api/system/diagnostics");
 }
 
 export async function retryReviewUnit(

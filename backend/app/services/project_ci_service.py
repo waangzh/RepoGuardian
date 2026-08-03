@@ -30,6 +30,7 @@ from app.tools.github_actions import (
     WorkflowNotFoundError,
 )
 from app.tools.patch_tool import normalized_patch_sha
+from app.services.external_validation_repository import ExternalValidationRepository
 
 
 class ProjectCIError(RuntimeError):
@@ -52,7 +53,7 @@ class _Record:
 
 
 class ProjectCIService:
-    """内存状态协调器；不创建 Git ref，也不执行目标仓库代码。"""
+    """可恢复状态协调器；不创建 Git ref，也不执行目标仓库代码。"""
 
     _TERMINAL = {
         ProjectCIStatus.passed,
@@ -79,6 +80,7 @@ class ProjectCIService:
         auto_poll: bool = True,
         now: Callable[[], datetime] | None = None,
         on_result: Callable[[ProjectCIRequestSummary, PatchValidationResult], None] | None = None,
+        repository: ExternalValidationRepository | None = None,
     ) -> None:
         self.client = client
         self.workflow = workflow
@@ -92,9 +94,31 @@ class ProjectCIService:
         self.auto_poll = auto_poll
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._on_result = on_result
+        self._repository = repository
         self._records: dict[str, _Record] = {}
         self._deliveries: set[str] = set()
         self._poll_tasks: dict[str, asyncio.Task[None]] = {}
+        self._restore()
+
+    def start_pending_polling(self) -> None:
+        """应用重启后恢复未终态请求的轮询。"""
+        if not self.auto_poll:
+            return
+        for request_id, record in self._records.items():
+            if record.summary.status in self._TERMINAL or request_id in self._poll_tasks:
+                continue
+            self._poll_tasks[request_id] = asyncio.create_task(
+                self._poll_until_terminal(request_id)
+            )
+
+    async def close(self) -> None:
+        tasks = list(self._poll_tasks.values())
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._poll_tasks.clear()
 
     async def dispatch(self, request: PatchValidationRequest) -> PatchValidationResult:
         request_id = uuid4().hex
@@ -116,6 +140,7 @@ class ProjectCIService:
         )
         record = _Record(summary=summary)
         self._records[request_id] = record
+        self._save_record(record)
 
         if request.is_fork and not self.allow_fork:
             return self._finish_without_run(
@@ -203,6 +228,7 @@ class ProjectCIService:
             "updated_at": self._now(),
             "detail": "workflow dispatched",
         })
+        self._save_record(record)
         if self.auto_poll:
             self._poll_tasks[request_id] = asyncio.create_task(self._poll_until_terminal(request_id))
         return PatchValidationResult(
@@ -283,6 +309,8 @@ class ProjectCIService:
         await self._accept_run(record, run)
         if delivery_id:
             self._deliveries.add(delivery_id)
+            if self._repository is not None:
+                self._repository.record_project_ci_delivery(delivery_id, request_id)
         return ProjectCIWebhookReceipt(request_id=request_id, status=record.summary.status)
 
     async def cancel(self, request_id: str) -> ProjectCIRequestSummary:
@@ -322,6 +350,8 @@ class ProjectCIService:
         ]
         for request_id in expired:
             self._records.pop(request_id, None)
+            if self._repository is not None:
+                self._repository.delete_project_ci_request(request_id)
             task = self._poll_tasks.pop(request_id, None)
             if task and not task.done():
                 task.cancel()
@@ -342,6 +372,7 @@ class ProjectCIService:
             "detail": f"workflow {run.status}",
         })
         if run.status != "completed":
+            self._save_record(record)
             return
 
         if run.conclusion == "cancelled":
@@ -569,6 +600,7 @@ class ProjectCIService:
             "updated_at": self._now(),
         })
         record.result = result
+        self._save_record(record)
         if (
             self._on_result
             and record.summary.run_id is not None
@@ -588,3 +620,34 @@ class ProjectCIService:
             return self._records[request_id]
         except KeyError as exc:
             raise ProjectCIRequestNotFound(request_id) from exc
+
+    def _save_record(self, record: _Record) -> None:
+        if self._repository is None:
+            return
+        self._repository.save_project_ci_request(
+            summary=record.summary.model_dump(mode="json"),
+            workflow=record.workflow.model_dump(mode="json") if record.workflow else None,
+            result=record.result.model_dump(mode="json") if record.result else None,
+        )
+
+    def _restore(self) -> None:
+        if self._repository is None:
+            return
+        for stored in self._repository.load_project_ci_requests():
+            summary = ProjectCIRequestSummary.model_validate(stored["summary"])
+            workflow = (
+                ProjectCIWorkflow.model_validate(stored["workflow"])
+                if stored.get("workflow")
+                else None
+            )
+            result = (
+                PatchValidationResult.model_validate(stored["result"])
+                if stored.get("result")
+                else None
+            )
+            self._records[summary.request_id] = _Record(
+                summary=summary,
+                workflow=workflow,
+                result=result,
+            )
+        self._deliveries = self._repository.load_project_ci_deliveries()

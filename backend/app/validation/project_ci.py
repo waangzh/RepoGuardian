@@ -11,6 +11,8 @@ from app.models.review import (
     ValidationCapabilities,
 )
 from app.services.project_ci_service import ProjectCIService
+from app.services.external_validation_repository import ExternalValidationRepository
+from app.core.database import schema_is_current
 from app.tools.github_actions import HttpGitHubActionsClient
 
 
@@ -34,6 +36,7 @@ def get_project_ci_service() -> ProjectCIService | None:
         poll_interval=settings.repoguardian_project_ci_poll_interval_seconds,
         max_patch_input_bytes=settings.repoguardian_project_ci_max_patch_input_bytes,
         on_result=apply_result,
+        repository=ExternalValidationRepository() if schema_is_current() else None,
     )
 
 

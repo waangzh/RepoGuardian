@@ -13,6 +13,8 @@ from app.models.review import (
     ValidationStatus,
 )
 from app.services.user_runner_service import UserRunnerService
+from app.services.external_validation_repository import ExternalValidationRepository
+from app.core.database import schema_is_current
 
 
 @lru_cache
@@ -32,6 +34,8 @@ def get_user_runner_service() -> UserRunnerService:
             settings.repoguardian_runner_registration_token,
         ))),
         max_log_summary_chars=settings.repoguardian_runner_max_log_summary_chars,
+        repository=ExternalValidationRepository() if schema_is_current() else None,
+        credential_secret=settings.repoguardian_runner_registration_token,
     )
 
 

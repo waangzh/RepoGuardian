@@ -20,6 +20,7 @@ dependencies = [
     "sse-starlette>=2.0.0",
     "tree-sitter>=0.23.0",
     "tree-sitter-python>=0.23.0",
+    "cryptography>=43.0.0",
 ]
 
 [project.optional-dependencies]

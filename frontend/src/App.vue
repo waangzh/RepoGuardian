@@ -9,12 +9,17 @@ import ReportPanel from "./components/ReportPanel.vue";
 import ValidationPanel from "./components/ValidationPanel.vue";
 import AppHeader from "./components/layout/AppHeader.vue";
 import AppSidebar from "./components/layout/AppSidebar.vue";
+import ReviewHistoryPage from "./components/pages/ReviewHistoryPage.vue";
+import SettingsPage from "./components/pages/SettingsPage.vue";
+import ValidationBackendsPage from "./components/pages/ValidationBackendsPage.vue";
 import ExecutionTimeline from "./components/review/ExecutionTimeline.vue";
 import ReviewLauncher from "./components/review/ReviewLauncher.vue";
 import ReviewMetrics from "./components/review/ReviewMetrics.vue";
 import ReviewUnitsPanel from "./components/review/ReviewUnitsPanel.vue";
+import type { AppPage } from "./types/operations";
 import type { ReviewMode, ReviewPreviewResponse, ReviewTask, ValidationBackend } from "./types/review";
 
+const activePage = ref<AppPage>("dashboard");
 const prUrl = ref("");
 const model = ref("");
 const mode = ref<ReviewMode>("review");
@@ -103,6 +108,16 @@ async function retryUnit(unitId: string) {
   }
 }
 
+async function openHistoricalReview(taskId: string) {
+  clearAll();
+  activePage.value = "dashboard";
+  error.value = null;
+  report.value = null;
+  task.value = null;
+  const currentTask = await refreshTask(taskId);
+  if (currentTask !== null && !isTerminalStatus(currentTask.status)) subscribeOrPoll(taskId);
+}
+
 function subscribeOrPoll(taskId: string) {
   try {
     eventSource = subscribeToEvents(taskId, {
@@ -163,9 +178,10 @@ onBeforeUnmount(clearPolling);
 <template>
   <div class="app-shell">
     <AppHeader :status-text="statusText" :status-english="statusEnglish" :status="task?.status || 'idle'" />
-    <div class="app-body">
-      <AppSidebar />
+    <div class="app-body" :class="{ 'app-body--wide': activePage !== 'dashboard' }">
+      <AppSidebar v-model="activePage" />
       <ReviewLauncher
+        v-if="activePage === 'dashboard'"
         v-model:pr-url="prUrl"
         v-model:model="model"
         v-model:mode="mode"
@@ -179,7 +195,7 @@ onBeforeUnmount(clearPolling);
         @submit="submitReview"
       />
 
-      <main class="dashboard-main">
+      <main v-if="activePage === 'dashboard'" class="dashboard-main">
         <header class="dashboard-heading">
           <div><p class="eyebrow">AI REVIEW WORKSPACE</p><h1>PR Review Control Desk</h1><p>AI 驱动的 Pull Request 审查控制台，支持审查规划、证据解析、问题验证与候选修复。</p></div>
         </header>
@@ -203,6 +219,9 @@ onBeforeUnmount(clearPolling);
         </section>
         <footer class="app-footer"><span>隐私优先 · 数据不出域 · 全流程可追溯</span><span><i /> RepoGuardian v0.1.0</span></footer>
       </main>
+      <ReviewHistoryPage v-else-if="activePage === 'history'" @open="openHistoricalReview" @create="activePage = 'dashboard'" />
+      <ValidationBackendsPage v-else-if="activePage === 'validation'" />
+      <SettingsPage v-else />
     </div>
   </div>
 </template>
