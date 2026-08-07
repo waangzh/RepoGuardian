@@ -62,10 +62,14 @@ def test_report_explains_pr_purpose_from_body_and_diff_scope() -> None:
         ],
     )
 
-    report = ReportService().generate(task)
+    report = ReportService().generate(
+        task,
+        purpose_summary="确保区间统计结果始终包含其点估计，并补充对应测试覆盖。",
+    )
 
     assert "## PR 作用" in report
-    assert "**作者意图：** Why Ensure interval statistics" in report
+    assert "**作者意图（中文概括）：** 确保区间统计结果始终包含其点估计" in report
+    assert "Ensure interval statistics" not in report
     assert "1 个实现或配置文件、1 个测试文件" in report
     assert "新增 51 行、删除 0 行" in report
     assert "PR 未提供正文" not in report
@@ -82,9 +86,11 @@ def test_report_labels_title_based_purpose_and_preserves_warnings() -> None:
     )
 
     report = ReportService().generate(task)
+    purpose_section = report.split("## PR 作用", 1)[1].split("## 审查结论", 1)[0]
 
-    assert "**作用概括（根据标题）：** keep the point estimate inside its interval" in report
-    assert "PR 未提供正文" in report
+    assert "**作用概括：** 未获得可靠的中文作者说明" in report
+    assert "keep the point estimate inside its interval" not in purpose_section
+    assert "未直接复述非中文 PR 标题或正文" in report
     assert "## 审查限制与警告" in report
     assert "静态分析后端不可用" in report
 

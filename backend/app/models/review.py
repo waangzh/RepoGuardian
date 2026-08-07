@@ -1379,6 +1379,22 @@ class ReviewSummary(BaseModel):
     completed: bool = False
 
 
+class PRPurposeSummary(BaseModel):
+    """模型生成的 PR 作用中文概括。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str = Field(min_length=1, max_length=800)
+
+    @field_validator("summary")
+    @classmethod
+    def require_chinese_summary(cls, value: str) -> str:
+        normalized = value.strip()
+        if not any("\u4e00" <= char <= "\u9fff" for char in normalized):
+            raise ValueError("PR purpose summary must contain Chinese text")
+        return normalized
+
+
 # ---------------------------------------------------------------------------
 # 聚合根
 # ---------------------------------------------------------------------------
