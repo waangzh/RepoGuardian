@@ -94,6 +94,7 @@ class ReviewState(TypedDict, total=False):
     human_request: dict[str, Any] | None
     human_answer: dict[str, Any] | None
     _human_interrupt_enabled: bool
+    _report_purpose_model_enabled: bool
     step_progress: list[dict[str, Any]] | None    # 图步骤进度 [{node, status, message, timestamp}]
     agent_events: list[dict[str, Any]] | None     # Agent 事件日志 [{action, reason, status, ...}]
 

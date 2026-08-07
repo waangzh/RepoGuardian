@@ -23,11 +23,11 @@ _HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 class ReportService:
     """生成 Markdown 格式的代码审查报告，包含 PR 概览、变更、问题、修复、测试等章节。"""
 
-    def generate(self, task: ReviewTask) -> str:
+    def generate(self, task: ReviewTask, *, purpose_summary: str | None = None) -> str:
         """从 ReviewTask 渲染完整 Markdown 报告，仅展示适用或有结果的章节。"""
         lines: list[str] = ["# RepoGuardian 代码审查报告", ""]
         _append_pr_summary(lines, task)
-        _append_pr_purpose(lines, task)
+        _append_pr_purpose(lines, task, purpose_summary=purpose_summary)
         _append_issue_summary(lines, task)
         _append_change_summary(lines, task)
         _append_issue_details(lines, task)
@@ -60,7 +60,12 @@ def _append_pr_summary(lines: list[str], task: ReviewTask) -> None:
     ])
 
 
-def _append_pr_purpose(lines: list[str], task: ReviewTask) -> None:
+def _append_pr_purpose(
+    lines: list[str],
+    task: ReviewTask,
+    *,
+    purpose_summary: str | None,
+) -> None:
     """用作者描述和实际变更范围解释 PR 的作用，并明确推断来源。"""
     if not task.pr:
         return
@@ -69,19 +74,27 @@ def _append_pr_purpose(lines: list[str], task: ReviewTask) -> None:
     )
     author_purpose = _plain_text_excerpt(task.pr.body or "", limit=600)
     lines.extend(["## PR 作用", ""])
-    if author_purpose:
+    if purpose_summary:
+        lines.append(f"**作者意图（中文概括）：** {_inline_text(purpose_summary)}")
+    elif author_purpose and _contains_chinese(author_purpose):
         lines.append(f"**作者意图：** {author_purpose}")
-        if title_purpose and title_purpose.casefold() not in author_purpose.casefold():
+        if (
+            title_purpose
+            and _contains_chinese(title_purpose)
+            and title_purpose.casefold() not in author_purpose.casefold()
+        ):
             lines.extend(["", f"**标题概括：** {title_purpose}"])
-    elif title_purpose:
+    elif title_purpose and _contains_chinese(title_purpose):
         lines.append(f"**作用概括（根据标题）：** {title_purpose}")
     else:
-        lines.append("**作用概括：** PR 未提供可用的标题或正文说明。")
+        lines.append("**作用概括：** 未获得可靠的中文作者说明，以下根据实际改动归纳。")
     lines.extend(["", f"**实际改动：** {_change_scope_summary(task)}"])
-    if not author_purpose:
+    if not purpose_summary and not (
+        _contains_chinese(author_purpose) or _contains_chinese(title_purpose)
+    ):
         lines.extend([
             "",
-            "> PR 未提供正文；作用概括来自标题，实际改动来自 Diff 统计，均未视为作者声明。",
+            "> 未直接复述非中文 PR 标题或正文；实际改动来自 Diff 统计，未视为作者声明。",
         ])
     lines.append("")
 
@@ -385,6 +398,10 @@ def _plain_text_excerpt(value: str, *, limit: int) -> str:
 
 def _inline_text(value: str) -> str:
     return html.escape(value, quote=False)
+
+
+def _contains_chinese(value: str) -> bool:
+    return any("\u4e00" <= char <= "\u9fff" for char in value)
 
 
 def _table_cell(value: str) -> str:
