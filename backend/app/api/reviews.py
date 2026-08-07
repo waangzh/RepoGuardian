@@ -219,11 +219,11 @@ async def get_report(task_id: str) -> Response:
 
 @router.get("/{task_id}/stream")
 async def stream_review(task_id: str, request: Request) -> EventSourceResponse:
-    """SSE 端点：每秒轮询任务状态，推送步骤进度事件，任务结束时发送 done。"""
+    """SSE 端点：推送步骤状态变化，任务结束时发送 done。"""
     service = get_review_service()
 
     async def event_generator():
-        last_step_count = 0
+        last_step_signature: tuple[tuple[object, ...], ...] = ()
         last_patch_signature: tuple[tuple[str, str], ...] = ()
         while True:
             if await request.is_disconnected():
@@ -233,20 +233,30 @@ async def stream_review(task_id: str, request: Request) -> EventSourceResponse:
                 yield {"event": "error", "data": json.dumps({"message": "Task not found"})}
                 break
 
-            # 推送新完成的步骤
-            steps = [s.model_dump() for s in task.steps]
-            current_count = len([s for s in steps if s["status"] == "completed"])
-            if current_count > last_step_count:
-                for step in steps[last_step_count:current_count]:
+            steps = [s.model_dump(mode="json") for s in task.steps]
+            current_signature = tuple(
+                (
+                    step["name"], step["status"], step.get("message"),
+                    step.get("started_at"), step.get("finished_at"),
+                )
+                for step in steps
+            )
+            if current_signature != last_step_signature:
+                for index, step in enumerate(steps):
+                    if (
+                        index < len(last_step_signature)
+                        and current_signature[index] == last_step_signature[index]
+                    ):
+                        continue
                     yield {
                         "event": "step_progress",
                         "data": json.dumps({
                             "node": step["name"],
-                            "status": "completed",
+                            "status": step["status"],
                             "message": step.get("message", ""),
                         }),
                     }
-                last_step_count = current_count
+                last_step_signature = current_signature
 
             patch_signature = tuple((patch.id, patch.status.value) for patch in task.patches)
             if patch_signature != last_patch_signature:
