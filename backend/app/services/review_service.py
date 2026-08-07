@@ -74,13 +74,33 @@ _TRACE_REDACTED_KEYS = {
     "repo_path",
 }
 
+_TASK_STATUS_BY_GRAPH_NODE = {
+    "intake": TaskStatus.planning,
+    "repo_prepare": TaskStatus.planning,
+    "diff_parse": TaskStatus.planning,
+    "repo_index": TaskStatus.planning,
+    "project_detection": TaskStatus.planning,
+    "review_plan": TaskStatus.reviewing,
+    "review_units": TaskStatus.reviewing,
+    "resolve_evidence": TaskStatus.resolving_evidence,
+    "issue_policy": TaskStatus.verifying_issues,
+    "issue_verifier": TaskStatus.verifying_issues,
+    "issue_deduplication": TaskStatus.verifying_issues,
+    "verification": TaskStatus.verifying_issues,
+    "generate_patch": TaskStatus.generating_patches,
+    "candidate_check": TaskStatus.generating_patches,
+    "mark_unverified": TaskStatus.generating_patches,
+    "validation": TaskStatus.validating,
+    "repair_assessment": TaskStatus.validating,
+}
+
 
 class ReviewService:
     """
     审查服务：协调从任务创建到图执行的完整生命周期。
     流程：
         create_task()          → 创建 ReviewTask，存入内存，后台启动图
-        _run_graph()           → 构建 StateGraph，注入工具，执行 ainvoke
+        _run_graph()           → 构建 StateGraph，注入工具，流式执行并同步进度
         _sync_result_to_task() → 将图状态字典重建为 Pydantic 模型写回任务
     """
 
@@ -423,10 +443,12 @@ class ReviewService:
             tracing, callbacks = _build_langsmith_tracing(run_metadata)
             if callbacks:
                 run_config["callbacks"] = callbacks
-            logger.info("📊 开始 ainvoke 执行...")
+            logger.info("📊 开始流式执行审查图...")
             with tracing:
                 graph_input: Any = Command(resume=resume) if resume is not None else initial_state
-                result = await compiled.ainvoke(graph_input, config=run_config)
+                result = await self._invoke_graph_with_progress(
+                    compiled, graph_input, run_config, task
+                )
             interrupt_payload = _extract_interrupt_payload(result)
             if interrupt_payload and self._repository:
                 request = HumanReviewRequest.model_validate(interrupt_payload["request"])
@@ -483,6 +505,100 @@ class ReviewService:
             self._repo_paths.pop(task_id, None)
             self._run_tasks.pop(task_id, None)
 
+    async def _invoke_graph_with_progress(
+        self,
+        compiled: Any,
+        graph_input: Any,
+        run_config: dict[str, Any],
+        task: ReviewTask,
+    ) -> dict[str, Any]:
+        """流式执行图，并在节点开始、结束时立即更新任务进度。"""
+        stream = getattr(compiled, "astream", None)
+        if not callable(stream):
+            # 保留对测试替身以及旧编译器接口的兼容。
+            return await compiled.ainvoke(graph_input, config=run_config)
+
+        result: dict[str, Any] | None = None
+        async for chunk in stream(
+            graph_input,
+            config=run_config,
+            stream_mode=["debug", "values"],
+            subgraphs=True,
+            version="v2",
+        ):
+            if not isinstance(chunk, dict):
+                continue
+            chunk_type = chunk.get("type")
+            if chunk_type == "values" and not chunk.get("ns"):
+                state = chunk.get("data")
+                if isinstance(state, dict):
+                    result = state
+                continue
+            if chunk_type != "debug":
+                continue
+            event = chunk.get("data")
+            if not isinstance(event, dict) or event.get("type") not in {"task", "task_result"}:
+                continue
+            event_type = event["type"]
+            payload = event.get("payload")
+            if not isinstance(payload, dict) or not isinstance(payload.get("name"), str):
+                continue
+            self._sync_graph_step_event(
+                task,
+                payload["name"],
+                event_type=event_type,
+                timestamp=event.get("timestamp"),
+                payload=payload,
+            )
+
+        if result is None:
+            raise RuntimeError("LangGraph 流式执行未返回最终状态")
+        return result
+
+    def _sync_graph_step_event(
+        self,
+        task: ReviewTask,
+        node: str,
+        *,
+        event_type: str,
+        timestamp: Any,
+        payload: dict[str, Any],
+    ) -> None:
+        """把 LangGraph 的 task/task_result 事件转换为可查询的 TaskStep。"""
+        event_time = _parse_event_time(timestamp)
+        if event_type == "task":
+            task.steps = [step for step in task.steps if step.name != "queued"]
+            task.steps.append(
+                TaskStep(name=node, status=StepStatus.running, started_at=event_time)
+            )
+            mapped_status = _TASK_STATUS_BY_GRAPH_NODE.get(node)
+            if mapped_status is not None:
+                task.status = mapped_status
+                task.review.status = mapped_status
+        else:
+            step = next(
+                (
+                    item
+                    for item in reversed(task.steps)
+                    if item.name == node and item.status == StepStatus.running
+                ),
+                None,
+            )
+            if step is None:
+                step = TaskStep(name=node, started_at=event_time)
+                task.steps.append(step)
+            progress = _latest_step_progress(payload)
+            failed = bool(payload.get("error")) or (
+                progress is not None and progress.get("status") == StepStatus.failed.value
+            )
+            step.status = StepStatus.failed if failed else StepStatus.completed
+            step.message = (
+                str(progress.get("message") or "") if progress is not None else step.message
+            )
+            step.finished_at = event_time
+        self._touch(task)
+        self._persist(task)
+
     def _sync_result_to_task(self, task: ReviewTask, result: dict) -> None:
         """将图的扁平字典状态重建为 Pydantic 模型并写回 ReviewTask。"""
         rebuilt = rebuild_task_from_state(result)
@@ -517,8 +633,9 @@ class ReviewService:
         task.steps = [
             TaskStep(
                 name=step.get("node", f"step_{index}"),
-                status=StepStatus.completed,
+                status=StepStatus(step.get("status", StepStatus.completed.value)),
                 message=step.get("message", ""),
+                finished_at=_parse_event_time(step.get("timestamp")),
             )
             for index, step in enumerate(result.get("step_progress") or [], start=1)
         ]
@@ -794,6 +911,27 @@ def _build_langsmith_tracing(
     except Exception as exc:
         logger.warning("LangSmith 初始化失败，已跳过本次追踪: %s", type(exc).__name__)
         return tracing_context(enabled=False), []
+
+
+def _parse_event_time(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            pass
+    return datetime.now(timezone.utc)
+
+
+def _latest_step_progress(payload: dict[str, Any]) -> dict[str, Any] | None:
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return None
+    progress = result.get("step_progress")
+    if not isinstance(progress, list):
+        return None
+    return next((item for item in reversed(progress) if isinstance(item, dict)), None)
 
 
 def _trace_content_filter(value: dict[str, Any]) -> dict[str, Any]:
