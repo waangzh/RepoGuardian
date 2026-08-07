@@ -418,6 +418,7 @@ class ReviewService:
             ):
                 initial_state.pop(key, None)
             initial_state["_human_interrupt_enabled"] = True
+            initial_state["_report_purpose_model_enabled"] = True
 
         result = None
         try:

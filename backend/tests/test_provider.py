@@ -63,6 +63,36 @@ async def test_provider_constructs_chatopenai_with_json_mode_and_model_override(
 
 
 @pytest.mark.asyncio
+async def test_provider_summarizes_english_pr_purpose_in_chinese(
+    fake_chat: type[FakeChatOpenAI],
+) -> None:
+    fake_chat.responses = [AIMessage(content='{"summary":"修复区间统计，使点估计始终位于区间内。"}')]
+    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
+
+    summary = await provider.summarize_pr_purpose(
+        _sample_pr(),
+        [ChangedFile(file_path="stats.py", change_type="modified", additions=3, deletions=1)],
+        None,
+    )
+
+    assert summary == "修复区间统计，使点估计始终位于区间内。"
+    chat = fake_chat.instances[0]
+    assert chat.kwargs["max_tokens"] == 700
+    assert "必须使用简体中文" in chat.messages[1].content
+
+
+@pytest.mark.asyncio
+async def test_provider_rejects_pr_purpose_without_chinese(
+    fake_chat: type[FakeChatOpenAI],
+) -> None:
+    fake_chat.responses = [AIMessage(content='{"summary":"Keep the estimate in the interval."}')]
+    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
+
+    with pytest.raises(LLMProviderError, match="PR purpose summary schema validation failed"):
+        await provider.summarize_pr_purpose(_sample_pr(), [], None)
+
+
+@pytest.mark.asyncio
 async def test_deepseek_passes_thinking_control_via_extra_body(
     fake_chat: type[FakeChatOpenAI],
 ) -> None:

@@ -1,6 +1,8 @@
 import logging
 from datetime import datetime, timezone
 
+from app.agents.providers import LLMProviderError, build_provider
+from app.core.config import settings
 from app.graph.nodes._events import append_step
 from app.graph.state import ReviewState
 from app.models.review import ReviewPhase
@@ -26,7 +28,24 @@ async def report_node(state: ReviewState) -> ReviewState:
         "updated_at": updated_at,
     })
     task = rebuild_task_from_state(report_state)
-    markdown = ReportService().generate(task)
+    purpose_summary = None
+    if task.pr:
+        provider = state.get("_provider")
+        if provider is None and state.get("_report_purpose_model_enabled"):
+            provider = build_provider(
+                settings.repoguardian_provider,
+                settings.openai_api_key,
+                settings.openai_base_url,
+                settings.repoguardian_model,
+            )
+        if provider is not None:
+            try:
+                purpose_summary = await provider.summarize_pr_purpose(
+                    task.pr, task.changed_files, task.model
+                )
+            except LLMProviderError as exc:
+                logger.warning("PR 作用中文概括生成失败，使用确定性中文兜底：%s", exc)
+    markdown = ReportService().generate(task, purpose_summary=purpose_summary)
     logger.info("📝 [报告] 报告生成完成（%d 字符 Markdown）", len(markdown))
     return ReviewState(
         report_markdown=markdown,
