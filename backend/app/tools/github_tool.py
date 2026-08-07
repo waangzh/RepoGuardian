@@ -56,6 +56,7 @@ class GitHubTool:
             repo=repo,
             number=number,
             title=payload.get("title") or "",
+            body=payload.get("body") or None,
             html_url=payload["html_url"],
             clone_url=base_repo["clone_url"],
             base=PullRequestRef(

@@ -138,6 +138,7 @@ def _rebuild_pr_info(data: dict) -> PullRequestInfo:
         repo=data.get("repo", ""),
         number=data.get("number", 0),
         title=data.get("title", ""),
+        body=data.get("body"),
         html_url=data.get("html_url", ""),
         clone_url=data.get("clone_url", ""),
         base=PullRequestRef(
