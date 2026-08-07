@@ -17,8 +17,8 @@ const relevanceLabel: Record<string, string> = {
 
 <template>
   <section class="panel context-panel">
-    <PanelHeader icon="⌘" title="审查上下文" subtitle="Context Snippets"><span class="panel-count">{{ snippets.length }} 条</span></PanelHeader>
-    <EmptyState v-if="snippets.length === 0" icon="⌘" title="暂无上下文" description="审查过程中引用的代码上下文片段会显示在这里。" />
+    <PanelHeader icon="context" title="审查上下文" subtitle="Context Snippets"><span class="panel-count">{{ snippets.length }} 条</span></PanelHeader>
+    <EmptyState v-if="snippets.length === 0" icon="context" title="未引用额外上下文" description="本次审查没有产生需要单独展示的代码上下文片段。" />
     <details v-for="(s, i) in snippets" v-else :key="i" class="snippet">
       <summary>
         <span class="relevance-tag" :data-kind="s.relevance">

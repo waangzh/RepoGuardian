@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import AppIcon from "../common/AppIcon.vue";
+
 defineProps<{
   statusText: string;
   statusEnglish: string;
@@ -21,7 +23,7 @@ defineProps<{
         <span class="header-status__dot" />
         <span><strong>{{ statusText }}</strong><small>{{ statusEnglish }}</small></span>
       </div>
-      <a class="icon-button" href="https://github.com" target="_blank" rel="noreferrer" aria-label="打开 GitHub 帮助">?</a>
+      <a class="icon-button" href="https://github.com" target="_blank" rel="noreferrer" aria-label="打开 GitHub 帮助"><AppIcon name="help" :size="17" /></a>
       <button class="user-button" type="button" disabled aria-label="用户设置暂不可用">RG</button>
     </div>
   </header>
