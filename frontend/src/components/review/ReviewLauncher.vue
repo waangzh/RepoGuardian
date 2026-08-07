@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { ReviewMode, ReviewPreviewResponse, ValidationBackend } from "../../types/review";
+import AppIcon from "../common/AppIcon.vue";
 
 const props = defineProps<{
   prUrl: string;
@@ -10,6 +11,8 @@ const props = defineProps<{
   validationBackend: ValidationBackend;
   previewing: boolean;
   submitting: boolean;
+  active: boolean;
+  cancelling: boolean;
   error: string | null;
   preview: ReviewPreviewResponse | null;
 }>();
@@ -22,6 +25,7 @@ const emit = defineEmits<{
   "update:validationBackend": [value: ValidationBackend];
   preview: [];
   submit: [];
+  cancel: [];
 }>();
 
 const prUrlModel = computed({ get: () => props.prUrl, set: (value) => emit("update:prUrl", value) });
@@ -35,26 +39,26 @@ const backendModel = computed({ get: () => props.validationBackend, set: (value)
   <aside class="review-launcher">
     <form class="launcher-form" @submit.prevent="$emit('submit')">
       <div class="launcher-heading">
-        <span class="launcher-heading__icon" aria-hidden="true">↗</span>
+        <span class="launcher-heading__icon"><AppIcon name="play" :size="18" /></span>
         <div><h2>启动新审查</h2><p>配置审查任务并启动 AI 评审流程</p></div>
       </div>
 
       <label class="field">
         <span>GitHub PR URL</span>
         <div class="input-with-icon">
-          <span aria-hidden="true">◉</span>
-          <input v-model="prUrlModel" type="url" placeholder="https://github.com/owner/repo/pull/123" required />
+          <span><AppIcon name="branch" :size="14" /></span>
+          <input v-model="prUrlModel" type="url" placeholder="https://github.com/owner/repo/pull/123" :disabled="active" required />
         </div>
       </label>
 
       <label class="field">
         <span>模型 / Model</span>
-        <input v-model="modelModel" type="text" placeholder="使用后端默认模型" />
+        <input v-model="modelModel" type="text" placeholder="使用后端默认模型" :disabled="active" />
       </label>
 
       <label class="field">
         <span>审查模式</span>
-        <select v-model="modeModel">
+        <select v-model="modeModel" :disabled="active">
           <option value="review">只读审查（不生成补丁）</option>
           <option value="review_and_suggest">审查 + 候选补丁</option>
           <option value="review_suggest_and_validate">审查 + 补丁 + 验证</option>
@@ -64,7 +68,7 @@ const backendModel = computed({ get: () => props.validationBackend, set: (value)
       <template v-if="mode === 'review_suggest_and_validate'">
         <label class="field">
           <span>验证后端</span>
-          <select v-model="backendModel">
+          <select v-model="backendModel" :disabled="active">
             <option value="none">不执行验证</option>
             <option value="user_runner">用户 Runner</option>
             <option value="project_ci">项目 CI</option>
@@ -80,19 +84,22 @@ const backendModel = computed({ get: () => props.validationBackend, set: (value)
 
       <label v-if="mode !== 'review'" class="switch-row">
         <span><strong>生成候选补丁</strong><small>发现问题时生成修复建议</small></span>
-        <input v-model="patchModel" type="checkbox" role="switch" />
+        <input v-model="patchModel" type="checkbox" role="switch" :disabled="active" />
       </label>
 
       <div class="launcher-actions">
-        <button type="button" class="button button--secondary" :disabled="previewing || !prUrl" @click="$emit('preview')">
+        <button v-if="active" type="button" class="button button--secondary" :disabled="cancelling" @click="$emit('cancel')">
+          {{ cancelling ? "取消中…" : "取消审查" }}
+        </button>
+        <button v-else type="button" class="button button--secondary" :disabled="previewing || !prUrl" @click="$emit('preview')">
           {{ previewing ? "分析中…" : "Preview" }}
         </button>
-        <button type="submit" class="button button--primary" :disabled="submitting || !prUrl">
-          {{ submitting ? "启动中…" : "开始审查" }}
+        <button type="submit" class="button button--primary" :disabled="submitting || active || !prUrl" :aria-busy="submitting || active">
+          {{ submitting ? "提交中…" : active ? "审查进行中…" : "开始审查" }}
         </button>
       </div>
 
-      <p class="safety-note"><span aria-hidden="true">◆</span>Preview 仅执行 PR 拉取、Diff 解析和确定性规划，不调用模型，也不运行目标仓库代码。</p>
+      <p class="safety-note"><AppIcon name="info" :size="16" />Preview 仅执行 PR 拉取、Diff 解析和确定性规划，不调用模型，也不运行目标仓库代码。</p>
       <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     </form>
 

@@ -19,10 +19,10 @@ function extension(path: string): string {
 
 <template>
   <section class="panel changed-files-panel">
-    <PanelHeader icon="▤" title="变更文件" subtitle="Changed Files">
+    <PanelHeader icon="file-code" title="变更文件" subtitle="Changed Files">
       <div class="file-totals"><span>{{ files.length }} 个文件</span><b class="text-success">+{{ additions }}</b><b class="text-danger">-{{ deletions }}</b></div>
     </PanelHeader>
-    <EmptyState v-if="files.length === 0" icon="▱" title="尚未加载变更文件" description="输入 PR URL 并运行 Preview，系统将解析变更并生成 Review Units。" />
+    <EmptyState v-if="files.length === 0" icon="file-code" title="尚未加载变更文件" description="任务准备完成后，系统会在这里列出本次 PR 的变更范围。" />
     <div v-else class="file-list">
       <div v-for="file in files" :key="file.file_path" class="file-row">
         <div class="file-row__main">

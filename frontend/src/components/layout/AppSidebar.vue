@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { AppPage } from "../../types/operations";
+import AppIcon from "../common/AppIcon.vue";
 
 defineProps<{
   modelValue: AppPage;
@@ -10,10 +11,10 @@ const emit = defineEmits<{
 }>();
 
 const items = [
-  { id: "dashboard", icon: "⌘", label: "控制台" },
-  { id: "history", icon: "◷", label: "审查历史" },
-  { id: "validation", icon: "✓", label: "验证后端" },
-  { id: "settings", icon: "⚙", label: "设置" },
+  { id: "dashboard", icon: "dashboard", label: "控制台" },
+  { id: "history", icon: "history", label: "审查历史" },
+  { id: "validation", icon: "server", label: "验证后端" },
+  { id: "settings", icon: "settings", label: "设置" },
 ] satisfies Array<{ id: AppPage; icon: string; label: string }>;
 </script>
 
@@ -29,12 +30,12 @@ const items = [
       :title="item.label"
       @click="emit('update:modelValue', item.id)"
     >
-      <span aria-hidden="true">{{ item.icon }}</span>
+      <span><AppIcon :name="item.icon" :size="19" /></span>
       <small>{{ item.label }}</small>
     </button>
     <div class="sidebar-spacer" />
     <a class="sidebar-item sidebar-help" href="https://github.com" target="_blank" rel="noreferrer">
-      <span aria-hidden="true">?</span><small>帮助</small>
+      <span><AppIcon name="help" :size="19" /></span><small>帮助</small>
     </a>
   </nav>
 </template>

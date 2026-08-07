@@ -19,6 +19,8 @@ class ReviewState(TypedDict, total=False):
     validation_backend: str
     validation_profile: str
     phase: ReviewPhase
+    created_at: str
+    updated_at: str
 
     # ---- 输入 ----
     pr_url: str | None

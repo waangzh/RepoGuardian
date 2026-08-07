@@ -50,13 +50,13 @@ function time(value?: string | null): string {
 
 <template>
   <section class="panel validation-panel">
-    <PanelHeader icon="◇" title="验证账本" subtitle="Validation Ledger"><span class="panel-count">{{ results.length }} 条记录</span></PanelHeader>
+    <PanelHeader icon="flask" title="验证账本" subtitle="Validation Ledger"><span class="panel-count">{{ results.length }} 条记录</span></PanelHeader>
 
     <p v-if="profile" class="validation-profile">
       {{ profile.adapter_id }} / {{ profile.language }}
       <span v-if="profile.detected_files.length">· {{ profile.detected_files.join("、") }}</span>
     </p>
-    <EmptyState v-if="!results.length" icon="◇" title="暂无验证记录" description="补丁验证结果会记录在验证账本中，便于追溯来源与可信度。" />
+    <EmptyState v-if="!results.length" icon="flask" title="尚无验证结果" description="候选补丁进入所选验证后端后，可信结果会记录在这里。" />
     <div v-else class="validation-table-wrap">
       <table class="validation-table">
         <thead><tr><th>Backend / Patch</th><th>状态</th><th>可信度</th><th>SHA</th><th>时间</th></tr></thead>

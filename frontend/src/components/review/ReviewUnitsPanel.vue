@@ -21,10 +21,10 @@ const terminal = computed(() => ["completed", "completed_with_warnings", "failed
 
 <template>
   <section class="panel review-units-panel">
-    <PanelHeader icon="▣" title="审查单元" subtitle="Review Units">
+    <PanelHeader icon="units" title="审查单元" subtitle="Review Units">
       <div class="panel-progress"><span>{{ completed }} / {{ units.length }} 完成</span><i><b :style="{ width: `${progress}%` }" /></i></div>
     </PanelHeader>
-    <EmptyState v-if="!units.length" icon="☷" title="暂无审查单元" description="运行 Preview 后，系统将根据文件、Hunk、符号与风险确定性规划 Review Units。" />
+    <EmptyState v-if="!units.length" icon="units" title="正在规划审查单元" description="系统会根据文件、Hunk、符号与风险拆分可独立审查的单元。" />
     <div v-else class="unit-list">
       <article v-for="unit in units" :key="unit.id" class="unit-item">
         <div class="unit-item__main">

@@ -35,9 +35,9 @@ const validation = computed(() => {
 
 <template>
   <section class="review-metrics" aria-label="审查概览">
-    <MetricCard icon="▦" label="审查单元" :value="`${completedUnits} / ${totalUnits}`" :detail="`已完成 ${unitProgress}%`" :progress="unitProgress" />
-    <MetricCard icon="△" label="发现问题" :value="issueSummary.total" :detail="`高 ${issueSummary.high} / 中 ${issueSummary.medium} / 低 ${issueSummary.low}`" tone="warning" />
-    <MetricCard icon="⌁" label="候选补丁" :value="patchSummary.total" :detail="`待验证 ${patchSummary.pending} · 已验证 ${patchSummary.verified}`" tone="info" />
-    <MetricCard icon="◇" label="验证状态" :value="validation.value" :detail="validation.detail" tone="purple" />
+    <MetricCard icon="units" label="审查单元" :value="`${completedUnits} / ${totalUnits}`" :detail="`已完成 ${unitProgress}%`" :progress="unitProgress" />
+    <MetricCard icon="alert" label="发现问题" :value="issueSummary.total" :detail="`高 ${issueSummary.high} / 中 ${issueSummary.medium} / 低 ${issueSummary.low}`" tone="warning" />
+    <MetricCard icon="patch" label="候选补丁" :value="patchSummary.total" :detail="`待验证 ${patchSummary.pending} · 已验证 ${patchSummary.verified}`" tone="info" />
+    <MetricCard icon="flask" label="验证状态" :value="validation.value" :detail="validation.detail" tone="purple" />
   </section>
 </template>

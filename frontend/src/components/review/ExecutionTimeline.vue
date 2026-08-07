@@ -49,7 +49,7 @@ const items = computed(() => flow.map((item) => {
 
 <template>
   <section class="panel execution-panel">
-    <PanelHeader icon="⚙" title="Agent 执行进度" subtitle="可追溯审查流程">
+    <PanelHeader icon="settings" title="Agent 执行进度" subtitle="可追溯审查流程">
       <StatusBadge :status="taskStatus || 'pending'" />
     </PanelHeader>
     <ol class="execution-flow">

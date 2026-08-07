@@ -86,7 +86,7 @@ onMounted(load);
     </section>
     <section v-else class="panel">
       <div v-if="loading" class="workspace-loading">正在探测验证能力…</div>
-      <EmptyState v-else icon="✓" title="未发现验证后端" description="请确认后端服务可用，并检查验证后端注册配置。" action-label="重试" @action="load" />
+      <EmptyState v-else icon="server" title="未发现验证后端" description="请确认后端服务可用，并检查验证后端注册配置。" action-label="重试" @action="load" />
     </section>
     <footer class="app-footer"><span>Profile 白名单 · 租约约束 · 结果可追溯</span><span><i /> Validation Control</span></footer>
   </main>

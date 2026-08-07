@@ -112,7 +112,7 @@ onMounted(load);
     </section>
     <section v-else class="panel">
       <div v-if="loading" class="workspace-loading">正在读取系统诊断…</div>
-      <EmptyState v-else icon="⚙" title="诊断信息不可用" description="请确认后端服务正在运行，然后重新读取诊断信息。" action-label="重试" @action="load" />
+      <EmptyState v-else icon="settings" title="诊断信息不可用" description="请确认后端服务正在运行，然后重新读取诊断信息。" action-label="重试" @action="load" />
     </section>
     <footer class="app-footer"><span>只读诊断 · 秘密不回显 · 配置由环境管理</span><span><i /> System Health</span></footer>
   </main>
