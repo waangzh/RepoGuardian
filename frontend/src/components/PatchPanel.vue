@@ -21,8 +21,8 @@ function changedLines(diff: string): number {
 
 <template>
   <section class="panel patch-panel">
-    <PanelHeader icon="⌁" title="候选补丁" subtitle="Candidate Patches"><span class="panel-count">{{ patches.length }} 总计</span></PanelHeader>
-    <EmptyState v-if="!patches.length" icon="⌁" title="暂无候选补丁" description="发现问题且允许生成补丁后，修复建议会显示在这里。" />
+    <PanelHeader icon="patch" title="候选补丁" subtitle="Candidate Patches"><span class="panel-count">{{ patches.length }} 总计</span></PanelHeader>
+    <EmptyState v-if="!patches.length" icon="patch" title="未生成候选补丁" description="没有满足生成条件的问题，或问题暂时需要人工判断。" />
     <div v-else class="patch-list">
       <article v-for="patch in patches" :key="patch.id" class="patch-item">
         <header><div><strong>{{ patch.title }}</strong><small>{{ patch.id.slice(0, 8) }}</small></div><StatusBadge :status="displayStatus(patch)" /></header>

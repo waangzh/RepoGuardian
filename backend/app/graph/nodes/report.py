@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 
 from app.graph.nodes._events import append_step
 from app.graph.state import ReviewState
@@ -15,21 +16,39 @@ async def report_node(state: ReviewState) -> ReviewState:
     这是审查流程的终点，之后图进入 END 状态。
     """
     logger.info("📝 [报告] 开始从状态重建 ReviewTask 并生成报告...")
-    task = rebuild_task_from_state(state)
+    final_status = _final_status(state)
+    final_phase = ReviewPhase.failed if final_status == "failed" else ReviewPhase.completed
+    updated_at = datetime.now(timezone.utc).isoformat()
+    report_state = ReviewState(**{
+        **state,
+        "status": final_status,
+        "phase": final_phase,
+        "updated_at": updated_at,
+    })
+    task = rebuild_task_from_state(report_state)
     markdown = ReportService().generate(task)
     logger.info("📝 [报告] 报告生成完成（%d 字符 Markdown）", len(markdown))
     return ReviewState(
         report_markdown=markdown,
-        phase=ReviewPhase.publishing,
+        status=final_status,
+        phase=final_phase,
+        updated_at=updated_at,
         step_progress=append_step(state, "report", "completed", "报告已生成"),
     )
 
 
 async def complete_node(state: ReviewState) -> ReviewState:
     """报告发布完成后才将任务标记为 completed。"""
-    if state.get("status") == "failed":
-        return ReviewState(status="failed", phase=ReviewPhase.failed)
+    final_status = _final_status(state)
+    if final_status == "failed":
+        return ReviewState(status=final_status, phase=ReviewPhase.failed)
     return ReviewState(
-        status="completed_with_warnings" if state.get("warnings") else "completed",
+        status=final_status,
         phase=ReviewPhase.completed,
     )
+
+
+def _final_status(state: ReviewState) -> str:
+    if state.get("status") == "failed":
+        return "failed"
+    return "completed_with_warnings" if state.get("warnings") else "completed"

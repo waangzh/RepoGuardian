@@ -1,12 +1,23 @@
 <script setup lang="ts">
-import type { ReviewIssue } from "../types/review";
+import { computed } from "vue";
+import type { ReviewIssue, TaskStatus } from "../types/review";
 import EmptyState from "./common/EmptyState.vue";
 import PanelHeader from "./common/PanelHeader.vue";
 import StatusBadge from "./common/StatusBadge.vue";
 
-defineProps<{
+const props = defineProps<{
   issues: ReviewIssue[];
+  taskStatus?: TaskStatus;
 }>();
+
+const successful = computed(() => ["completed", "completed_with_warnings"].includes(props.taskStatus || ""));
+const ended = computed(() => ["failed", "cancelled"].includes(props.taskStatus || ""));
+const emptyTitle = computed(() => successful.value ? "未发现需报告的问题" : ended.value ? "审查未完整结束" : "正在汇总审查问题");
+const emptyDescription = computed(() => successful.value
+  ? "本次自动审查没有发现达到报告门槛的问题，仍建议由工程师复核关键业务逻辑。"
+  : ended.value
+    ? "任务在形成完整问题结论前停止，请结合任务状态和执行记录处理。"
+    : "候选问题完成证据定位、验证和去重后会显示在这里。");
 
 const severityLabel: Record<string, string> = {
   critical: "Critical",
@@ -33,8 +44,13 @@ const resolutionLabel: Record<string, string> = {
 
 <template>
   <section class="panel issue-panel">
-    <PanelHeader icon="!" title="审查问题" subtitle="Review Issues"><span class="panel-count">{{ issues.length }} 个发现</span></PanelHeader>
-    <EmptyState v-if="issues.length === 0" icon="✓" title="暂无审查问题" description="任务开始后，候选、已确认和等待人工核验的问题会显示在这里。" />
+    <PanelHeader icon="alert" title="审查问题" subtitle="Review Issues"><span class="panel-count">{{ issues.length }} 个发现</span></PanelHeader>
+    <EmptyState
+      v-if="issues.length === 0"
+      :icon="successful ? 'check-circle' : ended ? 'alert' : 'clock'"
+      :title="emptyTitle"
+      :description="emptyDescription"
+    />
     <details
       v-for="issue in issues"
       :key="issue.id"

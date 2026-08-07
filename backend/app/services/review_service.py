@@ -369,6 +369,8 @@ class ReviewService:
             "task_id": task_id,
             "mode": task.mode.value,
             "status": TaskStatus.planning.value,
+            "created_at": task.created_at.isoformat(),
+            "updated_at": task.updated_at.isoformat(),
             "generate_patches": task.generate_patches,
             "validation_backend": task.validation_backend.value,
             "validation_profile": task.validation_profile,

@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from app.agents.providers import LLMProvider
-from app.graph.nodes.report import complete_node
+from app.graph.nodes.report import complete_node, report_node
 from app.graph.nodes.review_units import review_units_node
 from app.models.review import (
     AgentAction,
@@ -223,6 +223,22 @@ async def test_one_unit_failure_does_not_stop_other_units_and_order_is_stable() 
     })
     completed = await complete_node(aggregate)
     assert completed["status"] == "completed_with_warnings"
+
+
+@pytest.mark.asyncio
+async def test_report_uses_final_status_and_original_created_at() -> None:
+    result = await report_node({
+        **_state([]),
+        "status": "verifying_issues",
+        "created_at": "2026-08-07T09:59:38+00:00",
+        "updated_at": "2026-08-07T09:59:40+00:00",
+        "warnings": [],
+    })
+
+    assert result["status"] == "completed"
+    assert result["phase"] == "completed"
+    assert "- 状态：completed" in result["report_markdown"]
+    assert "- 创建时间：2026-08-07T09:59:38+00:00" in result["report_markdown"]
 
 
 @pytest.mark.asyncio

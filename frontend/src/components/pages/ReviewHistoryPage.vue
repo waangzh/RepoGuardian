@@ -94,7 +94,7 @@ onMounted(load);
       <div v-if="loading && tasks.length === 0" class="workspace-loading">正在读取审查记录…</div>
       <EmptyState
         v-else-if="tasks.length === 0"
-        icon="◷"
+        icon="history"
         title="暂无匹配的审查任务"
         description="创建第一条审查任务，或调整当前状态筛选。"
         action-label="发起审查"

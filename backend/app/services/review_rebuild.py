@@ -40,6 +40,7 @@ from app.models.review import (
 
 def rebuild_task_from_state(state: ReviewState) -> ReviewTask:
     """从图执行结束后的 ReviewState 重建完整的 ReviewTask 聚合根。"""
+    now = datetime.now(timezone.utc)
     return ReviewTask(
         id=state.get("task_id", ""),
         status=state.get("status", "completed"),
@@ -82,9 +83,20 @@ def rebuild_task_from_state(state: ReviewState) -> ReviewTask:
         report_markdown=state.get("report_markdown"),
         warnings=list(state.get("warnings") or []),
         error=state.get("error"),
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
+        created_at=_rebuild_datetime(state.get("created_at"), now),
+        updated_at=_rebuild_datetime(state.get("updated_at"), now),
     )
+
+
+def _rebuild_datetime(value: object, default: datetime) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            pass
+    return default
 
 
 def rebuild_pr_info(data: dict) -> PullRequestInfo:

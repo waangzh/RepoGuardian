@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import AppIcon from "./AppIcon.vue";
+
 defineProps<{
   icon?: string;
   title: string;
@@ -14,7 +16,7 @@ defineEmits<{
 
 <template>
   <div class="empty-state">
-    <div class="empty-state__icon" aria-hidden="true">{{ icon || "◇" }}</div>
+    <div class="empty-state__icon"><AppIcon :name="icon || 'info'" :size="20" /></div>
     <strong>{{ title }}</strong>
     <p>{{ description }}</p>
     <button
