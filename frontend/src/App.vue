@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
-import { cancelReview, createReview, getReport, getReview, previewReview, retryReviewUnit, subscribeToEvents } from "./api/client";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { cancelReview, createReview, getAvailableModels, getReport, getReview, previewReview, retryReviewUnit, subscribeToEvents } from "./api/client";
 import ChangedFiles from "./components/ChangedFiles.vue";
 import ContextPanel from "./components/ContextPanel.vue";
 import IssueList from "./components/IssueList.vue";
@@ -18,7 +18,7 @@ import ExecutionTimeline from "./components/review/ExecutionTimeline.vue";
 import ReviewLauncher from "./components/review/ReviewLauncher.vue";
 import ReviewMetrics from "./components/review/ReviewMetrics.vue";
 import ReviewUnitsPanel from "./components/review/ReviewUnitsPanel.vue";
-import type { AppPage } from "./types/operations";
+import type { AppPage, ProviderModelInfo } from "./types/operations";
 import type { ReviewMode, ReviewPreviewResponse, ReviewTask, ValidationBackend } from "./types/review";
 
 type NoticeTone = "info" | "success" | "warning" | "danger";
@@ -32,6 +32,10 @@ interface TaskNotice {
 const activePage = ref<AppPage>("dashboard");
 const prUrl = ref("");
 const model = ref("");
+const models = ref<ProviderModelInfo[]>([]);
+const defaultModel = ref("");
+const modelsLoading = ref(false);
+const modelsError = ref<string | null>(null);
 const mode = ref<ReviewMode>("review");
 const generatePatches = ref(false);
 const validationBackend = ref<ValidationBackend>("none");
@@ -59,6 +63,23 @@ watch(mode, (next) => {
   generatePatches.value = next !== "review";
   validationBackend.value = "none";
 });
+
+async function loadAvailableModels() {
+  modelsLoading.value = true;
+  modelsError.value = null;
+  try {
+    const catalog = await getAvailableModels();
+    models.value = catalog.models;
+    defaultModel.value = catalog.default_model;
+  } catch {
+    models.value = [];
+    modelsError.value = "模型列表加载失败，将使用后端默认模型";
+  } finally {
+    modelsLoading.value = false;
+  }
+}
+
+onMounted(() => void loadAvailableModels());
 
 const statusText = computed(() => {
   if (!task.value) return "等待输入";
@@ -396,6 +417,10 @@ onBeforeUnmount(() => {
         :cancelling="cancelling"
         :error="error"
         :preview="preview"
+        :models="models"
+        :default-model="defaultModel"
+        :models-loading="modelsLoading"
+        :models-error="modelsError"
         @preview="loadPreview"
         @submit="submitReview"
         @cancel="cancelCurrentReview"

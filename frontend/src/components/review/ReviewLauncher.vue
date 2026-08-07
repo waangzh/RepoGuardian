@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import type { ProviderModelInfo } from "../../types/operations";
 import type { ReviewMode, ReviewPreviewResponse, ValidationBackend } from "../../types/review";
 import AppIcon from "../common/AppIcon.vue";
 
@@ -15,6 +16,10 @@ const props = defineProps<{
   cancelling: boolean;
   error: string | null;
   preview: ReviewPreviewResponse | null;
+  models: ProviderModelInfo[];
+  defaultModel: string;
+  modelsLoading: boolean;
+  modelsError: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -53,7 +58,17 @@ const backendModel = computed({ get: () => props.validationBackend, set: (value)
 
       <label class="field">
         <span>模型 / Model</span>
-        <input v-model="modelModel" type="text" placeholder="使用后端默认模型" :disabled="active" />
+        <select v-model="modelModel" :disabled="active || modelsLoading" aria-describedby="model-help">
+          <option value="">
+            {{ modelsLoading ? "正在查询可用模型…" : defaultModel ? `后端默认：${defaultModel}` : "使用后端默认模型" }}
+          </option>
+          <option v-for="item in models" :key="item.id" :value="item.id">
+            {{ item.id }}{{ item.owned_by ? ` · ${item.owned_by}` : "" }}
+          </option>
+        </select>
+        <small id="model-help" :class="{ 'field-help--error': modelsError }">
+          {{ modelsError || (models.length ? `已查询到 ${models.length} 个可用模型，可手动选择` : "将使用后端配置的默认模型") }}
+        </small>
       </label>
 
       <label class="field">
