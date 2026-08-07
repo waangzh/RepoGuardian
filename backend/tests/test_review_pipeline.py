@@ -292,7 +292,7 @@ index 1111111..2222222 100644
     assert completed.validation_snapshots == []
     assert completed.validation[-1].status == "unsupported"
     assert completed.validation[-1].trusted is True
-    assert "## 6. 三阶段验证" in completed.report_markdown
+    assert "## 验证结果" in completed.report_markdown
 
 
 @pytest.mark.asyncio

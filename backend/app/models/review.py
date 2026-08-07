@@ -499,6 +499,7 @@ class PullRequestInfo(BaseModel):
     repo: str
     number: int
     title: str
+    body: str | None = Field(default=None, max_length=65_536)
     html_url: str
     clone_url: str
     base: PullRequestRef
