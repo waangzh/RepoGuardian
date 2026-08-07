@@ -31,6 +31,21 @@ class ValidationProfilesResponse(BaseModel):
     profiles: list[str]
 
 
+class ProviderModelInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    owned_by: str | None = None
+
+
+class ModelCatalogResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str
+    default_model: str
+    models: list[ProviderModelInfo]
+
+
 class VersionDiagnostics(BaseModel):
     config: str
     prompt: str

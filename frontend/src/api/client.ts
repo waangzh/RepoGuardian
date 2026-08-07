@@ -7,6 +7,7 @@ import type {
   ValidationBackend,
 } from "../types/review";
 import type {
+  ModelCatalogResponse,
   ReviewTaskListResponse,
   SystemDiagnostics,
   ValidationBackendInfo,
@@ -88,6 +89,10 @@ export async function getValidationBackends(): Promise<ValidationBackendInfo[]> 
 
 export async function getSystemDiagnostics(): Promise<SystemDiagnostics> {
   return request<SystemDiagnostics>("/api/system/diagnostics");
+}
+
+export async function getAvailableModels(): Promise<ModelCatalogResponse> {
+  return request<ModelCatalogResponse>("/api/system/models");
 }
 
 export async function retryReviewUnit(

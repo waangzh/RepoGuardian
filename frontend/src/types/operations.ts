@@ -52,3 +52,14 @@ export interface SystemDiagnostics {
   configured_secrets: Record<string, boolean>;
   versions: VersionDiagnostics;
 }
+
+export interface ProviderModelInfo {
+  id: string;
+  owned_by?: string | null;
+}
+
+export interface ModelCatalogResponse {
+  provider: string;
+  default_model: string;
+  models: ProviderModelInfo[];
+}

@@ -3,16 +3,34 @@
 import os
 from importlib.metadata import PackageNotFoundError, version
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 
 from app.api.reviews import get_review_service
 from app.api.validation_backends import discover_validation_backends
 from app.core.config import settings
 from app.core.database import schema_is_current
-from app.models.operations import SystemDiagnostics, VersionDiagnostics
+from app.models.operations import ModelCatalogResponse, SystemDiagnostics, VersionDiagnostics
+from app.services.model_catalog import ModelCatalogError, fetch_model_catalog
 
 
 router = APIRouter(prefix="/system", tags=["system"])
+
+
+@router.get("/models", response_model=ModelCatalogResponse)
+async def get_available_models() -> ModelCatalogResponse:
+    """使用后端配置的凭证查询当前 Provider 实际开放的模型。"""
+    try:
+        return await fetch_model_catalog(
+            provider=settings.repoguardian_provider,
+            api_key=settings.openai_api_key,
+            base_url=settings.openai_base_url,
+            default_model=settings.repoguardian_model,
+        )
+    except ModelCatalogError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
 
 
 @router.get("/diagnostics", response_model=SystemDiagnostics)
