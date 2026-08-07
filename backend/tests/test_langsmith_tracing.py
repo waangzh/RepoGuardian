@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from app.models.review import ReviewTask
+from app.models.review import ReviewTask, StepStatus
 from app.services import review_service
 from app.services.report_service import ReportService
 from app.services.review_service import ReviewService
@@ -16,6 +16,53 @@ class FakeCompiledGraph:
     async def ainvoke(self, state: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
         self.calls.append((state, config))
         return {}
+
+
+class FakeStreamingCompiledGraph(FakeCompiledGraph):
+    def __init__(self) -> None:
+        super().__init__()
+        self.stream_options: dict[str, Any] = {}
+
+    async def astream(
+        self,
+        state: dict[str, Any],
+        config: dict[str, Any],
+        **kwargs: Any,
+    ):
+        self.calls.append((state, config))
+        self.stream_options = kwargs
+        yield {
+            "type": "debug",
+            "ns": (),
+            "data": {
+                "type": "task",
+                "timestamp": "2026-08-07T10:00:00+00:00",
+                "payload": {"id": "node-1", "name": "intake", "input": state},
+            },
+        }
+        yield {
+            "type": "debug",
+            "ns": (),
+            "data": {
+                "type": "task_result",
+                "timestamp": "2026-08-07T10:00:01+00:00",
+                "payload": {
+                    "id": "node-1",
+                    "name": "intake",
+                    "error": None,
+                    "result": {
+                        "step_progress": [
+                            {
+                                "node": "intake",
+                                "status": "completed",
+                                "message": "已接收 PR URL",
+                            }
+                        ]
+                    },
+                },
+            },
+        }
+        yield {"type": "values", "ns": (), "data": {}}
 
 
 class FakeGraph:
@@ -88,6 +135,53 @@ async def test_langsmith_disabled_does_not_block_graph_execution(
     assert "callbacks" not in compiled.calls[0][1]
     assert fake_tracing == [{"enabled": False}]
     assert FakeClient.instances == []
+
+
+@pytest.mark.asyncio
+async def test_graph_stream_persists_running_and_completed_node_progress(
+    fake_tracing: list[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compiled = FakeStreamingCompiledGraph()
+    monkeypatch.setattr(review_service, "build_review_graph", lambda phase: FakeGraph(compiled))
+    monkeypatch.setattr(review_service.settings, "repoguardian_langsmith_tracing", False)
+    service = ReviewService(
+        github_tool=object(),  # type: ignore[arg-type]
+        git_tool=object(),  # type: ignore[arg-type]
+        diff_parser=object(),  # type: ignore[arg-type]
+        provider=object(),  # type: ignore[arg-type]
+        report_service=ReportService(),
+    )
+    task = ReviewTask(id="task-stream", pr_url="https://example.test/pull/1")
+    service._tasks[task.id] = task
+    snapshots: list[ReviewTask] = []
+    original_persist = service._persist
+
+    def record_persist(current: ReviewTask) -> None:
+        snapshots.append(current.model_copy(deep=True))
+        original_persist(current)
+
+    monkeypatch.setattr(service, "_persist", record_persist)
+    monkeypatch.setattr(service, "_sync_result_to_task", lambda task, result: None)
+
+    await service._run_graph(task.id)
+
+    assert any(
+        snapshot.steps and snapshot.steps[-1].status == StepStatus.running
+        for snapshot in snapshots
+    )
+    assert any(
+        snapshot.steps
+        and snapshot.steps[-1].status == StepStatus.completed
+        and snapshot.steps[-1].message == "已接收 PR URL"
+        for snapshot in snapshots
+    )
+    assert compiled.stream_options == {
+        "stream_mode": ["debug", "values"],
+        "subgraphs": True,
+        "version": "v2",
+    }
+    assert fake_tracing == [{"enabled": False}]
 
 
 @pytest.mark.asyncio

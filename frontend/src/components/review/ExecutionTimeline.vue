@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { AgentEvent, ReviewMode, TaskStatus, TaskStep, TestRunResult } from "../../types/review";
+import type { AgentEvent, TaskStatus, TaskStep, TestRunResult } from "../../types/review";
 import PanelHeader from "../common/PanelHeader.vue";
 import StatusBadge from "../common/StatusBadge.vue";
 
 const props = defineProps<{
   steps: TaskStep[];
   taskStatus?: TaskStatus;
-  mode: ReviewMode;
   events: AgentEvent[];
   staticResults: TestRunResult[];
   testResults: TestRunResult[];
@@ -17,33 +16,31 @@ interface FlowItem {
   title: string;
   description: string;
   aliases: string[];
-  optional?: "patch" | "validation";
 }
 
 const flow: FlowItem[] = [
-  { title: "获取 PR", description: "拉取元数据与目标分支", aliases: ["intake", "repo_prepare"] },
-  { title: "解析 Diff", description: "解析变更并建立仓库索引", aliases: ["diff_parse", "repo_index"] },
+  { title: "获取 PR", description: "拉取元数据与目标分支", aliases: ["queued", "intake", "repo_prepare"] },
+  { title: "解析 Diff", description: "解析变更、建立索引并识别项目", aliases: ["diff_parse", "repo_index", "project_detection"] },
   { title: "规划审查单元", description: "按文件、符号和风险拆分", aliases: ["review_plan"] },
   { title: "Unit 并发审查", description: "独立分析各审查单元", aliases: ["review_units"] },
   { title: "证据解析", description: "定位问题证据与代码上下文", aliases: ["resolve_evidence"] },
   { title: "问题验证", description: "核验问题有效性与影响范围", aliases: ["issue_policy", "issue_verifier"] },
   { title: "问题去重", description: "合并重复发现并统一结论", aliases: ["issue_deduplication"] },
-  { title: "生成候选补丁", description: "为符合条件的问题生成修复", aliases: ["repair_policy", "generate_patch", "candidate_check"], optional: "patch" },
-  { title: "补丁验证", description: "使用受控后端验证候选补丁", aliases: ["optional_validation"], optional: "validation" },
+  { title: "固化验证结论", description: "固化 Head 基线与自动修复边界", aliases: ["verification"] },
+  { title: "评估修复策略", description: "判断问题是否满足候选修复条件", aliases: ["repair_policy"] },
+  { title: "生成候选补丁", description: "为符合条件的问题生成修复", aliases: ["generate_patch", "patch_generate", "candidate_check", "mark_unverified", "patch_finalize"] },
+  { title: "补丁验证", description: "使用受控后端验证候选补丁", aliases: ["validation", "optional_validation", "patched_validation", "repair_assessment", "repair_accept", "repair_abandon"] },
   { title: "生成报告", description: "汇总结论与 Markdown 报告", aliases: ["report", "complete"] },
 ];
 
-const terminal = computed(() => ["completed", "completed_with_warnings", "failed", "cancelled"].includes(props.taskStatus || ""));
-
-const items = computed(() => flow.map((item) => {
+const items = computed(() => flow.flatMap((item) => {
   const matches = props.steps.filter((step) => item.aliases.some((alias) => step.name.toLowerCase().includes(alias)));
+  if (!matches.length) return [];
   let status = "pending";
   if (matches.some((step) => step.status === "failed")) status = "failed";
   else if (matches.some((step) => step.status === "running")) status = "running";
   else if (matches.length && matches.every((step) => step.status === "completed")) status = "completed";
-  else if (!matches.length && terminal.value && item.optional === "patch" && props.mode === "review") status = "skipped";
-  else if (!matches.length && terminal.value && item.optional === "validation" && props.mode !== "review_suggest_and_validate") status = "skipped";
-  return { ...item, status };
+  return [{ ...item, status }];
 }));
 </script>
 

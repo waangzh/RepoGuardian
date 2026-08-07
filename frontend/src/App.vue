@@ -435,7 +435,7 @@ onBeforeUnmount(() => {
           <ReviewMetrics :task="task" />
 
           <section v-if="taskActive" class="review-workbench">
-            <ExecutionTimeline :steps="task.steps || []" :task-status="task.status" :mode="task.mode" :events="task.agent_events || []" :static-results="task.static_results || []" :test-results="task.test_results || []" />
+            <ExecutionTimeline :steps="task.steps || []" :task-status="task.status" :events="task.agent_events || []" :static-results="task.static_results || []" :test-results="task.test_results || []" />
             <div class="review-workbench__support">
               <ChangedFiles :files="task.changed_files || []" />
               <ReviewUnitsPanel :units="task.review_units || []" :results="task.review_unit_results || []" :task-status="task.status" :retrying-unit-id="retryingUnitId" @retry="retryUnit" />
@@ -448,7 +448,7 @@ onBeforeUnmount(() => {
                 <IssueList :issues="task.issues || []" :task-status="task.status" />
                 <ReportPanel v-if="report || task.report_markdown" :markdown="report || task.report_markdown" />
               </div>
-              <ExecutionTimeline :steps="task.steps || []" :task-status="task.status" :mode="task.mode" :events="task.agent_events || []" :static-results="task.static_results || []" :test-results="task.test_results || []" />
+              <ExecutionTimeline :steps="task.steps || []" :task-status="task.status" :events="task.agent_events || []" :static-results="task.static_results || []" :test-results="task.test_results || []" />
             </section>
 
             <section class="review-support-grid">
