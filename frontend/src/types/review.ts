@@ -69,6 +69,7 @@ export interface PullRequestInfo {
   repo: string;
   number: number;
   title: string;
+  body?: string | null;
   html_url: string;
   clone_url: string;
   base: PullRequestRef;
