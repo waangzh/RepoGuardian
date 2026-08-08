@@ -104,6 +104,18 @@ class Settings(BaseSettings):
         Path(__file__).resolve().parent.parent.parent / ".repoguardian" / "artifacts"
     )
     repoguardian_retention_days: int = Field(default=30, ge=1, le=3650)
+    repoguardian_maintenance_interval_seconds: int = Field(
+        default=3_600, ge=60, le=86_400
+    )
+    repoguardian_orphan_workspace_ttl_seconds: int = Field(
+        default=604_800, ge=3_600, le=31_536_000
+    )
+    repoguardian_checkpoint_vacuum_min_bytes: int = Field(
+        default=64 * 1024 * 1024, ge=0
+    )
+    repoguardian_checkpoint_vacuum_min_ratio: float = Field(
+        default=0.2, ge=0.0, le=1.0
+    )
 
     # ---- 可复用结论版本 ----
     repoguardian_config_version: str = "6A-v1"

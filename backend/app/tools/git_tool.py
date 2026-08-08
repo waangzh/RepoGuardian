@@ -10,6 +10,7 @@ from app.review.tool_scope import (
     list_git_tracked_files,
     validate_repository_file,
 )
+from app.tools.workspace_cleanup import cleanup_workspace
 
 
 class GitToolError(RuntimeError):
@@ -73,19 +74,22 @@ class GitTool:
         """
         self._workdir.mkdir(parents=True, exist_ok=True)
         repo_dir = self._workdir / f"{pr.owner}-{pr.repo}-{pr.number}-{uuid4().hex[:8]}"
-
-        # 浅克隆（不带 checkout，节省时间）
-        self._run([self._git, "clone", "--no-checkout", pr.clone_url, str(repo_dir)])
-        # 分别 fetch base 和 head 的 SHA
-        self._fetch_ref(repo_dir, "origin", pr.base.sha, pr.base.ref)
-        self._fetch_ref(repo_dir, pr.head.repo_clone_url, pr.head.sha, pr.head.ref)
-        # 生成 unified diff（上下文 80 行，足够 LLM 理解）
-        diff = self._run(
-            [self._git, "-C", str(repo_dir), "diff", "--unified=80", pr.base.sha, "FETCH_HEAD"]
-        )
-        # 检出 head 到工作树（后续静态分析/测试需要）
-        self._run([self._git, "-C", str(repo_dir), "checkout", "--detach", "FETCH_HEAD"])
-        return repo_dir, diff
+        try:
+            # 浅克隆（不带 checkout，节省时间）
+            self._run([self._git, "clone", "--no-checkout", pr.clone_url, str(repo_dir)])
+            # 分别 fetch base 和 head 的 SHA
+            self._fetch_ref(repo_dir, "origin", pr.base.sha, pr.base.ref)
+            self._fetch_ref(repo_dir, pr.head.repo_clone_url, pr.head.sha, pr.head.ref)
+            # 生成 unified diff（上下文 80 行，足够 LLM 理解）
+            diff = self._run(
+                [self._git, "-C", str(repo_dir), "diff", "--unified=80", pr.base.sha, "FETCH_HEAD"]
+            )
+            # 检出 head 到工作树（后续静态分析/测试需要）
+            self._run([self._git, "-C", str(repo_dir), "checkout", "--detach", "FETCH_HEAD"])
+            return repo_dir, diff
+        except BaseException:
+            cleanup_workspace(repo_dir, workdir=self._workdir)
+            raise
 
     def checkout_sha(self, repo_path: str | Path, sha: str) -> None:
         """在任务临时 clone 中切换到已 fetch 的确定 SHA。"""

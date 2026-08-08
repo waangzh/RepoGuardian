@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import sys
 from contextlib import asynccontextmanager
@@ -11,12 +12,19 @@ from app.api.project_ci import router as project_ci_router
 from app.api.validation_backends import router as validation_backends_router
 from app.api.system import router as system_router
 from app.graph.checkpointer import close_checkpointer
+from app.services.maintenance_service import MaintenanceService
 from app.validation.project_ci import get_project_ci_service
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     service = get_review_service()
+    maintenance = MaintenanceService(
+        service._repository,
+        active_workspace_paths=lambda: tuple(service._repo_paths.values()),
+    )
+    await maintenance.run_once()
+    maintenance_task = asyncio.create_task(maintenance.run_forever())
     service._ensure_worker_started()
     project_ci = get_project_ci_service()
     if project_ci is not None:
@@ -24,6 +32,8 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        maintenance.stop()
+        await maintenance_task
         if project_ci is not None:
             await project_ci.close()
         if service._worker:
