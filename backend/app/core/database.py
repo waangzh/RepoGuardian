@@ -53,4 +53,4 @@ def schema_is_current() -> bool:
 async def init_db() -> None:
     """兼容旧入口：仅验证 migration，不自动建表。"""
     if not schema_is_current():
-        raise RuntimeError("database is not migrated; run `alembic upgrade head`")
+        raise RuntimeError("database is not migrated; run `uv run alembic upgrade head`")

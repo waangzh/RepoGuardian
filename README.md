@@ -63,10 +63,11 @@ RepoGuardian 接收一个 GitHub PR URL，在隔离的任务临时目录中准�
 ### 环境要求
 
 - Git
-- Conda
-- Python 3.11+（`environment.yml` 固定为 Python 3.12）
+- uv
 - Node.js 18+ 与 npm
 - 一个 OpenAI 或 OpenAI 兼容服务的 API Key
+
+RepoGuardian 后端默认使用 Python 3.12。uv 可以自动准备所需 Python 和项目虚拟环境。
 
 以下命令以 PowerShell 为例。
 
@@ -75,15 +76,9 @@ RepoGuardian 接收一个 GitHub PR URL，在隔离的任务临时目录中准�
 ```powershell
 git clone https://github.com/waangzh/RepoGuardian.git
 cd RepoGuardian
-conda env create -f environment.yml
-conda activate repoguardian
 Copy-Item .env.example backend\.env
-```
-
-如果 Conda 环境已经存在，可单独安装或更新后端依赖：
-
-```powershell
-python -m pip install -e .\backend[test]
+cd backend
+uv sync --extra test
 ```
 
 编辑 `backend/.env`，至少配置模型服务：
@@ -98,9 +93,8 @@ REPOGUARDIAN_MODEL=gpt-4.1-mini
 初始化数据库并启动 API：
 
 ```powershell
-cd backend
-alembic upgrade head
-uvicorn app.main:app --reload
+uv run alembic upgrade head
+uv run uvicorn app.main:app --reload
 ```
 
 后端默认地址为 <http://127.0.0.1:8000>：
@@ -110,7 +104,7 @@ uvicorn app.main:app --reload
 - OpenAPI JSON：<http://127.0.0.1:8000/openapi.json>
 
 > [!NOTE]
-> 数据库表只通过 Alembic migration 创建。未执行 `alembic upgrade head` 时，服务会明确拒绝启动，而不会自动建表。
+> 数据库表只通过 Alembic migration 创建。未执行 `uv run alembic upgrade head` 时，服务会明确拒绝启动，而不会自动建表。
 
 ### 2. 启动前端
 
@@ -288,6 +282,11 @@ REPOGUARDIAN_MODEL=your-model-name
 ```text
 RepoGuardian/
 ├── backend/
+│   ├── .python-version    # uv 使用的默认 Python 版本
+│   ├── .venv/             # 本地虚拟环境，不提交
+│   ├── uv.lock            # 后端依赖锁文件
+│   ├── pyproject.toml     # 后端项目与依赖声明
+│   ├── alembic.ini
 │   ├── alembic/          # 数据库 migration
 │   ├── app/
 │   │   ├── api/          # FastAPI 路由、SSE 与验证协议
@@ -307,8 +306,7 @@ RepoGuardian/
 │       ├── components/   # 任务、Issue、Patch、验证和报告组件
 │       └── types/        # 与后端响应同步的 TypeScript 类型
 ├── docs/                 # 验证协议与设计文档
-├── .env.example
-└── environment.yml
+└── .env.example
 ```
 
 ## 开发与验证
@@ -316,16 +314,23 @@ RepoGuardian/
 后端完整测试：
 
 ```powershell
-conda activate repoguardian
 cd backend
-pytest
+uv run pytest
 ```
 
 后端单文件测试：
 
 ```powershell
 cd backend
-pytest tests/test_provider.py -v
+uv run pytest tests/test_provider.py -v
+```
+
+后端代码检查与自动修复：
+
+```powershell
+cd backend
+uv run ruff check .
+uv run ruff check . --fix
 ```
 
 前端构建检查：
