@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import shutil
 from contextlib import AbstractContextManager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,7 +13,11 @@ from langsmith import Client, tracing_context
 from app.agents.providers import LLMProvider
 from app.core.config import settings
 from app.graph.builder import build_review_graph
-from app.graph.checkpointer import get_checkpointer, review_thread_config
+from app.graph.checkpointer import (
+    delete_thread_checkpoints,
+    get_checkpointer,
+    review_thread_config,
+)
 from app.graph.nodes.issue_validation import issue_policy_node, issue_verifier_node
 from app.graph.nodes.resolve_evidence import resolve_evidence_node
 from app.graph.state import ReviewState
@@ -54,6 +57,7 @@ from app.tools.diff_parser import DiffParser
 from app.tools.git_tool import GitTool
 from app.tools.github_tool import GitHubTool
 from app.tools.repo_indexer import RepoIndexer
+from app.tools.workspace_cleanup import cleanup_workspace
 from app.tools.command_runner import CommandExecutor
 from app.validation.selector import ValidationBackendSelector
 
@@ -351,7 +355,7 @@ class ReviewService:
                 warnings=plan.warnings,
             )
         finally:
-            _cleanup_repo(Path(repo_path))
+            await _cleanup_repo(Path(repo_path))
 
     async def _handle_job(self, job: ClaimedJob) -> None:
         if job.kind == "review":
@@ -502,7 +506,21 @@ class ReviewService:
                 else self._repo_paths.get(task_id)
             )
             if repo_path is not None and task.status != TaskStatus.waiting_for_human:
-                _cleanup_repo(repo_path)
+                await _cleanup_repo(repo_path)
+            if self._repository and task.status in {
+                TaskStatus.completed,
+                TaskStatus.completed_with_warnings,
+                TaskStatus.failed,
+                TaskStatus.cancelled,
+            }:
+                try:
+                    await delete_thread_checkpoints(task_id)
+                except Exception:
+                    logger.warning(
+                        "任务 %s 的 checkpoint 清理失败，将由后台维护重试",
+                        task_id[:8],
+                        exc_info=True,
+                    )
             self._repo_paths.pop(task_id, None)
             self._run_tasks.pop(task_id, None)
 
@@ -770,7 +788,7 @@ class ReviewService:
                 self._touch(task)
                 raise
             finally:
-                _cleanup_repo(Path(repo_path))
+                await _cleanup_repo(Path(repo_path))
 
             previous = {item.review_unit_id: item for item in task.review_unit_results}
             previous[unit_id] = result
@@ -856,13 +874,9 @@ class ReviewService:
         return detail, replay
 
 
-def _cleanup_repo(repo_path: Path) -> None:
+async def _cleanup_repo(repo_path: Path) -> bool:
     """清理克隆的临时仓库目录。"""
-    logger.info("🧹 清理临时仓库: %s", repo_path)
-    try:
-        shutil.rmtree(repo_path, ignore_errors=True)
-    except Exception:
-        pass
+    return await asyncio.to_thread(cleanup_workspace, repo_path)
 
 
 def _extract_interrupt_payload(result: Any) -> dict[str, Any] | None:

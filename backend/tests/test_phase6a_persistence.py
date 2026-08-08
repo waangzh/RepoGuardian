@@ -27,6 +27,7 @@ from app.models.review import (
     HumanReviewRequest,
     PatchProposal,
     ReviewTask,
+    TaskStatus,
     ReviewUnit,
     ReviewUnitComplexity,
     ReviewUnitResult,
@@ -371,6 +372,10 @@ def test_retention_prevents_early_delete(persistence) -> None:
     repository, _, sessions = persistence
     task = _task()
     repository.create_task(task)
+    with pytest.raises(ValueError, match="terminal"):
+        repository.delete_task_if_retention_elapsed(task.id)
+    task.status = TaskStatus.completed
+    repository.save_task(task)
     with pytest.raises(ValueError, match="retention"):
         repository.delete_task_if_retention_elapsed(task.id)
     with sessions.begin() as session:
