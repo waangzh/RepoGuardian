@@ -6,7 +6,7 @@ import json
 import hashlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 from uuid import uuid4
 
 from sqlalchemy import delete, func, select, update
@@ -141,6 +141,9 @@ class ReviewRepository:
                 row.head_sha = task.pr.head.sha
             if task.status.value in TERMINAL_TASK_STATUSES and row.completed_at is None:
                 row.completed_at = now
+                row.retention_until = now + timedelta(
+                    days=settings.repoguardian_retention_days
+                )
             if task.status == TaskStatus.cancelled:
                 row.cancelled_at = row.cancelled_at or now
             self._record_artifact(session, task.id, "task-snapshot", snapshot_uri)
@@ -528,6 +531,10 @@ class ReviewRepository:
                         else TaskStatus.failed.value
                     )
                     task.error_summary = "human request timed out"
+                    task.completed_at = task.completed_at or now
+                    task.retention_until = task.completed_at + timedelta(
+                        days=settings.repoguardian_retention_days
+                    )
                     task.updated_at = now
             return len(rows)
 
@@ -541,6 +548,7 @@ class ReviewRepository:
             task.current_phase = "failed"
             task.cancelled_at = now
             task.completed_at = now
+            task.retention_until = now + timedelta(days=settings.repoguardian_retention_days)
             task.updated_at = now
             session.execute(update(WorkerJobOrm).where(
                 WorkerJobOrm.task_id == task_id,
@@ -560,6 +568,10 @@ class ReviewRepository:
             task = session.get(ReviewTaskOrm, task_id)
             if task is None:
                 return False
+            if task.deleted_at is not None:
+                return True
+            if task.status not in TERMINAL_TASK_STATUSES:
+                raise ValueError("only terminal tasks can be deleted")
             if _as_utc(task.retention_until) > now:
                 raise ValueError("task retention period has not elapsed")
             task.deleted_at = now
@@ -572,6 +584,37 @@ class ReviewRepository:
                 ArtifactOrm.deleted_at.is_(None),
             ).values(deleted_at=now))
             return True
+
+    def list_checkpoint_gc_thread_ids(self, thread_ids: Iterable[str]) -> list[str]:
+        """列出已不再需要图恢复能力的终态任务 thread。"""
+        candidates = list(dict.fromkeys(thread_ids))
+        if not candidates:
+            return []
+        eligible: list[str] = []
+        with self._session_factory() as session:
+            for offset in range(0, len(candidates), 500):
+                batch = candidates[offset : offset + 500]
+                eligible.extend(session.scalars(
+                    select(ReviewTaskOrm.thread_id).where(
+                        ReviewTaskOrm.thread_id.in_(batch),
+                        ReviewTaskOrm.status.in_([*TERMINAL_TASK_STATUSES, "deleted"]),
+                    )
+                ))
+        return eligible
+
+    def list_expired_task_ids(
+        self, *, now: datetime | None = None, limit: int = 1_000
+    ) -> list[str]:
+        """列出保留期已结束、可执行软删除的终态任务。"""
+        now = now or utcnow()
+        with self._session_factory() as session:
+            return list(session.scalars(
+                select(ReviewTaskOrm.id).where(
+                    ReviewTaskOrm.deleted_at.is_(None),
+                    ReviewTaskOrm.status.in_(TERMINAL_TASK_STATUSES),
+                    ReviewTaskOrm.retention_until <= now,
+                ).limit(limit)
+            ))
 
     def begin_side_effect(
         self, *, task_id: str, effect_type: str, target: str, payload: dict[str, Any]
