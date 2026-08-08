@@ -76,7 +76,7 @@ class ReviewRepository:
         self._artifacts = artifact_store or LocalArtifactStore()
         if require_migration and not schema_is_current():
             raise DatabaseNotMigratedError(
-                "database is not migrated; run `cd backend; alembic upgrade head`"
+                "database is not migrated; run `cd backend; uv run alembic upgrade head`"
             )
 
     def create_task(self, task: ReviewTask) -> ReviewTask:

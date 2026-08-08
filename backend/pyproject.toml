@@ -2,7 +2,7 @@
 name = "repo-guardian-backend"
 version = "0.1.0"
 description = "RepoGuardian basic pull request review backend"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",
     "httpx>=0.27.0",
@@ -38,6 +38,9 @@ addopts = "--basetemp=.pytest_tmp"
 
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
