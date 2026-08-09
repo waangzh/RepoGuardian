@@ -3,6 +3,7 @@ import type {
   ReviewMode,
   ReviewPreviewResponse,
   ReviewTask,
+  TaskStepProgress,
   ReviewUnitResult,
   ValidationBackend,
 } from "../types/review";
@@ -132,7 +133,14 @@ export async function getReport(taskId: string): Promise<string> {
 export function subscribeToEvents(
   taskId: string,
   callbacks: {
-    onStepProgress?: (data: { node: string; status: string; message?: string }) => void;
+    onStepProgress?: (data: {
+      node: string;
+      status: string;
+      message?: string;
+      progress?: TaskStepProgress | null;
+      started_at?: string | null;
+      updated_at?: string | null;
+    }) => void;
     onPatchUpdate?: (data: { id: string; status: string; warning?: string | null }) => void;
     onDone?: (data: { status: string }) => void;
     onError?: (data: { message: string }) => void;
