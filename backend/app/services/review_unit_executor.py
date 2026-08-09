@@ -48,7 +48,8 @@ class _ReviewUnitGraphState(TypedDict, total=False):
     pending_issues: list[ReviewIssue]
     messages: list[AgentEvent]
     tool_events: list[ReviewUnitToolEvent]
-    retrieval_fingerprints: list[str]
+    retrieval_history: list[dict[str, Any]]
+    retrieval_no_new_rounds: int
     issue_round_completed: bool
     legacy_review_action: bool
     next_action: AgentAction | None
@@ -167,7 +168,8 @@ class ReviewUnitExecutor:
             "issues": [],
             "messages": [],
             "tool_events": [],
-            "retrieval_fingerprints": [],
+            "retrieval_history": [],
+            "retrieval_no_new_rounds": 0,
             "issue_round_completed": False,
             "legacy_review_action": False,
             "done": False,
@@ -289,7 +291,8 @@ class ReviewUnitExecutor:
             "unit_agent": True,
             "reported_issue_count": len(state["issues"]),
             "issue_round_completed": state["issue_round_completed"],
-            "retrieval_history": list(state["retrieval_fingerprints"]),
+            "retrieval_history": list(state["retrieval_history"]),
+            "retrieval_no_new_rounds": state["retrieval_no_new_rounds"],
         })
         action = await self.provider.decide(decision_state, state["parent_state"].get("model"))
         legacy_review = action.action == AgentActionName.review_code
@@ -325,6 +328,7 @@ class ReviewUnitExecutor:
         action = state["next_action"]
         budget = state["budget"]
         events = list(state["tool_events"])
+        history = list(state["retrieval_history"])
         if not budget.can_consume(context_retrievals=1):
             events.append(ReviewUnitToolEvent(
                 review_unit_id=state["unit"].id,
@@ -335,14 +339,25 @@ class ReviewUnitExecutor:
             return {"next_action": None, "tool_events": events}
         plan = ContextRetrievalPlan.model_validate(action.tool_args["plan"])
         fingerprint = plan.model_dump_json()
-        if fingerprint in state["retrieval_fingerprints"]:
+        if any(item.get("plan") == fingerprint for item in history):
             events.append(ReviewUnitToolEvent(
                 review_unit_id=state["unit"].id,
                 tool="code_search",
                 status="rejected",
                 detail="duplicate retrieval plan",
             ))
-            return {"next_action": None, "tool_events": events}
+            history.append({
+                "plan": fingerprint,
+                "result_count": 0,
+                "new_snippet_count": 0,
+                "status": "rejected",
+            })
+            return {
+                "next_action": None,
+                "retrieval_history": history,
+                "retrieval_no_new_rounds": state["retrieval_no_new_rounds"] + 1,
+                "tool_events": events,
+            }
         budget = budget.consume(context_retrievals=1)
         try:
             snippets = await CodeSearchTool().retrieve_context(
@@ -367,11 +382,24 @@ class ReviewUnitExecutor:
                 status="completed",
                 result_count=len(new_items),
             ))
+            history.append({
+                "plan": fingerprint,
+                "result_count": len(snippets),
+                "new_snippet_count": len(new_items),
+                "truncated_count": sum(
+                    1 for item in snippets
+                    if item.get("content", "").endswith("...(truncated)")
+                ),
+                "status": "completed",
+            })
             return {
                 "next_action": None,
                 "budget": budget,
                 "context": [*state["context"], *new_items],
-                "retrieval_fingerprints": [*state["retrieval_fingerprints"], fingerprint],
+                "retrieval_history": history,
+                "retrieval_no_new_rounds": (
+                    0 if new_items else state["retrieval_no_new_rounds"] + 1
+                ),
                 "tool_events": events,
             }
         except ValueError as exc:
@@ -381,10 +409,17 @@ class ReviewUnitExecutor:
                 status="rejected",
                 detail=str(exc),
             ))
+            history.append({
+                "plan": fingerprint,
+                "result_count": 0,
+                "new_snippet_count": 0,
+                "status": "rejected",
+            })
             return {
                 "next_action": None,
                 "budget": budget,
-                "retrieval_fingerprints": [*state["retrieval_fingerprints"], fingerprint],
+                "retrieval_history": history,
+                "retrieval_no_new_rounds": state["retrieval_no_new_rounds"] + 1,
                 "tool_events": events,
             }
 

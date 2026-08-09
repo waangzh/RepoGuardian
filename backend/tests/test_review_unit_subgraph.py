@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from app.agents.providers import LLMProvider
+from app.agents.providers import LLMProvider, OpenAICompatibleProvider
 from app.models.review import (
     AgentAction,
     ChangedFile,
@@ -21,6 +21,7 @@ from app.services.review_unit_executor import ReviewUnitExecutor
 
 class MultiRoundProvider(LLMProvider):
     def __init__(self) -> None:
+        self.decision_states: list[dict[str, Any]] = []
         self.actions = [
             AgentAction.model_validate({
                 "action": "retrieve_context",
@@ -47,6 +48,8 @@ class MultiRoundProvider(LLMProvider):
         ]
 
     async def decide(self, state: dict[str, Any], model: str | None) -> AgentAction:
+        self.decision_states.append(state)
+        OpenAICompatibleProvider._build_decision_prompt(state)
         return self.actions.pop(0)
 
     async def review(
@@ -133,7 +136,8 @@ async def test_per_unit_langgraph_supports_bounded_read_rounds_and_explicit_done
         base=PullRequestRef(ref="main", sha="base", repo_clone_url="https://example.test/repo.git"),
         head=PullRequestRef(ref="feature", sha="head", repo_clone_url="https://example.test/repo.git"),
     )
-    executor = ReviewUnitExecutor(MultiRoundProvider(), concurrency=1, timeout_seconds=5)
+    provider = MultiRoundProvider()
+    executor = ReviewUnitExecutor(provider, concurrency=1, timeout_seconds=5)
     result = await executor.execute_unit(unit, {
         "task_id": "task",
         "pr_info": pr.model_dump(mode="json"),
@@ -153,3 +157,6 @@ async def test_per_unit_langgraph_supports_bounded_read_rounds_and_explicit_done
     assert result.execution_budget.context_retrievals == 2
     assert result.issues and result.issues[0].review_unit_id == unit.id
     assert result.messages[-1].action == "task_done"
+    assert provider.decision_states[0]["retrieval_history"] == []
+    assert provider.decision_states[1]["retrieval_history"][0]["status"] == "completed"
+    assert provider.decision_states[1]["retrieval_history"][0]["new_snippet_count"] > 0
