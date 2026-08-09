@@ -3,6 +3,7 @@ import { computed } from "vue";
 import type { ProviderModelInfo } from "../../types/operations";
 import type { ReviewMode, ReviewPreviewResponse, ValidationBackend } from "../../types/review";
 import AppIcon from "../common/AppIcon.vue";
+import AppSelect from "../common/AppSelect.vue";
 
 const props = defineProps<{
   prUrl: string;
@@ -38,6 +39,36 @@ const modelModel = computed({ get: () => props.model, set: (value) => emit("upda
 const modeModel = computed({ get: () => props.mode, set: (value) => emit("update:mode", value) });
 const patchModel = computed({ get: () => props.generatePatches, set: (value) => emit("update:generatePatches", value) });
 const backendModel = computed({ get: () => props.validationBackend, set: (value) => emit("update:validationBackend", value) });
+
+const modelOptions = computed(() => [
+  {
+    value: "",
+    label: props.modelsLoading
+      ? "正在查询可用模型…"
+      : props.defaultModel
+        ? `后端默认：${props.defaultModel}`
+        : "使用后端默认模型",
+    description: props.modelsLoading ? "正在从模型服务同步列表" : "跟随后端环境配置",
+  },
+  ...props.models.map((item) => ({
+    value: item.id,
+    label: item.id,
+    description: item.owned_by ? `提供方 · ${item.owned_by}` : "可用模型",
+  })),
+]);
+
+const modeOptions = [
+  { value: "review", label: "只读审查", description: "分析问题，不生成补丁" },
+  { value: "review_and_suggest", label: "审查 + 候选补丁", description: "生成可检查的修复建议" },
+  { value: "review_suggest_and_validate", label: "审查 + 补丁 + 验证", description: "生成补丁并运行受控验证" },
+];
+
+const backendOptions = [
+  { value: "none", label: "不执行验证", description: "仅生成候选补丁" },
+  { value: "user_runner", label: "用户 Runner", description: "交由用户侧执行环境验证" },
+  { value: "project_ci", label: "项目 CI", description: "使用项目现有 CI 流程" },
+  { value: "gvisor", label: "gVisor", description: "在隔离沙箱中执行验证" },
+];
 </script>
 
 <template>
@@ -56,40 +87,30 @@ const backendModel = computed({ get: () => props.validationBackend, set: (value)
         </div>
       </label>
 
-      <label class="field">
+      <div class="field">
         <span>模型 / Model</span>
-        <select v-model="modelModel" :disabled="active || modelsLoading" aria-describedby="model-help">
-          <option value="">
-            {{ modelsLoading ? "正在查询可用模型…" : defaultModel ? `后端默认：${defaultModel}` : "使用后端默认模型" }}
-          </option>
-          <option v-for="item in models" :key="item.id" :value="item.id">
-            {{ item.id }}{{ item.owned_by ? ` · ${item.owned_by}` : "" }}
-          </option>
-        </select>
+        <AppSelect
+          v-model="modelModel"
+          :options="modelOptions"
+          :disabled="active || modelsLoading"
+          aria-label="模型"
+          aria-describedby="model-help"
+        />
         <small id="model-help" :class="{ 'field-help--error': modelsError }">
           {{ modelsError || (models.length ? `已查询到 ${models.length} 个可用模型，可手动选择` : "将使用后端配置的默认模型") }}
         </small>
-      </label>
+      </div>
 
-      <label class="field">
+      <div class="field">
         <span>审查模式</span>
-        <select v-model="modeModel" :disabled="active">
-          <option value="review">只读审查（不生成补丁）</option>
-          <option value="review_and_suggest">审查 + 候选补丁</option>
-          <option value="review_suggest_and_validate">审查 + 补丁 + 验证</option>
-        </select>
-      </label>
+        <AppSelect v-model="modeModel" :options="modeOptions" :disabled="active" aria-label="审查模式" />
+      </div>
 
       <template v-if="mode === 'review_suggest_and_validate'">
-        <label class="field">
+        <div class="field">
           <span>验证后端</span>
-          <select v-model="backendModel" :disabled="active">
-            <option value="none">不执行验证</option>
-            <option value="user_runner">用户 Runner</option>
-            <option value="project_ci">项目 CI</option>
-            <option value="gvisor">gVisor</option>
-          </select>
-        </label>
+          <AppSelect v-model="backendModel" :options="backendOptions" :disabled="active" aria-label="验证后端" />
+        </div>
         <label class="field">
           <span>Validation Profile</span>
           <input value="由所选验证后端与项目自动确定" disabled aria-describedby="profile-help" />

@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { listReviews } from "../../api/client";
 import type { ReviewTask } from "../../types/review";
+import AppSelect from "../common/AppSelect.vue";
 import EmptyState from "../common/EmptyState.vue";
 import StatusBadge from "../common/StatusBadge.vue";
 
@@ -17,6 +18,18 @@ const pageSize = 12;
 const status = ref("");
 const loading = ref(false);
 const error = ref<string | null>(null);
+
+const statusOptions = [
+  { value: "", label: "全部状态" },
+  { value: "completed", label: "已完成" },
+  { value: "completed_with_warnings", label: "存在警告" },
+  { value: "failed", label: "失败" },
+  { value: "pending", label: "等待中" },
+  { value: "reviewing", label: "审查中" },
+  { value: "validating", label: "验证中" },
+  { value: "waiting_for_human", label: "等待人工" },
+  { value: "cancelled", label: "已取消" },
+];
 
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / pageSize)));
 
@@ -72,20 +85,10 @@ onMounted(load);
 
     <section class="workspace-toolbar" aria-label="审查历史筛选">
       <div class="workspace-stat"><strong>{{ total }}</strong><span>累计任务</span></div>
-      <label class="compact-field">
+      <div class="compact-field">
         <span>任务状态</span>
-        <select v-model="status">
-          <option value="">全部状态</option>
-          <option value="completed">已完成</option>
-          <option value="completed_with_warnings">存在警告</option>
-          <option value="failed">失败</option>
-          <option value="pending">等待中</option>
-          <option value="reviewing">审查中</option>
-          <option value="validating">验证中</option>
-          <option value="waiting_for_human">等待人工</option>
-          <option value="cancelled">已取消</option>
-        </select>
-      </label>
+        <AppSelect v-model="status" :options="statusOptions" compact aria-label="任务状态" />
+      </div>
       <button type="button" class="button button--secondary button--compact" :disabled="loading" @click="load">刷新</button>
     </section>
 
