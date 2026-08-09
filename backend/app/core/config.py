@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     # ---- 工作目录 ----
     repoguardian_workdir: Path = Path(__file__).resolve().parent.parent.parent / ".repoguardian" / "workspaces"
     repoguardian_git_bin: str = "git"
+    repoguardian_git_timeout_seconds: int = Field(default=900, ge=30, le=86_400)
 
     # ---- 产品模式 ----
     # 默认审查不依赖任何执行器；验证必须由请求显式启用。

@@ -237,7 +237,8 @@ async def stream_review(task_id: str, request: Request) -> EventSourceResponse:
             current_signature = tuple(
                 (
                     step["name"], step["status"], step.get("message"),
-                    step.get("started_at"), step.get("finished_at"),
+                    json.dumps(step.get("progress"), sort_keys=True),
+                    step.get("started_at"), step.get("updated_at"), step.get("finished_at"),
                 )
                 for step in steps
             )
@@ -254,6 +255,9 @@ async def stream_review(task_id: str, request: Request) -> EventSourceResponse:
                             "node": step["name"],
                             "status": step["status"],
                             "message": step.get("message", ""),
+                            "progress": step.get("progress"),
+                            "started_at": step.get("started_at"),
+                            "updated_at": step.get("updated_at"),
                         }),
                     }
                 last_step_signature = current_signature

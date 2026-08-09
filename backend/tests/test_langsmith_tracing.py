@@ -41,6 +41,21 @@ class FakeStreamingCompiledGraph(FakeCompiledGraph):
             },
         }
         yield {
+            "type": "custom",
+            "ns": (),
+            "data": {
+                "kind": "git_progress",
+                "node": "intake",
+                "phase": "clone",
+                "operation": "receiving_objects",
+                "message": "正在克隆仓库：接收对象 42%",
+                "percent": 42,
+                "current": 42,
+                "total": 100,
+                "detail": "1.00 MiB | 2.00 MiB/s",
+            },
+        }
+        yield {
             "type": "debug",
             "ns": (),
             "data": {
@@ -176,8 +191,14 @@ async def test_graph_stream_persists_running_and_completed_node_progress(
         and snapshot.steps[-1].message == "已接收 PR URL"
         for snapshot in snapshots
     )
+    assert any(
+        snapshot.steps
+        and snapshot.steps[-1].progress
+        and snapshot.steps[-1].progress.percent == 42
+        for snapshot in snapshots
+    )
     assert compiled.stream_options == {
-        "stream_mode": ["debug", "values"],
+        "stream_mode": ["debug", "values", "custom"],
         "subgraphs": True,
         "version": "v2",
     }

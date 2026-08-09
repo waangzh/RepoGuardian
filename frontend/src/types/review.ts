@@ -54,8 +54,19 @@ export interface TaskStep {
   name: string;
   status: StepStatus;
   message?: string | null;
+  progress?: TaskStepProgress | null;
   started_at?: string | null;
+  updated_at?: string | null;
   finished_at?: string | null;
+}
+
+export interface TaskStepProgress {
+  phase: string;
+  operation?: string | null;
+  percent?: number | null;
+  current?: number | null;
+  total?: number | null;
+  detail?: string | null;
 }
 
 export interface PullRequestRef {

@@ -145,7 +145,7 @@ class FixtureGitTool:
     def __init__(self, workspace: Path) -> None:
         self._workspace = workspace
 
-    def clone_and_diff(self, pr: PullRequestInfo) -> tuple[Path, str]:
+    def clone_and_diff(self, pr: PullRequestInfo, **_kwargs: Any) -> tuple[Path, str]:
         shutil.copytree(SAMPLE_PYTHON_REPO, self._workspace)
         for source_file in self._workspace.rglob("*.py"):
             source_file.write_text(

@@ -478,8 +478,21 @@ class TaskStep(BaseModel):
     name: str
     status: StepStatus = StepStatus.pending
     message: str | None = None
+    progress: "TaskStepProgress | None" = None
     started_at: datetime | None = None
+    updated_at: datetime | None = None
     finished_at: datetime | None = None
+
+
+class TaskStepProgress(BaseModel):
+    """长时间运行步骤的结构化局部进度；percent 为空时表示不可确定进度。"""
+
+    phase: str
+    operation: str | None = None
+    percent: int | None = Field(default=None, ge=0, le=100)
+    current: int | None = Field(default=None, ge=0)
+    total: int | None = Field(default=None, ge=0)
+    detail: str | None = Field(default=None, max_length=200)
 
 
 # ---------------------------------------------------------------------------
