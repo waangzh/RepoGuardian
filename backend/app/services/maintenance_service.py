@@ -17,6 +17,17 @@ from app.services.review_repository import ReviewRepository
 from app.tools.workspace_cleanup import reap_orphaned_workspaces
 
 logger = logging.getLogger("RepoGuardian.Maintenance")
+workspace_cleanup_lock = asyncio.Lock()
+
+
+def workspace_ttl_seconds() -> int:
+    """返回兼顾人工等待窗口的 workspace 最小安全保留时间。"""
+    return max(
+        settings.repoguardian_orphan_workspace_ttl_seconds,
+        settings.repoguardian_human_timeout_seconds
+        + settings.repoguardian_maintenance_interval_seconds
+        + settings.repoguardian_worker_lease_seconds,
+    )
 
 
 class MaintenanceService:
@@ -66,19 +77,15 @@ class MaintenanceService:
         except Exception:
             logger.warning("任务保留期维护失败", exc_info=True)
 
-        workspace_ttl = max(
-            settings.repoguardian_orphan_workspace_ttl_seconds,
-            settings.repoguardian_human_timeout_seconds
-            + settings.repoguardian_maintenance_interval_seconds
-            + settings.repoguardian_worker_lease_seconds,
-        )
+        workspace_ttl = workspace_ttl_seconds()
         try:
-            workspace_result = await asyncio.to_thread(
-                reap_orphaned_workspaces,
-                workdir=settings.repoguardian_workdir,
-                older_than_seconds=workspace_ttl,
-                active_paths=list(self._active_workspace_paths()),
-            )
+            async with workspace_cleanup_lock:
+                workspace_result = await asyncio.to_thread(
+                    reap_orphaned_workspaces,
+                    workdir=settings.repoguardian_workdir,
+                    older_than_seconds=workspace_ttl,
+                    active_paths=list(self._active_workspace_paths()),
+                )
         except Exception:
             workspace_result = None
             logger.warning("孤儿 workspace 回收失败", exc_info=True)

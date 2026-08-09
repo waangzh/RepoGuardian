@@ -4,7 +4,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.tools.git_tool import GitTool, GitToolError
-from app.tools.workspace_cleanup import cleanup_workspace, reap_orphaned_workspaces
+from app.tools.workspace_cleanup import (
+    cleanup_workspace,
+    inspect_orphaned_workspaces,
+    reap_orphaned_workspaces,
+)
 
 
 def test_cleanup_workspace_removes_readonly_git_files(tmp_path: Path) -> None:
@@ -55,6 +59,50 @@ def test_reaper_only_removes_old_inactive_workspaces(tmp_path: Path) -> None:
     assert not old.exists()
     assert active.exists()
     assert recent.exists()
+
+
+def test_workspace_scan_is_read_only_and_reports_reclaimable_bytes(tmp_path: Path) -> None:
+    workdir = tmp_path / "workspaces"
+    old = workdir / "old"
+    active = workdir / "active"
+    recent = workdir / "recent"
+    for path in (old, active, recent):
+        path.mkdir(parents=True)
+    (old / "payload.bin").write_bytes(b"12345")
+    os.utime(old, (100.0, 100.0))
+    os.utime(active, (100.0, 100.0))
+    os.utime(recent, (950.0, 950.0))
+
+    result = inspect_orphaned_workspaces(
+        workdir=workdir,
+        older_than_seconds=100.0,
+        active_paths=[active],
+        now=1_000.0,
+    )
+
+    assert result.scanned == 3
+    assert result.eligible == 1
+    assert result.eligible_bytes == 5
+    assert result.skipped_active == 1
+    assert result.skipped_recent == 1
+    assert old.exists()
+
+
+def test_reaper_reports_reclaimed_bytes(tmp_path: Path) -> None:
+    workdir = tmp_path / "workspaces"
+    old = workdir / "old"
+    old.mkdir(parents=True)
+    (old / "payload.bin").write_bytes(b"12345")
+    os.utime(old, (100.0, 100.0))
+
+    result = reap_orphaned_workspaces(
+        workdir=workdir,
+        older_than_seconds=100.0,
+        now=1_000.0,
+    )
+
+    assert result.removed == 1
+    assert result.reclaimed_bytes == 5
 
 
 def test_clone_failure_cleans_partially_created_workspace(tmp_path: Path) -> None:

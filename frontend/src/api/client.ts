@@ -11,6 +11,8 @@ import type {
   ReviewTaskListResponse,
   SystemDiagnostics,
   ValidationBackendInfo,
+  WorkspaceCleanupPreview,
+  WorkspaceCleanupResponse,
 } from "../types/operations";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
@@ -89,6 +91,17 @@ export async function getValidationBackends(): Promise<ValidationBackendInfo[]> 
 
 export async function getSystemDiagnostics(): Promise<SystemDiagnostics> {
   return request<SystemDiagnostics>("/api/system/diagnostics");
+}
+
+export async function previewWorkspaceCleanup(): Promise<WorkspaceCleanupPreview> {
+  return request<WorkspaceCleanupPreview>("/api/system/workspaces/cleanup/preview");
+}
+
+export async function cleanupExpiredWorkspaces(): Promise<WorkspaceCleanupResponse> {
+  return request<WorkspaceCleanupResponse>("/api/system/workspaces/cleanup", {
+    method: "POST",
+    body: JSON.stringify({ mode: "expired_only", confirmed: true }),
+  });
 }
 
 export async function getAvailableModels(): Promise<ModelCatalogResponse> {

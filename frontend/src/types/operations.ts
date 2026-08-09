@@ -53,6 +53,28 @@ export interface SystemDiagnostics {
   versions: VersionDiagnostics;
 }
 
+export interface WorkspaceCleanupPreview {
+  mode: "expired_only";
+  ttl_seconds: number;
+  scanned: number;
+  eligible: number;
+  eligible_bytes: number;
+  failed: number;
+  skipped_active: number;
+  skipped_recent: number;
+}
+
+export interface WorkspaceCleanupResponse {
+  mode: "expired_only";
+  ttl_seconds: number;
+  scanned: number;
+  removed: number;
+  reclaimed_bytes: number;
+  failed: number;
+  skipped_active: number;
+  skipped_recent: number;
+}
+
 export interface ProviderModelInfo {
   id: string;
   owned_by?: string | null;
