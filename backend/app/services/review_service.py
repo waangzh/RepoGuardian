@@ -41,6 +41,7 @@ from app.models.review import (
     StepStatus,
     TaskStatus,
     TaskStep,
+    TaskStepProgress,
     ValidationBackend,
     ValidationResult,
     ValidationStatus,
@@ -541,7 +542,7 @@ class ReviewService:
         async for chunk in stream(
             graph_input,
             config=run_config,
-            stream_mode=["debug", "values"],
+            stream_mode=["debug", "values", "custom"],
             subgraphs=True,
             version="v2",
         ):
@@ -552,6 +553,11 @@ class ReviewService:
                 state = chunk.get("data")
                 if isinstance(state, dict):
                     result = state
+                continue
+            if chunk_type == "custom":
+                progress = chunk.get("data")
+                if isinstance(progress, dict) and progress.get("kind") == "git_progress":
+                    self._sync_custom_progress_event(task, progress)
                 continue
             if chunk_type != "debug":
                 continue
@@ -574,6 +580,41 @@ class ReviewService:
             raise RuntimeError("LangGraph 流式执行未返回最终状态")
         return result
 
+    def _sync_custom_progress_event(
+        self,
+        task: ReviewTask,
+        payload: dict[str, Any],
+    ) -> None:
+        """把节点内部的长任务进度合并到当前 TaskStep，并立即持久化供 SSE 推送。"""
+        node = str(payload.get("node") or "")
+        if not node:
+            return
+        step = next(
+            (
+                item
+                for item in reversed(task.steps)
+                if item.name == node and item.status == StepStatus.running
+            ),
+            None,
+        )
+        event_time = datetime.now(timezone.utc)
+        if step is None:
+            task.steps = [item for item in task.steps if item.name != "queued"]
+            step = TaskStep(
+                name=node,
+                status=StepStatus.running,
+                started_at=event_time,
+            )
+            task.steps.append(step)
+        step.message = str(payload.get("message") or step.message or "")
+        step.progress = TaskStepProgress.model_validate({
+            key: payload.get(key)
+            for key in ("phase", "operation", "percent", "current", "total", "detail")
+        })
+        step.updated_at = event_time
+        self._touch(task)
+        self._persist(task)
+
     def _sync_graph_step_event(
         self,
         task: ReviewTask,
@@ -588,7 +629,12 @@ class ReviewService:
         if event_type == "task":
             task.steps = [step for step in task.steps if step.name != "queued"]
             task.steps.append(
-                TaskStep(name=node, status=StepStatus.running, started_at=event_time)
+                TaskStep(
+                    name=node,
+                    status=StepStatus.running,
+                    started_at=event_time,
+                    updated_at=event_time,
+                )
             )
             mapped_status = _TASK_STATUS_BY_GRAPH_NODE.get(node)
             if mapped_status is not None:
@@ -615,6 +661,7 @@ class ReviewService:
                 str(progress.get("message") or "") if progress is not None else step.message
             )
             step.finished_at = event_time
+            step.updated_at = event_time
         self._touch(task)
         self._persist(task)
 

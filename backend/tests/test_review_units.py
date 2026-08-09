@@ -385,7 +385,7 @@ class RejectingDependency:
 @pytest.mark.asyncio
 async def test_preview_does_not_call_llm_or_command_executor(tmp_path: Path) -> None:
     class PreviewGit:
-        def clone_and_diff(self, pr: PullRequestInfo) -> tuple[Path, str]:
+        def clone_and_diff(self, pr: PullRequestInfo, **_kwargs: object) -> tuple[Path, str]:
             repo = tmp_path / "preview-repo"
             repo.mkdir()
             (repo / "preview.py").write_text("new\n", encoding="utf-8")

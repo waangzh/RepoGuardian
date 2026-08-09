@@ -108,7 +108,7 @@ def test_reaper_reports_reclaimed_bytes(tmp_path: Path) -> None:
 def test_clone_failure_cleans_partially_created_workspace(tmp_path: Path) -> None:
     tool = GitTool(tmp_path)
 
-    def fail_clone(command: list[str]) -> str:
+    def fail_clone(command: list[str], **_kwargs: object) -> str:
         repo_dir = Path(command[-1])
         repo_dir.mkdir(parents=True)
         partial = repo_dir / "partial.pack"

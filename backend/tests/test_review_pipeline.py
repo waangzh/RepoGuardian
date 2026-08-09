@@ -47,7 +47,7 @@ class FakeGitTool:
         self._diff_text = diff_text
         self._files = files or {}
 
-    def clone_and_diff(self, pr: PullRequestInfo) -> tuple[Path, str]:
+    def clone_and_diff(self, pr: PullRequestInfo, **_kwargs: object) -> tuple[Path, str]:
         self._workspace.mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "init"], cwd=self._workspace, check=True, capture_output=True)
         (self._workspace / ".fixture-repository").write_text("fixture\n", encoding="utf-8")
@@ -83,7 +83,7 @@ class FixtureGitTool:
         self._workspace = workspace
         self._diff_text = diff_text
 
-    def clone_and_diff(self, pr: PullRequestInfo) -> tuple[Path, str]:
+    def clone_and_diff(self, pr: PullRequestInfo, **_kwargs: object) -> tuple[Path, str]:
         shutil.copytree(self._fixture_path, self._workspace)
         for source_file in self._workspace.rglob("*.py"):
             source_file.write_text(source_file.read_text(encoding="utf-8"), encoding="utf-8")
