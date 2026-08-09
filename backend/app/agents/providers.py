@@ -129,7 +129,7 @@ class OpenAICompatibleProvider(LLMProvider):
         elapsed = time.monotonic() - t0
         logger.info("🌐 [LLM决策] API 响应 %.2f 秒，长度=%d 字符", elapsed, len(content))
         try:
-            raw = self._load_json(content)
+            raw = self._normalize_agent_action(self._load_json(content))
             return AgentAction.model_validate(raw)
         except ValidationError as exc:
             raise LLMProviderError(f"Agent action schema validation failed: {exc}") from exc
@@ -276,7 +276,8 @@ class OpenAICompatibleProvider(LLMProvider):
             max_tokens=request.budget.max_output_tokens,
         )
         try:
-            return IssueVerification.model_validate(self._load_json(content))
+            raw = self._normalize_issue_verification(self._load_json(content))
+            return IssueVerification.model_validate(raw)
         except ValidationError as exc:
             raise LLMProviderError(f"Issue verification schema validation failed: {exc}") from exc
 
@@ -383,6 +384,70 @@ class OpenAICompatibleProvider(LLMProvider):
             if not match:
                 raise LLMProviderError("LLM output is not valid JSON")
             return json.loads(match.group(0))
+
+    @staticmethod
+    def _normalize_agent_action(raw: Any) -> Any:
+        """兼容已观测到的检索计划别名，然后仍交由严格 schema 校验。"""
+        if not isinstance(raw, dict) or raw.get("action") != "retrieve_context":
+            return raw
+        tool_args = raw.get("tool_args")
+        plan = tool_args.get("plan") if isinstance(tool_args, dict) else None
+        if not isinstance(plan, dict):
+            return raw
+
+        normalized_plan = dict(plan)
+        used_alias = False
+        if "target_files" not in normalized_plan and "files" in normalized_plan:
+            files = normalized_plan.pop("files")
+            if isinstance(files, list) and all(isinstance(item, str) for item in files):
+                normalized_plan["target_files"] = files
+                used_alias = True
+            else:
+                normalized_plan["files"] = files
+
+        if "target_files" not in normalized_plan and "file_requests" in normalized_plan:
+            requests = normalized_plan.pop("file_requests")
+            if (
+                isinstance(requests, list)
+                and requests
+                and all(
+                    isinstance(item, dict)
+                    and set(item) <= {"file", "reason"}
+                    and isinstance(item.get("file"), str)
+                    for item in requests
+                )
+            ):
+                normalized_plan["target_files"] = [item["file"] for item in requests]
+                used_alias = True
+            else:
+                normalized_plan["file_requests"] = requests
+
+        if used_alias:
+            normalized_plan.setdefault("reason", raw.get("reason"))
+            normalized_plan.setdefault("relevance_types", ["direct"])
+            normalized = dict(raw)
+            normalized["tool_args"] = {**tool_args, "plan": normalized_plan}
+            logger.warning("🌐 [LLM决策] 已将检索计划别名归一化为严格 schema")
+            return normalized
+        return raw
+
+    @staticmethod
+    def _normalize_issue_verification(raw: Any) -> Any:
+        """保留超长 verifier 理由的开头与结论，避免说明文字使整个决策失效。"""
+        if not isinstance(raw, dict):
+            return raw
+        reason = raw.get("reason")
+        if not isinstance(reason, str) or len(reason) <= 2_000:
+            return raw
+        marker = "\n... [verifier reason truncated] ...\n"
+        normalized = dict(raw)
+        normalized["reason"] = (
+            reason[:1_500].rstrip()
+            + marker
+            + reason[-(2_000 - 1_500 - len(marker)):].lstrip()
+        )
+        logger.warning("🌐 [LLM验证] reason 超过 2000 字符，已保留首尾并截断")
+        return normalized
 
     @classmethod
     def _normalize_issue(cls, issue: Any) -> Any:
@@ -562,7 +627,12 @@ class OpenAICompatibleProvider(LLMProvider):
             "This is an isolated Review Unit. Use only read-only retrieve_context calls; "
             "use report_issue once the evidence is sufficient, then always call task_done. "
             "Zero reported issues is valid. Never request shell, network, patch, or test execution. "
-            "For retrieve_context, tool_args must be exactly {\"plan\": {...}}."
+            "For retrieve_context, tool_args must be exactly {\"plan\": {...}}. "
+            "The plan fields are reason, target_files, target_symbols, search_terms, "
+            "relevance_types, include_callers, include_callees, include_tests, max_results, and depth. "
+            "relevance_types must contain one or more of direct, caller, callee, test, module_config, "
+            "text, adjacent, type_definition, import_source, or failure_location. "
+            "Use target_files; never use files or file_requests."
             if unit_agent else
             "For retrieve_context, tool_args must be exactly {\"plan\": {...}}. "
             "The plan must use only listed files/symbols, literal search_terms, bounded max_results and depth. "
@@ -583,6 +653,12 @@ class OpenAICompatibleProvider(LLMProvider):
             f"{{\"action\":\"{'report_issue' if unit_agent else 'review_code'}\","
             "\"reason\":\"中文理由\","
             "\"target_issue_ids\":[],\"tool_args\":{},\"human_request\":null}\n\n"
+            "When choosing retrieve_context, use this exact structure (replace only values):\n"
+            "{\"action\":\"retrieve_context\",\"reason\":\"需要补充上下文\",\"target_issue_ids\":[],"
+            "\"tool_args\":{\"plan\":{\"reason\":\"查找直接相关实现\",\"target_files\":[],"
+            "\"target_symbols\":[],\"search_terms\":[\"字面搜索词\"],\"relevance_types\":[\"direct\"],"
+            "\"include_callers\":false,\"include_callees\":false,\"include_tests\":false,"
+            "\"max_results\":12,\"depth\":1}},\"human_request\":null}\n\n"
             f"Current state JSON:\n{json.dumps(compact, ensure_ascii=False)[:50000]}"
         )
 
@@ -623,7 +699,8 @@ class OpenAICompatibleProvider(LLMProvider):
             "evidence; adjusted_severity may only lower it. You cannot add an issue, modify primary "
             "evidence, generate a patch, expand file scope, call tools, execute code, or change unresolved "
             "evidence to resolved. Contradicting evidence may only quote supplied files and must leave all "
-            "server-owned resolution fields at their defaults.\n"
+            "server-owned resolution fields at their defaults. Keep reason concise, use Simplified Chinese, "
+            "and limit reason to at most 1000 characters.\n"
             "Return exactly this JSON shape and no Markdown:\n"
             '{"issue_id":"id","decision":"keep|drop|needs_human","reason":"reason",'
             '"contradicting_evidence":[],"adjusted_severity":null}\n\n'

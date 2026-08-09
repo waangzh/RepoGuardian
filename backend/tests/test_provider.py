@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 import pytest
@@ -163,6 +164,47 @@ async def test_provider_rejects_invalid_json(fake_chat: type[FakeChatOpenAI]) ->
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "legacy_plan, expected_files",
+    [
+        ({"files": ["chainladder/core/tests/test_triangle.py"]},
+         ["chainladder/core/tests/test_triangle.py"]),
+        ({"file_requests": [{"file": "chainladder/core/triangle.py",
+                              "reason": "读取相关实现"}]},
+         ["chainladder/core/triangle.py"]),
+    ],
+)
+async def test_provider_normalizes_observed_retrieval_plan_aliases(
+    fake_chat: type[FakeChatOpenAI],
+    legacy_plan: dict[str, Any],
+    expected_files: list[str],
+) -> None:
+    fake_chat.responses = [AIMessage(content=json.dumps({
+        "action": "retrieve_context",
+        "reason": "需要补充上下文",
+        "tool_args": {"plan": legacy_plan},
+    }, ensure_ascii=False))]
+    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
+
+    action = await provider.decide({"phase": "discovery", "unit_agent": True}, None)
+
+    assert action.tool_args["plan"]["target_files"] == expected_files
+    assert action.tool_args["plan"]["reason"] == "需要补充上下文"
+    assert action.tool_args["plan"]["relevance_types"] == ["direct"]
+
+
+def test_unit_decision_prompt_documents_exact_retrieval_plan_schema() -> None:
+    prompt = OpenAICompatibleProvider._build_decision_prompt({
+        "phase": "discovery",
+        "unit_agent": True,
+    })
+
+    assert '"target_files":[]' in prompt
+    assert '"relevance_types":["direct"]' in prompt
+    assert "never use files or file_requests" in prompt
+
+
+@pytest.mark.asyncio
 async def test_provider_wraps_chatopenai_failures(fake_chat: type[FakeChatOpenAI]) -> None:
     fake_chat.responses = [RuntimeError("network unavailable")]
     provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
@@ -294,6 +336,47 @@ async def test_issue_verifier_rejects_extra_output_fields(
 
     with pytest.raises(LLMProviderError, match="schema validation failed"):
         await provider.verify_issue(request, None)
+
+
+@pytest.mark.asyncio
+async def test_issue_verifier_preserves_decision_when_reason_is_too_long(
+    fake_chat: type[FakeChatOpenAI],
+) -> None:
+    issue = ReviewIssue(
+        id="issue-1",
+        review_unit_id="unit-1",
+        title="错误",
+        category="correctness",
+        severity="medium",
+        confidence=0.9,
+        affected_behavior="返回错误结果",
+        failure_scenario="有效输入会返回错误值",
+        recommendation="修复条件",
+        primary_evidence={"file_path": "app.py", "existing_code": "return wrong"},
+    )
+    request = IssueVerificationRequest(
+        issue=issue,
+        primary_evidence=issue.primary_evidence,
+        unit_diff="[]",
+        budget=IssueVerificationBudget(remaining_calls=1),
+    )
+    long_reason = "分析" * 1_100 + "最终结论：证据成立"
+    fake_chat.responses = [AIMessage(content=json.dumps({
+        "issue_id": "issue-1",
+        "decision": "keep",
+        "reason": long_reason,
+        "contradicting_evidence": [],
+        "adjusted_severity": None,
+    }, ensure_ascii=False))]
+    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
+
+    decision = await provider.verify_issue(request, None)
+
+    assert decision.decision == "keep"
+    assert len(decision.reason) <= 2_000
+    assert decision.reason.startswith("分析")
+    assert decision.reason.endswith("最终结论：证据成立")
+    assert "verifier reason truncated" in decision.reason
 
 
 def _sample_pr() -> PullRequestInfo:
