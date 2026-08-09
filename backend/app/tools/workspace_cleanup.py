@@ -19,6 +19,18 @@ class WorkspaceReapResult:
     scanned: int = 0
     removed: int = 0
     failed: int = 0
+    skipped_active: int = 0
+    skipped_recent: int = 0
+    reclaimed_bytes: int = 0
+
+
+@dataclass(frozen=True)
+class WorkspaceScanResult:
+    scanned: int = 0
+    eligible: int = 0
+    eligible_bytes: int = 0
+    failed: int = 0
+    skipped_active: int = 0
     skipped_recent: int = 0
 
 
@@ -85,6 +97,23 @@ def cleanup_workspace(
     return False
 
 
+def inspect_orphaned_workspaces(
+    *,
+    workdir: str | Path,
+    older_than_seconds: float,
+    active_paths: Iterable[str | Path] = (),
+    now: float | None = None,
+) -> WorkspaceScanResult:
+    """只读扫描超过 TTL 的非活动工作目录，并估算可回收空间。"""
+    _, result = _classify_workspaces(
+        workdir=workdir,
+        older_than_seconds=older_than_seconds,
+        active_paths=active_paths,
+        now=now,
+    )
+    return result
+
+
 def reap_orphaned_workspaces(
     *,
     workdir: str | Path,
@@ -93,19 +122,53 @@ def reap_orphaned_workspaces(
     now: float | None = None,
 ) -> WorkspaceReapResult:
     """回收 workdir 下超过 TTL 的直接子目录，并跳过当前活跃目录。"""
+    candidates, scan = _classify_workspaces(
+        workdir=workdir,
+        older_than_seconds=older_than_seconds,
+        active_paths=active_paths,
+        now=now,
+    )
+    root = Path(workdir).resolve()
+    removed = reclaimed_bytes = 0
+    failed = scan.failed
+    for child, size_bytes in candidates:
+        if cleanup_workspace(child, workdir=root):
+            removed += 1
+            reclaimed_bytes += size_bytes
+        else:
+            failed += 1
+    return WorkspaceReapResult(
+        scanned=scan.scanned,
+        removed=removed,
+        failed=failed,
+        skipped_active=scan.skipped_active,
+        skipped_recent=scan.skipped_recent,
+        reclaimed_bytes=reclaimed_bytes,
+    )
+
+
+def _classify_workspaces(
+    *,
+    workdir: str | Path,
+    older_than_seconds: float,
+    active_paths: Iterable[str | Path],
+    now: float | None,
+) -> tuple[list[tuple[Path, int]], WorkspaceScanResult]:
     root = Path(workdir).resolve()
     if not root.exists():
-        return WorkspaceReapResult()
+        return [], WorkspaceScanResult()
 
     active = {Path(path).resolve() for path in active_paths}
     current_time = time.time() if now is None else now
-    scanned = removed = failed = skipped_recent = 0
+    candidates: list[tuple[Path, int]] = []
+    scanned = failed = skipped_active = skipped_recent = 0
     for child in root.iterdir():
         if not child.is_dir() or child.is_symlink():
             continue
         scanned += 1
         resolved = child.resolve()
         if resolved in active:
+            skipped_active += 1
             continue
         try:
             age_seconds = max(0.0, current_time - child.stat().st_mtime)
@@ -116,13 +179,24 @@ def reap_orphaned_workspaces(
         if age_seconds < older_than_seconds:
             skipped_recent += 1
             continue
-        if cleanup_workspace(child, workdir=root):
-            removed += 1
-        else:
-            failed += 1
-    return WorkspaceReapResult(
+        candidates.append((child, _directory_size(child)))
+
+    return candidates, WorkspaceScanResult(
         scanned=scanned,
-        removed=removed,
+        eligible=len(candidates),
+        eligible_bytes=sum(size for _, size in candidates),
         failed=failed,
+        skipped_active=skipped_active,
         skipped_recent=skipped_recent,
     )
+
+
+def _directory_size(root: Path) -> int:
+    total = 0
+    for directory, _, files in os.walk(root, followlinks=False):
+        for name in files:
+            try:
+                total += (Path(directory) / name).stat().st_size
+            except OSError:
+                logger.debug("无法统计临时文件大小: %s", Path(directory) / name, exc_info=True)
+    return total

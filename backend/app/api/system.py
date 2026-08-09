@@ -1,5 +1,6 @@
-"""不返回秘密值的只读系统诊断 API。"""
+"""系统诊断与受限的本地维护 API。"""
 
+import asyncio
 import os
 from importlib.metadata import PackageNotFoundError, version
 
@@ -9,11 +10,25 @@ from app.api.reviews import get_review_service
 from app.api.validation_backends import discover_validation_backends
 from app.core.config import settings
 from app.core.database import schema_is_current
-from app.models.operations import ModelCatalogResponse, SystemDiagnostics, VersionDiagnostics
+from app.models.operations import (
+    ModelCatalogResponse,
+    SystemDiagnostics,
+    VersionDiagnostics,
+    WorkspaceCleanupPreview,
+    WorkspaceCleanupRequest,
+    WorkspaceCleanupResponse,
+)
+from app.services.maintenance_service import workspace_cleanup_lock, workspace_ttl_seconds
 from app.services.model_catalog import ModelCatalogError, fetch_model_catalog
+from app.tools.workspace_cleanup import inspect_orphaned_workspaces, reap_orphaned_workspaces
 
 
 router = APIRouter(prefix="/system", tags=["system"])
+
+
+def _active_workspace_paths() -> tuple[object, ...]:
+    service = get_review_service()
+    return tuple(service._repo_paths.values())
 
 
 @router.get("/models", response_model=ModelCatalogResponse)
@@ -79,3 +94,39 @@ async def get_system_diagnostics() -> SystemDiagnostics:
             patch_policy=settings.repoguardian_patch_policy_version,
         ),
     )
+
+
+@router.get("/workspaces/cleanup/preview", response_model=WorkspaceCleanupPreview)
+async def preview_workspace_cleanup() -> WorkspaceCleanupPreview:
+    """只读扫描达到安全 TTL 的非活动工作目录。"""
+    ttl_seconds = workspace_ttl_seconds()
+    async with workspace_cleanup_lock:
+        result = await asyncio.to_thread(
+            inspect_orphaned_workspaces,
+            workdir=settings.repoguardian_workdir,
+            older_than_seconds=ttl_seconds,
+            active_paths=_active_workspace_paths(),
+        )
+    return WorkspaceCleanupPreview(ttl_seconds=ttl_seconds, **result.__dict__)
+
+
+@router.post("/workspaces/cleanup", response_model=WorkspaceCleanupResponse)
+async def cleanup_expired_workspaces(
+    request: WorkspaceCleanupRequest,
+) -> WorkspaceCleanupResponse:
+    """经显式确认后，清理达到安全 TTL 的非活动工作目录。"""
+    if not request.confirmed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Workspace cleanup requires explicit confirmation",
+        )
+
+    ttl_seconds = workspace_ttl_seconds()
+    async with workspace_cleanup_lock:
+        result = await asyncio.to_thread(
+            reap_orphaned_workspaces,
+            workdir=settings.repoguardian_workdir,
+            older_than_seconds=ttl_seconds,
+            active_paths=_active_workspace_paths(),
+        )
+    return WorkspaceCleanupResponse(ttl_seconds=ttl_seconds, **result.__dict__)
