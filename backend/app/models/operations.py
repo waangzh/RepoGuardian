@@ -72,3 +72,36 @@ class SystemDiagnostics(BaseModel):
     validation_backends: list[ValidationBackendInfo]
     configured_secrets: dict[str, bool]
     versions: VersionDiagnostics
+
+
+class WorkspaceCleanupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["expired_only"] = "expired_only"
+    confirmed: bool = False
+
+
+class WorkspaceCleanupPreview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["expired_only"] = "expired_only"
+    ttl_seconds: int
+    scanned: int
+    eligible: int
+    eligible_bytes: int
+    failed: int
+    skipped_active: int
+    skipped_recent: int
+
+
+class WorkspaceCleanupResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["expired_only"] = "expired_only"
+    ttl_seconds: int
+    scanned: int
+    removed: int
+    reclaimed_bytes: int
+    failed: int
+    skipped_active: int
+    skipped_recent: int
