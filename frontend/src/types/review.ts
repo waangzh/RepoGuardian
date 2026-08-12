@@ -440,8 +440,62 @@ export interface ReviewUnitResult {
     detail?: string | null;
   }>;
   execution_budget: Record<string, number>;
+  model_usages: ModelUsage[];
   error?: string | null;
   human_request?: HumanReviewRequest | null;
+}
+
+export interface ModelUsage {
+  id: string;
+  provider: string;
+  model: string;
+  operation: string;
+  review_unit_id?: string | null;
+  unit_complexity?: ReviewUnitComplexity | null;
+  accounted_tokens_estimate?: number | null;
+  estimated_input_tokens: number;
+  max_output_tokens: number;
+  actual_input_tokens?: number | null;
+  actual_output_tokens?: number | null;
+  actual_total_tokens?: number | null;
+  cached_input_tokens?: number | null;
+  reasoning_output_tokens?: number | null;
+  latency_ms: number;
+  cost_microusd?: number | null;
+  usage_available: boolean;
+  accounting_source: "actual" | "missing";
+  response_metadata: Record<string, unknown>;
+  created_at: string;
+  estimation_delta_tokens?: number | null;
+}
+
+export interface ModelUsageStats {
+  calls: number;
+  usage_available_calls: number;
+  usage_missing_calls: number;
+  usage_coverage_rate: number;
+  actual_input_tokens: number;
+  actual_output_tokens: number;
+  actual_total_tokens: number;
+  cached_input_tokens: number;
+  reasoning_output_tokens: number;
+  accounted_tokens_estimate: number;
+  estimation_delta_tokens: number;
+  cost_microusd: number;
+  cost_available_calls: number;
+  input_tokens_p50?: number | null;
+  input_tokens_p95?: number | null;
+  output_tokens_p50?: number | null;
+  output_tokens_p95?: number | null;
+  latency_ms_p50?: number | null;
+  latency_ms_p95?: number | null;
+}
+
+export interface ModelUsageSummary {
+  overall: ModelUsageStats;
+  by_operation: Array<{ key: string; stats: ModelUsageStats }>;
+  by_unit_complexity: Array<{ key: string; stats: ModelUsageStats }>;
+  by_provider: Array<{ key: string; stats: ModelUsageStats }>;
 }
 
 export interface ReviewTask {
@@ -460,6 +514,8 @@ export interface ReviewTask {
   changed_files: ChangedFile[];
   review_units: ReviewUnit[];
   review_unit_results: ReviewUnitResult[];
+  model_usages: ModelUsage[];
+  model_usage_summary: ModelUsageSummary;
   excluded_files: ExcludedReviewFile[];
   issues: ReviewIssue[];
   issue_metrics: IssueMetrics;

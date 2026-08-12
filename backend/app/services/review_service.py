@@ -30,6 +30,7 @@ from app.models.review import (
     ReviewCreateRequest,
     ReviewMode,
     ReviewIssue,
+    ModelUsage,
     RepositorySnapshot,
     ReviewPreviewRequest,
     ReviewPreviewResponse,
@@ -48,6 +49,7 @@ from app.models.review import (
 )
 from app.services.report_service import ReportService
 from app.services.issue_deduplication import IssueDeduplicationService
+from app.services.model_usage import summarize_model_usage
 from app.services.review_rebuild import rebuild_task_from_state
 from app.services.review_planner import DeterministicReviewPlanner
 from app.services.review_unit_executor import ReviewUnitExecutor
@@ -680,6 +682,8 @@ class ReviewService:
         task.changed_files = rebuilt.changed_files
         task.review_units = rebuilt.review_units
         task.review_unit_results = rebuilt.review_unit_results
+        task.model_usages = rebuilt.model_usages
+        task.model_usage_summary = rebuilt.model_usage_summary
         task.excluded_files = rebuilt.excluded_files
         task.issues = rebuilt.issues
         task.issue_metrics = rebuilt.issue_metrics
@@ -844,6 +848,17 @@ class ReviewService:
             task.review_unit_results = [
                 previous[item.id] for item in task.review_units if item.id in previous
             ]
+            retained_task_usages = [
+                usage for usage in task.model_usages
+                if usage.review_unit_id != unit_id
+            ]
+            by_usage_id = {
+                usage.id: usage
+                for usage in [*retained_task_usages, *result.model_usages]
+                if isinstance(usage, ModelUsage)
+            }
+            task.model_usages = list(by_usage_id.values())
+            task.model_usage_summary = summarize_model_usage(task.model_usages)
             task.issues = aggregated_issues
             task.issue_metrics = retry_metrics
             task.context_snippets = [

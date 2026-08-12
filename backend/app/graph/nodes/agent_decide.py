@@ -16,6 +16,7 @@ from app.graph.policies import (
 )
 from app.graph.state import ReviewState
 from app.models.review import AgentAction, ReviewPhase
+from app.services.model_usage import annotate_usage, append_usage, unpack_model_call
 
 logger = logging.getLogger("RepoGuardian.Node")
 
@@ -51,10 +52,17 @@ async def agent_decide_node(state: ReviewState) -> ReviewState:
     consumed = consume_budget(state, model_calls=1, token_usage=_DECISION_TOKEN_RESERVE)
     assert consumed is not None
 
+    usage = None
     try:
-        action = await provider.decide(dict(state), state.get("model"))
+        raw_result = await provider.decide(dict(state), state.get("model"))
+        action, usage = unpack_model_call(raw_result)
+        usage = annotate_usage(usage, accounted_tokens_estimate=_DECISION_TOKEN_RESERVE)
         validate_action_for_phase(phase, action)
     except (LLMProviderError, ValueError, ActionPolicyViolation) as exc:
+        if isinstance(exc, LLMProviderError) and exc.usage is not None:
+            usage = annotate_usage(
+                exc.usage, accounted_tokens_estimate=_DECISION_TOKEN_RESERVE
+            )
         action = safe_action_for_phase(phase, f"已拒绝无效 Agent 动作：{exc}")
         return _with_action(
             state,
@@ -62,6 +70,7 @@ async def agent_decide_node(state: ReviewState) -> ReviewState:
             "rejected",
             str(exc),
             execution_budget=consumed,
+            model_usages=append_usage(state.get("model_usages") or [], usage),
         )
 
     return _with_action(
@@ -70,6 +79,7 @@ async def agent_decide_node(state: ReviewState) -> ReviewState:
         "selected",
         action.reason,
         execution_budget=consumed,
+        model_usages=append_usage(state.get("model_usages") or [], usage),
     )
 
 
@@ -80,6 +90,7 @@ def _with_action(
     message: str,
     *,
     execution_budget: Any | None = None,
+    model_usages: list[dict[str, Any]] | None = None,
 ) -> ReviewState:
     """将已经过阶段策略校验的动作、预算和审计事件写入状态。"""
     result: dict[str, Any] = {
@@ -94,4 +105,6 @@ def _with_action(
     }
     if execution_budget is not None:
         result["execution_budget"] = execution_budget.model_dump()
+    if model_usages is not None:
+        result["model_usages"] = model_usages
     return ReviewState(**result)

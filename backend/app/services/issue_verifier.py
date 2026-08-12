@@ -19,9 +19,11 @@ from app.models.review import (
     IssueVerificationDecision,
     IssueVerificationRequest,
     ReviewIssue,
+    ModelUsage,
     ReviewUnit,
 )
 from app.services.issue_policy import SeverityPolicy
+from app.services.model_usage import annotate_usage, unpack_model_call
 from app.services.review_planner import DeterministicReviewPlanner
 
 
@@ -31,6 +33,7 @@ class IssueVerifierBatchResult:
     verifications: list[IssueVerification]
     metrics: IssueMetrics
     warnings: list[str]
+    model_usages: list[ModelUsage]
 
 
 class IssueVerifierService:
@@ -67,13 +70,14 @@ class IssueVerifierService:
                 if issue.status == IssueStatus.evidence_resolved else issue
                 for issue in issues
             ]
-            return IssueVerifierBatchResult(confirmed, [], metrics, [])
+            return IssueVerifierBatchResult(confirmed, [], metrics, [], [])
 
         by_unit = {unit.id: unit for unit in units}
         calls_by_unit: dict[str, int] = {}
         output: list[ReviewIssue] = []
         decisions: list[IssueVerification] = []
         warnings: list[str] = []
+        model_usages: list[ModelUsage] = []
         call_count = metrics.verifier_call_count
         token_count = metrics.verifier_token_count
         verifier_drop_count = metrics.verifier_drop_count
@@ -97,12 +101,30 @@ class IssueVerifierService:
             token_count += self._estimate_tokens(request)
             try:
                 async with asyncio.timeout(self.timeout_seconds):
-                    verification = await self.provider.verify_issue(
+                    raw_result = await self.provider.verify_issue(
                         request, state.get("model")
                     )
+                verification, usage = unpack_model_call(raw_result)
+                usage = annotate_usage(
+                    usage,
+                    accounted_tokens_estimate=self._estimate_tokens(request),
+                    review_unit_id=unit.id,
+                    unit_complexity=unit.complexity,
+                )
+                if usage is not None:
+                    model_usages.append(usage)
                 verification = IssueVerification.model_validate(verification)
                 self._validate_decision(issue, unit, verification)
             except Exception as exc:
+                usage = getattr(exc, "usage", None)
+                usage = annotate_usage(
+                    usage,
+                    accounted_tokens_estimate=self._estimate_tokens(request),
+                    review_unit_id=unit.id,
+                    unit_complexity=unit.complexity,
+                )
+                if usage is not None:
+                    model_usages.append(usage)
                 reason = f"{type(exc).__name__}:{exc}"
                 output.append(self._on_failure(issue, reason))
                 warnings.append(f"Issue {issue.id} verifier 失败：{reason}")
@@ -143,7 +165,9 @@ class IssueVerifierService:
             "verifier_drop_count": verifier_drop_count,
             "severity_adjustment_count": severity_adjustments,
         })
-        return IssueVerifierBatchResult(output, decisions, updated_metrics, warnings)
+        return IssueVerifierBatchResult(
+            output, decisions, updated_metrics, warnings, model_usages
+        )
 
     def _build_request(
         self,
