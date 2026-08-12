@@ -9,6 +9,7 @@ from app.graph.policies import consume_budget
 from app.graph.state import ReviewState
 from app.models.review import AgentAction, ChangedFile, PullRequestInfo
 from app.models.review import ReviewIssue
+from app.services.model_usage import annotate_usage, append_usage, unpack_model_call
 
 logger = logging.getLogger("RepoGuardian.Node")
 
@@ -64,7 +65,9 @@ async def review_node(state: ReviewState) -> ReviewState:
     enhanced_diff = _build_enhanced_diff(state)
     logger.debug("✍️ [审查] 增强 diff 总长度: %d 字符", len(enhanced_diff))
 
-    model_issues = await agent.review(pr_info, changed_files, enhanced_diff, state.get("model"))
+    raw_result = await agent.review(pr_info, changed_files, enhanced_diff, state.get("model"))
+    model_issues, usage = unpack_model_call(raw_result)
+    usage = annotate_usage(usage, accounted_tokens_estimate=_DIAGNOSIS_TOKEN_RESERVE)
     issues, rejected_issue_count = _filter_candidate_issues(model_issues)
     issues_dicts = [issue.model_dump(mode="json") for issue in issues]
     # 按严重性统计
@@ -79,6 +82,7 @@ async def review_node(state: ReviewState) -> ReviewState:
         status="reviewing",
         review_issues=issues_dicts,
         execution_budget=budget.model_dump(),
+        model_usages=append_usage(state.get("model_usages") or [], usage),
         agent_events=append_event(state, action.action, action.reason, "completed", message),
         step_progress=append_step(state, "review", "completed", message),
     )

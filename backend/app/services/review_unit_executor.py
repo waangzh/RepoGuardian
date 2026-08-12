@@ -47,6 +47,7 @@ class _ReviewUnitGraphState(TypedDict, total=False):
     context: list[dict[str, Any]]
     issues: list[ReviewIssue]
     pending_issues: list[ReviewIssue]
+    model_usages: list[dict[str, Any]]
     messages: list[AgentEvent]
     tool_events: list[ReviewUnitToolEvent]
     retrieval_history: list[dict[str, Any]]
@@ -138,11 +139,21 @@ class ReviewUnitExecutor:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            from app.agents.providers import LLMProviderError
+            from app.services.model_usage import annotate_usage
+
+            usage = exc.usage if isinstance(exc, LLMProviderError) else None
+            usage = annotate_usage(
+                usage,
+                review_unit_id=unit.id,
+                unit_complexity=unit.complexity,
+            )
             return ReviewUnitResult(
                 review_unit_id=unit.id,
                 status=ReviewUnitStatus.failed,
                 plan_skipped=False,
                 execution_budget=self._budget_for(unit),
+                model_usages=[usage] if usage is not None else [],
                 error=f"{type(exc).__name__}: {exc}",
             )
 
@@ -167,6 +178,7 @@ class ReviewUnitExecutor:
             "skip_plan": skip_plan,
             "context": [],
             "issues": [],
+            "model_usages": [],
             "messages": [],
             "tool_events": [],
             "retrieval_history": [],
@@ -196,6 +208,7 @@ class ReviewUnitExecutor:
             messages=result.get("messages") or [],
             tool_events=result.get("tool_events") or [],
             execution_budget=result.get("budget") or budget,
+            model_usages=result.get("model_usages") or [],
             error=result.get("error"),
             human_request=result.get("human_request"),
         )
@@ -241,11 +254,12 @@ class ReviewUnitExecutor:
     async def _plan_unit_node(
         self, state: "_ReviewUnitGraphState"
     ) -> "_ReviewUnitGraphState":
-        action, budget, legacy = await self._decide_unit(state)
+        action, budget, legacy, model_usages = await self._decide_unit(state)
         return {
             "next_action": action,
             "budget": budget,
             "legacy_review_action": state.get("legacy_review_action", False) or legacy,
+            "model_usages": model_usages,
             "messages": [*state["messages"], self._event(
                 state["unit"].id, action, "selected", action.reason
             )],
@@ -262,11 +276,12 @@ class ReviewUnitExecutor:
                 action=AgentActionName.task_done,
                 reason="兼容旧 Provider：完成一次结构化问题报告后显式结束 Unit",
             )}
-        action, budget, legacy = await self._decide_unit(state)
+        action, budget, legacy, model_usages = await self._decide_unit(state)
         return {
             "next_action": action,
             "budget": budget,
             "legacy_review_action": state.get("legacy_review_action", False) or legacy,
+            "model_usages": model_usages,
             "messages": [*state["messages"], self._event(
                 state["unit"].id, action, "selected", action.reason
             )],
@@ -274,10 +289,15 @@ class ReviewUnitExecutor:
 
     async def _decide_unit(
         self, state: "_ReviewUnitGraphState"
-    ) -> tuple[AgentAction, ExecutionBudget, bool]:
+    ) -> tuple[AgentAction, ExecutionBudget, bool, list[dict[str, Any]]]:
         budget = state["budget"]
         if not budget.can_consume(model_calls=1, token_usage=600):
-            return AgentAction(action="task_done", reason="Unit 模型调用预算已耗尽"), budget, False
+            return (
+                AgentAction(action="task_done", reason="Unit 模型调用预算已耗尽"),
+                budget,
+                False,
+                list(state.get("model_usages") or []),
+            )
         budget = budget.consume(model_calls=1, token_usage=600)
         decision_state = self._unit_state(
             state["parent_state"], state["unit"], state["scope"],
@@ -290,7 +310,19 @@ class ReviewUnitExecutor:
             "retrieval_history": list(state["retrieval_history"]),
             "retrieval_no_new_rounds": state["retrieval_no_new_rounds"],
         })
-        action = await self.provider.decide(decision_state, state["parent_state"].get("model"))
+        from app.services.model_usage import annotate_usage, append_usage, unpack_model_call
+
+        raw_result = await self.provider.decide(
+            decision_state, state["parent_state"].get("model")
+        )
+        action, usage = unpack_model_call(raw_result)
+        usage = annotate_usage(
+            usage,
+            accounted_tokens_estimate=600,
+            review_unit_id=state["unit"].id,
+            unit_complexity=state["unit"].complexity,
+        )
+        model_usages = append_usage(state.get("model_usages") or [], usage)
         legacy_review = action.action == AgentActionName.review_code
         if legacy_review:
             action = AgentAction(
@@ -305,7 +337,7 @@ class ReviewUnitExecutor:
             action = AgentAction(action=AgentActionName.task_done, reason=action.reason)
         if action.action not in UNIT_ALLOWED_ACTIONS:
             action = AgentAction(action=AgentActionName.task_done, reason="Unit 动作不在只读白名单")
-        return action, budget, legacy_review
+        return action, budget, legacy_review, model_usages
 
     @staticmethod
     def _route_unit_action(state: "_ReviewUnitGraphState") -> str:
@@ -421,13 +453,26 @@ class ReviewUnitExecutor:
             return {"pending_issues": [], "next_action": None}
         budget = budget.consume(diagnosis_attempts=1, model_calls=1, token_usage=4_096)
         pr = PullRequestInfo.model_validate(state["parent_state"].get("pr_info") or {})
-        model_issues = await self.provider.review(
+        from app.services.model_usage import annotate_usage, append_usage, unpack_model_call
+
+        raw_result = await self.provider.review(
             pr,
             state["unit_files"],
             self._enhanced_diff(state["unit_diff"], state["context"]),
             state["parent_state"].get("model"),
         )
-        return {"pending_issues": model_issues, "budget": budget}
+        model_issues, usage = unpack_model_call(raw_result)
+        usage = annotate_usage(
+            usage,
+            accounted_tokens_estimate=4_096,
+            review_unit_id=state["unit"].id,
+            unit_complexity=state["unit"].complexity,
+        )
+        return {
+            "pending_issues": model_issues,
+            "budget": budget,
+            "model_usages": append_usage(state.get("model_usages") or [], usage),
+        }
 
     async def _collect_issue_node(
         self, state: "_ReviewUnitGraphState"

@@ -8,6 +8,7 @@ from app.graph.state import ReviewState
 from app.models.review import ReviewPhase
 from app.services.review_rebuild import rebuild_task_from_state
 from app.services.report_service import ReportService
+from app.services.model_usage import append_usage, unpack_model_call
 
 logger = logging.getLogger("RepoGuardian.Node")
 
@@ -29,6 +30,7 @@ async def report_node(state: ReviewState) -> ReviewState:
     })
     task = rebuild_task_from_state(report_state)
     purpose_summary = None
+    model_usages = append_usage(state.get("model_usages") or [], None)
     if task.pr:
         provider = state.get("_provider")
         if provider is None and state.get("_report_purpose_model_enabled"):
@@ -40,10 +42,13 @@ async def report_node(state: ReviewState) -> ReviewState:
             )
         if provider is not None:
             try:
-                purpose_summary = await provider.summarize_pr_purpose(
+                raw_result = await provider.summarize_pr_purpose(
                     task.pr, task.changed_files, task.model
                 )
+                purpose_summary, usage = unpack_model_call(raw_result)
+                model_usages = append_usage(model_usages, usage)
             except LLMProviderError as exc:
+                model_usages = append_usage(model_usages, exc.usage)
                 logger.warning("PR 作用中文概括生成失败，使用确定性中文兜底：%s", exc)
     markdown = ReportService().generate(task, purpose_summary=purpose_summary)
     logger.info("📝 [报告] 报告生成完成（%d 字符 Markdown）", len(markdown))
@@ -52,6 +57,7 @@ async def report_node(state: ReviewState) -> ReviewState:
         status=final_status,
         phase=final_phase,
         updated_at=updated_at,
+        model_usages=model_usages,
         step_progress=append_step(state, "report", "completed", "报告已生成"),
     )
 

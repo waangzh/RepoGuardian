@@ -9,10 +9,11 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import PurePosixPath
-from typing import Any, Literal
+from typing import Any, Generic, Iterator, Literal, TypeVar
 from uuid import uuid4
 
 from pydantic import (
@@ -391,6 +392,102 @@ class ExecutionBudget(BaseModel):
         return self.model_copy(
             update={name: getattr(self, name) + amount for name, amount in amounts.items()}
         )
+
+
+class ModelUsage(BaseModel):
+    """一次模型调用的只读资源观测；不参与当前逻辑预算判定。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    provider: str
+    model: str
+    operation: str
+    review_unit_id: str | None = None
+    unit_complexity: "ReviewUnitComplexity | None" = None
+    accounted_tokens_estimate: int | None = Field(default=None, ge=0)
+    estimated_input_tokens: int = Field(default=0, ge=0)
+    max_output_tokens: int = Field(default=0, ge=0)
+    actual_input_tokens: int | None = Field(default=None, ge=0)
+    actual_output_tokens: int | None = Field(default=None, ge=0)
+    actual_total_tokens: int | None = Field(default=None, ge=0)
+    cached_input_tokens: int | None = Field(default=None, ge=0)
+    reasoning_output_tokens: int | None = Field(default=None, ge=0)
+    latency_ms: int = Field(ge=0)
+    cost_microusd: int | None = Field(default=None, ge=0)
+    usage_available: bool = False
+    accounting_source: Literal["actual", "missing"] = "missing"
+    response_metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @computed_field
+    @property
+    def estimation_delta_tokens(self) -> int | None:
+        if self.accounted_tokens_estimate is None or self.actual_total_tokens is None:
+            return None
+        return self.accounted_tokens_estimate - self.actual_total_tokens
+
+
+class ModelUsageStats(BaseModel):
+    calls: int = Field(default=0, ge=0)
+    usage_available_calls: int = Field(default=0, ge=0)
+    usage_missing_calls: int = Field(default=0, ge=0)
+    usage_coverage_rate: float = Field(default=0.0, ge=0, le=1)
+    actual_input_tokens: int = Field(default=0, ge=0)
+    actual_output_tokens: int = Field(default=0, ge=0)
+    actual_total_tokens: int = Field(default=0, ge=0)
+    cached_input_tokens: int = Field(default=0, ge=0)
+    reasoning_output_tokens: int = Field(default=0, ge=0)
+    accounted_tokens_estimate: int = Field(default=0, ge=0)
+    estimation_delta_tokens: int = 0
+    cost_microusd: int = Field(default=0, ge=0)
+    cost_available_calls: int = Field(default=0, ge=0)
+    input_tokens_p50: int | None = Field(default=None, ge=0)
+    input_tokens_p95: int | None = Field(default=None, ge=0)
+    output_tokens_p50: int | None = Field(default=None, ge=0)
+    output_tokens_p95: int | None = Field(default=None, ge=0)
+    latency_ms_p50: int | None = Field(default=None, ge=0)
+    latency_ms_p95: int | None = Field(default=None, ge=0)
+
+
+class ModelUsageGroup(BaseModel):
+    key: str
+    stats: ModelUsageStats
+
+
+class ModelUsageSummary(BaseModel):
+    overall: ModelUsageStats = Field(default_factory=ModelUsageStats)
+    by_operation: list[ModelUsageGroup] = Field(default_factory=list)
+    by_unit_complexity: list[ModelUsageGroup] = Field(default_factory=list)
+    by_provider: list[ModelUsageGroup] = Field(default_factory=list)
+
+
+ModelCallValue = TypeVar("ModelCallValue")
+
+
+@dataclass(frozen=True)
+class ModelCallResult(Generic[ModelCallValue]):
+    """Provider 业务结果及其对应的资源观测。"""
+
+    value: ModelCallValue
+    usage: ModelUsage
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.value, name)
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter(self.value)  # type: ignore[arg-type]
+
+    def __len__(self) -> int:
+        return len(self.value)  # type: ignore[arg-type]
+
+    def __getitem__(self, key: Any) -> Any:
+        return self.value[key]  # type: ignore[index]
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, ModelCallResult):
+            return self.value == other.value and self.usage == other.usage
+        return self.value == other
 
 
 # ---------------------------------------------------------------------------
@@ -1391,6 +1488,7 @@ class ReviewUnitResult(BaseModel):
     messages: list[AgentEvent] = Field(default_factory=list)
     tool_events: list[ReviewUnitToolEvent] = Field(default_factory=list)
     execution_budget: ExecutionBudget = Field(default_factory=ExecutionBudget)
+    model_usages: list[ModelUsage] = Field(default_factory=list)
     error: str | None = None
     human_request: HumanReviewRequest | None = None
 
@@ -1452,6 +1550,8 @@ class ReviewTask(BaseModel):
     changed_files: list[ChangedFile] = Field(default_factory=list)
     review_units: list[ReviewUnit] = Field(default_factory=list)
     review_unit_results: list[ReviewUnitResult] = Field(default_factory=list)
+    model_usages: list[ModelUsage] = Field(default_factory=list)
+    model_usage_summary: ModelUsageSummary = Field(default_factory=ModelUsageSummary)
     excluded_files: list[ExcludedReviewFile] = Field(default_factory=list)
     issues: list[ReviewIssue] = Field(default_factory=list)
     issue_metrics: IssueMetrics = Field(default_factory=IssueMetrics)

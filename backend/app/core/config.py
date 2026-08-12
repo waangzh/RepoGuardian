@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     repoguardian_model: str = "gpt-4.1-mini"
     repoguardian_provider: str = "openai"  # openai / deepseek / openai-compatible
+    # JSON: {"provider:model":{"input":0.40,"output":1.60,"cached_input":0.10}}
+    # Rates are USD per one million tokens. Missing entries keep observed cost unknown.
+    repoguardian_model_pricing_json: str = "{}"
 
     # ---- LangSmith 可观测性（默认不追踪，也不上传审查内容）----
     repoguardian_langsmith_tracing: bool = False

@@ -17,6 +17,7 @@ from app.models.review import (
 from app.services.issue_deduplication import IssueDeduplicationService
 from app.services.issue_policy import IssuePolicyService
 from app.services.issue_verifier import IssueVerifierService
+from app.services.model_usage import append_usage
 
 
 async def issue_policy_node(state: ReviewState) -> ReviewState:
@@ -111,6 +112,10 @@ async def issue_verifier_node(state: ReviewState) -> ReviewState:
         review_issues=[issue.model_dump(mode="json") for issue in result.issues],
         issue_verifications=[item.model_dump(mode="json") for item in result.verifications],
         issue_metrics=result.metrics.model_dump(mode="json"),
+        model_usages=[
+            *append_usage(state.get("model_usages") or [], None),
+            *(item.model_dump(mode="json") for item in result.model_usages),
+        ],
         warnings=warnings,
         step_progress=append_step(
             state,
@@ -151,6 +156,10 @@ async def issue_deduplication_node(state: ReviewState) -> ReviewState:
             item.model_dump(mode="json") for item in result.decisions
         ],
         issue_metrics=result.metrics.model_dump(mode="json"),
+        model_usages=[
+            *append_usage(state.get("model_usages") or [], None),
+            *(item.model_dump(mode="json") for item in result.model_usages),
+        ],
         step_progress=append_step(
             state,
             "issue_deduplication",

@@ -6,7 +6,7 @@
 from typing import Any
 
 from app.agents.providers import LLMProvider
-from app.models.review import ChangedFile, PullRequestInfo, ReviewIssue
+from app.models.review import ChangedFile, ModelCallResult, PullRequestInfo, ReviewIssue
 
 
 class ReviewAgent:
@@ -22,7 +22,7 @@ class ReviewAgent:
         diff_text: str,
         model: str | None,
         context_snippets: list[dict[str, Any]] | None = None,
-    ) -> list[ReviewIssue]:
+    ) -> ModelCallResult[list[ReviewIssue]] | list[ReviewIssue]:
         """调用 LLM 执行代码审查，返回结构化问题列表。"""
         return await self._provider.review(pr_info, changed_files, diff_text, model)
 

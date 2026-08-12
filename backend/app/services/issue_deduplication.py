@@ -12,9 +12,11 @@ from app.models.review import (
     IssueDeduplicationDecision,
     IssueMetrics,
     IssueStatus,
+    ModelUsage,
     ReviewIssue,
     Severity,
 )
+from app.services.model_usage import unpack_model_call
 
 
 @dataclass(frozen=True)
@@ -22,6 +24,7 @@ class IssueDeduplicationResult:
     issues: list[ReviewIssue]
     decisions: list[IssueDeduplicationDecision]
     metrics: IssueMetrics
+    model_usages: list[ModelUsage]
 
 
 class IssueDeduplicationService:
@@ -48,6 +51,7 @@ class IssueDeduplicationService:
         by_id = {issue.id: issue for issue in publishable}
         removed: set[str] = set()
         decisions: list[IssueDeduplicationDecision] = []
+        model_usages: list[ModelUsage] = []
 
         for group, exact_anchor_group in self._candidate_groups(publishable):
             active = [by_id[issue.id] for issue in group if issue.id not in removed]
@@ -55,10 +59,16 @@ class IssueDeduplicationService:
                 continue
             decision: IssueDeduplicationDecision | None = None
             try:
-                proposed = await provider.deduplicate_issues(active, model)
+                raw_result = await provider.deduplicate_issues(active, model)
+                proposed, usage = unpack_model_call(raw_result)
+                if usage is not None:
+                    model_usages.append(usage)
                 decision = IssueDeduplicationDecision.model_validate(proposed)
                 self._validate_decision(active, decision, exact_anchor_group)
-            except Exception:
+            except Exception as exc:
+                usage = getattr(exc, "usage", None)
+                if usage is not None and all(item.id != usage.id for item in model_usages):
+                    model_usages.append(usage)
                 if exact_anchor_group:
                     decision = IssueDeduplicationDecision(
                         canonical_issue_id=active[0].id,
@@ -81,7 +91,7 @@ class IssueDeduplicationService:
             "confirmed_count": sum(issue.status == IssueStatus.confirmed for issue in final),
             "needs_human_count": sum(issue.status == IssueStatus.needs_human for issue in final),
         })
-        return IssueDeduplicationResult(final, decisions, updated_metrics)
+        return IssueDeduplicationResult(final, decisions, updated_metrics, model_usages)
 
     def _candidate_groups(
         self, issues: list[ReviewIssue]

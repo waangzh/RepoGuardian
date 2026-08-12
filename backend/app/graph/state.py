@@ -42,6 +42,7 @@ class ReviewState(TypedDict, total=False):
     review_plan: dict[str, Any] | None
     review_units: list[dict[str, Any]] | None
     review_unit_results: list[dict[str, Any]] | None
+    model_usages: list[dict[str, Any]] | None
     excluded_files: list[dict[str, Any]] | None
 
     # ---- 仓库索引 ----
