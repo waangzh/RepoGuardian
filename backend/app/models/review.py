@@ -580,12 +580,24 @@ class ExcludedReviewFile(BaseModel):
     classifications: list[str] = Field(default_factory=list)
 
 
+class ContextProvenance(BaseModel):
+    """Planner 为文件进入 Unit 可读范围给出的可审计依据。"""
+
+    file: str
+    source: str
+    distance: int = Field(ge=0, le=2)
+    confidence: float = Field(ge=0, le=1)
+    why_retrieved: str
+    unit_id: str | None = None
+
+
 class ReviewUnit(BaseModel):
     """由确定性 Planner 生成的最小独立审查单元。"""
 
     id: str
     primary_files: list[str] = Field(min_length=1)
     related_files: list[str] = Field(default_factory=list)
+    context_provenance: list[ContextProvenance] = Field(default_factory=list)
     diff_hunk_ids: list[str] = Field(default_factory=list)
     changed_symbols: list[str] = Field(default_factory=list)
     rule_ids: list[str] = Field(default_factory=list)
@@ -602,6 +614,10 @@ class ReviewUnit(BaseModel):
         self.related_files = [
             path for path in dict.fromkeys(self.related_files) if path not in primary
         ]
+        readable = primary | set(self.related_files)
+        self.context_provenance = [
+            item for item in self.context_provenance if item.file in readable
+        ]
         return self
 
 
@@ -611,6 +627,7 @@ class ReviewToolScope(BaseModel):
     review_unit_id: str
     commentable_files: set[str]
     readable_files: set[str]
+    context_provenance: dict[str, ContextProvenance] = Field(default_factory=dict)
     repository_root: str | None = None
     max_lines_per_read: int = Field(gt=0)
     max_search_results: int = Field(gt=0)
@@ -619,6 +636,8 @@ class ReviewToolScope(BaseModel):
     def require_commentable_subset(self) -> "ReviewToolScope":
         if not self.commentable_files <= self.readable_files:
             raise ValueError("commentable_files must be a subset of readable_files")
+        if not set(self.context_provenance) <= self.readable_files:
+            raise ValueError("context provenance files must be readable")
         return self
 
 
@@ -1333,6 +1352,10 @@ class ContextSnippet(BaseModel):
     relevance: str         # direct / caller / test / adjacent
     symbol: str | None = None
     review_unit_id: str | None = None
+    source: str | None = None
+    distance: int | None = Field(default=None, ge=0, le=2)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    why_retrieved: str | None = None
 
 
 class IssueVerificationBudget(BaseModel):

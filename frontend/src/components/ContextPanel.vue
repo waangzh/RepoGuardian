@@ -29,6 +29,11 @@ const relevanceLabel: Record<string, string> = {
         <small>L{{ s.start_line }}–L{{ s.end_line }}<template v-if="s.review_unit_id"> · Unit {{ s.review_unit_id.slice(0, 8) }}</template></small>
       </summary>
       <p>{{ s.relevance }}</p>
+      <p v-if="s.why_retrieved">
+        {{ s.why_retrieved }}
+        <template v-if="s.confidence != null"> · 置信度 {{ Math.round(s.confidence * 100) }}%</template>
+        <template v-if="s.distance != null"> · 距离 {{ s.distance }}</template>
+      </p>
       <pre><code>{{ s.content }}</code></pre>
     </details>
   </section>

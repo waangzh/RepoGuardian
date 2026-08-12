@@ -557,6 +557,9 @@ class ReviewUnitExecutor:
             "symbol_index": [
                 item for item in state.get("symbol_index") or [] if item.get("file") in readable
             ],
+            "context_provenance": [
+                item.model_dump(mode="json") for item in unit.context_provenance
+            ],
             "context_snippets": context,
             "retrieval_history": [],
             "execution_budget": budget.model_dump(),
@@ -568,9 +571,15 @@ class ReviewUnitExecutor:
             return unit_diff
         sections = ["## Unit scoped context"]
         for snippet in context:
+            provenance = snippet.get("why_retrieved")
             sections.append(
                 f"### {snippet.get('file')}:{snippet.get('start_line')}-{snippet.get('end_line')}"
             )
+            if provenance:
+                sections.append(
+                    f"Retrieved via {snippet.get('source')} (distance={snippet.get('distance')}, "
+                    f"confidence={snippet.get('confidence')}): {provenance}"
+                )
             sections.append(snippet.get("content", ""))
         sections.extend(["## Unit diff", unit_diff])
         return "\n".join(sections)
