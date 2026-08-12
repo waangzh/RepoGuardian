@@ -9,6 +9,7 @@ from app.graph.policies import consume_budget
 from app.graph.state import ReviewState
 from app.models.review import AgentAction, AgentActionName, PatchResult, PatchStatus
 from app.tools.patch_tool import PatchTool, extract_touched_files
+from app.services.model_usage import annotate_usage, append_usage, unpack_model_call
 
 logger = logging.getLogger("RepoGuardian.Node")
 
@@ -61,7 +62,9 @@ async def _generate_patch(state: ReviewState, action: AgentAction) -> ReviewStat
         settings.repoguardian_model,
     )
     logger.info("🩹 [生成 patch] 调用 LLM 生成修复 diff...")
-    patches = await provider.generate_patch(dict(state), state.get("model"))
+    raw_result = await provider.generate_patch(dict(state), state.get("model"))
+    patches, usage = unpack_model_call(raw_result)
+    usage = annotate_usage(usage, accounted_tokens_estimate=_PATCH_TOKEN_RESERVE)
     previous = [PatchResult.model_validate(item) for item in state.get("patches") or []]
     eligible_issue_ids = [
         item.get("issue_id", "")
@@ -109,6 +112,7 @@ async def _generate_patch(state: ReviewState, action: AgentAction) -> ReviewStat
         active_patch_id=None,
         active_patch_validation_passed=None,
         execution_budget=budget.model_dump(),
+        model_usages=append_usage(state.get("model_usages") or [], usage),
         agent_events=append_event(state, action.action, action.reason, "completed", message),
         step_progress=append_step(state, "patch_generate", "completed", message),
     )

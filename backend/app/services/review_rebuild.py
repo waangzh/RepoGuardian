@@ -20,6 +20,7 @@ from app.models.review import (
     PullRequestInfo,
     PullRequestRef,
     RepoSnapshot,
+    ModelUsage,
     ReviewMode,
     ReviewPhase,
     ReviewIssue,
@@ -36,11 +37,13 @@ from app.models.review import (
     ValidationResult,
     ValidationSnapshot,
 )
+from app.services.model_usage import summarize_model_usage
 
 
 def rebuild_task_from_state(state: ReviewState) -> ReviewTask:
     """从图执行结束后的 ReviewState 重建完整的 ReviewTask 聚合根。"""
     now = datetime.now(timezone.utc)
+    model_usages = _rebuild_model_usages(state)
     return ReviewTask(
         id=state.get("task_id", ""),
         status=state.get("status", "completed"),
@@ -60,6 +63,8 @@ def rebuild_task_from_state(state: ReviewState) -> ReviewTask:
         changed_files=rebuild_changed_files(state.get("changed_files") or []),
         review_units=[ReviewUnit.model_validate(item) for item in state.get("review_units") or []],
         review_unit_results=rebuild_review_unit_results(state.get("review_unit_results") or []),
+        model_usages=model_usages,
+        model_usage_summary=summarize_model_usage(model_usages),
         excluded_files=[
             ExcludedReviewFile.model_validate(item) for item in state.get("excluded_files") or []
         ],
@@ -86,6 +91,17 @@ def rebuild_task_from_state(state: ReviewState) -> ReviewTask:
         created_at=_rebuild_datetime(state.get("created_at"), now),
         updated_at=_rebuild_datetime(state.get("updated_at"), now),
     )
+
+
+def _rebuild_model_usages(state: ReviewState) -> list[ModelUsage]:
+    raw_items = list(state.get("model_usages") or [])
+    for raw_result in state.get("review_unit_results") or []:
+        raw_items.extend(raw_result.get("model_usages") or [])
+    by_id: dict[str, ModelUsage] = {}
+    for raw in raw_items:
+        usage = ModelUsage.model_validate(raw)
+        by_id[usage.id] = usage
+    return list(by_id.values())
 
 
 def _rebuild_datetime(value: object, default: datetime) -> datetime:

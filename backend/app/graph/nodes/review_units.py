@@ -91,6 +91,7 @@ async def review_units_node(state: ReviewState) -> ReviewState:
             )
             if cached and cached.result_snapshot:
                 result = ReviewUnitResult.model_validate(cached.result_snapshot)
+                result = result.model_copy(update={"model_usages": []})
                 reusable[unit.id] = result
                 repository.record_unit_result(
                     task_id=str(state["task_id"]),
