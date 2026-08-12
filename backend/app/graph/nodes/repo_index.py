@@ -8,11 +8,12 @@ logger = logging.getLogger("RepoGuardian.Node")
 
 
 async def repo_index_node(state: ReviewState) -> ReviewState:
-    """索引节点：扫描克隆仓库，构建文件级和符号级索引。
+    """索引节点：扫描克隆仓库，构建 Repository Intelligence 图。
 
     索引：
         file_index   — 文件路径、语言、大小、导入模块
-        symbol_index — 函数/类/方法定义、签名、调用关系（tree-sitter 解析）
+        symbol_index — 多语言声明、签名与调用关系
+        repository_graph — 文件、符号与高置信关系边
         project_meta — 语言、框架、测试目录、入口点
     """
     repo_path = state.get("repo_path", "")
@@ -27,6 +28,7 @@ async def repo_index_node(state: ReviewState) -> ReviewState:
     return ReviewState(
         file_index=result["file_index"],
         symbol_index=result["symbol_index"],
+        repository_graph=result["repository_graph"],
         project_meta=result["project_meta"],
         step_progress=append_step(
             state,
