@@ -152,6 +152,7 @@ export interface ReviewUnit {
   id: string;
   primary_files: string[];
   related_files: string[];
+  context_provenance: ContextProvenance[];
   diff_hunk_ids: string[];
   changed_symbols: string[];
   rule_ids: string[];
@@ -180,6 +181,15 @@ export interface ReviewPreviewResponse {
     unavailable_reason?: string | null;
   };
   warnings: string[];
+}
+
+export interface ContextProvenance {
+  file: string;
+  source: string;
+  distance: number;
+  confidence: number;
+  why_retrieved: string;
+  unit_id?: string | null;
 }
 
 export interface ReviewIssue {
@@ -258,6 +268,10 @@ export interface ContextSnippet {
   relevance: string;
   symbol?: string | null;
   review_unit_id?: string | null;
+  source?: string | null;
+  distance?: number | null;
+  confidence?: number | null;
+  why_retrieved?: string | null;
 }
 
 export interface RepoSnapshot {

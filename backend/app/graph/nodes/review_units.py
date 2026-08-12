@@ -21,6 +21,7 @@ async def review_plan_node(state: ReviewState) -> ReviewState:
         head_sha=state.get("head_sha") or "",
         file_index=state.get("file_index") or [],
         symbol_index=state.get("symbol_index") or [],
+        repository_graph=state.get("repository_graph") or {},
         model=state.get("model") or settings.repoguardian_model,
         provider=settings.repoguardian_provider,
     )

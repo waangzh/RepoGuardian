@@ -47,6 +47,7 @@ class ReviewState(TypedDict, total=False):
     # ---- 仓库索引 ----
     file_index: list[dict[str, Any]] | None     # [{path, language, size, imports}, ...]
     symbol_index: list[dict[str, Any]] | None   # [{file, symbol, type, lines, signature, calls}, ...]
+    repository_graph: dict[str, Any] | None     # {files, symbols, edges, metadata}
     project_meta: dict[str, Any] | None         # {language, framework, test_dirs, ...}
 
     # ---- 上下文 ----

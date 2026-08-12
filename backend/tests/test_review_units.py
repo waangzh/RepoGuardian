@@ -369,6 +369,72 @@ async def test_context_retrieval_plan_is_restricted_to_unit_scope(tmp_path: Path
         )
 
 
+def test_repository_graph_builds_layered_scope_with_provenance() -> None:
+    files = _parse(_diff("app/services/user.py"))
+    file_index = [
+        {"path": "app/services/user.py", "language": "python", "imports": ["app.models.user"]},
+        {"path": "app/models/user.py", "language": "python", "imports": ["app.schemas.user"]},
+        {"path": "app/schemas/user.py", "language": "python", "imports": []},
+        {"path": "tests/test_user.py", "language": "python", "imports": ["app.services.user"]},
+        {"path": "pyproject.toml", "language": "unknown", "imports": []},
+    ]
+    from app.tools.repository_graph import build_repository_graph
+
+    graph = build_repository_graph(file_index, [])
+    unit = DeterministicReviewPlanner().plan(
+        files,
+        base_sha="b",
+        head_sha="h",
+        file_index=file_index,
+        repository_graph=graph,
+    ).review_units[0]
+    provenance = {item.file: item for item in unit.context_provenance}
+
+    assert provenance["app/models/user.py"].source == "import"
+    assert provenance["app/models/user.py"].distance == 1
+    assert provenance["tests/test_user.py"].source == "test"
+    assert provenance["tests/test_user.py"].distance == 1
+    assert provenance["app/schemas/user.py"].source == "dependency"
+    assert provenance["app/schemas/user.py"].distance == 2
+    assert provenance["pyproject.toml"].source == "config"
+    assert all(item.unit_id == unit.id for item in provenance.values())
+
+
+@pytest.mark.asyncio
+async def test_code_search_attaches_scope_provenance(tmp_path: Path) -> None:
+    (tmp_path / "primary.py").write_text("def primary():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "related.py").write_text("VALUE = 1\n", encoding="utf-8")
+    unit = ReviewUnit(
+        id="unit",
+        primary_files=["primary.py"],
+        related_files=["related.py"],
+        context_provenance=[{
+            "file": "related.py", "source": "caller", "distance": 1,
+            "confidence": 0.94, "why_retrieved": "related.py calls primary",
+            "unit_id": "unit",
+        }],
+        diff_hunk_ids=[], changed_symbols=[], rule_ids=[], risk_tags=[],
+        estimated_tokens=512, complexity=ReviewUnitComplexity.small,
+        fingerprint="fingerprint", grouping_reason="single_file",
+    )
+    scope = DeterministicReviewPlanner().build_scope(unit)
+    snippets = await CodeSearchTool().retrieve_context(
+        changed_files=[{"file_path": "primary.py"}],
+        symbol_index=[],
+        file_index=[{"path": "primary.py"}, {"path": "related.py"}],
+        repo_path=str(tmp_path),
+        plan={
+            "reason": "read approved related file", "target_files": ["related.py"],
+            "relevance_types": ["text"], "search_terms": ["VALUE"],
+        },
+        scope=scope,
+    )
+    assert snippets[0]["source"] == "caller"
+    assert snippets[0]["distance"] == 1
+    assert snippets[0]["confidence"] == 0.94
+    assert snippets[0]["why_retrieved"] == "related.py calls primary"
+
+
 class PreviewGitHub:
     async def fetch_pr(self, pr_url: str) -> PullRequestInfo:
         return _pr()

@@ -162,7 +162,11 @@ class CodeSearchTool(BaseTool):
                 source = next((item for item in file_index if item["path"] == source_file), None)
                 for imported in (source or {}).get("imports", []):
                     for candidate in symbol_index:
-                        if Path(candidate["file"]).stem == imported:
+                        module_tail = (
+                            str(imported).lstrip(".").replace("::", ".")
+                            .rsplit(".", 1)[-1].rsplit("/", 1)[-1]
+                        )
+                        if Path(candidate["file"]).stem == module_tail:
                             add_symbol(candidate, "import_source")
 
         if RetrievalRelevanceType.failure_location in relevance:
@@ -192,6 +196,14 @@ class CodeSearchTool(BaseTool):
                 if len(lines) > normalized_scope.max_lines_per_read:
                     snippet["content"] = "\n".join(lines[:normalized_scope.max_lines_per_read]) + "\n...(truncated)"
                 snippet["review_unit_id"] = normalized_scope.review_unit_id
+                provenance = normalized_scope.context_provenance.get(str(snippet.get("file")))
+                if provenance is not None:
+                    snippet.update({
+                        "source": provenance.source,
+                        "distance": provenance.distance,
+                        "confidence": provenance.confidence,
+                        "why_retrieved": provenance.why_retrieved,
+                    })
         return result
 
 

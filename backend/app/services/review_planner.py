@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.services.fingerprints import unit_fingerprint
 from app.models.review import (
     ChangedFile,
+    ContextProvenance,
     ExcludedReviewFile,
     PlannedChangedFile,
     ReviewPlan,
@@ -23,7 +24,7 @@ from app.models.review import (
 )
 from app.tools.diff_parser import stable_hunk_id
 
-PLANNER_VERSION = "review-unit-planner-v1"
+PLANNER_VERSION = "review-unit-planner-v2"
 
 _BINARY_EXTENSIONS = {
     ".7z", ".a", ".avi", ".bin", ".bmp", ".class", ".dll", ".dylib",
@@ -103,6 +104,7 @@ class DeterministicReviewPlanner:
         head_sha: str,
         file_index: list[dict[str, Any]] | None = None,
         symbol_index: list[dict[str, Any]] | None = None,
+        repository_graph: dict[str, Any] | None = None,
         model: str | None = None,
         provider: str | None = None,
     ) -> ReviewPlan:
@@ -155,6 +157,7 @@ class DeterministicReviewPlanner:
                 head_sha,
                 file_index or [],
                 symbol_index or [],
+                repository_graph or {},
                 model or settings.repoguardian_model,
                 provider or settings.repoguardian_provider,
             )
@@ -182,10 +185,23 @@ class DeterministicReviewPlanner:
     def build_scope(
         self, unit: ReviewUnit, repository_root: str | None = None
     ) -> ReviewToolScope:
+        provenance = {
+            path: ContextProvenance(
+                file=path,
+                source="changed_symbol" if unit.changed_symbols else "changed_file",
+                distance=0,
+                confidence=1.0,
+                why_retrieved="primary file changed in this review unit",
+                unit_id=unit.id,
+            )
+            for path in unit.primary_files
+        }
+        provenance.update({item.file: item for item in unit.context_provenance})
         return ReviewToolScope(
             review_unit_id=unit.id,
             commentable_files=set(unit.primary_files),
             readable_files=set(unit.primary_files) | set(unit.related_files),
+            context_provenance=provenance,
             repository_root=repository_root,
             max_lines_per_read=self.max_lines_per_read,
             max_search_results=self.max_search_results,
@@ -392,6 +408,7 @@ class DeterministicReviewPlanner:
         head_sha: str,
         file_index: list[dict[str, Any]],
         symbol_index: list[dict[str, Any]],
+        repository_graph: dict[str, Any],
         model: str,
         provider: str,
     ) -> ReviewUnit:
@@ -409,7 +426,8 @@ class DeterministicReviewPlanner:
         if len({PurePosixPath(path).parent for path in primary}) > 1:
             risks.append("cross_module")
         risks = sorted(set(risks))
-        related = self._related_files(primary, file_index)
+        related_context = self._related_context(primary, file_index, repository_graph)
+        related = [item.file for item in related_context]
         normalized = self.normalized_unit_diff(draft, changed_by_path, all_hunk_ids)
         changed_lines = sum(
             changed_by_path[path].additions + changed_by_path[path].deletions for path in primary
@@ -429,6 +447,7 @@ class DeterministicReviewPlanner:
             "planner_version": PLANNER_VERSION,
         }
         unit_id = "ru-" + self._digest(identity)[:16]
+        related_context = [item.model_copy(update={"unit_id": unit_id}) for item in related_context]
         fingerprint = unit_fingerprint(
             base_sha=base_sha,
             head_sha=head_sha,
@@ -448,6 +467,7 @@ class DeterministicReviewPlanner:
             id=unit_id,
             primary_files=primary,
             related_files=related,
+            context_provenance=related_context,
             diff_hunk_ids=selected_hunks,
             changed_symbols=symbols,
             rule_ids=rules,
@@ -612,20 +632,101 @@ class DeterministicReviewPlanner:
 
     @staticmethod
     def _related_files(primary: list[str], file_index: list[dict[str, Any]]) -> list[str]:
+        return [
+            item.file
+            for item in DeterministicReviewPlanner._related_context(primary, file_index, {})
+        ]
+
+    @staticmethod
+    def _related_context(
+        primary: list[str],
+        file_index: list[dict[str, Any]],
+        repository_graph: dict[str, Any],
+    ) -> list[ContextProvenance]:
+        """按距离、证据类型和置信度生成不可扩张的分层可读范围。"""
         if not file_index:
             return []
-        by_stem: dict[str, list[str]] = defaultdict(list)
-        by_path = {item.get("path"): item for item in file_index if item.get("path")}
-        for path in by_path:
-            by_stem[PurePosixPath(path).stem].append(path)
-        related: set[str] = set()
-        for path in primary:
-            for imported in (by_path.get(path) or {}).get("imports", []):
-                related.update(by_stem.get(str(imported).split(".")[0], []))
-            for candidate in by_path:
-                if DeterministicReviewPlanner._is_test_for(candidate, path):
-                    related.add(candidate)
-        return sorted(related - set(primary))[:8]
+        from app.tools.repository_graph import build_repository_graph
+
+        graph = repository_graph or build_repository_graph(file_index, [])
+        primary_set = set(primary)
+        candidates: dict[str, ContextProvenance] = {}
+        source_order = {
+            "caller": 0, "callee": 1, "test": 2, "import": 3,
+            "importer": 4, "implementation": 5, "dependency": 6, "config": 7,
+        }
+
+        def offer(path: str, source: str, distance: int, confidence: float, why: str) -> None:
+            if path in primary_set or path not in {item.get("path") for item in file_index}:
+                return
+            item = ContextProvenance(
+                file=path,
+                source=source,
+                distance=distance,
+                confidence=confidence,
+                why_retrieved=why,
+            )
+            current = candidates.get(path)
+            if current is None or (
+                distance, source_order.get(source, 99), -confidence, source
+            ) < (
+                current.distance, source_order.get(current.source, 99),
+                -current.confidence, current.source
+            ):
+                candidates[path] = item
+
+        for edge in graph.get("edges", []):
+            kind = str(edge.get("type", ""))
+            source = str(edge.get("source", ""))
+            target = str(edge.get("target", ""))
+            source_file = str(edge.get("source_file") or source.split("::", 1)[0])
+            target_file = str(edge.get("target_file") or target.split("::", 1)[0])
+            confidence = float(edge.get("confidence", 0))
+            why = str(edge.get("why", kind))
+            if kind == "imports":
+                if source_file in primary_set:
+                    offer(target_file, "import", 1, confidence, why)
+                if target_file in primary_set:
+                    source_path = PurePosixPath(source_file.casefold())
+                    is_test_importer = (
+                        any(part in {"test", "tests", "testing", "__tests__"} for part in source_path.parts)
+                        or source_path.name.startswith("test_")
+                        or any(token in source_path.name for token in (".test.", ".spec."))
+                    )
+                    offer(source_file, "test" if is_test_importer else "importer", 1, confidence, why)
+            elif kind == "calls":
+                if source_file in primary_set:
+                    offer(target_file, "callee", 1, confidence, why)
+                if target_file in primary_set:
+                    offer(source_file, "caller", 1, confidence, why)
+            elif kind == "test_of":
+                if target_file in primary_set:
+                    offer(source_file, "test", 1, confidence, why)
+                if source_file in primary_set:
+                    offer(target_file, "implementation", 1, confidence, why)
+            elif kind == "configures" and target_file in primary_set:
+                offer(source_file, "config", 2, confidence, why)
+
+        level_one = {path for path, item in candidates.items() if item.distance == 1}
+        for edge in graph.get("edges", []):
+            if edge.get("type") != "imports" or float(edge.get("confidence", 0)) < 0.85:
+                continue
+            source = str(edge.get("source", ""))
+            target = str(edge.get("target", ""))
+            if source in level_one:
+                offer(
+                    target, "dependency", 2, float(edge["confidence"]) * 0.85,
+                    f"transitive dependency via {source}: {edge.get('why', 'imports')}",
+                )
+
+        ranked = sorted(
+            candidates.values(),
+            key=lambda item: (
+                item.distance, source_order.get(item.source, 99),
+                -item.confidence, item.file,
+            ),
+        )
+        return ranked[:12]
 
     @staticmethod
     def _validate_primary_ownership(units: list[ReviewUnit]) -> None:

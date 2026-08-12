@@ -319,6 +319,7 @@ class ReviewService:
                 head_sha=pr.head.sha,
                 file_index=index["file_index"],
                 symbol_index=index["symbol_index"],
+                repository_graph=index["repository_graph"],
                 model=getattr(request, "model", None) or settings.repoguardian_model,
                 provider=settings.repoguardian_provider,
             )
@@ -767,6 +768,7 @@ class ReviewService:
                     "changed_files": [item.model_dump(mode="json") for item in changed_files],
                     "file_index": index["file_index"],
                     "symbol_index": index["symbol_index"],
+                    "repository_graph": index["repository_graph"],
                 }
                 result = await ReviewUnitExecutor(
                     self._provider,
