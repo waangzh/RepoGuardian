@@ -5,6 +5,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.agents.providers import LLMProviderError, OpenAICompatibleProvider, build_provider
+from app.graph.policies import UNIT_ACTION_REGISTRY
 from app.models.review import (
     ChangedFile,
     IssueVerificationBudget,
@@ -202,6 +203,20 @@ def test_unit_decision_prompt_documents_exact_retrieval_plan_schema() -> None:
     assert '"target_files":[]' in prompt
     assert '"relevance_types":["direct"]' in prompt
     assert "never use files or file_requests" in prompt
+
+
+def test_unit_decision_prompt_is_generated_from_action_registry() -> None:
+    prompt = OpenAICompatibleProvider._build_decision_prompt({
+        "phase": "discovery",
+        "unit_agent": True,
+    })
+
+    expected_actions = ", ".join(item.action.value for item in UNIT_ACTION_REGISTRY)
+    assert f"Allowed actions: {expected_actions}." in prompt
+    for item in UNIT_ACTION_REGISTRY:
+        assert f"- {item.action.value}: {item.prompt_instruction}" in prompt
+    assert '"action":"request_human"' in prompt
+    assert '"missing_information"' in prompt
 
 
 @pytest.mark.asyncio
