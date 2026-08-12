@@ -1,8 +1,68 @@
 """审查阶段、Agent 动作和执行预算的服务端策略。"""
 
+from dataclasses import dataclass
 from typing import Any
 
 from app.models.review import AgentAction, AgentActionName, ExecutionBudget, ReviewPhase
+
+
+@dataclass(frozen=True, slots=True)
+class UnitActionRegistration:
+    """Review Unit 动作的服务端唯一注册信息。"""
+
+    action: AgentActionName
+    route: str
+    prompt_instruction: str
+
+
+UNIT_ACTION_REGISTRY: tuple[UnitActionRegistration, ...] = (
+    UnitActionRegistration(
+        action=AgentActionName.retrieve_context,
+        route="execute_read_tool",
+        prompt_instruction=(
+            "Use only for bounded read-only context retrieval. tool_args must be exactly "
+            "{\"plan\": {...}}; the plan fields are reason, target_files, target_symbols, "
+            "search_terms, relevance_types, include_callers, include_callees, include_tests, "
+            "max_results, and depth. relevance_types must contain one or more of direct, caller, "
+            "callee, test, module_config, text, adjacent, type_definition, import_source, or "
+            "failure_location. Use target_files; never use files or file_requests."
+        ),
+    ),
+    UnitActionRegistration(
+        action=AgentActionName.report_issue,
+        route="report_issue",
+        prompt_instruction="Use once the available evidence is sufficient to run issue reporting.",
+    ),
+    UnitActionRegistration(
+        action=AgentActionName.task_done,
+        route="finish_unit",
+        prompt_instruction=(
+            "Use to finish the Review Unit after issue reporting, or when no clear issue exists. "
+            "Zero reported issues is valid."
+        ),
+    ),
+    UnitActionRegistration(
+        action=AgentActionName.request_human,
+        route="finish_unit",
+        prompt_instruction=(
+            "Use only when business rules are unavailable, multiple behaviors are safe, evidence "
+            "is insufficient, or a security, funds, permission, or data-migration decision needs "
+            "approval. Include human_request with missing_information, known_evidence, questions, "
+            "and prohibited_operations."
+        ),
+    ),
+)
+
+UNIT_ALLOWED_ACTIONS = frozenset(item.action for item in UNIT_ACTION_REGISTRY)
+UNIT_ACTION_ROUTES = {item.action.value: item.route for item in UNIT_ACTION_REGISTRY}
+
+
+def render_unit_action_protocol() -> str:
+    """从注册表生成模型可见的 Unit 动作协议。"""
+    return "\n".join(
+        f"- {item.action.value}: {item.prompt_instruction}"
+        for item in UNIT_ACTION_REGISTRY
+    )
 
 
 ALLOWED_ACTIONS_BY_PHASE: dict[ReviewPhase, frozenset[AgentActionName]] = {

@@ -31,6 +31,7 @@ from app.models.review import (
 from app.services.review_planner import DeterministicReviewPlanner
 from app.tools.code_search import CodeSearchTool
 from app.graph.checkpointer import unit_thread_config
+from app.graph.policies import UNIT_ACTION_ROUTES, UNIT_ALLOWED_ACTIONS
 
 
 class _ReviewUnitGraphState(TypedDict, total=False):
@@ -219,12 +220,7 @@ class ReviewUnitExecutor:
         graph.add_conditional_edges(
             "agent_decide",
             self._route_unit_action,
-            {
-                "retrieve_context": "execute_read_tool",
-                "report_issue": "report_issue",
-                "task_done": "finish_unit",
-                "request_human": "finish_unit",
-            },
+            UNIT_ACTION_ROUTES,
         )
         graph.add_edge("execute_read_tool", "agent_decide")
         graph.add_edge("report_issue", "collect_issue")
@@ -307,13 +303,7 @@ class ReviewUnitExecutor:
             )
         elif action.action == AgentActionName.finish_report:
             action = AgentAction(action=AgentActionName.task_done, reason=action.reason)
-        allowed = {
-            AgentActionName.retrieve_context,
-            AgentActionName.report_issue,
-            AgentActionName.task_done,
-            AgentActionName.request_human,
-        }
-        if action.action not in allowed:
+        if action.action not in UNIT_ALLOWED_ACTIONS:
             action = AgentAction(action=AgentActionName.task_done, reason="Unit 动作不在只读白名单")
         return action, budget, legacy_review
 

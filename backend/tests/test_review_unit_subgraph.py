@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from app.agents.providers import LLMProvider, OpenAICompatibleProvider
+from app.graph.policies import UNIT_ACTION_REGISTRY, UNIT_ACTION_ROUTES
 from app.models.review import (
     AgentAction,
     ChangedFile,
@@ -160,3 +161,10 @@ async def test_per_unit_langgraph_supports_bounded_read_rounds_and_explicit_done
     assert provider.decision_states[0]["retrieval_history"] == []
     assert provider.decision_states[1]["retrieval_history"][0]["status"] == "completed"
     assert provider.decision_states[1]["retrieval_history"][0]["new_snippet_count"] > 0
+
+
+def test_unit_graph_routes_are_generated_from_action_registry() -> None:
+    assert UNIT_ACTION_ROUTES == {
+        item.action.value: item.route for item in UNIT_ACTION_REGISTRY
+    }
+    assert UNIT_ACTION_ROUTES["request_human"] == "finish_unit"
