@@ -17,6 +17,17 @@ const resultMap = computed(() => new Map(props.results.map((item) => [item.revie
 const completed = computed(() => props.results.filter((item) => item.status === "completed").length);
 const progress = computed(() => props.units.length ? Math.round((completed.value / props.units.length) * 100) : 0);
 const terminal = computed(() => ["completed", "completed_with_warnings", "failed", "cancelled"].includes(props.taskStatus || ""));
+const planStatusLabel: Record<string, string> = {
+  planned: "Unit Plan 已生成",
+  skipped: "Unit Plan 已跳过",
+  failed: "Unit Plan 已降级",
+};
+const skipReasonLabel: Record<string, string> = {
+  small_low_risk_unit: "小型低风险变更",
+  planning_disabled: "规划功能未启用",
+  budget_insufficient: "规划预算不足",
+  planning_failed: "规划生成或校验失败",
+};
 </script>
 
 <template>
@@ -31,6 +42,28 @@ const terminal = computed(() => ["completed", "completed_with_warnings", "failed
           <code>{{ unit.primary_files[0] }}</code>
           <p>{{ unit.grouping_reason }}</p>
           <span>{{ unit.related_files.length }} 个关联文件 · {{ unit.complexity }} · {{ unit.estimated_tokens.toLocaleString() }} tokens</span>
+          <details v-if="resultMap.get(unit.id)?.plan_status" class="unit-plan">
+            <summary>
+              <StatusBadge
+                :status="resultMap.get(unit.id)?.plan_status || 'skipped'"
+                :label="planStatusLabel[resultMap.get(unit.id)?.plan_status || 'skipped']"
+              />
+              <span v-if="resultMap.get(unit.id)?.plan">{{ resultMap.get(unit.id)?.plan?.risk_hypotheses.length }} 个风险假设</span>
+              <span v-else>{{ skipReasonLabel[resultMap.get(unit.id)?.plan_skip_reason || ''] || resultMap.get(unit.id)?.plan_skip_reason }}</span>
+            </summary>
+            <div v-if="resultMap.get(unit.id)?.plan" class="unit-plan__body">
+              <strong>{{ resultMap.get(unit.id)?.plan?.change_summary }}</strong>
+              <p>{{ resultMap.get(unit.id)?.plan?.review_objectives.join(" · ") }}</p>
+              <ul v-if="resultMap.get(unit.id)?.plan?.risk_hypotheses.length">
+                <li v-for="risk in resultMap.get(unit.id)?.plan?.risk_hypotheses" :key="risk.id">
+                  <span :data-priority="risk.priority">{{ risk.priority }}</span>{{ risk.description }}
+                </li>
+              </ul>
+            </div>
+            <p v-else class="unit-plan__reason">
+              {{ skipReasonLabel[resultMap.get(unit.id)?.plan_skip_reason || ''] || resultMap.get(unit.id)?.plan_error || "未生成 Unit Plan" }}
+            </p>
+          </details>
         </div>
         <div class="unit-item__status">
           <StatusBadge :status="resultMap.get(unit.id)?.status || 'pending'" />

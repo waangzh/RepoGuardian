@@ -24,6 +24,7 @@ const labels: Record<string, string> = {
   timed_out: "已超时",
   cancelled: "已取消",
   skipped: "已跳过",
+  planned: "已规划",
   warning: "警告",
   candidate: "候选",
   evidence_resolved: "证据已定位",

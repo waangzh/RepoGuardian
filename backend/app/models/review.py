@@ -763,7 +763,9 @@ class ReviewPreviewResponse(BaseModel):
     excluded_files: list[ExcludedReviewFile] = Field(default_factory=list)
     matched_rules: list[str] = Field(default_factory=list)
     risk_tags: list[str] = Field(default_factory=list)
+    planning_model_calls: int = Field(ge=0)
     estimated_model_calls: int = Field(ge=0)
+    max_model_calls: int = Field(ge=0)
     estimated_tokens: int = Field(ge=0)
     patch_generation_enabled: bool
     validation_backend: "ValidationBackendPreview"

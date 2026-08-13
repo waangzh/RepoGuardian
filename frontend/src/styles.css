@@ -317,6 +317,21 @@ input:disabled { background: var(--surface-muted); }
 .unit-item__main { min-width: 0; }.unit-item__main code { display: block; overflow: hidden; font-size: 13px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .unit-item__main p { display: -webkit-box; margin: 5px 0 4px; overflow: hidden; color: var(--text-secondary); font-size: 12px; line-height: 1.4; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .unit-item__main span { color: var(--text-muted); font-size: 11px; }.unit-item__status { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; flex: 0 0 auto; }.unit-item__status small { color: var(--text-muted); font-size: 11px; }
+.unit-plan { margin-top: 9px; border-left: 2px solid var(--border-strong); padding-left: 9px; }
+.unit-plan summary { display: flex; align-items: center; gap: 7px; width: max-content; max-width: 100%; cursor: pointer; list-style: none; }
+.unit-plan summary::-webkit-details-marker { display: none; }
+.unit-plan summary::after { color: var(--text-muted); content: "›"; font-size: 16px; line-height: 1; transition: transform 140ms ease; }
+.unit-plan[open] summary::after { transform: rotate(90deg); }
+.unit-plan summary > span { overflow: hidden; max-width: 190px; text-overflow: ellipsis; white-space: nowrap; }
+.unit-plan__body { max-width: 620px; padding: 9px 10px 2px; }
+.unit-plan__body > strong { display: block; color: var(--text-primary); font-size: 12px; line-height: 1.45; }
+.unit-plan__body > p, .unit-plan__reason { margin: 4px 0 0; color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
+.unit-plan__body ul { display: grid; gap: 5px; margin: 8px 0 0; padding: 0; list-style: none; }
+.unit-plan__body li { color: var(--text-secondary); font-size: 11px; line-height: 1.45; }
+.unit-plan__body li > span { display: inline-block; min-width: 42px; margin-right: 6px; color: var(--text-muted); font-family: "SFMono-Regular", monospace; font-size: 9px; font-weight: 800; text-transform: uppercase; }
+.unit-plan__body li > span[data-priority="high"] { color: var(--danger); }
+.unit-plan__body li > span[data-priority="medium"] { color: var(--warning); }
+.unit-plan__reason { max-width: 620px; padding: 7px 9px; border-radius: 5px; background: var(--surface-subtle); overflow-wrap: anywhere; }
 
 .execution-flow { list-style: none; margin: 0; padding: 7px 13px 11px; }
 .execution-flow li { position: relative; display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 8px; align-items: start; min-height: 48px; padding: 7px 0; }

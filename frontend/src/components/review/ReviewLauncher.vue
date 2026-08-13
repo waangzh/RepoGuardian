@@ -143,9 +143,10 @@ const backendOptions = [
       <header><strong>确定性 Preview</strong><span>{{ preview.review_units.length }} Units</span></header>
       <div class="preview-summary__metrics">
         <span><strong>{{ preview.included_file_count }}/{{ preview.changed_file_count }}</strong>审查文件</span>
-        <span><strong>{{ preview.estimated_model_calls }}</strong>模型调用</span>
+        <span><strong>{{ preview.estimated_model_calls }}</strong>预计调用</span>
         <span><strong>{{ preview.estimated_tokens.toLocaleString() }}</strong>预计 Token</span>
       </div>
+      <p>Plan {{ preview.planning_model_calls }} 次 · 调用上限 {{ preview.max_model_calls }} 次</p>
       <p>候选补丁 {{ preview.patch_generation_enabled ? "已开启" : "未开启" }} · 验证后端 {{ preview.validation_backend.name }}</p>
       <p v-if="preview.validation_backend.unavailable_reason" class="form-error">{{ preview.validation_backend.unavailable_reason }}</p>
       <details v-if="preview.review_units.length || preview.excluded_files.length">

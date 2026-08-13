@@ -24,7 +24,7 @@ from app.models.review import (
 )
 from app.tools.diff_parser import stable_hunk_id
 
-PLANNER_VERSION = "review-unit-planner-v2"
+PLANNER_VERSION = "review-unit-planner-v3"
 
 _BINARY_EXTENSIONS = {
     ".7z", ".a", ".avi", ".bin", ".bmp", ".class", ".dll", ".dylib",
@@ -221,9 +221,27 @@ class DeterministicReviewPlanner:
             and "cross_module" not in unit.risk_tags
         )
 
+    def planning_model_calls(
+        self, unit: ReviewUnit, changed_files: Iterable[ChangedFile]
+    ) -> int:
+        return 0 if self.should_skip_plan(unit, changed_files) else 1
+
+    def estimated_model_calls(
+        self, unit: ReviewUnit, changed_files: Iterable[ChangedFile]
+    ) -> int:
+        """估算 Plan、一次诊断和必要决策；不把预算上限误报为典型成本。"""
+        planning = self.planning_model_calls(unit, changed_files)
+        decision_calls = 1 if unit.complexity == ReviewUnitComplexity.small else 2
+        diagnosis_calls = 1
+        return planning + decision_calls + diagnosis_calls
+
     @staticmethod
-    def estimated_model_calls(unit: ReviewUnit) -> int:
-        return 1 if unit.complexity == ReviewUnitComplexity.small else 2
+    def max_model_calls(unit: ReviewUnit) -> int:
+        if unit.complexity == ReviewUnitComplexity.small:
+            return 3
+        if unit.complexity == ReviewUnitComplexity.medium:
+            return 4
+        return 6
 
     @staticmethod
     def hunk_id(file_path: str, index: int, hunk: dict[str, Any]) -> str:
