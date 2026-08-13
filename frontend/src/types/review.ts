@@ -172,7 +172,9 @@ export interface ReviewPreviewResponse {
   excluded_files: ExcludedReviewFile[];
   matched_rules: string[];
   risk_tags: string[];
+  planning_model_calls: number;
   estimated_model_calls: number;
+  max_model_calls: number;
   estimated_tokens: number;
   patch_generation_enabled: boolean;
   validation_backend: {
