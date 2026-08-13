@@ -13,6 +13,7 @@ from app.models.review import (
     PullRequestInfo,
     PullRequestRef,
     ReviewIssue,
+    UnitReviewPlan,
 )
 
 
@@ -217,6 +218,64 @@ def test_unit_decision_prompt_is_generated_from_action_registry() -> None:
         assert f"- {item.action.value}: {item.prompt_instruction}" in prompt
     assert '"action":"request_human"' in prompt
     assert '"missing_information"' in prompt
+
+
+@pytest.mark.asyncio
+async def test_provider_builds_structured_unit_plan_from_bounded_input(
+    fake_chat: type[FakeChatOpenAI],
+) -> None:
+    fake_chat.responses = [AIMessage(content=json.dumps({
+        "schema_version": "unit-review-plan-v1",
+        "change_summary": "修改公开接口返回值",
+        "review_objectives": ["验证兼容性"],
+        "risk_hypotheses": [{
+            "id": "risk-1",
+            "category": "correctness",
+            "priority": "high",
+            "description": "调用方可能依赖旧返回值",
+            "affected_files": ["api.py"],
+            "affected_symbols": ["public_api"],
+            "evidence_needed": ["检查调用方"],
+            "retrieval_suggestions": [],
+            "completion_criteria": "确认所有调用方兼容",
+        }],
+        "coverage_targets": ["公开接口调用链"],
+        "initial_action": {
+            "action": "report_issue", "reason": "diff 已足够",
+            "target_issue_ids": [], "tool_args": {}, "human_request": None,
+        },
+    }, ensure_ascii=False))]
+    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
+
+    result = await provider.plan_review_unit({
+        "review_unit": {
+            "primary_files": ["api.py"], "risk_tags": ["public_api"],
+            "rule_ids": ["review.api"], "changed_symbols": ["public_api"],
+        },
+        "unit_diff": "+def public_api():\n+    return 2",
+        "changed_files": [{"file_path": "api.py"}],
+        "file_index": [{"path": "api.py"}],
+        "symbol_index": [{"file": "api.py", "symbol": "public_api", "type": "function"}],
+        "review_tool_scope": {"commentable_files": ["api.py"], "readable_files": ["api.py"]},
+    }, None)
+
+    assert isinstance(result.value, UnitReviewPlan)
+    assert result.value.risk_hypotheses[0].id == "risk-1"
+    prompt = fake_chat.instances[0].messages[1].content
+    assert "public_api" in prompt
+    assert "+def public_api" in prompt
+    assert "unconfirmed hypotheses" in prompt
+
+
+@pytest.mark.asyncio
+async def test_provider_rejects_invalid_unit_plan_schema(
+    fake_chat: type[FakeChatOpenAI],
+) -> None:
+    fake_chat.responses = [AIMessage(content='{"change_summary":"missing fields"}')]
+    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
+
+    with pytest.raises(LLMProviderError, match="Unit review plan schema validation failed"):
+        await provider.plan_review_unit({}, None)
 
 
 @pytest.mark.asyncio

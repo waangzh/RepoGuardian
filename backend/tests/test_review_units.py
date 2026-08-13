@@ -19,6 +19,8 @@ from app.models.review import (
     ReviewUnitComplexity,
     ReviewUnitResult,
     ReviewUnitStatus,
+    UnitPlanStatus,
+    UnitReviewPlan,
 )
 from app.services.report_service import ReportService
 from app.services.review_planner import DeterministicReviewPlanner
@@ -124,12 +126,26 @@ class UnitProvider(LLMProvider):
         self.issue_path = issue_path
         self.delay = delay
         self.decide_calls = 0
+        self.decision_states: list[dict[str, Any]] = []
+        self.review_diffs: list[str] = []
         self.active = 0
         self.max_active = 0
         self.started = asyncio.Event()
 
+    async def plan_review_unit(
+        self, state: dict[str, Any], model: str | None
+    ) -> UnitReviewPlan:
+        return UnitReviewPlan.model_validate({
+            "change_summary": "检查 Unit 变更",
+            "review_objectives": ["验证行为"],
+            "risk_hypotheses": [],
+            "coverage_targets": ["变更路径"],
+            "initial_action": {"action": "report_issue", "reason": "进入审查"},
+        })
+
     async def decide(self, state: dict[str, Any], model: str | None) -> AgentAction:
         self.decide_calls += 1
+        self.decision_states.append(state)
         return AgentAction(action="review_code", reason="上下文已足够")
 
     async def review(
@@ -139,6 +155,7 @@ class UnitProvider(LLMProvider):
         diff_text: str,
         model: str | None,
     ) -> list[ReviewIssue]:
+        self.review_diffs.append(diff_text)
         path = changed_files[0].file_path
         if path in self.fail_paths:
             raise RuntimeError(f"failed {path}")
@@ -317,6 +334,87 @@ async def test_single_failed_unit_can_be_retried_independently() -> None:
 
     assert failed.status == ReviewUnitStatus.failed
     assert retried.status == ReviewUnitStatus.completed
+
+
+@pytest.mark.asyncio
+async def test_unit_plan_failure_degrades_to_normal_decision() -> None:
+    files = _parse(_diff("api.py", "-def old():\n+def public_api():"))
+    unit = DeterministicReviewPlanner().plan(
+        files, base_sha="b", head_sha="h"
+    ).review_units[0]
+
+    class FailingPlanProvider(UnitProvider):
+        async def plan_review_unit(self, state: dict[str, Any], model: str | None) -> UnitReviewPlan:
+            raise RuntimeError("invalid plan")
+
+    provider = FailingPlanProvider()
+    result = await ReviewUnitExecutor(
+        provider, concurrency=1, timeout_seconds=2
+    ).execute_unit(unit, _state(files))
+
+    assert result.status == ReviewUnitStatus.completed
+    assert result.plan is None
+    assert result.plan_status == UnitPlanStatus.failed
+    assert result.plan_skip_reason == "planning_failed"
+    assert "invalid plan" in (result.plan_error or "")
+    assert provider.decide_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_successful_unit_plan_is_injected_into_decide_and_review() -> None:
+    files = _parse(_diff("api.py", "-def old():\n+def public_api():"))
+    unit = DeterministicReviewPlanner().plan(
+        files, base_sha="b", head_sha="h"
+    ).review_units[0]
+    provider = UnitProvider()
+
+    result = await ReviewUnitExecutor(
+        provider, concurrency=1, timeout_seconds=2
+    ).execute_unit(unit, _state(files))
+
+    assert result.plan_status == UnitPlanStatus.planned
+    assert result.plan
+    assert provider.decision_states[0]["unit_plan"]["change_summary"]
+    assert provider.decision_states[0]["unit_diff"]
+    assert "risk hypotheses are unconfirmed guidance" in provider.review_diffs[0]
+
+
+@pytest.mark.asyncio
+async def test_out_of_scope_unit_plan_is_rejected_and_degraded() -> None:
+    files = _parse(_diff("api.py", "-def old():\n+def public_api():"))
+    unit = DeterministicReviewPlanner().plan(
+        files, base_sha="b", head_sha="h"
+    ).review_units[0]
+
+    class OutOfScopePlanProvider(UnitProvider):
+        async def plan_review_unit(self, state: dict[str, Any], model: str | None) -> UnitReviewPlan:
+            return UnitReviewPlan.model_validate({
+                "change_summary": "尝试越界读取",
+                "review_objectives": ["验证行为"],
+                "risk_hypotheses": [{
+                    "id": "risk-outside",
+                    "category": "security",
+                    "priority": "high",
+                    "description": "需要读取 Unit 外文件",
+                    "affected_files": ["outside.py"],
+                    "affected_symbols": [],
+                    "evidence_needed": ["读取越界文件"],
+                    "retrieval_suggestions": [],
+                    "completion_criteria": "确认越界内容",
+                }],
+                "coverage_targets": ["越界路径"],
+                "initial_action": {"action": "report_issue", "reason": "进入审查"},
+            })
+
+    provider = OutOfScopePlanProvider()
+    result = await ReviewUnitExecutor(
+        provider, concurrency=1, timeout_seconds=2
+    ).execute_unit(unit, _state(files))
+
+    assert result.status == ReviewUnitStatus.completed
+    assert result.plan_status == UnitPlanStatus.failed
+    assert "outside review scope" in (result.plan_error or "")
+    assert provider.decide_calls == 1
 
 
 @pytest.mark.asyncio

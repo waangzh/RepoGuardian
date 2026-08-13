@@ -27,6 +27,8 @@ from app.models.review import (
     ReviewUnitResult,
     ReviewUnitStatus,
     ReviewUnitToolEvent,
+    UnitPlanStatus,
+    UnitReviewPlan,
 )
 from app.services.review_planner import DeterministicReviewPlanner
 from app.tools.code_search import CodeSearchTool
@@ -44,6 +46,10 @@ class _ReviewUnitGraphState(TypedDict, total=False):
     unit_diff: str
     budget: ExecutionBudget
     skip_plan: bool
+    unit_plan: UnitReviewPlan | None
+    plan_status: UnitPlanStatus
+    plan_skip_reason: str | None
+    plan_error: str | None
     context: list[dict[str, Any]]
     issues: list[ReviewIssue]
     pending_issues: list[ReviewIssue]
@@ -55,7 +61,6 @@ class _ReviewUnitGraphState(TypedDict, total=False):
     issue_round_completed: bool
     legacy_review_action: bool
     next_action: AgentAction | None
-    pending_consumed: bool
     done: bool
     error: str | None
     needs_human: bool
@@ -176,6 +181,10 @@ class ReviewUnitExecutor:
             "unit_diff": self._unit_diff(unit, by_path),
             "budget": budget,
             "skip_plan": skip_plan,
+            "unit_plan": None,
+            "plan_status": UnitPlanStatus.skipped if skip_plan else UnitPlanStatus.failed,
+            "plan_skip_reason": "small_low_risk_unit" if skip_plan else None,
+            "plan_error": None,
             "context": [],
             "issues": [],
             "model_usages": [],
@@ -201,6 +210,10 @@ class ReviewUnitExecutor:
                 else ReviewUnitStatus.failed
             ),
             plan_skipped=skip_plan,
+            plan=result.get("unit_plan"),
+            plan_status=result.get("plan_status"),
+            plan_skip_reason=result.get("plan_skip_reason"),
+            plan_error=result.get("plan_error"),
             issues=result.get("issues") or [],
             context_snippets=[
                 ContextSnippet.model_validate(item) for item in result.get("context") or []
@@ -254,14 +267,76 @@ class ReviewUnitExecutor:
     async def _plan_unit_node(
         self, state: "_ReviewUnitGraphState"
     ) -> "_ReviewUnitGraphState":
-        action, budget, legacy, model_usages = await self._decide_unit(state)
+        from app.agents.providers import LLMProviderError
+        from app.services.model_usage import annotate_usage, append_usage, unpack_model_call
+
+        budget = state["budget"]
+        if not budget.can_consume(model_calls=1, token_usage=1_200):
+            return {
+                "plan_status": UnitPlanStatus.skipped,
+                "plan_skip_reason": "budget_insufficient",
+            }
+        budget = budget.consume(model_calls=1, token_usage=1_200)
+        planning_state = self._unit_state(
+            state["parent_state"], state["unit"], state["scope"],
+            state["unit_files"], budget, state["context"],
+            unit_diff=state["unit_diff"],
+        )
+        usage = None
+        try:
+            raw_result = await self.provider.plan_review_unit(
+                planning_state, state["parent_state"].get("model")
+            )
+            plan, usage = unpack_model_call(raw_result)
+            self._validate_unit_plan_scope(
+                plan, state["scope"], planning_state["symbol_index"]
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if isinstance(exc, LLMProviderError):
+                usage = exc.usage
+            usage = annotate_usage(
+                usage,
+                accounted_tokens_estimate=1_200,
+                review_unit_id=state["unit"].id,
+                unit_complexity=state["unit"].complexity,
+            )
+            detail = f"{type(exc).__name__}: {exc}"
+            return {
+                "budget": budget,
+                "plan_status": UnitPlanStatus.failed,
+                "plan_skip_reason": "planning_failed",
+                "plan_error": detail,
+                "model_usages": append_usage(state.get("model_usages") or [], usage),
+                "messages": [*state["messages"], AgentEvent(
+                    action="plan_unit",
+                    reason="Unit Plan 生成或校验失败，已降级为无 Plan 审查",
+                    status="failed",
+                    message=detail,
+                    review_unit_id=state["unit"].id,
+                )],
+            }
+        usage = annotate_usage(
+            usage,
+            accounted_tokens_estimate=1_200,
+            review_unit_id=state["unit"].id,
+            unit_complexity=state["unit"].complexity,
+        )
         return {
-            "next_action": action,
+            "unit_plan": plan,
+            "plan_status": UnitPlanStatus.planned,
+            "plan_skip_reason": None,
+            "plan_error": None,
+            "next_action": plan.initial_action,
             "budget": budget,
-            "legacy_review_action": state.get("legacy_review_action", False) or legacy,
-            "model_usages": model_usages,
-            "messages": [*state["messages"], self._event(
-                state["unit"].id, action, "selected", action.reason
+            "model_usages": append_usage(state.get("model_usages") or [], usage),
+            "messages": [*state["messages"], AgentEvent(
+                action="plan_unit",
+                reason=plan.change_summary,
+                status="completed",
+                message=f"生成 {len(plan.risk_hypotheses)} 个待验证风险假设",
+                review_unit_id=state["unit"].id,
             )],
         }
 
@@ -270,7 +345,7 @@ class ReviewUnitExecutor:
     ) -> "_ReviewUnitGraphState":
         pending = state.get("next_action")
         if pending is not None:
-            return {"next_action": pending, "pending_consumed": True}
+            return {"next_action": pending}
         if state["issue_round_completed"] and state.get("legacy_review_action", False):
             return {"next_action": AgentAction(
                 action=AgentActionName.task_done,
@@ -302,6 +377,8 @@ class ReviewUnitExecutor:
         decision_state = self._unit_state(
             state["parent_state"], state["unit"], state["scope"],
             state["unit_files"], budget, state["context"],
+            unit_diff=state["unit_diff"],
+            unit_plan=state.get("unit_plan"),
         )
         decision_state.update({
             "unit_agent": True,
@@ -458,7 +535,9 @@ class ReviewUnitExecutor:
         raw_result = await self.provider.review(
             pr,
             state["unit_files"],
-            self._enhanced_diff(state["unit_diff"], state["context"]),
+            self._enhanced_diff(
+                state["unit_diff"], state["context"], state.get("unit_plan")
+            ),
             state["parent_state"].get("model"),
         )
         model_issues, usage = unpack_model_call(raw_result)
@@ -578,12 +657,18 @@ class ReviewUnitExecutor:
         changed_files: list[ChangedFile],
         budget: ExecutionBudget,
         context: list[dict[str, Any]],
+        *,
+        unit_diff: str = "",
+        unit_plan: UnitReviewPlan | None = None,
     ) -> dict[str, Any]:
         readable = scope.readable_files
         return {
             "task_id": state.get("task_id"),
             "review_unit_id": unit.id,
             "review_unit": unit.model_dump(mode="json"),
+            "review_tool_scope": scope.model_dump(mode="json"),
+            "unit_diff": unit_diff,
+            "unit_plan": unit_plan.model_dump(mode="json") if unit_plan else None,
             "phase": ReviewPhase.discovery,
             "changed_files": [item.model_dump(mode="json") for item in changed_files],
             "file_index": [
@@ -601,10 +686,22 @@ class ReviewUnitExecutor:
         }
 
     @staticmethod
-    def _enhanced_diff(unit_diff: str, context: list[dict[str, Any]]) -> str:
-        if not context:
-            return unit_diff
-        sections = ["## Unit scoped context"]
+    def _enhanced_diff(
+        unit_diff: str,
+        context: list[dict[str, Any]],
+        unit_plan: UnitReviewPlan | None = None,
+    ) -> str:
+        sections: list[str] = []
+        if unit_plan is not None:
+            sections.extend([
+                "## Unit review plan guidance",
+                "The following risk hypotheses are unconfirmed guidance, not established issues. "
+                "Independently verify them against code evidence. The plan is not exhaustive; report "
+                "clear defects outside it when found.",
+                unit_plan.model_dump_json(),
+            ])
+        if context:
+            sections.append("## Unit scoped context")
         for snippet in context:
             provenance = snippet.get("why_retrieved")
             sections.append(
@@ -618,6 +715,50 @@ class ReviewUnitExecutor:
             sections.append(snippet.get("content", ""))
         sections.extend(["## Unit diff", unit_diff])
         return "\n".join(sections)
+
+    @staticmethod
+    def _validate_unit_plan_scope(
+        plan: UnitReviewPlan,
+        scope: ReviewToolScope,
+        symbol_index: list[dict[str, Any]],
+    ) -> None:
+        if plan.initial_action.action not in UNIT_ALLOWED_ACTIONS:
+            raise ValueError("Unit Plan initial action is outside the Unit action allowlist")
+        readable = scope.readable_files
+        indexed_symbols = {item.get("symbol") for item in symbol_index}
+        retrieval_plans = [
+            suggestion
+            for hypothesis in plan.risk_hypotheses
+            for suggestion in hypothesis.retrieval_suggestions
+        ]
+        for hypothesis in plan.risk_hypotheses:
+            unknown_files = set(hypothesis.affected_files) - readable
+            if unknown_files:
+                raise ValueError(
+                    f"Unit Plan hypothesis references files outside review scope: {sorted(unknown_files)}"
+                )
+            unknown_symbols = set(hypothesis.affected_symbols) - indexed_symbols
+            if unknown_symbols:
+                raise ValueError(
+                    f"Unit Plan hypothesis references symbols outside review scope: {sorted(unknown_symbols)}"
+                )
+        if plan.initial_action.action == AgentActionName.retrieve_context:
+            retrieval_plans.append(ContextRetrievalPlan.model_validate(
+                plan.initial_action.tool_args["plan"]
+            ))
+        for retrieval in retrieval_plans:
+            unknown_files = set(retrieval.target_files) - readable
+            if unknown_files:
+                raise ValueError(
+                    f"Unit Plan retrieval references files outside review scope: {sorted(unknown_files)}"
+                )
+            unknown_symbols = set(retrieval.target_symbols) - indexed_symbols
+            if unknown_symbols:
+                raise ValueError(
+                    f"Unit Plan retrieval references symbols outside review scope: {sorted(unknown_symbols)}"
+                )
+            if retrieval.max_results > scope.max_search_results:
+                raise ValueError("Unit Plan retrieval exceeds scope result limit")
 
     @staticmethod
     def _filter_issues(

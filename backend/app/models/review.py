@@ -110,6 +110,12 @@ class ReviewUnitStatus(str, Enum):
     needs_human = "needs_human"
 
 
+class UnitPlanStatus(str, Enum):
+    planned = "planned"
+    skipped = "skipped"
+    failed = "failed"
+
+
 class StepStatus(str, Enum):
     """单个图节点的执行状态。"""
     pending = "pending"
@@ -1056,6 +1062,47 @@ class AgentAction(BaseModel):
         return self
 
 
+class UnitRiskHypothesis(BaseModel):
+    """Unit 规划阶段提出的待验证风险，不代表已经确认的 Issue。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=100)
+    category: IssueCategory
+    priority: Literal["high", "medium", "low"]
+    description: str = Field(min_length=1, max_length=1_000)
+    affected_files: list[str] = Field(default_factory=list, max_length=12)
+    affected_symbols: list[str] = Field(default_factory=list, max_length=20)
+    evidence_needed: list[str] = Field(default_factory=list, max_length=12)
+    retrieval_suggestions: list[ContextRetrievalPlan] = Field(default_factory=list, max_length=4)
+    completion_criteria: str = Field(min_length=1, max_length=500)
+
+    @field_validator("affected_files")
+    @classmethod
+    def validate_affected_files(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(_validate_repo_relative_path(value) for value in values))
+
+
+class UnitReviewPlan(BaseModel):
+    """一次 Unit 审查的结构化风险与证据规划。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["unit-review-plan-v1"] = "unit-review-plan-v1"
+    change_summary: str = Field(min_length=1, max_length=1_500)
+    review_objectives: list[str] = Field(min_length=1, max_length=12)
+    risk_hypotheses: list[UnitRiskHypothesis] = Field(default_factory=list, max_length=12)
+    coverage_targets: list[str] = Field(default_factory=list, max_length=20)
+    initial_action: AgentAction
+
+    @model_validator(mode="after")
+    def require_unique_hypothesis_ids(self) -> "UnitReviewPlan":
+        ids = [item.id for item in self.risk_hypotheses]
+        if len(ids) != len(set(ids)):
+            raise ValueError("risk hypothesis ids must be unique")
+        return self
+
+
 class AgentEvent(BaseModel):
     """Agent 决策事件日志条目。"""
     action: AgentActionName | str
@@ -1483,6 +1530,10 @@ class ReviewUnitResult(BaseModel):
     review_unit_id: str
     status: ReviewUnitStatus = ReviewUnitStatus.pending
     plan_skipped: bool = False
+    plan: UnitReviewPlan | None = None
+    plan_status: UnitPlanStatus | None = None
+    plan_skip_reason: str | None = None
+    plan_error: str | None = None
     issues: list[ReviewIssue] = Field(default_factory=list)
     context_snippets: list[ContextSnippet] = Field(default_factory=list)
     messages: list[AgentEvent] = Field(default_factory=list)
