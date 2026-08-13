@@ -32,6 +32,8 @@ from app.models.review import (
     ReviewUnitComplexity,
     ReviewUnitResult,
     ReviewUnitStatus,
+    UnitPlanStatus,
+    UnitReviewPlan,
 )
 from app.services.artifact_store import LocalArtifactStore
 from app.services.fingerprints import patch_fingerprint, validation_fingerprint
@@ -152,6 +154,38 @@ def test_completed_unit_reuses_but_failed_unit_and_version_mismatch_do_not(persi
         tool_schema_version=settings.repoguardian_tool_schema_version,
         review_policy_version=settings.repoguardian_review_policy_version,
     ) is None
+
+
+def test_unit_result_snapshot_preserves_plan_observability(persistence) -> None:
+    repository, _, _ = persistence
+    task = _task()
+    repository.create_task(task)
+    unit = _unit()
+    plan = UnitReviewPlan.model_validate({
+        "change_summary": "检查公开接口兼容性",
+        "review_objectives": ["验证调用方"],
+        "risk_hypotheses": [],
+        "coverage_targets": ["公开接口"],
+        "initial_action": {"action": "report_issue", "reason": "进入审查"},
+    })
+    repository.record_unit_result(
+        task_id=task.id,
+        unit=unit,
+        result=ReviewUnitResult(
+            review_unit_id=unit.id,
+            status=ReviewUnitStatus.completed,
+            plan=plan,
+            plan_status=UnitPlanStatus.planned,
+        ),
+    )
+
+    loaded = repository.get_unit(task.id, unit.id)
+
+    assert loaded is not None
+    assert loaded.result is not None
+    result = loaded.result
+    assert result.plan_status == UnitPlanStatus.planned
+    assert result.plan and result.plan.change_summary == "检查公开接口兼容性"
 
 
 def test_unit_fingerprint_changes_with_diff_prompt_and_model(monkeypatch: pytest.MonkeyPatch) -> None:

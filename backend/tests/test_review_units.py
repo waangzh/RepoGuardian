@@ -111,6 +111,11 @@ def test_small_unit_skips_plan_and_public_api_unit_enters_plan() -> None:
 
     assert planner.should_skip_plan(small, small_files) is True
     assert planner.should_skip_plan(public, public_files) is False
+    assert planner.planning_model_calls(small, small_files) == 0
+    assert planner.planning_model_calls(public, public_files) == 1
+    assert planner.estimated_model_calls(small, small_files) == 2
+    assert planner.estimated_model_calls(public, public_files) == 4
+    assert planner.max_model_calls(small) == 3
     assert "public_api" in public.risk_tags
 
 
@@ -567,4 +572,6 @@ async def test_preview_does_not_call_llm_or_command_executor(tmp_path: Path) -> 
         ReviewPreviewRequest(pr_url="https://github.com/local/sample/pull/1")
     )
     assert len(preview.review_units) == 1
-    assert preview.estimated_model_calls == 1
+    assert preview.planning_model_calls == 0
+    assert preview.estimated_model_calls == 2
+    assert preview.max_model_calls == 3

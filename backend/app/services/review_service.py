@@ -344,8 +344,16 @@ class ReviewService:
                 excluded_files=plan.excluded_files,
                 matched_rules=plan.matched_rules,
                 risk_tags=plan.risk_tags,
+                planning_model_calls=sum(
+                    planner.planning_model_calls(unit, changed_files)
+                    for unit in plan.review_units
+                ),
                 estimated_model_calls=sum(
-                    planner.estimated_model_calls(unit) for unit in plan.review_units
+                    planner.estimated_model_calls(unit, changed_files)
+                    for unit in plan.review_units
+                ),
+                max_model_calls=sum(
+                    planner.max_model_calls(unit) for unit in plan.review_units
                 ),
                 estimated_tokens=sum(unit.estimated_tokens for unit in plan.review_units),
                 patch_generation_enabled=(

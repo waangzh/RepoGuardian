@@ -33,7 +33,8 @@ def test_openapi_exposes_preview_and_retry_contracts() -> None:
     preview = schema["components"]["schemas"]["ReviewPreviewResponse"]
     assert {
         "mode", "changed_file_count", "included_file_count", "changed_files",
-        "review_units", "patch_generation_enabled", "validation_backend",
+        "review_units", "planning_model_calls", "estimated_model_calls",
+        "max_model_calls", "patch_generation_enabled", "validation_backend",
     } <= set(preview["properties"])
 
 
