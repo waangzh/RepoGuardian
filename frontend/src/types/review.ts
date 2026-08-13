@@ -424,10 +424,35 @@ export interface AgentEvent {
   created_at: string;
 }
 
+export interface UnitRiskHypothesis {
+  id: string;
+  category: "correctness" | "maintainability" | "performance" | "security" | "test";
+  priority: "high" | "medium" | "low";
+  description: string;
+  affected_files: string[];
+  affected_symbols: string[];
+  evidence_needed: string[];
+  retrieval_suggestions: Array<Record<string, unknown>>;
+  completion_criteria: string;
+}
+
+export interface UnitReviewPlan {
+  schema_version: "unit-review-plan-v1";
+  change_summary: string;
+  review_objectives: string[];
+  risk_hypotheses: UnitRiskHypothesis[];
+  coverage_targets: string[];
+  initial_action: Record<string, unknown>;
+}
+
 export interface ReviewUnitResult {
   review_unit_id: string;
   status: ReviewUnitStatus;
   plan_skipped: boolean;
+  plan?: UnitReviewPlan | null;
+  plan_status?: "planned" | "skipped" | "failed" | null;
+  plan_skip_reason?: string | null;
+  plan_error?: string | null;
   issues: ReviewIssue[];
   issue_metrics: IssueMetrics;
   context_snippets: ContextSnippet[];

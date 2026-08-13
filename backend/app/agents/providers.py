@@ -32,6 +32,7 @@ from app.models.review import (
     ModelUsage,
     ReviewIssue,
     ReviewIssueInput,
+    UnitReviewPlan,
 )
 
 logger = logging.getLogger("RepoGuardian.LLM")
@@ -44,6 +45,13 @@ class LLMProviderError(RuntimeError):
 
 
 class LLMProvider(ABC):
+    async def plan_review_unit(
+        self, state: dict[str, Any], model: str | None
+    ) -> ModelCallResult[UnitReviewPlan]:
+        """生成可选的 Unit 风险规划；不支持时由调用方降级为无 Plan 审查。"""
+        del state, model
+        raise LLMProviderError("review unit planning is unavailable")
+
     @abstractmethod
     async def decide(
         self, state: dict[str, Any], model: str | None
@@ -123,6 +131,36 @@ class OpenAICompatibleProvider(LLMProvider):
         self._issue_adapter = TypeAdapter(list[ReviewIssueInput])
         self._patch_adapter = TypeAdapter(list[PatchResult])
         self._patch_request_adapter = TypeAdapter(list[PatchGenerationRequest])
+
+    async def plan_review_unit(
+        self, state: dict[str, Any], model: str | None
+    ) -> ModelCallResult[UnitReviewPlan]:
+        if not self._api_key:
+            raise LLMProviderError("OPENAI_API_KEY is required for review unit planning")
+
+        response = await self._request_json_content(
+            prompt=self._build_unit_plan_prompt(state),
+            model=model,
+            operation="unit_planning",
+            system=(
+                "You plan one bounded code review unit. Produce risk hypotheses and evidence "
+                "guidance, not confirmed issues. Return valid JSON only."
+            ),
+            max_tokens=2_400,
+        )
+        try:
+            raw = self._load_json(response.value)
+            if isinstance(raw, dict) and "initial_action" in raw:
+                raw = dict(raw)
+                raw["initial_action"] = self._normalize_agent_action(raw["initial_action"])
+            return ModelCallResult(UnitReviewPlan.model_validate(raw), response.usage)
+        except LLMProviderError as exc:
+            exc.usage = response.usage
+            raise
+        except ValidationError as exc:
+            raise LLMProviderError(
+                f"Unit review plan schema validation failed: {exc}", usage=response.usage
+            ) from exc
 
     async def decide(
         self, state: dict[str, Any], model: str | None
@@ -674,6 +712,50 @@ class OpenAICompatibleProvider(LLMProvider):
         )
 
     @staticmethod
+    def _build_unit_plan_prompt(state: dict[str, Any]) -> str:
+        unit = state.get("review_unit") or {}
+        scope = state.get("review_tool_scope") or {}
+        payload = {
+            "review_unit": unit,
+            "unit_diff": (state.get("unit_diff") or "")[:60_000],
+            "changed_files": state.get("changed_files") or [],
+            "retrieval_catalog": {
+                "files": [item.get("path") for item in state.get("file_index") or []],
+                "symbols": [
+                    {
+                        "file": item.get("file"),
+                        "symbol": item.get("symbol"),
+                        "type": item.get("type"),
+                    }
+                    for item in state.get("symbol_index") or []
+                ],
+            },
+            "scope": {
+                "commentable_files": scope.get("commentable_files", []),
+                "readable_files": scope.get("readable_files", []),
+            },
+        }
+        return (
+            "Create a risk-and-evidence plan for exactly one bounded Review Unit. The plan is "
+            "guidance only: risk_hypotheses are unconfirmed hypotheses, not review issues. "
+            "Do not claim that a defect exists. The later reviewer must independently verify all "
+            "hypotheses and may find defects outside this plan. Use Simplified Chinese for explanatory "
+            "text. affected_files and every retrieval target_file must be inside readable_files; the "
+            "initial action must follow the normal Unit action schema and cannot request shell, network, "
+            "patch, or test execution. Prefer report_issue when the diff is already sufficient, otherwise "
+            "retrieve_context with one bounded ContextRetrievalPlan.\n"
+            "Return exactly this JSON shape and no Markdown:\n"
+            '{"schema_version":"unit-review-plan-v1","change_summary":"变更摘要",'
+            '"review_objectives":["审查目标"],"risk_hypotheses":[{"id":"risk-1",'
+            '"category":"correctness","priority":"high","description":"待验证风险",'
+            '"affected_files":["path/to/file"],"affected_symbols":[],"evidence_needed":'
+            '["需要确认的证据"],"retrieval_suggestions":[],"completion_criteria":"完成条件"}],'
+            '"coverage_targets":["覆盖目标"],"initial_action":{"action":"report_issue",'
+            '"reason":"中文理由","target_issue_ids":[],"tool_args":{},"human_request":null}}\n\n'
+            f"Bounded Unit input JSON:\n{json.dumps(payload, ensure_ascii=False)[:80_000]}"
+        )
+
+    @staticmethod
     def _build_decision_prompt(state: dict[str, Any]) -> str:
         phase = get_phase(state)
         context_snippets = state.get("context_snippets") or []
@@ -760,6 +842,10 @@ class OpenAICompatibleProvider(LLMProvider):
             },
             "execution_budget": state.get("execution_budget") or {},
         }
+        if state.get("unit_agent"):
+            compact["review_unit"] = state.get("review_unit") or {}
+            compact["unit_diff"] = (state.get("unit_diff") or "")[:40_000]
+            compact["unit_plan"] = state.get("unit_plan")
         unit_agent = bool(state.get("unit_agent"))
         allowed = (
             ", ".join(item.action.value for item in UNIT_ACTION_REGISTRY)
