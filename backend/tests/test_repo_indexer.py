@@ -139,3 +139,27 @@ async def test_detect_project_meta_for_typescript_project(tmp_path):
     assert meta["test_framework"] == "vitest"
     assert meta["entry_points"] == ["src/main.ts"]
     assert meta["config_files"] == ["package.json", "tsconfig.json"]
+
+
+@pytest.mark.asyncio
+async def test_detect_project_meta_for_mixed_language_repository(tmp_path):
+    (tmp_path / "frontend").mkdir()
+    (tmp_path / "backend").mkdir()
+    (tmp_path / "frontend" / "main.ts").write_text(
+        "export const boot = () => true\n", encoding="utf-8"
+    )
+    (tmp_path / "frontend" / "view.tsx").write_text(
+        "export const View = () => null\n", encoding="utf-8"
+    )
+    (tmp_path / "backend" / "main.py").write_text(
+        "def main():\n    return True\n", encoding="utf-8"
+    )
+
+    indexer = RepoIndexer()
+    file_index = await indexer.build_file_index(str(tmp_path))
+    meta = await indexer.detect_project_meta(str(tmp_path), file_index)
+
+    assert meta["language"] == "typescript"
+    assert meta["languages"] == ["typescript", "python"]
+    assert meta["language_counts"] == {"typescript": 2, "python": 1}
+    assert meta["is_mixed_language"] is True
