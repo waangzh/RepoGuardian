@@ -29,6 +29,33 @@ UNIT_ACTION_REGISTRY: tuple[UnitActionRegistration, ...] = (
         ),
     ),
     UnitActionRegistration(
+        action=AgentActionName.file_read,
+        route="execute_read_tool",
+        prompt_instruction=(
+            "Read an exact bounded line range from one readable file. tool_args must be exactly "
+            "{\"request\": {\"file_path\": \"...\", \"start_line\": 1, \"end_line\": 80}}. "
+            "The server clamps the range to max_lines_per_read."
+        ),
+    ),
+    UnitActionRegistration(
+        action=AgentActionName.file_find,
+        route="execute_read_tool",
+        prompt_instruction=(
+            "Find a literal path fragment inside readable_files only. tool_args must be exactly "
+            "{\"request\": {\"query\": \"literal\", \"max_results\": 12}}. Regex and traversal "
+            "are not supported."
+        ),
+    ),
+    UnitActionRegistration(
+        action=AgentActionName.file_read_diff,
+        route="execute_read_tool",
+        prompt_instruction=(
+            "Read already parsed diff hunks for one changed Unit file. tool_args must be exactly "
+            "{\"request\": {\"file_path\": \"...\", \"hunk_ids\": []}}. Revisions and free-form "
+            "patch text are not accepted."
+        ),
+    ),
+    UnitActionRegistration(
         action=AgentActionName.report_issue,
         route="report_issue",
         prompt_instruction="Use once the available evidence is sufficient to run issue reporting.",
