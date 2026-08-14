@@ -7,13 +7,14 @@ RepoGuardian 将 PR 拆分为边界明确的 Review Unit，为复杂 Unit 生成
 默认 `review` 模式只读：**不运行目标仓库代码，不生成补丁，也不会提交、推送或写回真实仓库**。
 
 > [!IMPORTANT]
-> 项目仍处于早期开发阶段，当前主要支持 Python 项目，尚未提供容器沙箱，也尚未声明开源许可证。
+> 项目仍处于早期开发阶段。只读分析可识别 Python、TypeScript/JavaScript、Java、Go、Rust；Python 与 TS/JS 使用 Tree-sitter，其他语言按置信度降级到启发式索引。受控静态分析、测试与补丁验证目前仍主要支持 Python。项目尚未提供容器沙箱，也尚未声明开源许可证。
 
 ## 核心能力
 
 - **真正的 Unit Plan**：确定性拆分 Review Unit 后，模型输出结构化变更摘要、审查目标和风险假设；Plan 失败会降级为普通审查，不阻断任务。
 - **证据化 Issue**：不直接信任模型行号，服务端依据 Base/Head diff、代码片段和 anchor 重新定位证据。
 - **受控 Agent**：模型输出经过 JSON 与 Pydantic 校验，文件范围、工具权限和调用预算由服务端控制。
+- **分级多语言分析**：语言适配器统一产出符号、导入和调用引用；解析失败自动从 L2 降级到 L1/L0，Review Unit 仍可安全使用文件读取、路径查找和 diff 读取。
 - **安全的候选修复**：只为符合策略的 confirmed Issue 生成受限补丁，并在隔离的干净 Head 上检查。
 - **可观测、可恢复**：持久化任务、Unit Plan、Issue、Patch 和验证结果；前端展示 Plan 状态、摘要、风险假设及模型用量。
 

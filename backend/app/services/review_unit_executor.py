@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from typing import Any, TypedDict
 
@@ -17,6 +18,9 @@ from app.models.review import (
     ContextRetrievalPlan,
     ContextSnippet,
     ExecutionBudget,
+    FileFindRequest,
+    FileReadDiffRequest,
+    FileReadRequest,
     HumanReviewRequest,
     PullRequestInfo,
     ReviewIssue,
@@ -32,6 +36,7 @@ from app.models.review import (
 )
 from app.services.review_planner import DeterministicReviewPlanner
 from app.tools.code_search import CodeSearchTool
+from app.tools.context_files import ScopedContextTool
 from app.graph.checkpointer import unit_thread_config
 from app.graph.policies import UNIT_ACTION_ROUTES, UNIT_ALLOWED_ACTIONS
 from app.review.language_rules import (
@@ -433,6 +438,8 @@ class ReviewUnitExecutor:
         budget = state["budget"]
         events = list(state["tool_events"])
         history = list(state["retrieval_history"])
+        if action.action != AgentActionName.retrieve_context:
+            return await self._execute_direct_read_action(state, action, budget, events, history)
         if not budget.can_consume(context_retrievals=1):
             events.append(ReviewUnitToolEvent(
                 review_unit_id=state["unit"].id,
@@ -462,6 +469,145 @@ class ReviewUnitExecutor:
                 "retrieval_no_new_rounds": state["retrieval_no_new_rounds"] + 1,
                 "tool_events": events,
             }
+        return await self._execute_code_search_action(
+            state, plan, budget, events, history, fingerprint
+        )
+
+    async def _execute_direct_read_action(
+        self,
+        state: "_ReviewUnitGraphState",
+        action: AgentAction,
+        budget: ExecutionBudget,
+        events: list[ReviewUnitToolEvent],
+        history: list[dict[str, Any]],
+    ) -> "_ReviewUnitGraphState":
+        tool_name = action.action.value
+        if not budget.can_consume(context_retrievals=1):
+            events.append(ReviewUnitToolEvent(
+                review_unit_id=state["unit"].id,
+                tool=tool_name,
+                status="rejected",
+                detail="context retrieval budget exhausted",
+            ))
+            return {"next_action": None, "tool_events": events}
+
+        request_payload = action.tool_args["request"]
+        fingerprint = json.dumps(
+            {"action": tool_name, "request": request_payload},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        if any(item.get("plan") == fingerprint for item in history):
+            events.append(ReviewUnitToolEvent(
+                review_unit_id=state["unit"].id,
+                tool=tool_name,
+                status="rejected",
+                detail="duplicate read request",
+            ))
+            return {
+                "next_action": None,
+                "retrieval_history": [*history, {
+                    "plan": fingerprint,
+                    "result_count": 0,
+                    "new_snippet_count": 0,
+                    "status": "rejected",
+                }],
+                "retrieval_no_new_rounds": state["retrieval_no_new_rounds"] + 1,
+                "tool_events": events,
+            }
+
+        budget = budget.consume(context_retrievals=1)
+        context_tool = ScopedContextTool()
+        snippets: list[dict[str, Any]] = []
+        matches: list[str] = []
+        try:
+            if action.action == AgentActionName.file_read:
+                request = FileReadRequest.model_validate(request_payload)
+                snippets = [await context_tool.file_read(
+                    scope=state["scope"],
+                    file_path=request.file_path,
+                    start_line=request.start_line,
+                    end_line=request.end_line,
+                )]
+            elif action.action == AgentActionName.file_find:
+                request = FileFindRequest.model_validate(request_payload)
+                matches = await context_tool.file_find(
+                    scope=state["scope"], query=request.query, max_results=request.max_results
+                )
+            elif action.action == AgentActionName.file_read_diff:
+                request = FileReadDiffRequest.model_validate(request_payload)
+                snippets = [await context_tool.file_read_diff(
+                    scope=state["scope"],
+                    file_path=request.file_path,
+                    changed_files=state["unit_files"],
+                    hunk_ids=request.hunk_ids,
+                )]
+            else:
+                raise ValueError(f"unsupported Unit read action: {tool_name}")
+
+            existing = {
+                (item.get("file"), item.get("start_line"), item.get("end_line"), item.get("source"))
+                for item in state["context"]
+            }
+            new_items = [
+                item for item in snippets
+                if (item.get("file"), item.get("start_line"), item.get("end_line"), item.get("source"))
+                not in existing
+            ]
+            result_count = len(matches) if action.action == AgentActionName.file_find else len(new_items)
+            events.append(ReviewUnitToolEvent(
+                review_unit_id=state["unit"].id,
+                tool=tool_name,
+                status="completed",
+                result_count=result_count,
+            ))
+            history_item: dict[str, Any] = {
+                "plan": fingerprint,
+                "result_count": result_count,
+                "new_snippet_count": len(new_items),
+                "status": "completed",
+            }
+            if matches:
+                history_item["matches"] = matches
+            return {
+                "next_action": None,
+                "budget": budget,
+                "context": [*state["context"], *new_items],
+                "retrieval_history": [*history, history_item],
+                "retrieval_no_new_rounds": (
+                    0 if result_count else state["retrieval_no_new_rounds"] + 1
+                ),
+                "tool_events": events,
+            }
+        except ValueError as exc:
+            events.append(ReviewUnitToolEvent(
+                review_unit_id=state["unit"].id,
+                tool=tool_name,
+                status="rejected",
+                detail=str(exc),
+            ))
+            return {
+                "next_action": None,
+                "budget": budget,
+                "retrieval_history": [*history, {
+                    "plan": fingerprint,
+                    "result_count": 0,
+                    "new_snippet_count": 0,
+                    "status": "rejected",
+                }],
+                "retrieval_no_new_rounds": state["retrieval_no_new_rounds"] + 1,
+                "tool_events": events,
+            }
+
+    async def _execute_code_search_action(
+        self,
+        state: "_ReviewUnitGraphState",
+        plan: ContextRetrievalPlan,
+        budget: ExecutionBudget,
+        events: list[ReviewUnitToolEvent],
+        history: list[dict[str, Any]],
+        fingerprint: str,
+    ) -> "_ReviewUnitGraphState":
         budget = budget.consume(context_retrievals=1)
         try:
             snippets = await CodeSearchTool().retrieve_context(
@@ -774,6 +920,18 @@ class ReviewUnitExecutor:
             retrieval_plans.append(ContextRetrievalPlan.model_validate(
                 plan.initial_action.tool_args["plan"]
             ))
+        elif plan.initial_action.action == AgentActionName.file_read:
+            request = FileReadRequest.model_validate(plan.initial_action.tool_args["request"])
+            if request.file_path not in readable:
+                raise ValueError("Unit Plan file_read references a file outside review scope")
+        elif plan.initial_action.action == AgentActionName.file_read_diff:
+            request = FileReadDiffRequest.model_validate(plan.initial_action.tool_args["request"])
+            if request.file_path not in scope.commentable_files:
+                raise ValueError("Unit Plan file_read_diff references a non-commentable file")
+        elif plan.initial_action.action == AgentActionName.file_find:
+            request = FileFindRequest.model_validate(plan.initial_action.tool_args["request"])
+            if request.max_results > scope.max_search_results:
+                raise ValueError("Unit Plan file_find exceeds scope result limit")
         for retrieval in retrieval_plans:
             unknown_files = set(retrieval.target_files) - readable
             if unknown_files:

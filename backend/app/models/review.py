@@ -178,6 +178,9 @@ class CommentPlacement(str, Enum):
 class AgentActionName(str, Enum):
     """Agent 及兼容流程支持的操作类型。"""
     retrieve_context = "retrieve_context"
+    file_read = "file_read"
+    file_find = "file_find"
+    file_read_diff = "file_read_diff"
     run_static_analysis = "run_static_analysis"
     review_code = "review_code"
     generate_patch = "generate_patch"
@@ -334,6 +337,69 @@ class ContextRetrievalPlan(BaseModel):
         if not (self.target_files or self.target_symbols or self.search_terms):
             raise ValueError("retrieval plan requires a file, symbol, or literal search term")
         return self
+
+
+class FileReadRequest(BaseModel):
+    """读取 Unit 已授权文件的有界行范围。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    file_path: str
+    start_line: int = Field(default=1, ge=1)
+    end_line: int | None = Field(default=None, ge=1)
+
+    @field_validator("file_path")
+    @classmethod
+    def validate_file_path(cls, value: str) -> str:
+        return _validate_repo_relative_path(value)
+
+    @model_validator(mode="after")
+    def validate_line_range(self) -> "FileReadRequest":
+        if self.end_line is not None and self.end_line < self.start_line:
+            raise ValueError("end_line must not precede start_line")
+        return self
+
+
+class FileFindRequest(BaseModel):
+    """仅在 Unit readable_files 清单中执行路径字面量查找。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1, max_length=120)
+    max_results: int = Field(default=12, ge=1, le=20)
+
+    @field_validator("query")
+    @classmethod
+    def validate_query(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("file_find query must not be blank")
+        if any(ord(char) < 32 for char in cleaned):
+            raise ValueError("file_find query cannot contain control characters")
+        if "\\" in cleaned or cleaned.startswith(("/", "~")) or ".." in cleaned.split("/"):
+            raise ValueError("file_find query must not contain path traversal")
+        return cleaned
+
+
+class FileReadDiffRequest(BaseModel):
+    """读取 Unit 内已解析 diff，可选限制到已知 hunk_id。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    file_path: str
+    hunk_ids: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("file_path")
+    @classmethod
+    def validate_file_path(cls, value: str) -> str:
+        return _validate_repo_relative_path(value)
+
+    @field_validator("hunk_ids")
+    @classmethod
+    def validate_hunk_ids(cls, values: list[str]) -> list[str]:
+        if any(not value or len(value) > 100 or any(ord(char) < 32 for char in value) for value in values):
+            raise ValueError("hunk_ids must contain short non-empty identifiers")
+        return list(dict.fromkeys(values))
 
 
 class HumanReviewRequest(BaseModel):
@@ -1046,6 +1112,20 @@ class AgentAction(BaseModel):
                 raise ValueError("retrieve_context requires tool_args.plan only")
             plan = ContextRetrievalPlan.model_validate(self.tool_args["plan"])
             self.tool_args = {"plan": plan.model_dump(mode="json")}
+        elif self.action in {
+            AgentActionName.file_read,
+            AgentActionName.file_find,
+            AgentActionName.file_read_diff,
+        }:
+            if set(self.tool_args) != {"request"}:
+                raise ValueError(f"{self.action.value} requires tool_args.request only")
+            request_type = {
+                AgentActionName.file_read: FileReadRequest,
+                AgentActionName.file_find: FileFindRequest,
+                AgentActionName.file_read_diff: FileReadDiffRequest,
+            }[self.action]
+            request = request_type.model_validate(self.tool_args["request"])
+            self.tool_args = {"request": request.model_dump(mode="json")}
         elif self.action == AgentActionName.apply_patch:
             patch_id = self.tool_args.get("patch_id")
             if set(self.tool_args) != {"patch_id"} or not isinstance(patch_id, str) or not patch_id:

@@ -31,12 +31,19 @@ def build_repository_graph(
     edges: list[dict[str, Any]] = []
 
     for source, item in files.items():
-        for imported in item.get("imports", []):
-            resolved = resolve_import(source, str(imported), files)
+        import_refs = item.get("import_refs") or [
+            {"module": imported, "confidence": 1.0, "parser_id": "legacy"}
+            for imported in item.get("imports", [])
+        ]
+        for import_ref in import_refs:
+            imported = str(import_ref.get("module", ""))
+            resolved = resolve_import(source, imported, files)
             for target, confidence in resolved:
                 edges.append(_edge(
-                    "file", source, "file", target, "imports", confidence,
+                    "file", source, "file", target, "imports",
+                    min(confidence, float(import_ref.get("confidence", confidence))),
                     f"{source} imports {imported}",
+                    parser_id=import_ref.get("parser_id"),
                 ))
 
     by_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -45,8 +52,13 @@ def build_repository_graph(
         by_name[name].append(symbol)
         by_name[name.rsplit(".", 1)[-1]].append(symbol)
     for caller in symbols:
-        for call in caller.get("calls", []):
-            simple = str(call).rsplit(".", 1)[-1]
+        call_refs = caller.get("call_refs") or [
+            {"callee": call, "simple_name": str(call).rsplit(".", 1)[-1], "confidence": 0.88}
+            for call in caller.get("calls", [])
+        ]
+        for call_ref in call_refs:
+            call = str(call_ref.get("callee", ""))
+            simple = str(call_ref.get("simple_name") or call.rsplit(".", 1)[-1])
             candidates = {
                 (str(item["file"]), str(item["symbol"])): item
                 for item in by_name.get(simple, [])
@@ -57,8 +69,10 @@ def build_repository_graph(
             callee = next(iter(candidates.values()))
             edges.append(_edge(
                 "symbol", _symbol_id(caller), "symbol", _symbol_id(callee),
-                "calls", 0.88, f"{caller.get('symbol')} calls {call}",
+                "calls", min(0.92, float(call_ref.get("confidence", 0.7))),
+                f"{caller.get('symbol')} calls {call}",
                 source_file=str(caller["file"]), target_file=str(callee["file"]),
+                parser_id=call_ref.get("parser_id"),
             ))
 
     source_files = [path for path in files if not _is_test(path)]
@@ -108,6 +122,8 @@ def build_repository_graph(
                 "kind": item.get("type"),
                 "start_line": item.get("start_line"),
                 "end_line": item.get("end_line"),
+                "confidence": item.get("confidence"),
+                "parser_id": item.get("parser_id"),
             }
             for item in symbols
         ],
