@@ -210,6 +210,9 @@ def rebuild_repo_snapshot(data: dict) -> RepoSnapshot | None:
         return None
     return RepoSnapshot(
         language=data.get("language", "unknown"),
+        languages=list(data.get("languages") or []),
+        language_counts=dict(data.get("language_counts") or {}),
+        is_mixed_language=bool(data.get("is_mixed_language", False)),
         framework=data.get("framework"),
         test_framework=data.get("test_framework"),
         total_files=data.get("total_files", 0),

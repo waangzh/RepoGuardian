@@ -23,6 +23,7 @@ from app.models.review import (
     ReviewUnitComplexity,
 )
 from app.tools.diff_parser import stable_hunk_id
+from app.review.language_rules import language_for_path
 
 PLANNER_VERSION = "review-unit-planner-v3"
 
@@ -438,6 +439,14 @@ class DeterministicReviewPlanner:
         if draft.symbol_filter:
             symbols = [symbol for symbol in symbols if symbol in set(draft.symbol_filter)]
         rules = sorted({rule for path in primary for rule in self._rules(classified[path])})
+        rules = sorted({
+            *rules,
+            *(
+                f"review.language.{language}"
+                for path in primary
+                if (language := language_for_path(path, file_index)) != "unknown"
+            ),
+        })
         risks = sorted({risk for path in primary for risk in self._risks(path, classified[path])})
         if symbols and any("test" not in classified[path] for path in primary):
             risks.append("public_api")

@@ -331,6 +331,13 @@ class ReviewService:
             )
             capabilities = await backend.capabilities(RepositorySnapshot(
                 language=index.get("project_meta", {}).get("language", "unknown"),
+                languages=list(index.get("project_meta", {}).get("languages") or []),
+                language_counts=dict(
+                    index.get("project_meta", {}).get("language_counts") or {}
+                ),
+                is_mixed_language=bool(
+                    index.get("project_meta", {}).get("is_mixed_language", False)
+                ),
                 framework=index.get("project_meta", {}).get("framework"),
                 test_framework=index.get("project_meta", {}).get("test_framework"),
                 total_files=len(index["file_index"]),

@@ -1549,6 +1549,9 @@ class ReviewUnitResult(BaseModel):
 class RepoSnapshot(BaseModel):
     """仓库概览快照（RepoIndexer 产出）。"""
     language: str
+    languages: list[str] = Field(default_factory=list)
+    language_counts: dict[str, int] = Field(default_factory=dict)
+    is_mixed_language: bool = False
     framework: str | None = None
     test_framework: str | None = None
     total_files: int

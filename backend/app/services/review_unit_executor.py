@@ -34,6 +34,11 @@ from app.services.review_planner import DeterministicReviewPlanner
 from app.tools.code_search import CodeSearchTool
 from app.graph.checkpointer import unit_thread_config
 from app.graph.policies import UNIT_ACTION_ROUTES, UNIT_ALLOWED_ACTIONS
+from app.review.language_rules import (
+    build_language_context,
+    markdown_language_for_path,
+    render_language_rule_context,
+)
 
 
 class _ReviewUnitGraphState(TypedDict, total=False):
@@ -466,6 +471,7 @@ class ReviewUnitExecutor:
                 repo_path=state["parent_state"].get("repo_path", ""),
                 plan=plan,
                 scope=state["scope"],
+                repository_graph=state["parent_state"].get("repository_graph") or {},
             )
             existing = {
                 (item.get("file"), item.get("start_line"), item.get("end_line"))
@@ -536,7 +542,14 @@ class ReviewUnitExecutor:
             pr,
             state["unit_files"],
             self._enhanced_diff(
-                state["unit_diff"], state["context"], state.get("unit_plan")
+                state["unit_diff"],
+                state["context"],
+                state.get("unit_plan"),
+                build_language_context(
+                    (item.file_path for item in state["unit_files"]),
+                    state["parent_state"].get("file_index") or [],
+                    state["parent_state"].get("project_meta") or {},
+                ),
             ),
             state["parent_state"].get("model"),
         )
@@ -662,6 +675,11 @@ class ReviewUnitExecutor:
         unit_plan: UnitReviewPlan | None = None,
     ) -> dict[str, Any]:
         readable = scope.readable_files
+        language_context = build_language_context(
+            unit.primary_files,
+            state.get("file_index") or [],
+            state.get("project_meta") or {},
+        )
         return {
             "task_id": state.get("task_id"),
             "review_unit_id": unit.id,
@@ -669,6 +687,8 @@ class ReviewUnitExecutor:
             "review_tool_scope": scope.model_dump(mode="json"),
             "unit_diff": unit_diff,
             "unit_plan": unit_plan.model_dump(mode="json") if unit_plan else None,
+            "project_meta": state.get("project_meta") or {},
+            "language_context": language_context,
             "phase": ReviewPhase.discovery,
             "changed_files": [item.model_dump(mode="json") for item in changed_files],
             "file_index": [
@@ -690,8 +710,12 @@ class ReviewUnitExecutor:
         unit_diff: str,
         context: list[dict[str, Any]],
         unit_plan: UnitReviewPlan | None = None,
+        language_context: dict[str, Any] | None = None,
     ) -> str:
         sections: list[str] = []
+        rendered_rules = render_language_rule_context(language_context or {})
+        if rendered_rules:
+            sections.append(rendered_rules)
         if unit_plan is not None:
             sections.extend([
                 "## Unit review plan guidance",
@@ -712,7 +736,11 @@ class ReviewUnitExecutor:
                     f"Retrieved via {snippet.get('source')} (distance={snippet.get('distance')}, "
                     f"confidence={snippet.get('confidence')}): {provenance}"
                 )
+            sections.append(
+                f"```{markdown_language_for_path(snippet.get('file', ''))}"
+            )
             sections.append(snippet.get("content", ""))
+            sections.append("```")
         sections.extend(["## Unit diff", unit_diff])
         return "\n".join(sections)
 

@@ -26,6 +26,33 @@ async def test_find_test_files(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_find_typescript_test_files_through_repository_graph(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "user.ts").write_text(
+        "export const getUser = () => ({ id: '1' })\n", encoding="utf-8"
+    )
+    (tmp_path / "src" / "user.test.ts").write_text(
+        "import { getUser } from './user'\ntest('user', () => getUser())\n",
+        encoding="utf-8",
+    )
+    from app.tools.repo_indexer import RepoIndexer
+
+    index = await RepoIndexer().execute(repo_path=str(tmp_path))
+    snippets = await CodeSearchTool().retrieve_context(
+        changed_files=[{"file_path": "src/user.ts"}],
+        symbol_index=index["symbol_index"],
+        file_index=index["file_index"],
+        repository_graph=index["repository_graph"],
+        repo_path=str(tmp_path),
+    )
+
+    assert any(
+        item["relevance"] == "test" and item["file"] == "src/user.test.ts"
+        for item in snippets
+    )
+
+
+@pytest.mark.asyncio
 async def test_retrieve_context_with_caller(tmp_path):
     (tmp_path / "app").mkdir()
     (tmp_path / "app" / "user.py").write_text("def get_user(id):\n    return None")

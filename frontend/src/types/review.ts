@@ -278,6 +278,9 @@ export interface ContextSnippet {
 
 export interface RepoSnapshot {
   language: string;
+  languages: string[];
+  language_counts: Record<string, number>;
+  is_mixed_language: boolean;
   framework?: string | null;
   test_framework?: string | null;
   total_files: number;

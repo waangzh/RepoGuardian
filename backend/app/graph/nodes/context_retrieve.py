@@ -52,6 +52,7 @@ async def context_retrieve_node(state: ReviewState) -> ReviewState:
             repo_path=state.get("repo_path", ""),
             plan=plan,
             failure_fingerprints=failure_fingerprints,
+            repository_graph=state.get("repository_graph") or {},
         )
     except (ContextRetrievalPlanError, ValueError) as exc:
         return _rejected_result(
