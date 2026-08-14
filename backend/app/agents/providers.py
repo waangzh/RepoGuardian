@@ -717,6 +717,8 @@ class OpenAICompatibleProvider(LLMProvider):
         scope = state.get("review_tool_scope") or {}
         payload = {
             "review_unit": unit,
+            "project": state.get("project_meta") or {},
+            "language_context": state.get("language_context") or {},
             "unit_diff": (state.get("unit_diff") or "")[:60_000],
             "changed_files": state.get("changed_files") or [],
             "retrieval_catalog": {
@@ -778,6 +780,8 @@ class OpenAICompatibleProvider(LLMProvider):
         )
         compact = {
             "phase": phase.value,
+            "project": state.get("project_meta") or {},
+            "language_context": state.get("language_context") or {},
             "changed_files": [item.get("file_path") for item in state.get("changed_files") or []],
             "retrieval_catalog": {
                 "files": [item.get("path") for item in (state.get("file_index") or [])[:200]],

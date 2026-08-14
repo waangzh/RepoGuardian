@@ -7,6 +7,7 @@ from typing import Any
 
 from app.agents.providers import LLMProvider
 from app.models.review import ChangedFile, ModelCallResult, PullRequestInfo, ReviewIssue
+from app.review.language_rules import markdown_language_for_path
 
 
 class ReviewAgent:
@@ -36,7 +37,7 @@ def _build_context_text(snippets: list[dict[str, Any]]) -> str:
         lines.append(
             f"### {s.get('relevance', 'unknown')} | {s['file']}:{s.get('start_line', '?')}"
         )
-        lines.append("```python")
+        lines.append(f"```{markdown_language_for_path(s.get('file', ''))}")
         lines.append(s.get("content", ""))
         lines.append("```")
         lines.append("")

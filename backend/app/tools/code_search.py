@@ -7,6 +7,7 @@ from typing import Any
 from app.models.review import ContextRetrievalPlan, RetrievalRelevanceType, ReviewToolScope
 from app.tools.base import BaseTool
 from app.tools.git_tool import GitTool
+from app.tools.repository_graph import build_repository_graph
 from app.review.tool_scope import ReviewPathPolicyError, validate_repository_file
 
 
@@ -27,6 +28,7 @@ class CodeSearchTool(BaseTool):
             plan=kwargs.get("plan"),
             failure_fingerprints=kwargs.get("failure_fingerprints"),
             scope=kwargs.get("scope"),
+            repository_graph=kwargs.get("repository_graph"),
         )
         return {"context_snippets": snippets}
 
@@ -39,6 +41,7 @@ class CodeSearchTool(BaseTool):
         plan: ContextRetrievalPlan | dict[str, Any] | None = None,
         failure_fingerprints: list[dict[str, Any]] | None = None,
         scope: ReviewToolScope | dict[str, Any] | None = None,
+        repository_graph: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """执行字面量、索引驱动的检索；绝不把模型文本转换为 Shell 或正则。"""
         normalized_scope = (
@@ -133,7 +136,9 @@ class CodeSearchTool(BaseTool):
         source_files = target_files or {symbol["file"] for symbol in selected_symbols}
         if normalized_plan.include_tests or RetrievalRelevanceType.test in relevance:
             for source_file in sorted(source_files):
-                for test_file in _find_test_files(source_file, file_index):
+                for test_file in _find_test_files(
+                    source_file, file_index, repository_graph
+                ):
                     _append_file_snippet(snippets, git_tool, repo_path, test_file, "test", None, 2_000)
 
         if RetrievalRelevanceType.module_config in relevance:
@@ -377,20 +382,25 @@ def _truncate(content: str, limit: int) -> str:
     return content if len(content) <= limit else content[:limit] + "\n...(truncated)"
 
 
-def _find_test_files(source_path: str, file_index: list[dict[str, Any]]) -> list[str]:
-    base = Path(source_path).stem
-    candidates: list[str] = []
-    patterns = [
-        rf"tests?[/\\](test[/\\])?{re.escape(base)}.*\.py$",
-        rf"tests?[/\\]test_{re.escape(base)}\.py$",
-        rf"test[/\\]{re.escape(base)}.*\.py$",
+def _find_test_files(
+    source_path: str,
+    file_index: list[dict[str, Any]],
+    repository_graph: dict[str, Any] | None = None,
+) -> list[str]:
+    """通过语言无关的 repository_graph.test_of 关系定位测试文件。"""
+    graph = repository_graph or build_repository_graph(file_index, [])
+    candidates = [
+        (
+            float(edge.get("confidence", 0)),
+            str(edge.get("source", "")),
+        )
+        for edge in graph.get("edges", [])
+        if edge.get("type") == "test_of"
+        and edge.get("target") == source_path
+        and edge.get("source_kind") == "file"
+        and edge.get("target_kind") == "file"
     ]
-    for file_item in file_index:
-        if file_item.get("language") != "python" or file_item.get("path") == source_path:
-            continue
-        if any(re.search(pattern, file_item["path"]) for pattern in patterns):
-            candidates.append(file_item["path"])
-    return candidates[:4]
+    return [path for _, path in sorted(candidates, key=lambda item: (-item[0], item[1]))[:4]]
 
 
 def _dedupe_and_limit(snippets: list[dict[str, Any]], max_results: int) -> list[dict[str, Any]]:

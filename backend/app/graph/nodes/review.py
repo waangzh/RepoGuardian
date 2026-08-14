@@ -10,6 +10,11 @@ from app.graph.state import ReviewState
 from app.models.review import AgentAction, ChangedFile, PullRequestInfo
 from app.models.review import ReviewIssue
 from app.services.model_usage import annotate_usage, append_usage, unpack_model_call
+from app.review.language_rules import (
+    build_language_context,
+    markdown_language_for_path,
+    render_language_rule_context,
+)
 
 logger = logging.getLogger("RepoGuardian.Node")
 
@@ -105,6 +110,18 @@ def _filter_candidate_issues(issues: list[ReviewIssue]) -> tuple[list[ReviewIssu
 def _build_enhanced_diff(state: ReviewState) -> str:
     """拼接增强 diff：上下文片段 + 静态分析结果 + 原始 diff。"""
     sections: list[str] = []
+    file_index = state.get("file_index") or []
+    language_context = build_language_context(
+        (
+            item.get("file_path", "")
+            for item in state.get("changed_files") or []
+        ),
+        file_index,
+        state.get("project_meta") or {},
+    )
+    rendered_rules = render_language_rule_context(language_context)
+    if rendered_rules:
+        sections.append(rendered_rules)
     context_snippets = state.get("context_snippets") or []
     if context_snippets:
         sections.append("## 相关代码上下文")
@@ -113,7 +130,9 @@ def _build_enhanced_diff(state: ReviewState) -> str:
                 f"### {snippet.get('relevance', '?')} | "
                 f"`{snippet.get('file', '')}`:{snippet.get('start_line', '?')}-{snippet.get('end_line', '?')}"
             )
-            sections.append("```python")
+            sections.append(
+                f"```{markdown_language_for_path(snippet.get('file', ''), file_index)}"
+            )
             sections.append(snippet.get("content", ""))
             sections.append("```")
     static_results = state.get("static_results") or []

@@ -146,6 +146,9 @@ def _repository_snapshot(state: ReviewState) -> RepositorySnapshot:
     metadata = state.get("project_meta") or {}
     return RepositorySnapshot(
         language=metadata.get("language", "unknown"),
+        languages=list(metadata.get("languages") or []),
+        language_counts=dict(metadata.get("language_counts") or {}),
+        is_mixed_language=bool(metadata.get("is_mixed_language", False)),
         framework=metadata.get("framework"),
         test_framework=metadata.get("test_framework"),
         total_files=metadata.get("total_files", len(state.get("file_index") or [])),
