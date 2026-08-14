@@ -793,6 +793,16 @@ class OpenAICompatibleProvider(LLMProvider):
             "observed_context": {
                 "files": sorted({snippet.get("file") for snippet in context_snippets if snippet.get("file")}),
                 "symbols": sorted({snippet.get("symbol") for snippet in context_snippets if snippet.get("symbol")}),
+                "snippets": [
+                    {
+                        "file": snippet.get("file"),
+                        "start_line": snippet.get("start_line"),
+                        "end_line": snippet.get("end_line"),
+                        "source": snippet.get("source"),
+                        "content": (snippet.get("content") or "")[:4_000],
+                    }
+                    for snippet in context_snippets[-12:]
+                ],
                 "coverage": {
                     kind: sum(1 for snippet in context_snippets if snippet.get("relevance") == kind)
                     for kind in ("caller", "callee", "test")

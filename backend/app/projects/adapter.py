@@ -6,8 +6,8 @@ from typing import Protocol
 from app.models.review import CommandId, CommandSpec, ProjectProfile
 
 
-class ProjectAdapter(Protocol):
-    """将项目识别和受控验证命令绑定到同一个语言适配器。"""
+class ProjectValidationAdapter(Protocol):
+    """项目级受控验证能力；不代表语言分析支持范围。"""
 
     adapter_id: str
 
@@ -18,10 +18,14 @@ class ProjectAdapter(Protocol):
         """只返回本适配器预注册的命令定义。"""
 
 
+ProjectAdapter = ProjectValidationAdapter
+# 向后兼容别名；新代码应使用 ProjectValidationAdapter 表达验证边界。
+
+
 class ProjectAdapterRegistry:
     """按固定顺序检测适配器，避免从外部仓库加载可执行配置。"""
 
-    def __init__(self, adapters: list[ProjectAdapter]) -> None:
+    def __init__(self, adapters: list[ProjectValidationAdapter]) -> None:
         self._adapters = tuple(adapters)
         self._by_id = {adapter.adapter_id: adapter for adapter in adapters}
 
@@ -32,5 +36,5 @@ class ProjectAdapterRegistry:
                 return profile
         return None
 
-    def get(self, adapter_id: str) -> ProjectAdapter | None:
+    def get(self, adapter_id: str) -> ProjectValidationAdapter | None:
         return self._by_id.get(adapter_id)

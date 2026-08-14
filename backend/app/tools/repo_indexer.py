@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from app.languages.registry import default_language_registry
 from app.tools.base import BaseTool
 from app.review.tool_scope import ReviewPathPolicyError, validate_repository_file
 from app.tools.git_tool import GitTool
@@ -100,13 +101,16 @@ class RepoIndexer(BaseTool):
                     size = stat.st_size
                 except OSError:
                     size = 0
-                language = _detect_language(filename)
-                imports = _extract_imports(file_path_obj, language)
+                analysis = default_language_registry.analyze(file_path_obj, rel_path)
+                language = analysis.language_id
                 index.append({
                     "path": rel_path,
                     "language": language,
                     "size": size,
-                    "imports": imports,
+                    "imports": sorted({item.module for item in analysis.imports}),
+                    "import_refs": [item.model_dump(mode="json") for item in analysis.imports],
+                    "analysis_level": int(analysis.level),
+                    "parser_id": analysis.parser_id,
                 })
         return sorted(index, key=lambda f: f["path"])
 
@@ -132,15 +136,8 @@ class RepoIndexer(BaseTool):
                     validate_repository_file(root, rel_path, tracked_files=tracked_files)
                 except (OSError, ReviewPathPolicyError):
                     continue
-                try:
-                    symbols = (
-                        _parse_python_symbols(str(file_path_obj), rel_path)
-                        if language == "python"
-                        else _parse_structural_symbols(file_path_obj, rel_path, language)
-                    )
-                except Exception:
-                    symbols = []
-                index.extend(symbols)
+                analysis = default_language_registry.analyze(file_path_obj, rel_path)
+                index.extend(symbol.to_index_entry() for symbol in analysis.symbols)
         return index
 
     async def detect_project_meta(
@@ -186,26 +183,16 @@ class RepoIndexer(BaseTool):
             "test_dirs": test_dirs,
             "config_files": config_files,
             "total_files": len(file_index),
+            "analysis_capabilities": [
+                default_language_registry.capability(language_id)
+                for language_id in languages
+            ],
         }
 
 
 def _detect_language(filename: str) -> str:
     """根据文件扩展名检测编程语言。"""
-    ext = Path(filename).suffix.lower()
-    return {
-        ".py": "python",
-        ".js": "javascript",
-        ".mjs": "javascript",
-        ".cjs": "javascript",
-        ".ts": "typescript",
-        ".jsx": "javascript",
-        ".tsx": "typescript",
-        ".mts": "typescript",
-        ".cts": "typescript",
-        ".java": "java",
-        ".go": "go",
-        ".rs": "rust",
-    }.get(ext, "unknown")
+    return default_language_registry.detect_language(filename)
 
 
 def _extract_imports(file_path: Path, language: str = "python") -> list[str]:

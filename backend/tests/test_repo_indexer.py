@@ -115,6 +115,67 @@ async def test_symbol_index_extracts_typescript_declarations(tmp_path):
     assert ("DEFAULT_LIMIT", "constant") in indexed
     load_user = next(item for item in symbols if item["symbol"] == "loadUser")
     assert "fetchUser" in load_user["calls"]
+    assert load_user["parser_id"].startswith("tree-sitter.typescript")
+    assert load_user["confidence"] >= 0.9
+    assert load_user["call_refs"][0]["simple_name"] == "fetchUser"
+
+
+@pytest.mark.asyncio
+async def test_typescript_tree_sitter_extracts_methods_arrows_and_import_refs(tmp_path):
+    (tmp_path / "service.ts").write_text(
+        "import { fetchUser } from './api'\n"
+        "export const load = async (id: string) => fetchUser(id)\n"
+        "export class UserService {\n"
+        "  get(id: string) { return load(id) }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    result = await RepoIndexer().execute(repo_path=str(tmp_path))
+    file_item = next(item for item in result["file_index"] if item["path"] == "service.ts")
+    symbols = {item["symbol"]: item for item in result["symbol_index"]}
+
+    assert file_item["analysis_level"] == 2
+    assert file_item["parser_id"] == "tree-sitter.typescript.v1"
+    assert file_item["import_refs"][0]["module"] == "./api"
+    assert symbols["load"]["calls"] == ["fetchUser"]
+    assert symbols["UserService.get"]["container"] == "UserService"
+    assert symbols["UserService.get"]["calls"] == ["load"]
+
+
+@pytest.mark.asyncio
+async def test_javascript_and_tsx_use_their_tree_sitter_grammars(tmp_path):
+    (tmp_path / "client.jsx").write_text(
+        "export function render() { return createElement('main') }\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "view.tsx").write_text(
+        "export const View = () => <main>Ready</main>\n",
+        encoding="utf-8",
+    )
+
+    result = await RepoIndexer().execute(repo_path=str(tmp_path))
+    files = {item["path"]: item for item in result["file_index"]}
+    symbols = {item["symbol"]: item for item in result["symbol_index"]}
+
+    assert files["client.jsx"]["parser_id"] == "tree-sitter.javascript.v1"
+    assert files["view.tsx"]["parser_id"] == "tree-sitter.typescript.v1"
+    assert symbols["render"]["calls"] == ["createElement"]
+    assert symbols["View"]["parser_id"] == "tree-sitter.typescript.v1"
+
+
+@pytest.mark.asyncio
+async def test_project_meta_exposes_language_analysis_capabilities(tmp_path):
+    (tmp_path / "main.ts").write_text("export const main = () => true\n", encoding="utf-8")
+    (tmp_path / "legacy.java").write_text("class Legacy {}\n", encoding="utf-8")
+
+    indexer = RepoIndexer()
+    file_index = await indexer.build_file_index(str(tmp_path))
+    meta = await indexer.detect_project_meta(str(tmp_path), file_index)
+    capabilities = {item["language_id"]: item for item in meta["analysis_capabilities"]}
+
+    assert capabilities["typescript"]["max_level"] == 2
+    assert capabilities["java"]["max_level"] == 1
 
 
 @pytest.mark.asyncio
