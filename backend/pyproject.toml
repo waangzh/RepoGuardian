@@ -36,7 +36,6 @@ test = [
 testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
-addopts = "--basetemp=.pytest_tmp"
 
 [tool.ruff]
 line-length = 100
