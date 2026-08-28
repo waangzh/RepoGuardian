@@ -8,6 +8,7 @@
 """
 
 import ast
+import asyncio
 import os
 import re
 from pathlib import Path
@@ -73,6 +74,9 @@ class RepoIndexer(BaseTool):
         }
 
     async def build_file_index(self, repo_path: str) -> list[dict[str, Any]]:
+        return await asyncio.to_thread(self._build_file_index_sync, repo_path)
+
+    def _build_file_index_sync(self, repo_path: str) -> list[dict[str, Any]]:
         """遍历仓库目录，构建文件级索引（路径、语言、大小、导入）。"""
         index: list[dict[str, Any]] = []
         root = Path(repo_path)
@@ -115,6 +119,9 @@ class RepoIndexer(BaseTool):
         return sorted(index, key=lambda f: f["path"])
 
     async def build_symbol_index(self, repo_path: str) -> list[dict[str, Any]]:
+        return await asyncio.to_thread(self._build_symbol_index_sync, repo_path)
+
+    def _build_symbol_index_sync(self, repo_path: str) -> list[dict[str, Any]]:
         """使用 tree-sitter 解析 Python 文件，提取函数/类/方法符号。"""
         index: list[dict[str, Any]] = []
         root = Path(repo_path)

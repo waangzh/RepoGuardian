@@ -1,6 +1,6 @@
 """使用 diff、工作树与 symbol index 确定性解析模型证据。"""
 
-from pathlib import Path
+import asyncio
 from typing import Any
 
 from app.evidence import DiffIndex, EvidenceResolver
@@ -13,6 +13,7 @@ from app.models.review import (
     ReviewUnitResult,
 )
 from app.tools.git_tool import GitTool
+from app.review.tool_scope import ReviewPathPolicyError, validate_repository_file
 
 
 async def resolve_evidence_node(state: ReviewState) -> ReviewState:
@@ -26,23 +27,16 @@ async def resolve_evidence_node(state: ReviewState) -> ReviewState:
         if side == "base":
             reader = getattr(git_tool, "get_file_content_at_revision", None)
             return reader(repo_path, base_sha, file_path) if reader else None
-        full_path = Path(repo_path) / file_path
-        if not full_path.is_file():
-            return None
         try:
+            full_path = validate_repository_file(repo_path, file_path)
             content = full_path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        except (OSError, ReviewPathPolicyError):
             return None
         return None if "\x00" in content else content
 
     repository_files = {
         str(item.get("path")) for item in state.get("file_index") or [] if item.get("path")
     }
-    for item in changed:
-        if item.get("file_path"):
-            repository_files.add(str(item["file_path"]))
-        if item.get("old_file_path"):
-            repository_files.add(str(item["old_file_path"]))
     resolver = EvidenceResolver(
         diff_index,
         file_loader=load_file,
@@ -71,7 +65,7 @@ async def resolve_evidence_node(state: ReviewState) -> ReviewState:
         if unit is None:
             unit = next(iter(by_unit.values()))
             issue = issue.model_copy(update={"review_unit_id": unit.id})
-        resolved.append(resolver.resolve_issue(issue, unit))
+        resolved.append(await asyncio.to_thread(resolver.resolve_issue, issue, unit))
 
     resolved_by_id = {issue.id: issue for issue in resolved}
     unit_results: list[dict] = []

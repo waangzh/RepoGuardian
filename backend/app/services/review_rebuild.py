@@ -26,6 +26,8 @@ from app.models.review import (
     ReviewIssue,
     ReviewUnit,
     ReviewUnitResult,
+    ReviewCoverage,
+    ReviewRunManifest,
     ExcludedReviewFile,
     IssueMetrics,
     IssueStatus,
@@ -81,6 +83,11 @@ def rebuild_task_from_state(state: ReviewState) -> ReviewTask:
             PatchEligibilityDecision.model_validate(item)
             for item in state.get("patch_eligibility") or []
         ],
+        coverage=ReviewCoverage.model_validate(state.get("review_coverage") or {}),
+        run_manifest=(
+            ReviewRunManifest.model_validate(state["run_manifest"])
+            if state.get("run_manifest") else None
+        ),
         patches=rebuild_patches(state.get("patches") or [], state.get("head_sha")),
         test_results=rebuild_test_results(state.get("test_results") or []),
         agent_events=rebuild_agent_events(state.get("agent_events") or []),

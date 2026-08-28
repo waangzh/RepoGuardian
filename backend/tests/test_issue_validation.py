@@ -179,7 +179,10 @@ def test_verifier_decision_schema_only_allows_three_actions_and_no_new_issue() -
 @pytest.mark.asyncio
 async def test_verifier_failure_uses_configured_mode_and_other_issue_continues() -> None:
     unit = _unit()
-    issues = [_issue("first"), _issue("second", anchor_hash="anchor-2")]
+    issues = [
+        _issue("first", severity="high"),
+        _issue("second", anchor_hash="anchor-2", severity="high"),
+    ]
     provider = VerifierProvider([
         RuntimeError("provider unavailable"),
         {"issue_id": "second", "decision": "keep", "reason": "证据可推出"},
@@ -202,7 +205,10 @@ async def test_verifier_failure_uses_configured_mode_and_other_issue_continues()
 @pytest.mark.asyncio
 async def test_verifier_calls_are_bounded_per_unit() -> None:
     unit = _unit()
-    issues = [_issue("one"), _issue("two", anchor_hash="anchor-2")]
+    issues = [
+        _issue("one", severity="high"),
+        _issue("two", anchor_hash="anchor-2", severity="high"),
+    ]
     provider = VerifierProvider([
         {"issue_id": "one", "decision": "keep", "reason": "成立"},
     ])
@@ -216,7 +222,8 @@ async def test_verifier_calls_are_bounded_per_unit() -> None:
 
     assert provider.calls == 1
     assert result.issues[0].status == IssueStatus.confirmed
-    assert result.issues[1].status == IssueStatus.candidate
+    assert result.issues[1].status == IssueStatus.confirmed
+    assert result.issues[1].unresolved_reason.startswith("verifier_failure:")
 
 
 @pytest.mark.asyncio
@@ -265,7 +272,7 @@ async def test_similar_text_with_different_anchor_is_not_merged_without_semantic
 
 @pytest.mark.asyncio
 async def test_zero_confirmed_is_valid_and_metrics_are_accurate() -> None:
-    issue = _issue("drop")
+    issue = _issue("drop", severity="high")
     provider = VerifierProvider([
         {"issue_id": "drop", "decision": "drop", "reason": "存在反例"},
     ])

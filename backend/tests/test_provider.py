@@ -195,15 +195,15 @@ async def test_provider_normalizes_observed_retrieval_plan_aliases(
     assert action.tool_args["plan"]["relevance_types"] == ["direct"]
 
 
-def test_unit_decision_prompt_documents_exact_retrieval_plan_schema() -> None:
+def test_unit_decision_prompt_exposes_small_repository_search_surface() -> None:
     prompt = OpenAICompatibleProvider._build_decision_prompt({
         "phase": "discovery",
         "unit_agent": True,
     })
 
-    assert '"target_files":[]' in prompt
-    assert '"relevance_types":["direct"]' in prompt
-    assert "never use files or file_requests" in prompt
+    assert "code_search" in prompt
+    assert '"relation": "text"' in prompt
+    assert "Internal retrieval plans are not exposed" in prompt
 
 
 def test_unit_decision_prompt_is_generated_from_action_registry() -> None:
