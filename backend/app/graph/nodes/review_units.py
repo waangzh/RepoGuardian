@@ -11,6 +11,10 @@ from app.graph.checkpointer import get_checkpointer
 from app.services.review_planner import DeterministicReviewPlanner
 from app.services.review_unit_executor import ReviewUnitExecutor
 from app.services.review_repository import ReviewRepository
+from app.review.unit_completion import (
+    is_reusable_review_unit_result,
+    is_review_unit_complete,
+)
 
 
 async def review_plan_node(state: ReviewState) -> ReviewState:
@@ -72,7 +76,7 @@ async def review_units_node(state: ReviewState) -> ReviewState:
             ReviewUnitResult.model_validate(raw)
             for raw in state.get("review_unit_results") or []
         )
-        if item.status == ReviewUnitStatus.completed
+        if is_review_unit_complete(item)
     }
     pending_units = [unit for unit in plan.review_units if unit.id not in previous]
     reusable: dict[str, ReviewUnitResult] = {}
@@ -91,6 +95,9 @@ async def review_units_node(state: ReviewState) -> ReviewState:
             )
             if cached and cached.result_snapshot:
                 result = ReviewUnitResult.model_validate(cached.result_snapshot)
+                if not is_reusable_review_unit_result(result):
+                    still_pending.append(unit)
+                    continue
                 result = result.model_copy(update={"model_usages": []})
                 reusable[unit.id] = result
                 repository.record_unit_result(
@@ -117,9 +124,9 @@ async def review_units_node(state: ReviewState) -> ReviewState:
         **{item.review_unit_id: item for item in executed},
     }
     results = [by_id[unit.id] for unit in plan.review_units if unit.id in by_id]
-    successful = [item for item in results if item.status == ReviewUnitStatus.completed]
+    successful = [item for item in results if is_review_unit_complete(item)]
     needs_human = [item for item in results if item.status == ReviewUnitStatus.needs_human]
-    failed = [item for item in results if item.status != ReviewUnitStatus.completed]
+    incomplete = [item for item in results if not is_review_unit_complete(item)]
     if needs_human:
         human_request = needs_human[0].human_request or HumanReviewRequest(
             missing_information=["Review Unit 需要人工提供业务规则。"],
@@ -151,9 +158,9 @@ async def review_units_node(state: ReviewState) -> ReviewState:
     snippets = [snippet for item in successful for snippet in item.context_snippets]
     events = [event for item in results for event in item.messages]
     warnings = list(state.get("warnings") or [])
-    if failed:
+    if incomplete:
         warnings.append(
-            f"{len(failed)} 个 Review Unit 失败，其他 {len(successful)} 个 Unit 已完成"
+            f"{len(incomplete)} 个 Review Unit 未完整完成，其他 {len(successful)} 个 Unit 已完成"
         )
     return ReviewState(
         status="reviewing",

@@ -46,7 +46,7 @@ from app.review.language_rules import (
     markdown_language_for_path,
     render_language_rule_context,
 )
-from app.review.tool_scope import is_sensitive_repository_path
+from app.review.tool_scope import is_sensitive_repository_change
 
 
 class _ReviewUnitGraphState(TypedDict, total=False):
@@ -187,14 +187,21 @@ class ReviewUnitExecutor:
         unit: ReviewUnit,
         state: dict[str, Any],
     ) -> ReviewUnitResult:
+        all_changed = [
+            ChangedFile.model_validate(item)
+            for item in state.get("changed_files") or []
+        ]
+        primary_paths = set(unit.primary_files)
         sensitive_files = [
-            path for path in unit.primary_files if is_sensitive_repository_path(path)
+            item.old_file_path or item.file_path
+            for item in all_changed
+            if item.file_path in primary_paths
+            and is_sensitive_repository_change(item.file_path, item.old_file_path)
         ]
         if sensitive_files:
             raise ValueError(
                 f"sensitive changed files cannot enter a Review Unit: {sensitive_files}"
             )
-        all_changed = [ChangedFile.model_validate(item) for item in state.get("changed_files") or []]
         by_path = {item.file_path: item for item in all_changed}
         unit_files = self._unit_changed_files(unit, by_path)
         repository_files = {

@@ -35,7 +35,6 @@ from app.models.review import (
     ReviewPreviewResponse,
     ValidationBackendPreview,
     ReviewUnitResult,
-    ReviewUnitStatus,
     ReviewPhase,
     ReviewTask,
     StepStatus,
@@ -52,6 +51,10 @@ from app.services.model_usage import summarize_model_usage
 from app.services.review_rebuild import rebuild_task_from_state
 from app.services.review_planner import DeterministicReviewPlanner
 from app.services.review_unit_executor import ReviewUnitExecutor
+from app.review.unit_completion import (
+    is_review_unit_budget_exhausted,
+    is_review_unit_complete,
+)
 from app.services.review_repository import ReviewRepository
 from app.services.task_queue import ClaimedJob, DatabaseTaskQueue, ReviewWorker
 from app.services.patch_presentation import build_patch_presentation
@@ -804,7 +807,7 @@ class ReviewService:
                 aggregated_issues = list(task.issues)
                 retry_metrics = task.issue_metrics
                 lifecycle_warnings: list[str] = []
-                if result.status == ReviewUnitStatus.completed:
+                if is_review_unit_complete(result):
                     lifecycle_state: ReviewState = {
                         **state,
                         "base_sha": pr.base.sha,
@@ -890,22 +893,25 @@ class ReviewService:
                 item for item in task.agent_events if item.review_unit_id != unit_id
             ] + result.messages
 
-            failed = [
+            incomplete = [
                 item for item in task.review_unit_results
-                if item.status != ReviewUnitStatus.completed
+                if not is_review_unit_complete(item)
             ]
-            completed = len(task.review_unit_results) - len(failed)
+            completed = len(task.review_unit_results) - len(incomplete)
             task.warnings = [
                 warning for warning in task.warnings if "Review Unit" not in warning
             ]
             task.warnings = list(dict.fromkeys([*task.warnings, *lifecycle_warnings]))
-            if failed and completed:
+            if incomplete and (
+                completed
+                or any(is_review_unit_budget_exhausted(item) for item in incomplete)
+            ):
                 task.status = TaskStatus.completed_with_warnings
                 task.warnings.append(
-                    f"{len(failed)} 个 Review Unit 失败，其他 {completed} 个 Unit 已完成"
+                    f"{len(incomplete)} 个 Review Unit 未完整完成，其他 {completed} 个 Unit 已完成"
                 )
                 task.error = None
-            elif failed:
+            elif incomplete:
                 task.status = TaskStatus.failed
                 task.error = result.error or "all review units failed"
             else:

@@ -19,6 +19,7 @@ from app.models.review import (
     ReviewUnitComplexity,
     ReviewUnitResult,
     ReviewUnitStatus,
+    ReviewUnitTerminalReason,
     UnitPlanStatus,
     UnitReviewPlan,
 )
@@ -81,6 +82,20 @@ def test_changed_npmrc_is_excluded() -> None:
 
 def test_changed_private_key_is_excluded() -> None:
     _assert_sensitive_changed_file_is_excluded("secrets/deploy.pem")
+
+
+def test_sensitive_file_renamed_to_safe_path_is_excluded() -> None:
+    files = _parse(_diff(
+        "config/runtime.py",
+        "-TOKEN=old-secret\n+TOKEN=new-secret",
+        old=".env",
+    ))
+    plan = DeterministicReviewPlanner().plan(files, base_sha="b", head_sha="h")
+
+    assert files[0].change_type == "renamed"
+    assert files[0].old_file_path == ".env"
+    assert plan.review_units == []
+    assert plan.changed_files[0].excluded_reason == "sensitive_file"
 
 
 def test_implementation_and_test_merge_but_unrelated_file_does_not() -> None:
@@ -241,6 +256,33 @@ async def test_sensitive_diff_never_reaches_provider() -> None:
     assert provider.review_diffs == []
 
 
+@pytest.mark.asyncio
+async def test_sensitive_rename_diff_never_reaches_provider() -> None:
+    files = _parse(_diff(
+        "config/runtime.py",
+        "-STRIPE_KEY=old-secret\n+STRIPE_KEY=new-secret",
+        old=".env",
+    ))
+    unit = ReviewUnit(
+        id="malicious-sensitive-rename",
+        primary_files=["config/runtime.py"],
+        estimated_tokens=100,
+        complexity=ReviewUnitComplexity.small,
+        fingerprint="sensitive-rename",
+        grouping_reason="invalid_manual_unit",
+    )
+    provider = UnitProvider()
+
+    result = await ReviewUnitExecutor(
+        provider, concurrency=1, timeout_seconds=2
+    ).execute_unit(unit, _state(files))
+
+    assert result.status == ReviewUnitStatus.failed
+    assert "sensitive changed files" in (result.error or "")
+    assert provider.decide_calls == 0
+    assert provider.review_diffs == []
+
+
 def _pr() -> PullRequestInfo:
     return PullRequestInfo(
         owner="local",
@@ -292,6 +334,84 @@ async def test_one_unit_failure_does_not_stop_other_units_and_order_is_stable() 
     })
     completed = await complete_node(aggregate)
     assert completed["status"] == "completed_with_warnings"
+
+
+@pytest.mark.asyncio
+async def test_budget_exhausted_unit_is_incomplete_and_adds_warning() -> None:
+    files = _parse(_diff("budget.py"))
+    plan = DeterministicReviewPlanner().plan(files, base_sha="b", head_sha="h")
+    unit = plan.review_units[0]
+    issue = ReviewIssue(
+        review_unit_id=unit.id,
+        severity="low",
+        category="correctness",
+        title="不应进入证据流水线",
+        failure_scenario="预算耗尽后的候选问题不完整",
+        recommendation="重新执行 Unit",
+        confidence=0.8,
+        primary_evidence={"file_path": "budget.py", "existing_code": "new"},
+        affected_behavior="审查完整性",
+    )
+    budget_result = ReviewUnitResult(
+        review_unit_id=unit.id,
+        status=ReviewUnitStatus.completed,
+        terminal_reason=ReviewUnitTerminalReason.model_budget_exhausted,
+        issues=[issue],
+    )
+
+    class BudgetExecutor:
+        async def execute(
+            self, requested: list[ReviewUnit], state: dict[str, Any]
+        ) -> list[ReviewUnitResult]:
+            assert requested == [unit]
+            return [budget_result]
+
+    aggregate = await review_units_node({
+        **_state(files),
+        "review_plan": plan.model_dump(mode="json"),
+        "_review_unit_executor": BudgetExecutor(),
+        "warnings": [],
+    })
+
+    assert aggregate["review_issues"] == []
+    assert "完成 0/1 个 Review Unit" in aggregate["step_progress"][-1]["message"]
+    assert any("未完整完成" in warning for warning in aggregate["warnings"])
+    assert (await complete_node(aggregate))["status"] == "completed_with_warnings"
+
+
+@pytest.mark.asyncio
+async def test_budget_exhausted_unit_is_reexecuted_on_resume() -> None:
+    files = _parse(_diff("resume.py"))
+    plan = DeterministicReviewPlanner().plan(files, base_sha="b", head_sha="h")
+    unit = plan.review_units[0]
+    budget_result = ReviewUnitResult(
+        review_unit_id=unit.id,
+        status=ReviewUnitStatus.completed,
+        terminal_reason=ReviewUnitTerminalReason.retrieval_budget_exhausted,
+    )
+    requested_ids: list[str] = []
+
+    class ResumeExecutor:
+        async def execute(
+            self, requested: list[ReviewUnit], state: dict[str, Any]
+        ) -> list[ReviewUnitResult]:
+            requested_ids.extend(item.id for item in requested)
+            return [ReviewUnitResult(
+                review_unit_id=unit.id,
+                status=ReviewUnitStatus.completed,
+                terminal_reason=ReviewUnitTerminalReason.no_issue,
+            )]
+
+    aggregate = await review_units_node({
+        **_state(files),
+        "review_plan": plan.model_dump(mode="json"),
+        "review_unit_results": [budget_result.model_dump(mode="json")],
+        "_review_unit_executor": ResumeExecutor(),
+        "warnings": [],
+    })
+
+    assert requested_ids == [unit.id]
+    assert aggregate["warnings"] == []
 
 
 @pytest.mark.asyncio

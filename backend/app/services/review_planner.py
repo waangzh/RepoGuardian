@@ -24,7 +24,7 @@ from app.models.review import (
 )
 from app.tools.diff_parser import stable_hunk_id
 from app.review.language_rules import language_for_path
-from app.review.tool_scope import is_sensitive_repository_path
+from app.review.tool_scope import is_sensitive_repository_change
 
 PLANNER_VERSION = "review-unit-planner-v3"
 
@@ -122,7 +122,9 @@ class DeterministicReviewPlanner:
 
         for item in files:
             tags = classified[item.file_path]
-            reason = self._excluded_reason(item.file_path, tags)
+            reason = self._excluded_reason(
+                item.file_path, tags, old_file_path=item.old_file_path
+            )
             dispositions.append(PlannedChangedFile(
                 file_path=item.file_path,
                 old_file_path=item.old_file_path,
@@ -557,8 +559,10 @@ class DeterministicReviewPlanner:
         return sorted(tags)
 
     @staticmethod
-    def _excluded_reason(path: str, tags: list[str]) -> str | None:
-        if is_sensitive_repository_path(path):
+    def _excluded_reason(
+        path: str, tags: list[str], *, old_file_path: str | None = None
+    ) -> str | None:
+        if is_sensitive_repository_change(path, old_file_path):
             return "sensitive_file"
         if "binary" in tags:
             return "binary_file"

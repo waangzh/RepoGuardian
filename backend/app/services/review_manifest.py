@@ -18,15 +18,11 @@ from app.models.review import (
     ReviewUnitCoverage,
     ReviewUnitResult,
     ReviewUnitStatus,
-    ReviewUnitTerminalReason,
 )
-
-
-_BUDGET_TERMINAL_REASONS = {
-    ReviewUnitTerminalReason.model_budget_exhausted,
-    ReviewUnitTerminalReason.retrieval_budget_exhausted,
-    ReviewUnitTerminalReason.diagnosis_budget_exhausted,
-}
+from app.review.unit_completion import (
+    is_review_unit_budget_exhausted,
+    is_review_unit_complete,
+)
 
 
 def build_review_manifest(state: dict[str, Any], completed_at: datetime) -> ReviewRunManifest:
@@ -65,14 +61,14 @@ def build_review_manifest(state: dict[str, Any], completed_at: datetime) -> Revi
         elif (
             len(unit_results) == len(unit_ids)
             and unit_results
-            and all(_is_fully_completed(result) for result in unit_results)
+            and all(is_review_unit_complete(result) for result in unit_results)
         ):
             status, reason = ReviewFileStatus.reviewed, None
-        elif any(_is_fully_completed(result) for result in unit_results):
+        elif any(is_review_unit_complete(result) for result in unit_results):
             status, reason = ReviewFileStatus.partial, _result_summary(
                 unit_results, missing_units=len(unit_ids) - len(unit_results)
             )
-        elif any(result.terminal_reason in _BUDGET_TERMINAL_REASONS for result in unit_results):
+        elif any(is_review_unit_budget_exhausted(result) for result in unit_results):
             status, reason = ReviewFileStatus.budget_exhausted, _result_summary(
                 unit_results, missing_units=len(unit_ids) - len(unit_results)
             )
@@ -127,7 +123,7 @@ def build_review_manifest(state: dict[str, Any], completed_at: datetime) -> Revi
         ReviewFileStatus.unsupported,
     }
     completed_units = sum(
-        result is not None and _is_fully_completed(result)
+        result is not None and is_review_unit_complete(result)
         for result in (results.get(unit.id) for unit in units)
     )
     coverage = ReviewCoverage(
@@ -177,13 +173,6 @@ def _all_usages(state: dict[str, Any]) -> list[ModelUsage]:
         raw.extend(result.get("model_usages") or [])
     by_id = {usage.id: usage for usage in (ModelUsage.model_validate(item) for item in raw)}
     return list(by_id.values())
-
-
-def _is_fully_completed(result: ReviewUnitResult) -> bool:
-    return (
-        result.status == ReviewUnitStatus.completed
-        and result.terminal_reason not in _BUDGET_TERMINAL_REASONS
-    )
 
 
 def _result_summary(

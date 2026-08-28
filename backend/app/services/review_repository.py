@@ -51,6 +51,7 @@ from app.models.review import (
 from app.services.artifact_store import LocalArtifactStore
 from app.services.fingerprints import patch_fingerprint, stable_hash, validation_fingerprint
 from app.services.review_planner import PLANNER_VERSION
+from app.review.unit_completion import is_reusable_review_unit_result
 
 TERMINAL_TASK_STATUSES = {
     TaskStatus.completed.value,
@@ -284,14 +285,16 @@ class ReviewRepository:
         if not settings.repoguardian_allow_cross_model_reuse:
             filters.append(ReviewUnitOrm.model == model)
         with self._session_factory() as session:
-            row = session.scalar(
+            rows = session.scalars(
                 select(ReviewUnitOrm).where(*filters).order_by(ReviewUnitOrm.finished_at.desc())
             )
-            if row and row.result_snapshot:
+            for row in rows:
+                if not row.result_snapshot:
+                    continue
                 result = ReviewUnitResult.model_validate(row.result_snapshot)
-                if any(issue.status == IssueStatus.needs_human for issue in result.issues):
-                    return None
-            return row
+                if is_reusable_review_unit_result(result):
+                    return row
+            return None
 
     def record_unit_result(
         self,

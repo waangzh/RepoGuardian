@@ -10,6 +10,7 @@ from app.models.review import ChangedFile, ReviewToolScope
 from app.review.tool_scope import (
     ReviewPathPolicyError,
     is_sensitive_repository_path,
+    is_sensitive_repository_change,
     list_git_tracked_files,
     validate_repository_file,
 )
@@ -103,10 +104,6 @@ class ScopedContextTool:
         changed_files: list[ChangedFile | dict[str, Any]],
         hunk_ids: list[str] | None = None,
     ) -> dict[str, Any]:
-        if is_sensitive_repository_path(file_path):
-            raise ScopedContextToolError(
-                f"sensitive repository path is not readable: {file_path}"
-            )
         if file_path not in scope.commentable_files:
             raise ScopedContextToolError(
                 "file_read_diff accepts commentable changed files in the current Unit only"
@@ -118,6 +115,11 @@ class ScopedContextTool:
         target = next((item for item in changed if item.file_path == file_path), None)
         if target is None:
             raise ScopedContextToolError("file_read_diff accepts changed files in the current Unit only")
+        if is_sensitive_repository_change(target.file_path, target.old_file_path):
+            raise ScopedContextToolError(
+                "sensitive repository change is not readable: "
+                f"{target.old_file_path or target.file_path} -> {target.file_path}"
+            )
         selected = set(hunk_ids or ())
         known = {hunk.hunk_id for hunk in target.hunks if hunk.hunk_id}
         if selected - known:
