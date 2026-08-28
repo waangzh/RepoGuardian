@@ -88,6 +88,14 @@ class IssueVerifierService:
                 output.append(issue)
                 continue
             unit = by_unit.get(issue.review_unit_id)
+            if unit is not None and not self._requires_model_verifier(issue, unit):
+                output.append(self._confirm_without_call(issue))
+                decisions.append(IssueVerification(
+                    issue_id=issue.id,
+                    decision=IssueVerificationDecision.keep,
+                    reason="deterministic_evidence_checks_sufficient",
+                ))
+                continue
             used = calls_by_unit.get(issue.review_unit_id, 0)
             if unit is None or used >= self.max_calls_per_unit:
                 reason = "review_unit_not_found" if unit is None else "verifier_budget_exhausted"
@@ -179,7 +187,10 @@ class IssueVerifierService:
         context_budget = 12_000
         context: list[ContextSnippet] = []
         consumed = 0
-        readable = set(unit.primary_files) | set(unit.related_files)
+        readable = {
+            issue.primary_evidence.file_path,
+            *(anchor.file_path for anchor in issue.supporting_evidence),
+        }
         for raw in state.get("context_snippets") or []:
             snippet = ContextSnippet.model_validate(raw)
             if snippet.review_unit_id not in {None, unit.id} or snippet.file not in readable:
@@ -229,10 +240,31 @@ class IssueVerifierService:
                 "unresolved_reason": f"verifier_failure:{reason}",
             })
         return issue.model_copy(update={
-            "status": IssueStatus.candidate,
+            # 确定性 evidence/policy 已通过时，额外 verifier 的基础设施失败
+            # 不能把 Issue 从最终报告中静默删除。
+            "status": IssueStatus.confirmed,
             "auto_fix_eligible": False,
             "unresolved_reason": f"verifier_failure:{reason}",
         })
+
+    @staticmethod
+    def _requires_model_verifier(issue: ReviewIssue, unit: ReviewUnit) -> bool:
+        """只把高风险、模糊、跨模块或低置信度 Issue 交给额外模型。"""
+        if issue.severity.value in {"high", "critical"} or issue.confidence < 0.8:
+            return True
+        if issue.primary_evidence.resolution_method != EvidenceResolutionMethod.diff_exact:
+            return True
+        if any(
+            anchor.resolution_method == EvidenceResolutionMethod.unresolved
+            for anchor in issue.supporting_evidence
+        ):
+            return True
+        if "cross_module" in unit.risk_tags or any(
+            anchor.file_path != issue.primary_evidence.file_path
+            for anchor in issue.supporting_evidence
+        ):
+            return True
+        return False
 
     @staticmethod
     def _confirm_without_call(issue: ReviewIssue) -> ReviewIssue:
@@ -246,7 +278,11 @@ class IssueVerifierService:
     ) -> None:
         if verification.issue_id != issue.id:
             raise ValueError("verifier_issue_id_mismatch")
-        readable = set(unit.primary_files) | set(unit.related_files)
+        del unit
+        readable = {
+            issue.primary_evidence.file_path,
+            *(anchor.file_path for anchor in issue.supporting_evidence),
+        }
         if any(anchor.file_path not in readable for anchor in verification.contradicting_evidence):
             raise ValueError("verifier_evidence_out_of_scope")
 

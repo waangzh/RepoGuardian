@@ -84,7 +84,8 @@ class Settings(BaseSettings):
     repoguardian_patch_max_changed_lines: int = Field(default=80, ge=1, le=1_000)
 
     # ---- 受控命令执行 ----
-    # reject 和 gvisor 均不会回退到宿主机。sandbox 是旧配置值的兼容别名。
+    # 已从 Production Review Plane 废弃，仅保留旧开发工具/配置解析兼容性。
+    # reject 和 gvisor 均不会回退到宿主机；sandbox 是旧配置值的兼容别名。
     repoguardian_executor: Literal["reject", "local", "gvisor", "sandbox"] = "reject"
     repoguardian_allow_unsafe_local_execution: bool = False
     repoguardian_sandbox_network: bool = False

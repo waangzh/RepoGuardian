@@ -166,6 +166,10 @@ async def test_dispatch_inputs_bind_request_head_and_patch_sha() -> None:
     assert inputs["head_sha"] == "head-sha"
     assert inputs["patch_sha"] == normalized_patch_sha(PATCH)
     assert inputs["profile"] == "unit"
+    assert set(inputs) == {
+        "validation_request_id", "head_sha", "patch_sha", "patch_artifact", "profile"
+    }
+    assert "command" not in inputs
     assert inputs["patch_artifact"].startswith("inline-base64:")
     assert service.get_summary(result.validation_request_id).status == ProjectCIStatus.dispatched
 

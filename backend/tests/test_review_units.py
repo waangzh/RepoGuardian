@@ -264,7 +264,7 @@ async def test_report_uses_final_status_and_original_created_at() -> None:
 
 
 @pytest.mark.asyncio
-async def test_all_units_failed_makes_aggregation_fail() -> None:
+async def test_all_units_failed_still_produces_partial_review_warning() -> None:
     files = _parse(_diff("a.py"), _diff("b.py"))
     plan = DeterministicReviewPlanner().plan(files, base_sha="b", head_sha="h")
 
@@ -281,9 +281,10 @@ async def test_all_units_failed_makes_aggregation_fail() -> None:
         "review_plan": plan.model_dump(mode="json"),
         "_review_unit_executor": FailedExecutor(),
     })
-    assert result["status"] == "failed"
-    assert result["error"].startswith("all review units failed")
-    assert (await complete_node(result))["status"] == "failed"
+    assert result["status"] == "reviewing"
+    assert not result.get("error")
+    assert result["warnings"]
+    assert (await complete_node(result))["status"] == "completed_with_warnings"
 
 
 @pytest.mark.asyncio
@@ -321,7 +322,7 @@ async def test_related_file_cannot_be_comment_target() -> None:
 
     result = await ReviewUnitExecutor(provider, concurrency=1, timeout_seconds=2).execute_unit(unit, state)
     assert result.status == ReviewUnitStatus.completed
-    assert result.issues[0].primary_evidence.file_path == "related.py"
+    assert result.issues == []
 
 
 @pytest.mark.asyncio

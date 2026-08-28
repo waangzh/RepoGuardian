@@ -234,7 +234,7 @@ async def test_review_pipeline_skips_llm_when_diff_is_empty(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_review_pipeline_generates_unverified_patch_without_running_tests(tmp_path: Path) -> None:
+async def test_review_pipeline_keeps_repair_and_validation_outside_main_lifecycle(tmp_path: Path) -> None:
     diff_text = """diff --git a/sample.py b/sample.py
 index 1111111..2222222 100644
 --- a/sample.py
@@ -285,14 +285,12 @@ index 1111111..2222222 100644
     completed = service.get_task(task.id)
 
     assert completed is not None
-    assert completed.status == TaskStatus.completed, completed.error
-    assert completed.patches
-    assert completed.patches[-1].status == "unverified"
+    assert completed.status == TaskStatus.completed_with_warnings, completed.error
+    assert completed.patches == []
     assert completed.test_results == []
     assert completed.validation_snapshots == []
-    assert completed.validation[-1].status == "unsupported"
-    assert completed.validation[-1].trusted is True
-    assert "## 验证结果" in completed.report_markdown
+    assert completed.validation == []
+    assert "## 验证结果" not in completed.report_markdown
 
 
 @pytest.mark.asyncio
@@ -345,12 +343,12 @@ index 1111111..2222222 100644
     completed = service.get_task(task.id)
 
     assert completed is not None
-    assert completed.status == TaskStatus.completed, completed.error
+    assert completed.status == TaskStatus.completed_with_warnings, completed.error
     assert completed.changed_files[0].file_path == "pricing.py"
     assert completed.issues
-    assert completed.patches[-1].status == "unverified"
+    assert completed.patches == []
     assert completed.test_results == []
-    assert completed.validation[-1].status == "unsupported"
+    assert completed.validation == []
     assert completed.report_markdown is not None
 
 

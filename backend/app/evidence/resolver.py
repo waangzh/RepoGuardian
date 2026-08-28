@@ -9,12 +9,16 @@ from typing import Callable, Iterable
 
 from app.evidence.diff_index import DiffIndex, IndexedLine
 from app.models.review import (
+    AuditableReasoningSummary,
     CommentPlacement,
     EvidenceAnchor,
     EvidenceCandidate,
+    EvidenceProvenance,
     EvidenceResolutionMethod,
+    EvidenceResolutionStatus,
     IssueStatus,
     ReviewIssue,
+    ResolvedIssueLocation,
     ReviewUnit,
 )
 
@@ -46,7 +50,7 @@ class EvidenceResolver:
 
     def resolve_issue(self, issue: ReviewIssue, unit: ReviewUnit) -> ReviewIssue:
         primary = issue.primary_evidence
-        readable = set(unit.primary_files) | set(unit.related_files)
+        readable = self.repository_files or (set(unit.primary_files) | set(unit.related_files))
         if primary.file_path not in set(unit.primary_files):
             return self._route_invalid(issue, "primary_evidence_not_in_primary_files")
         if any(anchor.file_path not in readable for anchor in issue.supporting_evidence):
@@ -68,6 +72,28 @@ class EvidenceResolver:
             "supporting_evidence": supporting,
             "placement": placement,
             "status": status,
+            "resolved_location": (
+                ResolvedIssueLocation(
+                    file_path=resolved_primary.file_path,
+                    start_line=resolved_primary.resolved_start_line,
+                    end_line=resolved_primary.resolved_end_line,
+                    side=resolved_primary.resolved_side,
+                    hunk_id=(
+                        resolved_primary.candidate_locations[0].hunk_id
+                        if resolved_primary.candidate_locations else None
+                    ),
+                )
+                if resolved_primary.resolved_start_line is not None
+                and resolved_primary.resolved_end_line is not None
+                and resolved_primary.resolved_side is not None
+                else None
+            ),
+            "reasoning_summary": issue.reasoning_summary or AuditableReasoningSummary(
+                change=f"PR 修改了 {primary.file_path} 中的相关行为",
+                invariant=issue.affected_behavior,
+                violation=issue.failure_scenario,
+                consequence=issue.affected_behavior,
+            ),
             "unresolved_reason": reason,
             "requires_human_confirmation": (
                 issue.requires_human_confirmation or placement == CommentPlacement.needs_human
@@ -330,6 +356,22 @@ class EvidenceResolver:
             "resolved_start_line": candidate.start_line,
             "resolved_end_line": candidate.end_line,
             "resolution_method": method,
+            "resolution_status": {
+                EvidenceResolutionMethod.diff_exact: EvidenceResolutionStatus.exact,
+                EvidenceResolutionMethod.diff_normalized: EvidenceResolutionStatus.context_resolved,
+                EvidenceResolutionMethod.file_exact: EvidenceResolutionStatus.relocated,
+                EvidenceResolutionMethod.symbol_assisted: EvidenceResolutionStatus.symbol_resolved,
+            }[method],
+            "provenance": (
+                EvidenceProvenance.diff
+                if method in {
+                    EvidenceResolutionMethod.diff_exact,
+                    EvidenceResolutionMethod.diff_normalized,
+                }
+                else EvidenceProvenance.symbol_index
+                if method == EvidenceResolutionMethod.symbol_assisted
+                else EvidenceProvenance.repository_file
+            ),
             "match_count": 1,
             "anchor_hash": anchor_hash,
             "resolved_side": candidate.side,
@@ -382,6 +424,8 @@ class EvidenceResolver:
             "resolved_start_line": None,
             "resolved_end_line": None,
             "resolution_method": EvidenceResolutionMethod.unresolved,
+            "resolution_status": EvidenceResolutionStatus.unresolved,
+            "provenance": None,
             "match_count": len(candidates),
             "anchor_hash": None,
             "resolved_side": None,

@@ -14,6 +14,7 @@ from uuid import uuid4
 from app.models.review import PullRequestInfo
 from app.review.tool_scope import (
     ReviewPathPolicyError,
+    git_safety_environment,
     list_git_tracked_files,
     validate_repository_file,
 )
@@ -130,6 +131,7 @@ class GitTool:
             [self._git, "-C", str(repo_dir), "show", f"{revision}:{file_path}"],
             check=False,
             capture_output=True,
+            env=git_safety_environment(),
         )
         if completed.returncode != 0 or b"\x00" in completed.stdout:
             return None
@@ -183,7 +185,10 @@ class GitTool:
             # 生成 unified diff（上下文 80 行，足够 LLM 理解）
             self._notify(progress_callback, "diff", "正在生成 PR Diff")
             diff = self._run(
-                [self._git, "-C", str(repo_dir), "diff", "--unified=80", pr.base.sha, "FETCH_HEAD"],
+                [
+                    self._git, "-C", str(repo_dir), "diff", "--no-ext-diff",
+                    "--unified=80", pr.base.sha, "FETCH_HEAD",
+                ],
                 cancel_event=cancel_event,
             )
             self._notify(progress_callback, "diff", "PR Diff 已生成", "completed", 100)
@@ -246,6 +251,7 @@ class GitTool:
                 command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                env=git_safety_environment(),
             )
         except OSError as exc:
             raise GitToolError(f"无法启动 Git 命令：{exc}") from exc

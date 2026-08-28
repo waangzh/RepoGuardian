@@ -14,6 +14,7 @@ from app.models.review import (
     ReviewUnitComplexity,
 )
 from app.services.review_unit_executor import ReviewUnitExecutor
+from app.services.review_planner import DeterministicReviewPlanner
 from app.tools.context_files import ScopedContextTool, ScopedContextToolError
 
 
@@ -105,6 +106,35 @@ async def test_file_read_diff_uses_parsed_unit_hunks_only(tmp_path: Path) -> Non
             changed_files=[changed],
             hunk_ids=["missing"],
         )
+
+
+@pytest.mark.asyncio
+async def test_planner_seed_is_not_repository_discovery_ceiling(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    unit = ReviewUnit(
+        id="unit-ts",
+        primary_files=["src/service.ts"],
+        related_files=[],
+        estimated_tokens=500,
+        complexity=ReviewUnitComplexity.medium,
+        fingerprint="fingerprint",
+        grouping_reason="single_file",
+    )
+    scope = DeterministicReviewPlanner().build_scope(
+        unit,
+        str(repo),
+        repository_files={"src/service.ts", "tests/service.test.ts", "secret.ts"},
+    )
+
+    matches = await ScopedContextTool().file_find(scope=scope, query="service.test")
+    snippet = await ScopedContextTool().file_read(
+        scope=scope, file_path="tests/service.test.ts", start_line=1, end_line=20
+    )
+
+    assert scope.seed_files == {"src/service.ts"}
+    assert matches == ["tests/service.test.ts"]
+    assert "test('service'" in snippet["content"]
+    assert "tests/service.test.ts" not in scope.commentable_files
 
 
 def test_agent_action_validates_structured_file_tool_requests() -> None:

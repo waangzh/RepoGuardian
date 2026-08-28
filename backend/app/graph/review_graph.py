@@ -19,8 +19,6 @@ from app.graph.nodes.report import complete_node, report_node
 from app.graph.nodes.review import review_node
 from app.graph.nodes.review_units import review_plan_node, review_units_node
 from app.graph.nodes.resolve_evidence import resolve_evidence_node
-from app.graph.nodes.verification import verification_node
-from app.graph.repair_graph import build_repair_graph
 from app.graph.routers import route_discovery_action
 from app.graph.state import ReviewState
 
@@ -43,8 +41,6 @@ def build_review_graph(phase: int | None = None) -> StateGraph:
     graph.add_node("issue_verifier", issue_verifier_node)
     graph.add_node("issue_deduplication", issue_deduplication_node)
     graph.add_node("human_required", human_required_node)
-    graph.add_node("verification", verification_node)
-    graph.add_node("repair_graph", build_repair_graph().compile())
     graph.add_node("report", report_node)
     graph.add_node("complete", complete_node)
 
@@ -77,9 +73,9 @@ def build_review_graph(phase: int | None = None) -> StateGraph:
     graph.add_edge("resolve_evidence", "issue_policy")
     graph.add_edge("issue_policy", "issue_verifier")
     graph.add_edge("issue_verifier", "issue_deduplication")
-    graph.add_edge("issue_deduplication", "verification")
-    graph.add_edge("verification", "repair_graph")
-    graph.add_edge("repair_graph", "report")
+    # Dynamic validation and repair are deliberately outside the production
+    # review plane.  The main graph terminates after static issue aggregation.
+    graph.add_edge("issue_deduplication", "report")
     graph.add_edge("report", "complete")
     graph.add_edge("complete", END)
     return graph
@@ -100,8 +96,6 @@ def _build_review_unit_graph() -> StateGraph:
     graph.add_node("issue_policy", issue_policy_node)
     graph.add_node("issue_verifier", issue_verifier_node)
     graph.add_node("issue_deduplication", issue_deduplication_node)
-    graph.add_node("verification", verification_node)
-    graph.add_node("repair_graph", build_repair_graph().compile())
     graph.add_node("report", report_node)
     graph.add_node("complete", complete_node)
 
@@ -133,9 +127,7 @@ def _build_review_unit_graph() -> StateGraph:
     graph.add_edge("resolve_evidence", "issue_policy")
     graph.add_edge("issue_policy", "issue_verifier")
     graph.add_edge("issue_verifier", "issue_deduplication")
-    graph.add_edge("issue_deduplication", "verification")
-    graph.add_edge("verification", "repair_graph")
-    graph.add_edge("repair_graph", "report")
+    graph.add_edge("issue_deduplication", "report")
     graph.add_edge("report", "complete")
     graph.add_edge("complete", END)
     return graph

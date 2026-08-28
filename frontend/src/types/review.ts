@@ -203,6 +203,12 @@ export interface ReviewIssue {
   confidence: number;
   affected_behavior: string;
   failure_scenario: string;
+  reasoning_summary?: {
+    change: string;
+    invariant: string;
+    violation: string;
+    consequence: string;
+  } | null;
   recommendation: string;
   primary_evidence: EvidenceAnchor;
   supporting_evidence: EvidenceAnchor[];
@@ -213,6 +219,13 @@ export interface ReviewIssue {
   status: "candidate" | "evidence_resolved" | "confirmed" | "dismissed" | "needs_human" | "published";
   placement: "inline" | "summary" | "suppressed" | "needs_human";
   unresolved_reason?: string | null;
+  resolved_location?: {
+    file_path: string;
+    start_line: number;
+    end_line: number;
+    side: "head" | "base";
+    hunk_id?: string | null;
+  } | null;
   source_review_unit_ids: string[];
   source_issue_ids: string[];
 }
@@ -248,6 +261,8 @@ export interface EvidenceAnchor {
   resolved_start_line?: number | null;
   resolved_end_line?: number | null;
   resolution_method: "diff_exact" | "diff_normalized" | "file_exact" | "symbol_assisted" | "unresolved";
+  resolution_status: "exact" | "relocated" | "symbol_resolved" | "context_resolved" | "unresolved";
+  provenance?: "diff" | "repository_file" | "symbol_index" | null;
   match_count: number;
   anchor_hash?: string | null;
   resolved_side?: "head" | "base" | null;
@@ -475,6 +490,63 @@ export interface ReviewUnitResult {
   human_request?: HumanReviewRequest | null;
 }
 
+export type ReviewFileStatus =
+  | "pending"
+  | "reviewed"
+  | "excluded_binary"
+  | "excluded_generated"
+  | "unsupported"
+  | "timed_out"
+  | "model_failed"
+  | "budget_exhausted";
+
+export interface ReviewCoverage {
+  changed_files: number;
+  eligible_files: number;
+  reviewed_files: number;
+  skipped_files: number;
+  failed_files: number;
+  coverage_rate: number;
+  files: Array<{
+    file_path: string;
+    eligible: boolean;
+    status: ReviewFileStatus;
+    review_unit_ids: string[];
+    reason?: string | null;
+  }>;
+  units: Array<{
+    review_unit_id: string;
+    files: string[];
+    status: ReviewUnitStatus;
+    failure_reason?: string | null;
+    model_calls: number;
+    tokens: number;
+    duration_ms: number;
+  }>;
+}
+
+export interface ReviewRunManifest {
+  schema_version: "review-run-manifest-v1";
+  review_id: string;
+  repository?: string | null;
+  pr_number?: number | null;
+  base_sha?: string | null;
+  head_sha?: string | null;
+  planner_version?: string | null;
+  provider: string;
+  model: string;
+  started_at: string;
+  completed_at: string;
+  duration_ms: number;
+  model_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  confirmed_issues: number;
+  coverage: ReviewCoverage;
+  warnings: string[];
+}
+
 export interface ModelUsage {
   id: string;
   provider: string;
@@ -547,6 +619,8 @@ export interface ReviewTask {
   model_usages: ModelUsage[];
   model_usage_summary: ModelUsageSummary;
   excluded_files: ExcludedReviewFile[];
+  coverage: ReviewCoverage;
+  run_manifest?: ReviewRunManifest | null;
   issues: ReviewIssue[];
   issue_metrics: IssueMetrics;
   static_results: TestRunResult[];

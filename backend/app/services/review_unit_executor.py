@@ -16,6 +16,7 @@ from app.models.review import (
     AgentEvent,
     ChangedFile,
     ContextRetrievalPlan,
+    CodeSearchRequest,
     ContextSnippet,
     ExecutionBudget,
     FileFindRequest,
@@ -180,7 +181,16 @@ class ReviewUnitExecutor:
         all_changed = [ChangedFile.model_validate(item) for item in state.get("changed_files") or []]
         by_path = {item.file_path: item for item in all_changed}
         unit_files = self._unit_changed_files(unit, by_path)
-        scope = self.planner.build_scope(unit, state.get("repo_path") or None)
+        repository_files = {
+            str(item["path"])
+            for item in state.get("file_index") or []
+            if isinstance(item.get("path"), str)
+        }
+        scope = self.planner.build_scope(
+            unit,
+            state.get("repo_path") or None,
+            repository_files=repository_files,
+        )
         budget = self._budget_for(unit)
         skip_plan = self.planner.should_skip_plan(unit, all_changed)
         graph_state: _ReviewUnitGraphState = {
@@ -361,6 +371,21 @@ class ReviewUnitExecutor:
                 action=AgentActionName.task_done,
                 reason="兼容旧 Provider：完成一次结构化问题报告后显式结束 Unit",
             )}
+        if state.get("retrieval_no_new_rounds", 0) >= 2:
+            action = AgentAction(
+                action=(
+                    AgentActionName.task_done
+                    if state["issue_round_completed"]
+                    else AgentActionName.report_issue
+                ),
+                reason="连续只读检索未产生新上下文，按服务端策略收敛 Unit",
+            )
+            return {
+                "next_action": action,
+                "messages": [*state["messages"], self._event(
+                    state["unit"].id, action, "selected", action.reason
+                )],
+            }
         action, budget, legacy, model_usages = await self._decide_unit(state)
         return {
             "next_action": action,
@@ -534,6 +559,30 @@ class ReviewUnitExecutor:
                 matches = await context_tool.file_find(
                     scope=state["scope"], query=request.query, max_results=request.max_results
                 )
+            elif action.action == AgentActionName.code_search:
+                request = CodeSearchRequest.model_validate(request_payload)
+                relation = request.relation
+                plan = ContextRetrievalPlan(
+                    reason="repository-wide bounded code search",
+                    target_symbols=[] if relation == "text" else [request.query],
+                    search_terms=[request.query] if relation == "text" else [],
+                    relevance_types=[relation],
+                    include_callers=relation == "caller",
+                    include_callees=relation == "callee",
+                    include_tests=relation == "test",
+                    max_results=min(request.max_results, state["scope"].max_search_results),
+                )
+                snippets = await CodeSearchTool().retrieve_context(
+                    changed_files=[
+                        item.model_dump(mode="json") for item in state["unit_files"]
+                    ],
+                    symbol_index=state["parent_state"].get("symbol_index") or [],
+                    file_index=state["parent_state"].get("file_index") or [],
+                    repo_path=state["parent_state"].get("repo_path", ""),
+                    plan=plan,
+                    scope=state["scope"],
+                    repository_graph=state["parent_state"].get("repository_graph") or {},
+                )
             elif action.action == AgentActionName.file_read_diff:
                 request = FileReadDiffRequest.model_validate(request_payload)
                 snippets = [await context_tool.file_read_diff(
@@ -554,6 +603,9 @@ class ReviewUnitExecutor:
                 if (item.get("file"), item.get("start_line"), item.get("end_line"), item.get("source"))
                 not in existing
             ]
+            new_items = self._fit_context_budget(
+                state["context"], new_items, state["scope"].max_context_chars
+            )
             result_count = len(matches) if action.action == AgentActionName.file_find else len(new_items)
             events.append(ReviewUnitToolEvent(
                 review_unit_id=state["unit"].id,
@@ -627,6 +679,9 @@ class ReviewUnitExecutor:
                 item for item in snippets
                 if (item.get("file"), item.get("start_line"), item.get("end_line")) not in existing
             ]
+            new_items = self._fit_context_budget(
+                state["context"], new_items, state["scope"].max_context_chars
+            )
             events.append(ReviewUnitToolEvent(
                 review_unit_id=state["unit"].id,
                 tool="code_search",
@@ -760,7 +815,7 @@ class ReviewUnitExecutor:
     def _budget_for(unit: ReviewUnit) -> ExecutionBudget:
         if unit.complexity == ReviewUnitComplexity.small:
             return ExecutionBudget(
-                max_context_retrievals=0,
+                max_context_retrievals=4,
                 max_diagnosis_attempts=1,
                 max_patch_attempts=0,
                 max_model_calls=3,
@@ -768,17 +823,17 @@ class ReviewUnitExecutor:
             )
         if unit.complexity == ReviewUnitComplexity.medium:
             return ExecutionBudget(
-                max_context_retrievals=1,
-                max_diagnosis_attempts=1,
+                max_context_retrievals=8,
+                max_diagnosis_attempts=2,
                 max_patch_attempts=0,
-                max_model_calls=4,
+                max_model_calls=5,
                 max_token_usage=max(12_000, unit.estimated_tokens + 6_000),
             )
         return ExecutionBudget(
-            max_context_retrievals=2,
-            max_diagnosis_attempts=1,
+            max_context_retrievals=12,
+            max_diagnosis_attempts=3,
             max_patch_attempts=0,
-                max_model_calls=6,
+            max_model_calls=7,
             max_token_usage=max(20_000, unit.estimated_tokens + 8_000),
         )
 
@@ -826,6 +881,7 @@ class ReviewUnitExecutor:
             state.get("file_index") or [],
             state.get("project_meta") or {},
         )
+
         return {
             "task_id": state.get("task_id"),
             "review_unit_id": unit.id,
@@ -850,6 +906,27 @@ class ReviewUnitExecutor:
             "retrieval_history": [],
             "execution_budget": budget.model_dump(),
         }
+
+    @staticmethod
+    def _fit_context_budget(
+        current: list[dict[str, Any]],
+        candidates: list[dict[str, Any]],
+        max_chars: int,
+    ) -> list[dict[str, Any]]:
+        """按稳定顺序截取新上下文，保证 Unit 总字符预算是硬限制。"""
+        remaining = max_chars - sum(len(str(item.get("content") or "")) for item in current)
+        accepted: list[dict[str, Any]] = []
+        for item in candidates:
+            if remaining <= 0:
+                break
+            content = str(item.get("content") or "")
+            if len(content) > remaining:
+                if remaining < 32:
+                    break
+                item = {**item, "content": content[:remaining].rstrip() + "\n...(truncated)"}
+            accepted.append(item)
+            remaining -= len(str(item.get("content") or ""))
+        return accepted
 
     @staticmethod
     def _enhanced_diff(
@@ -958,6 +1035,13 @@ class ReviewUnitExecutor:
             if issue.id in seen:
                 continue
             seen.add(issue.id)
+            if issue.primary_evidence.file_path not in scope.commentable_files:
+                continue
+            if any(
+                anchor.file_path not in scope.readable_files
+                for anchor in issue.supporting_evidence
+            ):
+                continue
             accepted.append(issue.model_copy(update={"review_unit_id": unit.id}))
         return accepted
 

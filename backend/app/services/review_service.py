@@ -28,7 +28,6 @@ from app.models.review import (
     PatchStatus,
     PatchValidationResult,
     ReviewCreateRequest,
-    ReviewMode,
     ReviewIssue,
     ModelUsage,
     RepositorySnapshot,
@@ -128,8 +127,9 @@ class ReviewService:
         self._diff_parser = diff_parser
         self._provider = provider
         self._report_service = report_service
-        # 兼容旧构造签名，但阶段 5A 不把命令执行器注入验证路径。
-        self._command_executor = command_executor
+        # 仅保留旧构造签名兼容性；production Review Plane 不保存也不注入
+        # 任何目标仓库命令执行能力。
+        del command_executor
         self._validation_backend_selector = validation_backend_selector or ValidationBackendSelector()
         self._repository = repository
         self._task_queue = task_queue or (DatabaseTaskQueue() if repository else None)
@@ -363,9 +363,9 @@ class ReviewService:
                     planner.max_model_calls(unit) for unit in plan.review_units
                 ),
                 estimated_tokens=sum(unit.estimated_tokens for unit in plan.review_units),
-                patch_generation_enabled=(
-                    request.mode != ReviewMode.review and request.generate_patches
-                ),
+                # Repair is an independent workflow and never part of previewed
+                # production Review Plane capacity.
+                patch_generation_enabled=False,
                 validation_backend=ValidationBackendPreview(
                     name=ValidationBackend(backend.name),
                     available=capabilities.available,
@@ -418,7 +418,13 @@ class ReviewService:
             "validation_backend": task.validation_backend.value,
             "validation_profile": task.validation_profile,
             "validation_results": [item.model_dump(mode="json") for item in task.validation],
-            "warnings": [],
+            "warnings": (
+                [
+                    "修复与动态验证已从主 Review lifecycle 解耦；本次任务仅执行严格只读审查"
+                ]
+                if task.generate_patches or task.validation_backend != ValidationBackend.none
+                else []
+            ),
             "pr_url": task.pr_url,
             "model": task.model,
             "execution_budget": ExecutionBudget().model_dump(),
@@ -427,7 +433,6 @@ class ReviewService:
             "_git_tool": self._git_tool,
             "_diff_parser": self._diff_parser,
             "_provider": self._provider,
-            "_command_executor": None,
             "_validation_backend_selector": self._validation_backend_selector,
             "_repo_prepared_callback": lambda path: self._repo_paths.__setitem__(
                 task_id, Path(path)
@@ -436,7 +441,7 @@ class ReviewService:
         if self._repository:
             for key in (
                 "_github_tool", "_git_tool", "_diff_parser", "_provider",
-                "_command_executor", "_validation_backend_selector",
+                "_validation_backend_selector",
                 "_repo_prepared_callback",
             ):
                 initial_state.pop(key, None)
@@ -700,6 +705,8 @@ class ReviewService:
         task.model_usages = rebuilt.model_usages
         task.model_usage_summary = rebuilt.model_usage_summary
         task.excluded_files = rebuilt.excluded_files
+        task.coverage = rebuilt.coverage
+        task.run_manifest = rebuilt.run_manifest
         task.issues = rebuilt.issues
         task.issue_metrics = rebuilt.issue_metrics
         task.context_snippets = rebuilt.context_snippets

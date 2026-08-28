@@ -44,6 +44,8 @@ class ReviewState(TypedDict, total=False):
     review_unit_results: list[dict[str, Any]] | None
     model_usages: list[dict[str, Any]] | None
     excluded_files: list[dict[str, Any]] | None
+    review_coverage: dict[str, Any] | None
+    run_manifest: dict[str, Any] | None
 
     # ---- 仓库索引 ----
     file_index: list[dict[str, Any]] | None     # [{path, language, size, imports}, ...]
@@ -105,7 +107,6 @@ class ReviewState(TypedDict, total=False):
     _git_tool: Any
     _diff_parser: Any
     _provider: Any
-    _command_executor: Any
     _project_registry: Any
     _review_planner: Any
     _review_unit_executor: Any
