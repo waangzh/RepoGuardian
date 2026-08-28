@@ -12,12 +12,12 @@ RepoGuardian 将 PR 拆分为边界明确的 Review Unit，通过安全的 Git-t
 ## 核心能力
 
 - **真正的 Unit Plan**：确定性拆分 Review Unit 后，模型输出结构化变更摘要、审查目标和风险假设；Plan 失败会降级为普通审查，不阻断任务。
-- **证据化 Issue**：不直接信任模型行号，服务端解析 primary/supporting evidence、位置、来源和 resolution status；Issue 只能锚定当前 PR 的可评论变更文件。
+- **证据化 Issue**：不直接信任模型行号，服务端解析 primary/supporting evidence、位置、来源、resolution status 和简洁审计摘要；Issue 只能锚定当前 PR 的可评论变更文件，不保存或展示隐藏 Chain-of-Thought。
 - **Repository-aware 探索**：`file_find` / `code_search` 可发现整个安全的 Git-tracked repository；`file_read` 仍受敏感路径、realpath/symlink、大小、行数和 Unit 预算限制。
-- **最小只读工具面**：Unit Agent 只使用 `file_find`、`code_search`、`file_read`、`file_read_diff`、`report_issue` 和 `task_done`。
+- **最小只读工具面**：Unit Agent 只使用 `file_find`、`code_search`、`file_read`、`file_read_diff`、`report_issue` 和 `task_done`；只有需要业务语义或安全决策时才使用结构化 `request_human` 控制动作。
 - **分级多语言分析**：语言适配器统一产出符号、导入和调用引用；解析失败自动从 L2 降级到 L1/L0，Review Unit 仍可安全使用文件读取、路径查找和 diff 读取。
 - **Selective Verifier**：确定性 evidence checks 优先，只对高风险、模糊、跨模块或低置信度问题追加模型验证；Verifier 不得提升 severity。
-- **可审计、失败隔离**：Coverage / Run Manifest 记录文件、Unit、模型用量、耗时和确认问题；单个 Unit 或 Verifier 失败不会抹掉其他有效结果。
+- **可审计、失败隔离**：Coverage / Run Manifest 分别报告 File Coverage 与 Unit Coverage，并记录 partial、终止原因、模型用量、耗时和确认问题；单个 Unit 或 Verifier 失败不会抹掉其他有效结果。
 - **独立 Project CI**：只发送服务端注册的 profile、request ID 和 SHA 绑定信息，不发送模型生成的 shell command；Fork PR 默认不 dispatch。
 
 ## 工作流程
@@ -32,6 +32,8 @@ GitHub PR
 ```
 
 Plan 是待验证的审查指导，不是已确认 Issue，也不是固定步骤队列。后续 Agent 可以根据工具反馈调整动作，并发现 Plan 之外的明确缺陷。
+
+一个文件可能因大型 symbol/hunk 拆分而属于多个 Unit。只有所有 owning Units 都完整完成时，该文件才计为 `reviewed`；部分完成会标记为 `partial`。Unit 的状态和终止原因分开记录：模型、检索或诊断预算耗尽即使保留兼容状态 `completed`，也会被视为未完整完成，触发 warning 和 `completed_with_warnings`，并且不会进入 Evidence Pipeline、同任务 resume 成功集或跨任务复用缓存。
 
 Preview 不调用模型、不运行目标代码，会显示文件和 Unit 范围、风险标签以及三种调用口径：Plan 调用数、典型预计调用数和预算上限。
 
@@ -93,6 +95,7 @@ npm run dev
 
 - 模型没有 shell、terminal、package manager、build 或 test 工具，也不能向 Project CI 提交命令文本。
 - Repository discovery 可以覆盖安全的 Git-tracked 文件；内容读取仍经过 containment、realpath/symlink、tracked、sensitive-path 与预算校验。
+- Sensitive-path policy 同时检查变更的新旧路径；例如将 `.env` 重命名为普通源码路径时，整个 diff 仍会在 Planner、Unit Executor 和 `file_read_diff` 三层被拒绝，不会发送给模型。
 - Unchanged 文件可以成为 supporting evidence，但 Issue primary location 必须属于当前 Unit 的 changed/commentable files。
 - Git 命令使用参数化 argv，并隔离 host Git config、credential prompt 和 external diff。
 - RepoGuardian 不 commit、push、创建 PR 或写回 GitHub 评论。
