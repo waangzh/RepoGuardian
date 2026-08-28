@@ -468,6 +468,7 @@ export interface UnitReviewPlan {
 export interface ReviewUnitResult {
   review_unit_id: string;
   status: ReviewUnitStatus;
+  terminal_reason?: ReviewUnitTerminalReason | null;
   plan_skipped: boolean;
   plan?: UnitReviewPlan | null;
   plan_status?: "planned" | "skipped" | "failed" | null;
@@ -493,8 +494,10 @@ export interface ReviewUnitResult {
 export type ReviewFileStatus =
   | "pending"
   | "reviewed"
+  | "partial"
   | "excluded_binary"
   | "excluded_generated"
+  | "excluded_sensitive"
   | "unsupported"
   | "timed_out"
   | "model_failed"
@@ -504,9 +507,13 @@ export interface ReviewCoverage {
   changed_files: number;
   eligible_files: number;
   reviewed_files: number;
+  partial_files: number;
   skipped_files: number;
   failed_files: number;
   coverage_rate: number;
+  completed_units: number;
+  total_units: number;
+  unit_coverage_rate: number;
   files: Array<{
     file_path: string;
     eligible: boolean;
@@ -518,12 +525,25 @@ export interface ReviewCoverage {
     review_unit_id: string;
     files: string[];
     status: ReviewUnitStatus;
+    terminal_reason?: ReviewUnitTerminalReason | null;
     failure_reason?: string | null;
     model_calls: number;
     tokens: number;
     duration_ms: number;
   }>;
 }
+
+export type ReviewUnitTerminalReason =
+  | "completed"
+  | "no_issue"
+  | "no_new_context"
+  | "model_budget_exhausted"
+  | "retrieval_budget_exhausted"
+  | "diagnosis_budget_exhausted"
+  | "timed_out"
+  | "provider_error"
+  | "execution_error"
+  | "human_required";
 
 export interface ReviewRunManifest {
   schema_version: "review-run-manifest-v1";

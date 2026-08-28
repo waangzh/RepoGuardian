@@ -49,9 +49,12 @@ def _append_coverage(lines: list[str], task: ReviewTask) -> None:
         f"- Changed：{coverage.changed_files}",
         f"- Eligible：{coverage.eligible_files}",
         f"- Reviewed：{coverage.reviewed_files}",
+        f"- Partial：{coverage.partial_files}",
         f"- Skipped：{coverage.skipped_files}",
         f"- Failed：{coverage.failed_files}",
-        f"- Coverage：{coverage.coverage_rate:.1%}",
+        f"- File Coverage：{coverage.coverage_rate:.1%}",
+        f"- Unit Coverage：{coverage.unit_coverage_rate:.1%} "
+        f"({coverage.completed_units}/{coverage.total_units})",
         "",
     ])
     incomplete = [item for item in coverage.files if item.status.value != "reviewed"]

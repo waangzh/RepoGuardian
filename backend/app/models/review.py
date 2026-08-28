@@ -110,11 +110,28 @@ class ReviewUnitStatus(str, Enum):
     needs_human = "needs_human"
 
 
+class ReviewUnitTerminalReason(str, Enum):
+    """Unit 结束原因；状态描述结果，原因描述为何结束。"""
+
+    completed = "completed"
+    no_issue = "no_issue"
+    no_new_context = "no_new_context"
+    model_budget_exhausted = "model_budget_exhausted"
+    retrieval_budget_exhausted = "retrieval_budget_exhausted"
+    diagnosis_budget_exhausted = "diagnosis_budget_exhausted"
+    timed_out = "timed_out"
+    provider_error = "provider_error"
+    execution_error = "execution_error"
+    human_required = "human_required"
+
+
 class ReviewFileStatus(str, Enum):
     pending = "pending"
     reviewed = "reviewed"
+    partial = "partial"
     excluded_binary = "excluded_binary"
     excluded_generated = "excluded_generated"
+    excluded_sensitive = "excluded_sensitive"
     unsupported = "unsupported"
     timed_out = "timed_out"
     model_failed = "model_failed"
@@ -201,17 +218,13 @@ class CommentPlacement(str, Enum):
 
 
 class AgentActionName(str, Enum):
-    """Agent 及兼容流程支持的操作类型。"""
+    """Agent 的结构化只读与流程控制动作；不包含代码执行能力。"""
     retrieve_context = "retrieve_context"
     file_read = "file_read"
     file_find = "file_find"
     code_search = "code_search"
     file_read_diff = "file_read_diff"
-    run_static_analysis = "run_static_analysis"
     review_code = "review_code"
-    generate_patch = "generate_patch"
-    apply_patch = "apply_patch"
-    run_tests = "run_tests"
     finish_report = "finish_report"
     request_human = "request_human"
     revise_patch = "revise_patch"
@@ -1206,10 +1219,6 @@ class AgentAction(BaseModel):
             }[self.action]
             request = request_type.model_validate(self.tool_args["request"])
             self.tool_args = {"request": request.model_dump(mode="json")}
-        elif self.action == AgentActionName.apply_patch:
-            patch_id = self.tool_args.get("patch_id")
-            if set(self.tool_args) != {"patch_id"} or not isinstance(patch_id, str) or not patch_id:
-                raise ValueError("apply_patch requires a server-selected patch_id only")
         elif self.action in {AgentActionName.report_issue, AgentActionName.task_done}:
             if self.tool_args:
                 raise ValueError(f"{self.action.value} does not accept tool_args")
@@ -1691,6 +1700,7 @@ class IssueVerificationRequest(BaseModel):
 class ReviewUnitResult(BaseModel):
     review_unit_id: str
     status: ReviewUnitStatus = ReviewUnitStatus.pending
+    terminal_reason: ReviewUnitTerminalReason | None = None
     plan_skipped: bool = False
     plan: UnitReviewPlan | None = None
     plan_status: UnitPlanStatus | None = None
@@ -1722,6 +1732,7 @@ class ReviewUnitCoverage(BaseModel):
     review_unit_id: str
     files: list[str] = Field(default_factory=list)
     status: ReviewUnitStatus
+    terminal_reason: ReviewUnitTerminalReason | None = None
     failure_reason: str | None = None
     model_calls: int = Field(default=0, ge=0)
     tokens: int = Field(default=0, ge=0)
@@ -1734,9 +1745,13 @@ class ReviewCoverage(BaseModel):
     changed_files: int = Field(default=0, ge=0)
     eligible_files: int = Field(default=0, ge=0)
     reviewed_files: int = Field(default=0, ge=0)
+    partial_files: int = Field(default=0, ge=0)
     skipped_files: int = Field(default=0, ge=0)
     failed_files: int = Field(default=0, ge=0)
     coverage_rate: float = Field(default=0.0, ge=0, le=1)
+    completed_units: int = Field(default=0, ge=0)
+    total_units: int = Field(default=0, ge=0)
+    unit_coverage_rate: float = Field(default=0.0, ge=0, le=1)
     files: list[ReviewFileCoverage] = Field(default_factory=list)
     units: list[ReviewUnitCoverage] = Field(default_factory=list)
 

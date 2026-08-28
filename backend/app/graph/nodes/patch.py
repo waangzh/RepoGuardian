@@ -7,7 +7,7 @@ from app.core.config import settings
 from app.graph.nodes._events import append_event, append_step
 from app.graph.policies import consume_budget
 from app.graph.state import ReviewState
-from app.models.review import AgentAction, AgentActionName, PatchResult, PatchStatus
+from app.models.review import PatchResult, PatchStatus
 from app.tools.patch_tool import PatchTool, extract_touched_files
 from app.services.model_usage import annotate_usage, append_usage, unpack_model_call
 
@@ -17,32 +17,39 @@ _PATCH_TOKEN_RESERVE = 4_096
 
 
 async def patch_node(state: ReviewState) -> ReviewState:
-    """Patch 节点：根据 action 分发到生成 patch 或应用 patch 子流程。
+    """遗留 Patch 兼容节点；只接受服务端内部结构，不属于 Agent 动作面。
 
     - generate_patch: 调用 LLM 为可自动修复的问题生成 unified diff
     - apply_patch:  在克隆仓库中 git apply 选中的 patch
     """
-    action = AgentAction.model_validate(state.get("next_action") or {
-        "action": "generate_patch",
-        "reason": "Generate patch.",
-    })
-    if action.action in {AgentActionName.generate_patch, AgentActionName.revise_patch}:
-        logger.info("🩹 [修复] 生成 patch，目标 issue IDs: %s", action.target_issue_ids)
-        return await _generate_patch(state, action)
-    if action.action == AgentActionName.apply_patch:
-        patch_id = action.tool_args.get("patch_id")
+    payload = state.get("next_action") or {}
+    action_name = str(payload.get("action") or "generate_patch")
+    reason = str(payload.get("reason") or "Server requested legacy patch operation.")
+    if action_name in {"generate_patch", "revise_patch"}:
+        target_issue_ids = [
+            str(item) for item in payload.get("target_issue_ids") or [] if str(item)
+        ]
+        logger.info("🩹 [修复] 生成 patch，目标 issue IDs: %s", target_issue_ids)
+        return await _generate_patch(state, action_name, reason)
+    if action_name == "apply_patch":
+        tool_args = payload.get("tool_args") or {}
+        patch_id = tool_args.get("patch_id") if isinstance(tool_args, dict) else None
+        if not isinstance(patch_id, str) or not patch_id:
+            patch_id = None
         logger.info("🩹 [修复] 应用 patch（patch_id=%s）", patch_id or "自动选择最新")
-        return await _apply_patch(state, action)
+        return await _apply_patch(state, patch_id, reason)
 
-    message = f"Unsupported patch action: {action.action.value}"
-    logger.error("🩹 [修复] 不支持的 patch action: %s", action.action.value)
+    message = f"Unsupported patch action: {action_name}"
+    logger.error("🩹 [修复] 不支持的 patch action: %s", action_name)
     return ReviewState(
-        agent_events=append_event(state, action.action, action.reason, "failed", message),
+        agent_events=append_event(state, action_name, reason, "failed", message),
         step_progress=append_step(state, "patch", "failed", message),
     )
 
 
-async def _generate_patch(state: ReviewState, action: AgentAction) -> ReviewState:
+async def _generate_patch(
+    state: ReviewState, action_name: str, reason: str
+) -> ReviewState:
     budget = consume_budget(
         state,
         patch_attempts=1,
@@ -52,7 +59,7 @@ async def _generate_patch(state: ReviewState, action: AgentAction) -> ReviewStat
     if budget is None:
         message = "补丁或模型调用预算已耗尽"
         return ReviewState(
-            agent_events=append_event(state, action.action, action.reason, "completed", message),
+            agent_events=append_event(state, action_name, reason, "completed", message),
             step_progress=append_step(state, "patch_generate", "completed", message),
         )
     provider: Any = state.get("_provider") or build_provider(
@@ -76,7 +83,7 @@ async def _generate_patch(state: ReviewState, action: AgentAction) -> ReviewStat
     )
     revision_of: str | None = None
     attempt_number = 1
-    if action.action == AgentActionName.revise_patch and active_patch is not None:
+    if action_name == "revise_patch" and active_patch is not None:
         active_patch.status = PatchStatus.superseded
         revision_of = active_patch.id
         attempt_number = active_patch.attempt_number + 1
@@ -113,20 +120,22 @@ async def _generate_patch(state: ReviewState, action: AgentAction) -> ReviewStat
         active_patch_validation_passed=None,
         execution_budget=budget.model_dump(),
         model_usages=append_usage(state.get("model_usages") or [], usage),
-        agent_events=append_event(state, action.action, action.reason, "completed", message),
+        agent_events=append_event(state, action_name, reason, "completed", message),
         step_progress=append_step(state, "patch_generate", "completed", message),
     )
 
 
-async def _apply_patch(state: ReviewState, action: AgentAction) -> ReviewState:
+async def _apply_patch(
+    state: ReviewState, patch_id: str | None, reason: str
+) -> ReviewState:
     """在临时仓库中执行 git apply。先 --check，通过后再正式 apply。"""
     patches = [PatchResult.model_validate(item) for item in state.get("patches") or []]
-    patch = _select_patch(patches, action.tool_args.get("patch_id"))
+    patch = _select_patch(patches, patch_id)
     if patch is None:
         message = "No generated patch is available to apply."
         logger.warning("🩹 [应用 patch] 无可用的 generated patch")
         return ReviewState(
-            agent_events=append_event(state, action.action, action.reason, "failed", message),
+            agent_events=append_event(state, "apply_patch", reason, "failed", message),
             step_progress=append_step(state, "patch_apply", "failed", message),
         )
 
@@ -154,7 +163,7 @@ async def _apply_patch(state: ReviewState, action: AgentAction) -> ReviewState:
         logger.error("🩹 [应用 patch] 失败: patch %s → %s", applied.id[:8], applied.error)
     return ReviewState(
         patches=[item.model_dump(mode="json") for item in updated],
-        agent_events=append_event(state, action.action, action.reason, status, message),
+        agent_events=append_event(state, "apply_patch", reason, status, message),
         step_progress=append_step(state, "patch_apply", status, message),
     )
 
