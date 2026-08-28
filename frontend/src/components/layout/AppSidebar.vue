@@ -2,26 +2,27 @@
 import type { AppPage } from "../../types/operations";
 import AppIcon from "../common/AppIcon.vue";
 
-defineProps<{
+const props = defineProps<{
   modelValue: AppPage;
+  hasReview?: boolean;
 }>();
 
 const emit = defineEmits<{
   "update:modelValue": [page: AppPage];
 }>();
 
-const items = [
-  { id: "dashboard", icon: "dashboard", label: "控制台" },
+const items = () => [
+  { id: "dashboard", icon: props.hasReview ? "dashboard" : "play", label: props.hasReview ? "当前审查" : "新审查" },
   { id: "history", icon: "history", label: "审查历史" },
   { id: "validation", icon: "server", label: "验证后端" },
-  { id: "settings", icon: "settings", label: "设置" },
+  { id: "settings", icon: "settings", label: "系统" },
 ] satisfies Array<{ id: AppPage; icon: string; label: string }>;
 </script>
 
 <template>
   <nav class="app-sidebar" aria-label="主导航">
     <button
-      v-for="item in items"
+      v-for="item in items()"
       :key="item.label"
       type="button"
       class="sidebar-item"
