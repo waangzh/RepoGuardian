@@ -64,6 +64,23 @@ function taskRepo(task: ReviewTask) {
   return task.pr ? `${task.pr.owner}/${task.pr.repo}` : "等待获取仓库信息";
 }
 
+function taskCoverage(task: ReviewTask) {
+  const coverage = task.coverage;
+  return coverage?.eligible_files ? `${coverage.reviewed_files} / ${coverage.eligible_files}` : "—";
+}
+
+function humanCount(task: ReviewTask) {
+  return task.issues.filter((issue) => issue.status === "needs_human" || issue.requires_human_confirmation).length;
+}
+
+function validationStatus(task: ReviewTask) {
+  const latest = task.validation.at(-1);
+  if (latest) return latest.status;
+  return task.validation_backend === "project_ci" && !["completed", "completed_with_warnings", "failed", "cancelled"].includes(task.status)
+    ? "running"
+    : "—";
+}
+
 watch(status, () => {
   page.value = 1;
   void load();
@@ -112,9 +129,10 @@ onMounted(load);
             <code>{{ task.id }}</code>
           </div>
           <dl class="history-row__metrics">
-            <div><dt>问题</dt><dd>{{ task.issues.length }}</dd></div>
-            <div><dt>补丁</dt><dd>{{ task.patches.length }}</dd></div>
-            <div><dt>验证</dt><dd>{{ task.validation.length }}</dd></div>
+            <div><dt>覆盖</dt><dd>{{ taskCoverage(task) }}</dd></div>
+            <div><dt>发现</dt><dd>{{ task.issues.length }}</dd></div>
+            <div><dt>人工</dt><dd>{{ humanCount(task) }}</dd></div>
+            <div><dt>验证</dt><dd class="history-validation">{{ validationStatus(task) }}</dd></div>
           </dl>
           <div class="history-row__time"><span>{{ formatDate(task.updated_at) }}</span><small>最近更新</small></div>
           <button type="button" class="button button--secondary button--compact" @click="emit('open', task.id)">查看详情</button>
