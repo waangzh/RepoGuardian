@@ -7,7 +7,6 @@ from app.graph.nodes.patch import patch_node, prepare_patch_workspace, restore_p
 from app.graph.policies import get_execution_budget
 from app.graph.state import ReviewState
 from app.models.review import (
-    AgentAction,
     AgentActionName,
     PatchResult,
     PatchEligibilityDecision,
@@ -75,19 +74,19 @@ async def repair_policy_node(state: ReviewState) -> ReviewState:
 
 async def repair_generate_patch_node(state: ReviewState) -> ReviewState:
     action_name = (
-        AgentActionName.revise_patch
+        "revise_patch"
         if state.get("active_patch_id")
-        else AgentActionName.generate_patch
+        else "generate_patch"
     )
-    action = AgentAction(
-        action=action_name,
-        reason="修复策略修订候选补丁" if action_name == AgentActionName.revise_patch else "修复策略创建候选补丁",
-        target_issue_ids=[
+    action = {
+        "action": action_name,
+        "reason": "修复策略修订候选补丁" if action_name == "revise_patch" else "修复策略创建候选补丁",
+        "target_issue_ids": [
             item.get("issue_id", "")
             for item in state.get("patch_eligibility") or []
             if item.get("eligible")
         ],
-    )
+    }
     return await patch_node(_with_action(state, action))
 
 
@@ -182,11 +181,11 @@ async def repair_apply_patch_node(state: ReviewState) -> ReviewState:
             pending_patch_ids=[],
             step_progress=append_step(state, "patch_apply", "failed", "没有本轮可应用的候选补丁"),
         )
-    action = AgentAction(
-        action=AgentActionName.apply_patch,
-        reason="在任务临时 clone 中应用本轮候选补丁",
-        tool_args={"patch_id": patch_id},
-    )
+    action = {
+        "action": "apply_patch",
+        "reason": "在任务临时 clone 中应用本轮候选补丁",
+        "tool_args": {"patch_id": patch_id},
+    }
     result = await patch_node(_with_action(state, action))
     return ReviewState(
         **result,
@@ -323,9 +322,9 @@ def _patch_size_within_limit(diff_content: str) -> bool:
     return bool(changed_lines) and len(changed_lines) <= 80 and changed_files <= 3
 
 
-def _with_action(state: ReviewState, action: AgentAction) -> ReviewState:
+def _with_action(state: ReviewState, action: dict[str, Any]) -> ReviewState:
     payload: dict[str, Any] = dict(state)
-    payload["next_action"] = action.model_dump(mode="json")
+    payload["next_action"] = action
     return ReviewState(**payload)
 
 
