@@ -29,6 +29,7 @@ class ReportService:
         _append_pr_summary(lines, task)
         _append_pr_purpose(lines, task, purpose_summary=purpose_summary)
         _append_issue_summary(lines, task)
+        _append_coverage(lines, task)
         _append_change_summary(lines, task)
         _append_issue_details(lines, task)
         _append_static_results(lines, task)
@@ -38,6 +39,29 @@ class ReportService:
         _append_limitations(lines, task)
         _append_execution_details(lines, task)
         return "\n".join(lines)
+
+
+def _append_coverage(lines: list[str], task: ReviewTask) -> None:
+    coverage = task.coverage
+    lines.extend([
+        "## 审查覆盖率",
+        "",
+        f"- Changed：{coverage.changed_files}",
+        f"- Eligible：{coverage.eligible_files}",
+        f"- Reviewed：{coverage.reviewed_files}",
+        f"- Skipped：{coverage.skipped_files}",
+        f"- Failed：{coverage.failed_files}",
+        f"- Coverage：{coverage.coverage_rate:.1%}",
+        "",
+    ])
+    incomplete = [item for item in coverage.files if item.status.value != "reviewed"]
+    if incomplete:
+        lines.extend(["| 文件 | 状态 | 原因 |", "|---|---|---|"])
+        for item in incomplete:
+            lines.append(
+                f"| `{item.file_path}` | {item.status.value} | {_table_cell(item.reason or '-')} |"
+            )
+        lines.append("")
 
 
 def _append_pr_summary(lines: list[str], task: ReviewTask) -> None:
@@ -186,6 +210,29 @@ def _append_issue_details(lines: list[str], task: ReviewTask) -> None:
             issue.recommendation,
             "",
         ])
+        if issue.reasoning_summary:
+            reasoning = issue.reasoning_summary
+            lines.extend([
+                "审计摘要：",
+                f"- 变更：{reasoning.change}",
+                f"- 不变量：{reasoning.invariant}",
+                f"- 违反：{reasoning.violation}",
+                f"- 后果：{reasoning.consequence}",
+                "",
+            ])
+        if issue.supporting_evidence:
+            lines.extend(["Supporting Evidence：", ""])
+            for evidence in issue.supporting_evidence:
+                resolved = (
+                    f":{evidence.resolved_start_line}-{evidence.resolved_end_line}"
+                    if evidence.resolved_start_line is not None else ""
+                )
+                provenance = evidence.provenance.value if evidence.provenance else "-"
+                lines.append(
+                    f"- `{evidence.file_path}{resolved}` "
+                    f"({evidence.resolution_status.value}, {provenance})"
+                )
+            lines.append("")
 
 
 def _append_static_results(lines: list[str], task: ReviewTask) -> None:

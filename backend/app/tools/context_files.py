@@ -10,6 +10,7 @@ from app.models.review import ChangedFile, ReviewToolScope
 from app.review.tool_scope import (
     ReviewPathPolicyError,
     is_sensitive_repository_path,
+    list_git_tracked_files,
     validate_repository_file,
 )
 
@@ -21,7 +22,7 @@ class ScopedContextToolError(ValueError):
 
 
 class ScopedContextTool:
-    """只读取 Planner 已授权的文件或已解析 diff，不扫描范围外路径。"""
+    """在安全 tracked repository 中发现文件，并对内容读取实施硬限制。"""
 
     async def file_read(
         self,
@@ -70,11 +71,29 @@ class ScopedContextTool:
         if "\\" in normalized or normalized.startswith(("/", "~")) or ".." in normalized.split("/"):
             raise ScopedContextToolError("file_find query must not contain path traversal")
         limit = min(max_results or scope.max_search_results, scope.max_search_results)
-        return [
-            path
-            for path in sorted(scope.readable_files)
+        candidates = scope.readable_files if scope.repository_discovery_enabled else scope.seed_files
+        matched = [
+            path for path in sorted(candidates)
             if normalized in path.casefold() and not is_sensitive_repository_path(path)
-        ][:limit]
+        ]
+        if not scope.repository_root:
+            return matched[:limit]
+        tracked = await asyncio.to_thread(list_git_tracked_files, scope.repository_root)
+        safe: list[str] = []
+        for path in matched:
+            try:
+                await asyncio.to_thread(
+                    validate_repository_file,
+                    scope.repository_root,
+                    path,
+                    tracked_files=tracked,
+                )
+            except (OSError, ReviewPathPolicyError):
+                continue
+            safe.append(path)
+            if len(safe) == limit:
+                break
+        return safe
 
     async def file_read_diff(
         self,
@@ -84,7 +103,10 @@ class ScopedContextTool:
         changed_files: list[ChangedFile | dict[str, Any]],
         hunk_ids: list[str] | None = None,
     ) -> dict[str, Any]:
-        self._require_readable(scope, file_path)
+        if file_path not in scope.commentable_files:
+            raise ScopedContextToolError(
+                "file_read_diff accepts commentable changed files in the current Unit only"
+            )
         changed = [
             item if isinstance(item, ChangedFile) else ChangedFile.model_validate(item)
             for item in changed_files

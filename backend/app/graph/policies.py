@@ -17,18 +17,6 @@ class UnitActionRegistration:
 
 UNIT_ACTION_REGISTRY: tuple[UnitActionRegistration, ...] = (
     UnitActionRegistration(
-        action=AgentActionName.retrieve_context,
-        route="execute_read_tool",
-        prompt_instruction=(
-            "Use only for bounded read-only context retrieval. tool_args must be exactly "
-            "{\"plan\": {...}}; the plan fields are reason, target_files, target_symbols, "
-            "search_terms, relevance_types, include_callers, include_callees, include_tests, "
-            "max_results, and depth. relevance_types must contain one or more of direct, caller, "
-            "callee, test, module_config, text, adjacent, type_definition, import_source, or "
-            "failure_location. Use target_files; never use files or file_requests."
-        ),
-    ),
-    UnitActionRegistration(
         action=AgentActionName.file_read,
         route="execute_read_tool",
         prompt_instruction=(
@@ -41,9 +29,19 @@ UNIT_ACTION_REGISTRY: tuple[UnitActionRegistration, ...] = (
         action=AgentActionName.file_find,
         route="execute_read_tool",
         prompt_instruction=(
-            "Find a literal path fragment inside readable_files only. tool_args must be exactly "
+            "Find a literal path fragment across the safe Git-tracked repository. tool_args must be exactly "
             "{\"request\": {\"query\": \"literal\", \"max_results\": 12}}. Regex and traversal "
             "are not supported."
+        ),
+    ),
+    UnitActionRegistration(
+        action=AgentActionName.code_search,
+        route="execute_read_tool",
+        prompt_instruction=(
+            "Search a short literal or indexed symbol across the safe Git-tracked repository. "
+            "tool_args must be exactly {\"request\": {\"query\": \"literal\", "
+            "\"relation\": \"text\", \"max_results\": 12}}. Supported relations are text, "
+            "caller, callee, test, and type_definition. Internal retrieval plans are not exposed."
         ),
     ),
     UnitActionRegistration(

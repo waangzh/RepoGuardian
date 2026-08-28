@@ -1,5 +1,6 @@
 """受控代码上下文检索：所有路径、符号与搜索范围均受服务端索引约束。"""
 
+import asyncio
 import re
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,29 @@ class CodeSearchTool(BaseTool):
         return {"context_snippets": snippets}
 
     async def retrieve_context(
+        self,
+        changed_files: list[dict[str, Any]],
+        symbol_index: list[dict[str, Any]],
+        file_index: list[dict[str, Any]],
+        repo_path: str,
+        plan: ContextRetrievalPlan | dict[str, Any] | None = None,
+        failure_fingerprints: list[dict[str, Any]] | None = None,
+        scope: ReviewToolScope | dict[str, Any] | None = None,
+        repository_graph: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        return await asyncio.to_thread(
+            self._retrieve_context_sync,
+            changed_files=changed_files,
+            symbol_index=symbol_index,
+            file_index=file_index,
+            repo_path=repo_path,
+            plan=plan,
+            failure_fingerprints=failure_fingerprints,
+            scope=scope,
+            repository_graph=repository_graph,
+        )
+
+    def _retrieve_context_sync(
         self,
         changed_files: list[dict[str, Any]],
         symbol_index: list[dict[str, Any]],

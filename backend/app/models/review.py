@@ -110,6 +110,17 @@ class ReviewUnitStatus(str, Enum):
     needs_human = "needs_human"
 
 
+class ReviewFileStatus(str, Enum):
+    pending = "pending"
+    reviewed = "reviewed"
+    excluded_binary = "excluded_binary"
+    excluded_generated = "excluded_generated"
+    unsupported = "unsupported"
+    timed_out = "timed_out"
+    model_failed = "model_failed"
+    budget_exhausted = "budget_exhausted"
+
+
 class UnitPlanStatus(str, Enum):
     planned = "planned"
     skipped = "skipped"
@@ -168,6 +179,20 @@ class EvidenceResolutionMethod(str, Enum):
     unresolved = "unresolved"
 
 
+class EvidenceResolutionStatus(str, Enum):
+    exact = "exact"
+    relocated = "relocated"
+    symbol_resolved = "symbol_resolved"
+    context_resolved = "context_resolved"
+    unresolved = "unresolved"
+
+
+class EvidenceProvenance(str, Enum):
+    diff = "diff"
+    repository_file = "repository_file"
+    symbol_index = "symbol_index"
+
+
 class CommentPlacement(str, Enum):
     inline = "inline"
     summary = "summary"
@@ -180,6 +205,7 @@ class AgentActionName(str, Enum):
     retrieve_context = "retrieve_context"
     file_read = "file_read"
     file_find = "file_find"
+    code_search = "code_search"
     file_read_diff = "file_read_diff"
     run_static_analysis = "run_static_analysis"
     review_code = "review_code"
@@ -378,6 +404,24 @@ class FileFindRequest(BaseModel):
             raise ValueError("file_find query cannot contain control characters")
         if "\\" in cleaned or cleaned.startswith(("/", "~")) or ".." in cleaned.split("/"):
             raise ValueError("file_find query must not contain path traversal")
+        return cleaned
+
+
+class CodeSearchRequest(BaseModel):
+    """面向模型的最小仓库级字面量搜索请求。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1, max_length=120)
+    relation: Literal["text", "caller", "callee", "test", "type_definition"] = "text"
+    max_results: int = Field(default=12, ge=1, le=20)
+
+    @field_validator("query")
+    @classmethod
+    def validate_query(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned or any(ord(char) < 32 for char in cleaned):
+            raise ValueError("code_search query must be a short literal")
         return cleaned
 
 
@@ -791,15 +835,18 @@ class ReviewUnit(BaseModel):
 
 
 class ReviewToolScope(BaseModel):
-    """单个 Unit 的不可扩张工具权限。"""
+    """单个 Unit 的两阶段只读权限：仓库发现可扩张，评论范围不可扩张。"""
 
     review_unit_id: str
     commentable_files: set[str]
+    seed_files: set[str] = Field(default_factory=set)
     readable_files: set[str]
+    repository_discovery_enabled: bool = True
     context_provenance: dict[str, ContextProvenance] = Field(default_factory=dict)
     repository_root: str | None = None
     max_lines_per_read: int = Field(gt=0)
     max_search_results: int = Field(gt=0)
+    max_context_chars: int = Field(default=60_000, gt=0)
 
     @model_validator(mode="after")
     def require_commentable_subset(self) -> "ReviewToolScope":
@@ -807,6 +854,10 @@ class ReviewToolScope(BaseModel):
             raise ValueError("commentable_files must be a subset of readable_files")
         if not set(self.context_provenance) <= self.readable_files:
             raise ValueError("context provenance files must be readable")
+        if not self.seed_files:
+            self.seed_files = set(self.commentable_files)
+        if not self.seed_files <= self.readable_files:
+            raise ValueError("seed_files must be a subset of readable_files")
         return self
 
 
@@ -875,6 +926,8 @@ class EvidenceAnchor(BaseModel):
     resolved_start_line: int | None = Field(default=None, ge=1)
     resolved_end_line: int | None = Field(default=None, ge=1)
     resolution_method: EvidenceResolutionMethod = EvidenceResolutionMethod.unresolved
+    resolution_status: EvidenceResolutionStatus = EvidenceResolutionStatus.unresolved
+    provenance: EvidenceProvenance | None = None
     match_count: int = Field(default=0, ge=0)
     anchor_hash: str | None = None
     resolved_side: Literal["head", "base"] | None = None
@@ -936,6 +989,7 @@ class ReviewIssueInput(BaseModel):
     confidence: float = Field(ge=0, le=1)
     affected_behavior: str = Field(min_length=3, max_length=1_000)
     failure_scenario: str = Field(min_length=3, max_length=2_000)
+    reasoning_summary: "AuditableReasoningSummary | None" = None
     recommendation: str = Field(min_length=1, max_length=2_000)
     primary_evidence: EvidenceAnchorInput
     supporting_evidence: list[EvidenceAnchorInput] = Field(default_factory=list, max_length=12)
@@ -962,6 +1016,7 @@ class ReviewIssueInput(BaseModel):
             confidence=self.confidence,
             affected_behavior=self.affected_behavior,
             failure_scenario=self.failure_scenario,
+            reasoning_summary=self.reasoning_summary,
             recommendation=self.recommendation,
             primary_evidence=anchor(self.primary_evidence),
             supporting_evidence=[anchor(item) for item in self.supporting_evidence],
@@ -972,6 +1027,27 @@ class ReviewIssueInput(BaseModel):
             fix_risk=self.fix_risk,
             status=IssueStatus.candidate,
         )
+
+
+class AuditableReasoningSummary(BaseModel):
+    """面向审计者的简短因果摘要，不包含隐藏思维链。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    change: str = Field(min_length=1, max_length=500)
+    invariant: str = Field(min_length=1, max_length=500)
+    violation: str = Field(min_length=1, max_length=500)
+    consequence: str = Field(min_length=1, max_length=500)
+
+
+class ResolvedIssueLocation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    file_path: str
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    side: Literal["head", "base"]
+    hunk_id: str | None = None
 
 
 class ReviewIssue(BaseModel):
@@ -987,6 +1063,7 @@ class ReviewIssue(BaseModel):
     confidence: float = Field(ge=0, le=1)
     affected_behavior: str = Field(min_length=3, max_length=1_000)
     failure_scenario: str = Field(min_length=3, max_length=2_000)
+    reasoning_summary: AuditableReasoningSummary | None = None
     recommendation: str = Field(min_length=1, max_length=2_000)
     primary_evidence: EvidenceAnchor
     supporting_evidence: list[EvidenceAnchor] = Field(default_factory=list, max_length=12)
@@ -998,6 +1075,7 @@ class ReviewIssue(BaseModel):
     status: IssueStatus = IssueStatus.candidate
     placement: CommentPlacement = CommentPlacement.suppressed
     unresolved_reason: str | None = None
+    resolved_location: ResolvedIssueLocation | None = None
     source_review_unit_ids: list[str] = Field(default_factory=list)
     source_issue_ids: list[str] = Field(default_factory=list)
 
@@ -1115,6 +1193,7 @@ class AgentAction(BaseModel):
         elif self.action in {
             AgentActionName.file_read,
             AgentActionName.file_find,
+            AgentActionName.code_search,
             AgentActionName.file_read_diff,
         }:
             if set(self.tool_args) != {"request"}:
@@ -1122,6 +1201,7 @@ class AgentAction(BaseModel):
             request_type = {
                 AgentActionName.file_read: FileReadRequest,
                 AgentActionName.file_find: FileFindRequest,
+                AgentActionName.code_search: CodeSearchRequest,
                 AgentActionName.file_read_diff: FileReadDiffRequest,
             }[self.action]
             request = request_type.model_validate(self.tool_args["request"])
@@ -1626,6 +1706,67 @@ class ReviewUnitResult(BaseModel):
     human_request: HumanReviewRequest | None = None
 
 
+class ReviewFileCoverage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    file_path: str
+    eligible: bool
+    status: ReviewFileStatus
+    review_unit_ids: list[str] = Field(default_factory=list)
+    reason: str | None = None
+
+
+class ReviewUnitCoverage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    review_unit_id: str
+    files: list[str] = Field(default_factory=list)
+    status: ReviewUnitStatus
+    failure_reason: str | None = None
+    model_calls: int = Field(default=0, ge=0)
+    tokens: int = Field(default=0, ge=0)
+    duration_ms: int = Field(default=0, ge=0)
+
+
+class ReviewCoverage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    changed_files: int = Field(default=0, ge=0)
+    eligible_files: int = Field(default=0, ge=0)
+    reviewed_files: int = Field(default=0, ge=0)
+    skipped_files: int = Field(default=0, ge=0)
+    failed_files: int = Field(default=0, ge=0)
+    coverage_rate: float = Field(default=0.0, ge=0, le=1)
+    files: list[ReviewFileCoverage] = Field(default_factory=list)
+    units: list[ReviewUnitCoverage] = Field(default_factory=list)
+
+
+class ReviewRunManifest(BaseModel):
+    """一次静态审查的可审计、稳定运行摘要。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["review-run-manifest-v1"] = "review-run-manifest-v1"
+    review_id: str
+    repository: str | None = None
+    pr_number: int | None = Field(default=None, ge=1)
+    base_sha: str | None = None
+    head_sha: str | None = None
+    planner_version: str | None = None
+    provider: str
+    model: str
+    started_at: datetime
+    completed_at: datetime
+    duration_ms: int = Field(ge=0)
+    model_calls: int = Field(default=0, ge=0)
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+    confirmed_issues: int = Field(default=0, ge=0)
+    coverage: ReviewCoverage
+    warnings: list[str] = Field(default_factory=list)
+
+
 class RepoSnapshot(BaseModel):
     """仓库概览快照（RepoIndexer 产出）。"""
     language: str
@@ -1689,8 +1830,9 @@ class ReviewTask(BaseModel):
     model_usages: list[ModelUsage] = Field(default_factory=list)
     model_usage_summary: ModelUsageSummary = Field(default_factory=ModelUsageSummary)
     excluded_files: list[ExcludedReviewFile] = Field(default_factory=list)
+    coverage: ReviewCoverage = Field(default_factory=ReviewCoverage)
+    run_manifest: ReviewRunManifest | None = None
     issues: list[ReviewIssue] = Field(default_factory=list)
-    issue_metrics: IssueMetrics = Field(default_factory=IssueMetrics)
     issue_metrics: IssueMetrics = Field(default_factory=IssueMetrics)
     context_snippets: list[ContextSnippet] = Field(default_factory=list)
     repo_snapshot: RepoSnapshot | None = None

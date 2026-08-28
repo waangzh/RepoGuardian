@@ -21,6 +21,19 @@ _SENSITIVE_NAMES = frozenset({
 _PRIVATE_KEY_SUFFIXES = (".pem", ".p12", ".pfx", ".key")
 
 
+def git_safety_environment() -> dict[str, str]:
+    """隔离 host Git 配置与交互式凭证，避免继承 filter/hook 配置。"""
+    env = os.environ.copy()
+    env.update({
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_OPTIONAL_LOCKS": "0",
+    })
+    env.pop("GIT_EXTERNAL_DIFF", None)
+    return env
+
+
 def is_sensitive_repository_path(file_path: str) -> bool:
     """按规范化的仓库相对路径判断是否属于禁止读取的敏感路径。"""
     path = PurePosixPath(file_path)
@@ -43,6 +56,7 @@ def list_git_tracked_files(repository_root: str | Path, git_executable: str = "g
         [git_executable, "-C", str(root), "ls-files", "-z", "--cached"],
         check=False,
         capture_output=True,
+        env=git_safety_environment(),
     )
     if completed.returncode != 0:
         return set()

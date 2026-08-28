@@ -25,23 +25,17 @@ class MultiRoundProvider(LLMProvider):
         self.decision_states: list[dict[str, Any]] = []
         self.actions = [
             AgentAction.model_validate({
-                "action": "retrieve_context",
+                "action": "code_search",
                 "reason": "读取常量",
-                "tool_args": {"plan": {
-                    "reason": "定位 FEATURE",
-                    "target_files": ["module.py"],
-                    "search_terms": ["FEATURE"],
-                    "relevance_types": ["text"],
+                "tool_args": {"request": {
+                    "query": "FEATURE", "relation": "text", "max_results": 12,
                 }},
             }),
             AgentAction.model_validate({
-                "action": "retrieve_context",
+                "action": "code_search",
                 "reason": "读取返回值",
-                "tool_args": {"plan": {
-                    "reason": "定位 return",
-                    "target_files": ["module.py"],
-                    "search_terms": ["return"],
-                    "relevance_types": ["text"],
+                "tool_args": {"request": {
+                    "query": "return", "relation": "text", "max_results": 12,
                 }},
             }),
             AgentAction(action="report_issue", reason="证据充分，报告问题"),

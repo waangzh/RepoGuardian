@@ -147,25 +147,6 @@ async def review_units_node(state: ReviewState) -> ReviewState:
                 state, "review_units", "completed", "Review Unit 已暂停等待人工输入"
             ),
         )
-    if failed and not successful:
-        details = "; ".join(
-            f"{item.review_unit_id}: {item.error or item.status.value}" for item in failed
-        )
-        return ReviewState(
-            status="failed",
-            error=f"all review units failed: {details}",
-            review_unit_results=[item.model_dump(mode="json") for item in results],
-            review_issues=[],
-            context_snippets=[],
-            agent_events=[
-                *(state.get("agent_events") or []),
-                *(event.model_dump(mode="json") for item in results for event in item.messages),
-            ],
-            step_progress=append_step(
-                state, "review_units", "failed", "全部 Review Unit 执行失败"
-            ),
-        )
-
     issues = [issue for item in successful for issue in item.issues]
     snippets = [snippet for item in successful for snippet in item.context_snippets]
     events = [event for item in results for event in item.messages]

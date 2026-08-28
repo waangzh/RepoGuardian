@@ -184,7 +184,10 @@ class DeterministicReviewPlanner:
         )
 
     def build_scope(
-        self, unit: ReviewUnit, repository_root: str | None = None
+        self,
+        unit: ReviewUnit,
+        repository_root: str | None = None,
+        repository_files: set[str] | None = None,
     ) -> ReviewToolScope:
         provenance = {
             path: ContextProvenance(
@@ -198,14 +201,24 @@ class DeterministicReviewPlanner:
             for path in unit.primary_files
         }
         provenance.update({item.file: item for item in unit.context_provenance})
+        seed_files = set(unit.primary_files) | set(unit.related_files)
+        readable_files = set(repository_files or seed_files)
+        readable_files.update(seed_files)
         return ReviewToolScope(
             review_unit_id=unit.id,
             commentable_files=set(unit.primary_files),
-            readable_files=set(unit.primary_files) | set(unit.related_files),
+            seed_files=seed_files,
+            readable_files=readable_files,
+            repository_discovery_enabled=True,
             context_provenance=provenance,
             repository_root=repository_root,
             max_lines_per_read=self.max_lines_per_read,
             max_search_results=self.max_search_results,
+            max_context_chars={
+                ReviewUnitComplexity.small: 30_000,
+                ReviewUnitComplexity.medium: 60_000,
+                ReviewUnitComplexity.large: 100_000,
+            }[unit.complexity],
         )
 
     def should_skip_plan(self, unit: ReviewUnit, changed_files: Iterable[ChangedFile]) -> bool:
@@ -241,8 +254,8 @@ class DeterministicReviewPlanner:
         if unit.complexity == ReviewUnitComplexity.small:
             return 3
         if unit.complexity == ReviewUnitComplexity.medium:
-            return 4
-        return 6
+            return 5
+        return 7
 
     @staticmethod
     def hunk_id(file_path: str, index: int, hunk: dict[str, Any]) -> str:

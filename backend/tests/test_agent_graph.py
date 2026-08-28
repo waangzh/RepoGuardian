@@ -457,7 +457,7 @@ async def test_issue_with_nonexistent_head_file_is_rejected(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_failed_patch_decision_receives_structured_validation_feedback(tmp_path: Path) -> None:
+async def test_main_review_graph_never_enters_patch_validation(tmp_path: Path) -> None:
     provider = GraphScriptedProvider(
         actions=[
             {"action": "review_code", "reason": "审查"},
@@ -469,7 +469,8 @@ async def test_failed_patch_decision_receives_structured_validation_feedback(tmp
 
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
-    assert result["patches"][-1]["status"] == "unverified"
+    assert provider.patch_calls == 0
+    assert not result.get("patches")
     assert not result.get("validation_results")
 
 
@@ -511,7 +512,7 @@ async def test_main_flow_cannot_skip_report(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_repair_subgraph_returns_to_main_flow(tmp_path: Path) -> None:
+async def test_repair_subgraph_is_not_in_main_review_flow(tmp_path: Path) -> None:
     provider = GraphScriptedProvider(
         actions=[
             {"action": "review_code", "reason": "开始诊断"},
@@ -523,14 +524,14 @@ async def test_repair_subgraph_returns_to_main_flow(tmp_path: Path) -> None:
 
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
-    assert provider.patch_calls == 1
-    assert result["patches"][-1]["status"] == "unverified"
+    assert provider.patch_calls == 0
+    assert not result.get("patches")
     assert not result.get("test_results")
     assert result["step_progress"][-1]["node"] == "report"
 
 
 @pytest.mark.asyncio
-async def test_accept_patch_is_gated_by_server_validation_policy(tmp_path: Path) -> None:
+async def test_repair_action_is_unreachable_from_main_review_flow(tmp_path: Path) -> None:
     provider = GraphScriptedProvider(
         actions=[
             {"action": "review_code", "reason": "开始审查"},
@@ -542,12 +543,13 @@ async def test_accept_patch_is_gated_by_server_validation_policy(tmp_path: Path)
 
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
-    assert result["patches"][-1]["status"] == "unverified"
+    assert provider.patch_calls == 0
+    assert not result.get("patches")
     assert not any(event["action"] == "accept_patch" for event in result["agent_events"])
 
 
 @pytest.mark.asyncio
-async def test_repair_subgraph_abandons_unselected_generated_patches(tmp_path: Path) -> None:
+async def test_main_graph_does_not_generate_multiple_candidate_patches(tmp_path: Path) -> None:
     first_patch = PatchResult(issue_id="discount-fix", diff_content=SAMPLE_PATCH)
     second_patch = PatchResult(issue_id="verification-note", diff_content=SECOND_SAMPLE_PATCH)
     provider = GraphScriptedProvider(
@@ -561,11 +563,8 @@ async def test_repair_subgraph_abandons_unselected_generated_patches(tmp_path: P
 
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
-    assert provider.patch_calls == 1
-    assert [patch["status"] for patch in result["patches"]] == [
-        "unverified",
-        "abandoned",
-    ]
+    assert provider.patch_calls == 0
+    assert not result.get("patches")
     patched_snapshots = [
         snapshot for snapshot in result.get("validation_snapshots") or [] if snapshot["stage"] == "patched"
     ]
@@ -573,7 +572,7 @@ async def test_repair_subgraph_abandons_unselected_generated_patches(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_failed_current_patch_does_not_reuse_previous_patch_validation(tmp_path: Path) -> None:
+async def test_main_graph_has_no_patch_validation_state(tmp_path: Path) -> None:
     first_patch = PatchResult(issue_id="discount-fix", diff_content=SAMPLE_PATCH)
     failed_patch = PatchResult(issue_id="invalid", diff_content=INVALID_SAMPLE_PATCH)
     provider = GraphScriptedProvider(
@@ -584,15 +583,13 @@ async def test_failed_current_patch_does_not_reuse_previous_patch_validation(tmp
 
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
-    assert [patch["status"] for patch in result["patches"]] == [
-        "unverified",
-        "abandoned",
-    ]
+    assert provider.patch_calls == 0
+    assert not result.get("patches")
     patched_snapshots = [
         snapshot for snapshot in result.get("validation_snapshots") or [] if snapshot["stage"] == "patched"
     ]
     assert patched_snapshots == []
-    assert result["active_patch_id"] == first_patch.id
+    assert not result.get("active_patch_id")
 
 
 @pytest.mark.asyncio
@@ -645,7 +642,7 @@ async def test_review_mode_does_not_call_command_executor(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_suggest_mode_generates_unverified_candidate_without_execution(tmp_path: Path) -> None:
+async def test_legacy_suggest_mode_stays_read_only_without_patch_generation(tmp_path: Path) -> None:
     executor = RejectingExecutor()
     provider = GraphScriptedProvider(
         review_issues=[_auto_fixable_issue()],
@@ -662,8 +659,8 @@ async def test_suggest_mode_generates_unverified_candidate_without_execution(tmp
     result = await build_review_graph().compile().ainvoke(state)
 
     assert result["status"] == "completed"
-    assert result.get("patches"), result.get("step_progress")
-    assert result["patches"][0]["status"] == "unverified"
+    assert provider.patch_calls == 0
+    assert not result.get("patches")
     assert executor.calls == 0
 
 
@@ -684,14 +681,14 @@ async def test_unsupported_validation_keeps_review_completed_with_warning(tmp_pa
 
     result = await build_review_graph().compile().ainvoke(state)
 
-    assert result["status"] == "completed_with_warnings"
-    assert result["patches"][0]["status"] == "unverified"
-    assert result["validation_results"][-1]["status"] == "unsupported"
+    assert result["status"] == "completed"
+    assert not result.get("patches")
+    assert not result.get("validation_results")
     assert executor.calls == 0
 
 
 @pytest.mark.asyncio
-async def test_infrastructure_error_is_not_a_validation_failed_patch(tmp_path: Path) -> None:
+async def test_validation_executor_is_unreachable_from_main_graph(tmp_path: Path) -> None:
     provider = GraphScriptedProvider(
         review_issues=[_auto_fixable_issue()],
         patches=[PatchResult(issue_id="discount-fix", diff_content=REGRESSIVE_SAMPLE_PATCH)],
@@ -706,8 +703,8 @@ async def test_infrastructure_error_is_not_a_validation_failed_patch(tmp_path: P
 
     result = await build_review_graph().compile().ainvoke(state)
 
-    assert result["patches"][0]["status"] == "unverified"
-    assert result["validation_results"][-1]["status"] == "unsupported"
+    assert not result.get("patches")
+    assert not result.get("validation_results")
 
 
 def test_create_request_defaults_and_rejects_invalid_mode_combinations() -> None:

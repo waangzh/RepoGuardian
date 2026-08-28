@@ -58,16 +58,14 @@ const modelOptions = computed(() => [
 ]);
 
 const modeOptions = [
-  { value: "review", label: "只读审查", description: "分析问题，不生成补丁" },
-  { value: "review_and_suggest", label: "审查 + 候选补丁", description: "生成可检查的修复建议" },
-  { value: "review_suggest_and_validate", label: "审查 + 补丁 + 验证", description: "生成补丁并运行受控验证" },
+  { value: "review", label: "严格只读审查", description: "基于静态证据审查；动态验证由 Project CI 异步完成" },
 ];
 
 const backendOptions = [
   { value: "none", label: "不执行验证", description: "仅生成候选补丁" },
   { value: "user_runner", label: "用户 Runner", description: "交由用户侧执行环境验证" },
   { value: "project_ci", label: "项目 CI", description: "使用项目现有 CI 流程" },
-  { value: "gvisor", label: "gVisor", description: "在隔离沙箱中执行验证" },
+  { value: "gvisor", label: "gVisor（已废弃）", description: "不可执行兼容占位；请使用 Project CI" },
 ];
 </script>
 

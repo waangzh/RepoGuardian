@@ -9,6 +9,7 @@ from app.models.review import ReviewPhase
 from app.services.review_rebuild import rebuild_task_from_state
 from app.services.report_service import ReportService
 from app.services.model_usage import append_usage, unpack_model_call
+from app.services.review_manifest import build_review_manifest
 
 logger = logging.getLogger("RepoGuardian.Node")
 
@@ -50,6 +51,18 @@ async def report_node(state: ReviewState) -> ReviewState:
             except LLMProviderError as exc:
                 model_usages = append_usage(model_usages, exc.usage)
                 logger.warning("PR 作用中文概括生成失败，使用确定性中文兜底：%s", exc)
+    completed_at = datetime.fromisoformat(updated_at)
+    manifest_state = {
+        **report_state,
+        "model_usages": model_usages,
+    }
+    manifest = build_review_manifest(manifest_state, completed_at)
+    report_state = ReviewState(**{
+        **manifest_state,
+        "review_coverage": manifest.coverage.model_dump(mode="json"),
+        "run_manifest": manifest.model_dump(mode="json"),
+    })
+    task = rebuild_task_from_state(report_state)
     markdown = ReportService().generate(task, purpose_summary=purpose_summary)
     logger.info("📝 [报告] 报告生成完成（%d 字符 Markdown）", len(markdown))
     return ReviewState(
@@ -58,6 +71,8 @@ async def report_node(state: ReviewState) -> ReviewState:
         phase=final_phase,
         updated_at=updated_at,
         model_usages=model_usages,
+        review_coverage=manifest.coverage.model_dump(mode="json"),
+        run_manifest=manifest.model_dump(mode="json"),
         step_progress=append_step(state, "report", "completed", "报告已生成"),
     )
 
