@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { ProviderModelInfo } from "../../types/operations";
-import type { ReviewMode, ReviewPreviewResponse, ValidationBackend } from "../../types/review";
+import type { ReviewMode, ValidationBackend } from "../../types/review";
 import AppIcon from "../common/AppIcon.vue";
 import AppSelect from "../common/AppSelect.vue";
 
@@ -16,7 +16,6 @@ const props = defineProps<{
   active: boolean;
   cancelling: boolean;
   error: string | null;
-  preview: ReviewPreviewResponse | null;
   models: ProviderModelInfo[];
   defaultModel: string;
   modelsLoading: boolean;
@@ -137,25 +136,5 @@ const backendOptions = [
       <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     </form>
 
-    <section v-if="preview" class="preview-summary" aria-label="审查 Preview">
-      <header><strong>确定性 Preview</strong><span>{{ preview.review_units.length }} Units</span></header>
-      <div class="preview-summary__metrics">
-        <span><strong>{{ preview.included_file_count }}/{{ preview.changed_file_count }}</strong>审查文件</span>
-        <span><strong>{{ preview.estimated_model_calls }}</strong>预计调用</span>
-        <span><strong>{{ preview.estimated_tokens.toLocaleString() }}</strong>预计 Token</span>
-      </div>
-      <p>Plan {{ preview.planning_model_calls }} 次 · 调用上限 {{ preview.max_model_calls }} 次</p>
-      <p>候选补丁 {{ preview.patch_generation_enabled ? "已开启" : "未开启" }} · 验证后端 {{ preview.validation_backend.name }}</p>
-      <p v-if="preview.validation_backend.unavailable_reason" class="form-error">{{ preview.validation_backend.unavailable_reason }}</p>
-      <details v-if="preview.review_units.length || preview.excluded_files.length">
-        <summary>查看规划详情</summary>
-        <p v-for="unit in preview.review_units" :key="unit.id" class="preview-summary__row">
-          <code>{{ unit.primary_files[0] }}</code><span>{{ unit.complexity }} · {{ unit.estimated_tokens.toLocaleString() }} tokens</span>
-        </p>
-        <p v-for="file in preview.excluded_files" :key="file.file_path" class="preview-summary__row">
-          <code>{{ file.file_path }}</code><span>已排除 · {{ file.reason }}</span>
-        </p>
-      </details>
-    </section>
   </aside>
 </template>

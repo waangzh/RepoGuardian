@@ -16,7 +16,7 @@ defineProps<{
       </div>
       <strong>RepoGuardian</strong>
       <span class="app-brand__divider" />
-      <span class="app-brand__product">PR Review Control Desk</span>
+      <span class="app-brand__product">AI Pull Request Review</span>
     </div>
     <div class="app-header__actions">
       <div class="header-status" :data-status="status" role="status">

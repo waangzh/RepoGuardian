@@ -13,6 +13,7 @@ node_modules/
 .repoguardian/
 .pytest_tmp/
 .pytest_tmp*/
+/UI/
 AGENTS.md
 CLAUDE.md
 .claude
