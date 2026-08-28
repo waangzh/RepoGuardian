@@ -47,7 +47,7 @@ def test_python_adapter_registers_only_the_supported_command_ids(tmp_path: Path)
 def test_agent_action_rejects_free_form_shell_command() -> None:
     with pytest.raises(ValidationError, match="command"):
         AgentAction.model_validate({
-            "action": "run_tests",
+            "action": "task_done",
             "reason": "bad command",
             "tool_args": {"command": "python -c 'import os'"},
         })

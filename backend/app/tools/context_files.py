@@ -103,6 +103,10 @@ class ScopedContextTool:
         changed_files: list[ChangedFile | dict[str, Any]],
         hunk_ids: list[str] | None = None,
     ) -> dict[str, Any]:
+        if is_sensitive_repository_path(file_path):
+            raise ScopedContextToolError(
+                f"sensitive repository path is not readable: {file_path}"
+            )
         if file_path not in scope.commentable_files:
             raise ScopedContextToolError(
                 "file_read_diff accepts commentable changed files in the current Unit only"

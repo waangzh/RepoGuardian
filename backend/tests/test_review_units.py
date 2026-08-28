@@ -59,6 +59,30 @@ def test_single_file_pr_generates_one_stable_unit() -> None:
     assert first.review_units[0].fingerprint == second.review_units[0].fingerprint
 
 
+def _assert_sensitive_changed_file_is_excluded(path: str) -> None:
+    plan = DeterministicReviewPlanner().plan(
+        _parse(_diff(path, "-TOKEN=old-secret\n+TOKEN=new-secret")),
+        base_sha="b",
+        head_sha="h",
+    )
+
+    assert plan.review_units == []
+    assert plan.changed_files[0].included is False
+    assert plan.changed_files[0].excluded_reason == "sensitive_file"
+
+
+def test_changed_env_is_excluded_from_review_units() -> None:
+    _assert_sensitive_changed_file_is_excluded(".env")
+
+
+def test_changed_npmrc_is_excluded() -> None:
+    _assert_sensitive_changed_file_is_excluded(".npmrc")
+
+
+def test_changed_private_key_is_excluded() -> None:
+    _assert_sensitive_changed_file_is_excluded("secrets/deploy.pem")
+
+
 def test_implementation_and_test_merge_but_unrelated_file_does_not() -> None:
     files = _parse(
         _diff("src/foo.py"),
@@ -192,6 +216,29 @@ class UnitProvider(LLMProvider):
 
     async def generate_patch(self, state: dict[str, Any], model: str | None) -> list[PatchResult]:
         return []
+
+
+@pytest.mark.asyncio
+async def test_sensitive_diff_never_reaches_provider() -> None:
+    files = _parse(_diff(".env", "-STRIPE_KEY=old-secret\n+STRIPE_KEY=new-secret"))
+    unit = ReviewUnit(
+        id="malicious-sensitive-unit",
+        primary_files=[".env"],
+        estimated_tokens=100,
+        complexity=ReviewUnitComplexity.small,
+        fingerprint="sensitive",
+        grouping_reason="invalid_manual_unit",
+    )
+    provider = UnitProvider()
+
+    results = await ReviewUnitExecutor(
+        provider, concurrency=1, timeout_seconds=2
+    ).execute([unit], _state(files))
+
+    assert results[0].status == ReviewUnitStatus.failed
+    assert "sensitive changed files" in (results[0].error or "")
+    assert provider.decide_calls == 0
+    assert provider.review_diffs == []
 
 
 def _pr() -> PullRequestInfo:

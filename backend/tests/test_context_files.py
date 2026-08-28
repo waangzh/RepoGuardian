@@ -109,6 +109,35 @@ async def test_file_read_diff_uses_parsed_unit_hunks_only(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_file_read_diff_rejects_sensitive_changed_file(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    scope = _scope(repo).model_copy(update={"commentable_files": {".env"}})
+    changed = ChangedFile(
+        file_path=".env",
+        change_type="modified",
+        additions=1,
+        deletions=1,
+        hunks=[DiffHunk(
+            old_start=1,
+            old_length=1,
+            new_start=1,
+            new_length=1,
+            lines=[
+                DiffLine(kind="deleted", content="TOKEN=old-secret", old_line_no=1),
+                DiffLine(kind="added", content="TOKEN=new-secret", new_line_no=1),
+            ],
+        )],
+    )
+
+    with pytest.raises(ScopedContextToolError, match="sensitive repository path"):
+        await ScopedContextTool().file_read_diff(
+            scope=scope,
+            file_path=".env",
+            changed_files=[changed],
+        )
+
+
+@pytest.mark.asyncio
 async def test_planner_seed_is_not_repository_discovery_ceiling(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     unit = ReviewUnit(

@@ -31,6 +31,7 @@ from app.models.review import (
     ReviewUnitComplexity,
     ReviewUnitResult,
     ReviewUnitStatus,
+    ReviewUnitTerminalReason,
     ReviewUnitToolEvent,
     UnitPlanStatus,
     UnitReviewPlan,
@@ -45,6 +46,7 @@ from app.review.language_rules import (
     markdown_language_for_path,
     render_language_rule_context,
 )
+from app.review.tool_scope import is_sensitive_repository_path
 
 
 class _ReviewUnitGraphState(TypedDict, total=False):
@@ -76,6 +78,7 @@ class _ReviewUnitGraphState(TypedDict, total=False):
     error: str | None
     needs_human: bool
     human_request: HumanReviewRequest | None
+    terminal_reason: ReviewUnitTerminalReason | None
 
 
 class ReviewUnitExecutor:
@@ -148,6 +151,7 @@ class ReviewUnitExecutor:
             return ReviewUnitResult(
                 review_unit_id=unit.id,
                 status=ReviewUnitStatus.timed_out,
+                terminal_reason=ReviewUnitTerminalReason.timed_out,
                 plan_skipped=False,
                 execution_budget=self._budget_for(unit),
                 error=f"review unit timed out after {self.timeout_seconds} seconds",
@@ -167,6 +171,11 @@ class ReviewUnitExecutor:
             return ReviewUnitResult(
                 review_unit_id=unit.id,
                 status=ReviewUnitStatus.failed,
+                terminal_reason=(
+                    ReviewUnitTerminalReason.provider_error
+                    if isinstance(exc, LLMProviderError)
+                    else ReviewUnitTerminalReason.execution_error
+                ),
                 plan_skipped=False,
                 execution_budget=self._budget_for(unit),
                 model_usages=[usage] if usage is not None else [],
@@ -178,6 +187,13 @@ class ReviewUnitExecutor:
         unit: ReviewUnit,
         state: dict[str, Any],
     ) -> ReviewUnitResult:
+        sensitive_files = [
+            path for path in unit.primary_files if is_sensitive_repository_path(path)
+        ]
+        if sensitive_files:
+            raise ValueError(
+                f"sensitive changed files cannot enter a Review Unit: {sensitive_files}"
+            )
         all_changed = [ChangedFile.model_validate(item) for item in state.get("changed_files") or []]
         by_path = {item.file_path: item for item in all_changed}
         unit_files = self._unit_changed_files(unit, by_path)
@@ -215,11 +231,22 @@ class ReviewUnitExecutor:
             "issue_round_completed": False,
             "legacy_review_action": False,
             "done": False,
+            "terminal_reason": None,
         }
         config = None
         if getattr(self.unit_graph, "checkpointer", None) is not None:
             config = unit_thread_config(str(state.get("task_id") or "unknown"), unit.id)
         result = await self.unit_graph.ainvoke(graph_state, config=config)
+        if result.get("needs_human"):
+            terminal_reason = ReviewUnitTerminalReason.human_required
+        elif result.get("done") and not result.get("error"):
+            terminal_reason = result.get("terminal_reason") or (
+                ReviewUnitTerminalReason.completed
+                if result.get("issues")
+                else ReviewUnitTerminalReason.no_issue
+            )
+        else:
+            terminal_reason = ReviewUnitTerminalReason.execution_error
         return ReviewUnitResult(
             review_unit_id=unit.id,
             status=(
@@ -229,6 +256,7 @@ class ReviewUnitExecutor:
                 if result.get("done") and not result.get("error")
                 else ReviewUnitStatus.failed
             ),
+            terminal_reason=terminal_reason,
             plan_skipped=skip_plan,
             plan=result.get("unit_plan"),
             plan_status=result.get("plan_status"),
@@ -382,16 +410,21 @@ class ReviewUnitExecutor:
             )
             return {
                 "next_action": action,
+                "terminal_reason": (
+                    state.get("terminal_reason")
+                    or ReviewUnitTerminalReason.no_new_context
+                ),
                 "messages": [*state["messages"], self._event(
                     state["unit"].id, action, "selected", action.reason
                 )],
             }
-        action, budget, legacy, model_usages = await self._decide_unit(state)
+        action, budget, legacy, model_usages, terminal_reason = await self._decide_unit(state)
         return {
             "next_action": action,
             "budget": budget,
             "legacy_review_action": state.get("legacy_review_action", False) or legacy,
             "model_usages": model_usages,
+            "terminal_reason": terminal_reason or state.get("terminal_reason"),
             "messages": [*state["messages"], self._event(
                 state["unit"].id, action, "selected", action.reason
             )],
@@ -399,7 +432,13 @@ class ReviewUnitExecutor:
 
     async def _decide_unit(
         self, state: "_ReviewUnitGraphState"
-    ) -> tuple[AgentAction, ExecutionBudget, bool, list[dict[str, Any]]]:
+    ) -> tuple[
+        AgentAction,
+        ExecutionBudget,
+        bool,
+        list[dict[str, Any]],
+        ReviewUnitTerminalReason | None,
+    ]:
         budget = state["budget"]
         if not budget.can_consume(model_calls=1, token_usage=600):
             return (
@@ -407,6 +446,7 @@ class ReviewUnitExecutor:
                 budget,
                 False,
                 list(state.get("model_usages") or []),
+                ReviewUnitTerminalReason.model_budget_exhausted,
             )
         budget = budget.consume(model_calls=1, token_usage=600)
         decision_state = self._unit_state(
@@ -449,7 +489,7 @@ class ReviewUnitExecutor:
             action = AgentAction(action=AgentActionName.task_done, reason=action.reason)
         if action.action not in UNIT_ALLOWED_ACTIONS:
             action = AgentAction(action=AgentActionName.task_done, reason="Unit 动作不在只读白名单")
-        return action, budget, legacy_review, model_usages
+        return action, budget, legacy_review, model_usages, None
 
     @staticmethod
     def _route_unit_action(state: "_ReviewUnitGraphState") -> str:
@@ -472,7 +512,12 @@ class ReviewUnitExecutor:
                 status="rejected",
                 detail="context retrieval budget exhausted",
             ))
-            return {"next_action": None, "tool_events": events}
+            return {
+                "next_action": None,
+                "terminal_reason": ReviewUnitTerminalReason.retrieval_budget_exhausted,
+                "retrieval_no_new_rounds": state["retrieval_no_new_rounds"] + 1,
+                "tool_events": events,
+            }
         plan = ContextRetrievalPlan.model_validate(action.tool_args["plan"])
         fingerprint = plan.model_dump_json()
         if any(item.get("plan") == fingerprint for item in history):
@@ -514,7 +559,12 @@ class ReviewUnitExecutor:
                 status="rejected",
                 detail="context retrieval budget exhausted",
             ))
-            return {"next_action": None, "tool_events": events}
+            return {
+                "next_action": None,
+                "terminal_reason": ReviewUnitTerminalReason.retrieval_budget_exhausted,
+                "retrieval_no_new_rounds": state["retrieval_no_new_rounds"] + 1,
+                "tool_events": events,
+            }
 
         request_payload = action.tool_args["request"]
         fingerprint = json.dumps(
@@ -734,7 +784,11 @@ class ReviewUnitExecutor:
     ) -> "_ReviewUnitGraphState":
         budget = state["budget"]
         if not budget.can_consume(diagnosis_attempts=1, model_calls=1, token_usage=4_096):
-            return {"pending_issues": [], "next_action": None}
+            return {
+                "pending_issues": [],
+                "next_action": None,
+                "terminal_reason": ReviewUnitTerminalReason.diagnosis_budget_exhausted,
+            }
         budget = budget.consume(diagnosis_attempts=1, model_calls=1, token_usage=4_096)
         pr = PullRequestInfo.model_validate(state["parent_state"].get("pr_info") or {})
         from app.services.model_usage import annotate_usage, append_usage, unpack_model_call
@@ -799,9 +853,18 @@ class ReviewUnitExecutor:
                 "needs_human": True,
                 "error": "review unit requires human input",
                 "human_request": action.human_request,
+                "terminal_reason": ReviewUnitTerminalReason.human_required,
             }
         return {
             "done": True,
+            "terminal_reason": (
+                state.get("terminal_reason")
+                or (
+                    ReviewUnitTerminalReason.completed
+                    if state["issues"]
+                    else ReviewUnitTerminalReason.no_issue
+                )
+            ),
             "messages": [*state["messages"], AgentEvent(
                 action=AgentActionName.task_done,
                 reason=action.reason,
