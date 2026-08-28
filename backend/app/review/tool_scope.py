@@ -49,6 +49,16 @@ def is_sensitive_repository_path(file_path: str) -> bool:
     )
 
 
+def is_sensitive_repository_change(
+    file_path: str, old_file_path: str | None = None
+) -> bool:
+    """变更任一侧命中敏感路径时，整个 diff 都不得进入模型。"""
+    return is_sensitive_repository_path(file_path) or (
+        old_file_path is not None
+        and is_sensitive_repository_path(old_file_path)
+    )
+
+
 def list_git_tracked_files(repository_root: str | Path, git_executable: str = "git") -> set[str]:
     """返回 Git 索引中的路径；非 Git fixture 返回空集合，由调用方决定是否降级。"""
     root = Path(repository_root).resolve()

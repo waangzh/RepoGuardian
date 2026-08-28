@@ -129,10 +129,42 @@ async def test_file_read_diff_rejects_sensitive_changed_file(tmp_path: Path) -> 
         )],
     )
 
-    with pytest.raises(ScopedContextToolError, match="sensitive repository path"):
+    with pytest.raises(ScopedContextToolError, match="sensitive repository"):
         await ScopedContextTool().file_read_diff(
             scope=scope,
             file_path=".env",
+            changed_files=[changed],
+        )
+
+
+@pytest.mark.asyncio
+async def test_file_read_diff_rejects_sensitive_rename_source(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    scope = _scope(repo).model_copy(update={
+        "commentable_files": {"config/runtime.py"}
+    })
+    changed = ChangedFile(
+        file_path="config/runtime.py",
+        old_file_path=".env",
+        change_type="renamed",
+        additions=1,
+        deletions=1,
+        hunks=[DiffHunk(
+            old_start=1,
+            old_length=1,
+            new_start=1,
+            new_length=1,
+            lines=[
+                DiffLine(kind="deleted", content="TOKEN=secret", old_line_no=1),
+                DiffLine(kind="added", content="TOKEN=secret", new_line_no=1),
+            ],
+        )],
+    )
+
+    with pytest.raises(ScopedContextToolError, match="sensitive repository change"):
+        await ScopedContextTool().file_read_diff(
+            scope=scope,
+            file_path="config/runtime.py",
             changed_files=[changed],
         )
 
