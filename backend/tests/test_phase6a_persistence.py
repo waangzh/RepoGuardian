@@ -32,6 +32,7 @@ from app.models.review import (
     ReviewUnitComplexity,
     ReviewUnitResult,
     ReviewUnitStatus,
+    ReviewUnitTerminalReason,
     UnitPlanStatus,
     UnitReviewPlan,
 )
@@ -147,6 +148,32 @@ def test_completed_unit_reuses_but_failed_unit_and_version_mismatch_do_not(persi
     )
     assert repository.find_reusable_unit(
         fingerprint=failed_unit.fingerprint,
+        model="model-a",
+        provider=settings.repoguardian_provider,
+        prompt_version=settings.repoguardian_prompt_version,
+        rule_version=settings.repoguardian_rule_version,
+        tool_schema_version=settings.repoguardian_tool_schema_version,
+        review_policy_version=settings.repoguardian_review_policy_version,
+    ) is None
+
+
+def test_budget_exhausted_unit_is_not_reusable(persistence) -> None:
+    repository, _, _ = persistence
+    source = _task()
+    repository.create_task(source)
+    unit = _unit()
+    repository.record_unit_result(
+        task_id=source.id,
+        unit=unit,
+        result=ReviewUnitResult(
+            review_unit_id=unit.id,
+            status=ReviewUnitStatus.completed,
+            terminal_reason=ReviewUnitTerminalReason.model_budget_exhausted,
+        ),
+    )
+
+    assert repository.find_reusable_unit(
+        fingerprint=unit.fingerprint,
         model="model-a",
         provider=settings.repoguardian_provider,
         prompt_version=settings.repoguardian_prompt_version,
