@@ -11,6 +11,7 @@ from app.graph.nodes.review_units import review_units_node
 from app.models.review import (
     AgentAction,
     ChangedFile,
+    ExecutionBudget,
     PatchResult,
     PullRequestInfo,
     PullRequestRef,
@@ -232,6 +233,54 @@ class UnitProvider(LLMProvider):
 
     async def generate_patch(self, state: dict[str, Any], model: str | None) -> list[PatchResult]:
         return []
+
+
+@pytest.mark.asyncio
+async def test_completed_issue_round_converges_at_model_budget_boundary() -> None:
+    issue = ReviewIssue(
+        review_unit_id="unit-1",
+        severity="medium",
+        category="correctness",
+        title="边界条件错误",
+        failure_scenario="有效输入返回错误结果",
+        recommendation="修复边界条件",
+        confidence=0.9,
+        primary_evidence={"file_path": "app.py", "existing_code": "return wrong"},
+        affected_behavior="调用方收到错误结果",
+    )
+    provider = UnitProvider()
+    executor = ReviewUnitExecutor(provider, concurrency=1, timeout_seconds=2)
+
+    action, budget, legacy, usages, terminal_reason = await executor._decide_unit({
+        "budget": ExecutionBudget(model_calls=5, max_model_calls=5),
+        "issue_round_completed": True,
+        "issues": [issue],
+        "model_usages": [],
+    })  # type: ignore[arg-type]
+
+    assert action.action == "task_done"
+    assert terminal_reason == ReviewUnitTerminalReason.completed
+    assert budget.model_calls == 5
+    assert legacy is False
+    assert usages == []
+    assert provider.decide_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_unfinished_issue_round_still_reports_model_budget_exhaustion() -> None:
+    provider = UnitProvider()
+    executor = ReviewUnitExecutor(provider, concurrency=1, timeout_seconds=2)
+
+    action, _, _, _, terminal_reason = await executor._decide_unit({
+        "budget": ExecutionBudget(model_calls=5, max_model_calls=5),
+        "issue_round_completed": False,
+        "issues": [],
+        "model_usages": [],
+    })  # type: ignore[arg-type]
+
+    assert action.action == "task_done"
+    assert terminal_reason == ReviewUnitTerminalReason.model_budget_exhausted
+    assert provider.decide_calls == 0
 
 
 @pytest.mark.asyncio
