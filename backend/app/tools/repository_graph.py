@@ -28,6 +28,7 @@ def build_repository_graph(
     """Build a serializable graph without granting any additional file access."""
     files = {str(item["path"]): item for item in file_index if item.get("path")}
     symbols = [item for item in symbol_index if item.get("file") in files]
+    lookup = _build_lookup(files)
     edges: list[dict[str, Any]] = []
 
     for source, item in files.items():
@@ -37,7 +38,7 @@ def build_repository_graph(
         ]
         for import_ref in import_refs:
             imported = str(import_ref.get("module", ""))
-            resolved = resolve_import(source, imported, files)
+            resolved = resolve_import(source, imported, files, lookup)
             for target, confidence in resolved:
                 edges.append(_edge(
                     "file", source, "file", target, "imports",
@@ -75,12 +76,12 @@ def build_repository_graph(
                 parser_id=call_ref.get("parser_id"),
             ))
 
-    source_files = [path for path in files if not _is_test(path)]
-    for test_path in sorted(path for path in files if _is_test(path)):
+    for test_path in sorted(lookup["test_files"]):
+        candidates = _candidate_sources_for_test(test_path, lookup)
         ranked = sorted(
             (
                 (_test_match_score(test_path, source), source)
-                for source in source_files
+                for source in candidates
             ),
             key=lambda item: (-item[0], item[1]),
         )
@@ -91,18 +92,14 @@ def build_repository_graph(
                 min(0.98, 0.78 + score * 0.05), f"{test_path} matches tests for {source}",
             ))
 
-    for config in sorted(path for path in files if PurePosixPath(path).name.casefold() in _CONFIG_NAMES):
-        config_dir = PurePosixPath(config).parent
-        for target in sorted(files):
-            if target == config or _is_config(target):
-                continue
-            target_dir = PurePosixPath(target).parent
-            if config_dir == PurePosixPath(".") or config_dir in target_dir.parents or config_dir == target_dir:
-                edges.append(_edge(
-                    "file", config, "file", target, "configures", 0.72,
-                    f"{config} configures files in its directory tree",
-                ))
+    for config, targets in sorted(lookup["config_targets"].items()):
+        for target in targets:
+            edges.append(_edge(
+                "file", config, "file", target, "configures", 0.72,
+                f"{config} configures files in its directory tree",
+            ))
 
+    deduped_edges = _dedupe_edges(edges)
     return {
         "version": 1,
         "files": [
@@ -127,24 +124,29 @@ def build_repository_graph(
             }
             for item in symbols
         ],
-        "edges": _dedupe_edges(edges),
+        "edges": deduped_edges,
         "metadata": {
             "file_count": len(files),
             "symbol_count": len(symbols),
-            "edge_count": len(_dedupe_edges(edges)),
+            "edge_count": len(deduped_edges),
             "supported_edges": ["imports", "calls", "test_of", "configures"],
         },
     }
 
 
 def resolve_import(
-    source: str, imported: str, files: dict[str, dict[str, Any]]
+    source: str,
+    imported: str,
+    files: dict[str, dict[str, Any]],
+    lookup: dict[str, Any] | None = None,
 ) -> list[tuple[str, float]]:
     """Resolve a language import to repository files, preferring exact paths."""
     language = str((files.get(source) or {}).get("language", "unknown"))
     module = imported.strip().strip("'\"")
     if not module:
         return []
+    if lookup is None:
+        lookup = _build_lookup(files)
     candidates: list[tuple[str, float]] = []
     source_path = PurePosixPath(source)
 
@@ -157,16 +159,15 @@ def resolve_import(
             parts = [*base, *dotted.split(".")] if dotted else base
         else:
             parts = dotted.split(".")
-        candidate_bases = ["/".join(parts)]
-        if not level:
-            candidate_bases.extend(
-                "/".join((*prefix, *parts))
+        candidate_modules = [".".join(part for part in parts if part)]
+        if not level and candidate_modules[0]:
+            candidate_modules.extend(
+                ".".join((*prefix, *parts))
                 for prefix in (("src",), ("backend",), ("backend", "src"))
             )
-        for base in candidate_bases:
-            for path in (f"{base}.py", f"{base}/__init__.py"):
-                if path in files:
-                    candidates.append((path, 0.99 if base == candidate_bases[0] else 0.94))
+        for index, candidate in enumerate(candidate_modules):
+            for path in lookup["python_modules"].get(candidate, ()):
+                candidates.append((path, 0.99 if index == 0 else 0.94))
     elif language in {"javascript", "typescript"} and module.startswith("."):
         base = (source_path.parent / module).as_posix()
         for ext in _SOURCE_EXTENSIONS[language]:
@@ -174,18 +175,15 @@ def resolve_import(
                 if path in files:
                     candidates.append((path, 0.99))
     elif language == "java":
-        suffix = module.replace(".", "/") + ".java"
-        for path in files:
-            if path == suffix or path.endswith("/" + suffix):
-                candidates.append((path, 0.96))
+        for path in lookup["java_modules"].get(module, ()):
+            candidates.append((path, 0.96))
     elif language == "go":
         suffix = module.rstrip("/")
-        for path, item in files.items():
-            if item.get("language") == "go" and (
-                PurePosixPath(path).parent.as_posix() == suffix
-                or suffix.endswith("/" + PurePosixPath(path).parent.as_posix())
-            ):
-                candidates.append((path, 0.9))
+        for path in lookup["go_directories"].get(suffix, ()):
+            candidates.append((path, 0.9))
+        for directory, paths in lookup["go_directories"].items():
+            if suffix.endswith("/" + directory):
+                candidates.extend((path, 0.9) for path in paths)
     elif language == "rust":
         parts = [part for part in module.replace("::", "/").split("/") if part]
         if parts and parts[0] in {"crate", "self", "super"}:
@@ -193,18 +191,171 @@ def resolve_import(
         for length in range(len(parts), 0, -1):
             base = "/".join(parts[:length])
             for prefix in (source_path.parent.as_posix(), "src"):
-                for path in (f"{prefix}/{base}.rs", f"{prefix}/{base}/mod.rs"):
-                    if path in files:
-                        candidates.append((path, 0.94))
+                key = f"{prefix}/{base}".strip("/")
+                for path in lookup["rust_modules"].get(key, ()):
+                    candidates.append((path, 0.94))
             if candidates:
                 break
 
     if not candidates:
         stem = module.replace("::", ".").rsplit(".", 1)[-1].rsplit("/", 1)[-1]
-        matches = [path for path in files if PurePosixPath(path).stem == stem]
+        matches = lookup["stem_to_paths"].get(stem, ())
         if len(matches) == 1:
             candidates.append((matches[0], 0.68))
     return sorted(set(candidates), key=lambda item: (-item[1], item[0]))
+
+
+def _build_lookup(files: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    stem_to_paths: dict[str, list[str]] = defaultdict(list)
+    python_modules: dict[str, list[str]] = defaultdict(list)
+    java_modules: dict[str, list[str]] = defaultdict(list)
+    go_directories: dict[str, list[str]] = defaultdict(list)
+    rust_modules: dict[str, list[str]] = defaultdict(list)
+    test_files: list[str] = []
+    source_stem_index: dict[str, list[str]] = defaultdict(list)
+    source_stems: dict[str, str] = {}
+    source_directories: dict[str, frozenset[str]] = {}
+    sources_by_directory: dict[str, set[str]] = defaultdict(set)
+    sources_by_trigram: dict[str, set[str]] = defaultdict(set)
+    short_stem_sources: set[str] = set()
+    config_targets: dict[str, list[str]] = defaultdict(list)
+    targets_by_directory: dict[str, list[str]] = defaultdict(list)
+
+    for path, item in files.items():
+        path_obj = PurePosixPath(path)
+        stem_to_paths[path_obj.stem].append(path)
+        language = str(item.get("language", "unknown"))
+
+        if _is_test(path):
+            test_files.append(path)
+        else:
+            source_stem = path_obj.stem.casefold()
+            source_stem_index[source_stem].append(path)
+            source_stems[path] = source_stem
+            directory_parts = frozenset(path_obj.parts[:-1])
+            source_directories[path] = directory_parts
+            for part in directory_parts:
+                sources_by_directory[part].add(path)
+            if len(source_stem) < 3:
+                short_stem_sources.add(path)
+            else:
+                for trigram in _trigrams(source_stem):
+                    sources_by_trigram[trigram].add(path)
+
+        if language == "python":
+            for module in _python_module_candidates(path_obj):
+                python_modules[module].append(path)
+        elif language == "java":
+            module_parts = list(path_obj.with_suffix("").parts)
+            for index in range(len(module_parts)):
+                java_modules[".".join(module_parts[index:])].append(path)
+        elif language == "go":
+            go_directories[path_obj.parent.as_posix()].append(path)
+        elif language == "rust":
+            for module in _rust_module_candidates(path_obj):
+                rust_modules[module].append(path)
+
+        if path != "." and not _is_config(path):
+            for directory in _ancestor_directories(path_obj.parent):
+                targets_by_directory[directory].append(path)
+
+    for path in files:
+        if not _is_config(path):
+            continue
+        config_dir = PurePosixPath(path).parent.as_posix()
+        config_targets[path] = sorted(
+            target for target in targets_by_directory.get(config_dir, []) if target != path
+        )
+
+    return {
+        "stem_to_paths": {key: sorted(values) for key, values in stem_to_paths.items()},
+        "python_modules": {key: sorted(values) for key, values in python_modules.items()},
+        "java_modules": {key: sorted(values) for key, values in java_modules.items()},
+        "go_directories": {key: sorted(values) for key, values in go_directories.items()},
+        "rust_modules": {key: sorted(values) for key, values in rust_modules.items()},
+        "test_files": sorted(test_files),
+        "source_stem_index": {key: sorted(values) for key, values in source_stem_index.items()},
+        "source_stems": source_stems,
+        "source_directories": source_directories,
+        "sources_by_directory": {
+            key: sorted(values) for key, values in sources_by_directory.items()
+        },
+        "sources_by_trigram": {
+            key: sorted(values) for key, values in sources_by_trigram.items()
+        },
+        "short_stem_sources": sorted(short_stem_sources),
+        "config_targets": dict(sorted(config_targets.items())),
+    }
+
+
+def _python_module_candidates(path: PurePosixPath) -> list[str]:
+    parts = list(path.parts)
+    if path.name == "__init__.py":
+        module_parts = parts[:-1]
+    else:
+        module_parts = [*parts[:-1], path.stem]
+    candidates: set[tuple[str, ...]] = {tuple(module_parts)}
+    if len(module_parts) >= 1 and module_parts[0] in {"src", "backend"}:
+        candidates.add(tuple(module_parts[1:]))
+    if len(module_parts) >= 2 and module_parts[:2] == ["backend", "src"]:
+        candidates.add(tuple(module_parts[2:]))
+    return sorted(".".join(item for item in candidate if item) for candidate in candidates if candidate)
+
+
+def _rust_module_candidates(path: PurePosixPath) -> list[str]:
+    candidates = []
+    if path.name == "mod.rs":
+        candidates.append(path.parent.as_posix())
+    else:
+        candidates.append((path.parent / path.stem).as_posix())
+    return sorted(set(item.strip("/") for item in candidates if item))
+
+
+def _ancestor_directories(path: PurePosixPath) -> list[str]:
+    directories = [path.as_posix()]
+    directories.extend(parent.as_posix() for parent in path.parents)
+    return [item for item in dict.fromkeys(directories) if item]
+
+
+def _candidate_sources_for_test(test_path: str, lookup: dict[str, Any]) -> list[str]:
+    test_path_obj = PurePosixPath(test_path)
+    test_stem = test_path_obj.stem.casefold()
+    normalized = _normalize_test_stem(test_stem)
+    exact = lookup["source_stem_index"].get(normalized, ())
+    if exact:
+        return list(exact)
+
+    candidates: set[str] = set()
+    for trigram in _trigrams(test_stem):
+        candidates.update(lookup["sources_by_trigram"].get(trigram, ()))
+    candidates.update(lookup["short_stem_sources"])
+    for directory in test_path_obj.parts[:-1]:
+        candidates.update(lookup["sources_by_directory"].get(directory, ()))
+
+    source_stems = lookup["source_stems"]
+    source_directories = lookup["source_directories"]
+    test_directories = frozenset(test_path_obj.parts[:-1])
+    return sorted(
+        source
+        for source in candidates
+        if (
+            source_stems[source] in test_stem
+            or bool(test_directories & source_directories[source])
+        )
+    )
+
+
+def _trigrams(value: str) -> set[str]:
+    if len(value) < 3:
+        return set()
+    return {value[index:index + 3] for index in range(len(value) - 2)}
+
+
+def _normalize_test_stem(stem: str) -> str:
+    normalized = stem.removeprefix("test_").removesuffix("_test")
+    for suffix in (".test", ".spec"):
+        normalized = normalized.removesuffix(suffix)
+    return normalized
 
 
 def _edge(
@@ -239,9 +390,7 @@ def _is_config(path: str) -> bool:
 def _test_match_score(test_path: str, source_path: str) -> int:
     test_stem = PurePosixPath(test_path).stem.casefold()
     source_stem = PurePosixPath(source_path).stem.casefold()
-    normalized = test_stem.removeprefix("test_").removesuffix("_test")
-    for suffix in (".test", ".spec"):
-        normalized = normalized.removesuffix(suffix)
+    normalized = _normalize_test_stem(test_stem)
     score = 4 if normalized == source_stem else 0
     if source_stem in test_stem:
         score += 2

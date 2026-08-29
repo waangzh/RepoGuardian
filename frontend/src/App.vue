@@ -49,11 +49,18 @@ let refreshTaskId: string | null = null;
 let reportPromise: Promise<string | null> | null = null;
 let reportTaskId: string | null = null;
 let trackingTaskId: string | null = null;
+let previewController: AbortController | null = null;
+let previewRequestId = 0;
 const terminalNotifiedTaskIds = new Set<string>();
 
 watch(mode, (next) => {
   generatePatches.value = next !== "review";
   validationBackend.value = "none";
+});
+
+watch([prUrl, mode, generatePatches, validationBackend], () => {
+  preview.value = null;
+  cancelPreview();
 });
 
 async function loadAvailableModels() {
@@ -104,6 +111,7 @@ const taskDuration = computed(() => {
 });
 
 async function submitReview() {
+  if (submitting.value || previewing.value || taskActive.value || !prUrl.value.trim()) return;
   clearAll();
   error.value = null;
   report.value = null;
@@ -141,14 +149,30 @@ async function cancelCurrentReview() {
 }
 
 async function loadPreview() {
+  if (previewing.value || submitting.value || taskActive.value || !prUrl.value.trim()) return;
   error.value = null;
+  cancelPreview();
+  const requestId = ++previewRequestId;
+  const controller = new AbortController();
+  previewController = controller;
   previewing.value = true;
   try {
-    preview.value = await previewReview(prUrl.value.trim(), mode.value, generatePatches.value, validationBackend.value);
+    const next = await previewReview(
+      prUrl.value.trim(),
+      mode.value,
+      generatePatches.value,
+      validationBackend.value,
+      controller.signal,
+    );
+    if (previewRequestId === requestId) preview.value = next;
   } catch (err) {
+    if (controller.signal.aborted) return;
     error.value = err instanceof Error ? err.message : "Preview 失败";
   } finally {
-    previewing.value = false;
+    if (previewController === controller) {
+      previewController = null;
+      previewing.value = false;
+    }
   }
 }
 
@@ -350,11 +374,19 @@ function clearPolling() {
 }
 
 function clearAll() {
+  cancelPreview();
   clearPolling();
   trackingTaskId = null;
   reportTaskId = null;
   reportPromise = null;
   document.title = "RepoGuardian";
+}
+
+function cancelPreview() {
+  previewRequestId += 1;
+  previewController?.abort();
+  previewController = null;
+  previewing.value = false;
 }
 onBeforeUnmount(() => {
   clearAll();

@@ -549,6 +549,15 @@ class ModelUsage(BaseModel):
     response_metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+    @model_validator(mode="before")
+    @classmethod
+    def discard_serialized_computed_fields(cls, value: Any) -> Any:
+        """允许 model_dump 产物安全地从图状态或快照中重建。"""
+        if isinstance(value, dict) and "estimation_delta_tokens" in value:
+            value = dict(value)
+            value.pop("estimation_delta_tokens")
+        return value
+
     @computed_field
     @property
     def estimation_delta_tokens(self) -> int | None:
