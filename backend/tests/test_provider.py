@@ -270,6 +270,49 @@ async def test_provider_builds_structured_unit_plan_from_bounded_input(
 
 
 @pytest.mark.asyncio
+async def test_provider_discards_invalid_optional_unit_plan_guidance(
+    fake_chat: type[FakeChatOpenAI],
+) -> None:
+    fake_chat.responses = [AIMessage(content=json.dumps({
+        "schema_version": "unit-review-plan-v1",
+        "change_summary": "修复区间边界",
+        "review_objectives": ["验证区间包含点估计"],
+        "risk_hypotheses": [{
+            "id": "risk-valid",
+            "category": "correctness",
+            "priority": "high",
+            "description": "边界修正可能遗漏特殊输入",
+            "affected_files": ["stats.py"],
+            "affected_symbols": ["weighted_posterior"],
+            "evidence_needed": ["检查边界测试"],
+            "retrieval_suggestions": ["查看相关边界测试"],
+            "completion_criteria": "确认特殊输入仍满足区间约束",
+        }, {
+            "id": "risk-invalid-category",
+            "category": "cross_module",
+            "priority": "medium",
+            "description": "跨模块影响",
+            "affected_files": ["stats.py"],
+            "affected_symbols": [],
+            "evidence_needed": [],
+            "retrieval_suggestions": [],
+            "completion_criteria": "确认调用方行为",
+        }],
+        "coverage_targets": ["边界测试"],
+        "initial_action": {
+            "action": "report_issue", "reason": "diff 已足够",
+            "target_issue_ids": [], "tool_args": {}, "human_request": None,
+        },
+    }, ensure_ascii=False))]
+    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
+
+    result = await provider.plan_review_unit({}, None)
+
+    assert [item.id for item in result.value.risk_hypotheses] == ["risk-valid"]
+    assert result.value.risk_hypotheses[0].retrieval_suggestions == []
+
+
+@pytest.mark.asyncio
 async def test_provider_rejects_invalid_unit_plan_schema(
     fake_chat: type[FakeChatOpenAI],
 ) -> None:

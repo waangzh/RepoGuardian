@@ -157,6 +157,7 @@ class OpenAICompatibleProvider(LLMProvider):
         )
         try:
             raw = self._load_json(response.value)
+            raw = self._normalize_unit_plan(raw)
             if isinstance(raw, dict) and "initial_action" in raw:
                 raw = dict(raw)
                 raw["initial_action"] = self._normalize_agent_action(raw["initial_action"])
@@ -666,6 +667,47 @@ class OpenAICompatibleProvider(LLMProvider):
             return json.loads(match.group(0))
 
     @staticmethod
+    def _normalize_unit_plan(raw: Any) -> Any:
+        """保守丢弃无效的可选规划提示，核心字段仍由 Pydantic 严格校验。"""
+        if not isinstance(raw, dict):
+            return raw
+        hypotheses = raw.get("risk_hypotheses")
+        if not isinstance(hypotheses, list):
+            return raw
+
+        allowed_categories = {
+            "correctness", "maintainability", "performance", "security", "test"
+        }
+        normalized_hypotheses: list[dict[str, Any]] = []
+        dropped_hypotheses = 0
+        dropped_suggestions = 0
+        for item in hypotheses:
+            if not isinstance(item, dict) or item.get("category") not in allowed_categories:
+                dropped_hypotheses += 1
+                continue
+            normalized = dict(item)
+            suggestions = normalized.get("retrieval_suggestions")
+            if isinstance(suggestions, list):
+                structured = [
+                    suggestion for suggestion in suggestions
+                    if isinstance(suggestion, dict)
+                ]
+                dropped_suggestions += len(suggestions) - len(structured)
+                normalized["retrieval_suggestions"] = structured
+            normalized_hypotheses.append(normalized)
+
+        if not dropped_hypotheses and not dropped_suggestions:
+            return raw
+        normalized_plan = dict(raw)
+        normalized_plan["risk_hypotheses"] = normalized_hypotheses
+        logger.warning(
+            "🌐 [LLM规划] 已丢弃无效的可选规划提示：hypotheses=%d suggestions=%d",
+            dropped_hypotheses,
+            dropped_suggestions,
+        )
+        return normalized_plan
+
+    @staticmethod
     def _normalize_agent_action(raw: Any) -> Any:
         """兼容已观测到的检索计划别名，然后仍交由严格 schema 校验。"""
         if not isinstance(raw, dict) or raw.get("action") != "retrieve_context":
@@ -843,6 +885,11 @@ class OpenAICompatibleProvider(LLMProvider):
             "initial action must follow the normal Unit action schema and cannot request shell, network, "
             "patch, or test execution. Prefer report_issue when the diff is already sufficient, otherwise "
             "retrieve_context with one bounded ContextRetrievalPlan.\n"
+            "Each risk category must be exactly one of correctness, maintainability, performance, "
+            "security, or test. retrieval_suggestions may contain only JSON objects matching "
+            "ContextRetrievalPlan, for example {\"reason\":\"检查调用方\",\"target_files\":"
+            "[\"path/to/file\"],\"relevance_types\":[\"direct\"]}; use [] instead of plain "
+            "language strings.\n"
             "Return exactly this JSON shape and no Markdown:\n"
             '{"schema_version":"unit-review-plan-v1","change_summary":"变更摘要",'
             '"review_objectives":["审查目标"],"risk_hypotheses":[{"id":"risk-1",'

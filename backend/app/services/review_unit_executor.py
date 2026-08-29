@@ -484,6 +484,23 @@ class ReviewUnitExecutor:
     ]:
         budget = state["budget"]
         if not budget.can_consume(model_calls=1, token_usage=600):
+            issue_round_completed = bool(state.get("issue_round_completed"))
+            if issue_round_completed:
+                terminal_reason = (
+                    ReviewUnitTerminalReason.completed
+                    if state.get("issues")
+                    else ReviewUnitTerminalReason.no_issue
+                )
+                return (
+                    AgentAction(
+                        action="task_done",
+                        reason="已完成至少一轮结构化审查，在模型预算边界确定性结束 Unit",
+                    ),
+                    budget,
+                    False,
+                    list(state.get("model_usages") or []),
+                    terminal_reason,
+                )
             return (
                 AgentAction(action="task_done", reason="Unit 模型调用预算已耗尽"),
                 budget,
