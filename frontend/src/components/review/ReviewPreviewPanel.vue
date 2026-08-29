@@ -27,8 +27,8 @@ function unitTitle(unit: ReviewUnit): string {
       <div class="preview-metrics-grid">
         <article><p>变更文件</p><strong>{{ preview.changed_file_count }}</strong><small>{{ preview.included_file_count }} included · {{ preview.excluded_files.length }} excluded</small></article>
         <article><p>变更组</p><strong>{{ preview.review_units.length }}</strong><small>{{ preview.review_units.filter(unit => unit.complexity === 'small').length }} small · {{ preview.review_units.filter(unit => unit.complexity === 'medium').length }} medium · {{ preview.review_units.filter(unit => unit.complexity === 'large').length }} large</small></article>
-        <article><p>预计调用</p><strong>{{ preview.estimated_model_calls }}</strong><small>planning {{ preview.planning_model_calls }} · max {{ preview.max_model_calls }}</small></article>
-        <article><p>预计 Tokens</p><strong>{{ preview.estimated_tokens.toLocaleString() }}</strong><small>确定性预算上界</small></article>
+        <article><p>Unit 预计调用</p><strong>{{ preview.estimated_model_calls }}</strong><small>planning {{ preview.planning_model_calls }} · Unit max {{ preview.max_model_calls }}</small></article>
+        <article><p>Unit 输入规模估算</p><strong>{{ preview.estimated_tokens.toLocaleString() }}</strong><small>Review Unit 合计，不含 verifier、dedup 与报告</small></article>
       </div>
       <div v-if="preview.risk_tags.length" class="preview-risk-tags"><strong>风险标签</strong><span v-for="risk in preview.risk_tags" :key="risk">{{ risk }}</span></div>
       <section class="preview-groups">
