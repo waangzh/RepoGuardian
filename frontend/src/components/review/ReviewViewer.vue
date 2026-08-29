@@ -115,16 +115,47 @@ const ciPresentation = computed(() => {
   return { value: "未配置", detail: "严格只读审查", status: "pending" };
 });
 
+function containsChinese(value: string): boolean {
+  return /[\u4e00-\u9fff]/.test(value);
+}
+
+function plainSummary(value: string): string {
+  return value
+    .replace(/<!--.*?-->/gs, "")
+    .replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
+    .replace(/[#*_>`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function chinesePurposeFromReport(markdown: string): string | null {
+  const section = markdown.match(/## PR 作用\s*\r?\n([\s\S]*?)(?=\r?\n##\s|$)/)?.[1] || "";
+  const labeledLine = section
+    .split(/\r?\n/)
+    .map(plainSummary)
+    .find((line) => /^(作者意图|作用概括|标题概括)/.test(line) && containsChinese(line));
+  if (!labeledLine) return null;
+  const summary = labeledLine.replace(/^(作者意图(?:（中文概括）)?|作用概括(?:（根据标题）)?|标题概括)[：:]\s*/, "");
+  return containsChinese(summary) ? summary.slice(0, 520) : null;
+}
+
 const purposeSummary = computed(() => {
-  const body = props.task.pr?.body?.trim();
-  if (body) return body.replace(/[#*_>`\[\]]/g, "").split(/\n\s*\n/)[0].slice(0, 520);
+  const reportSummary = chinesePurposeFromReport(props.report || props.task.report_markdown || "");
+  if (reportSummary) return reportSummary;
+
+  const body = plainSummary(props.task.pr?.body || "");
+  if (body && containsChinese(body)) return body.split(/\n\s*\n/)[0].slice(0, 520);
+
   const unitSummaries = Array.from(new Set(
     props.task.review_unit_results
       .map((item) => item.plan?.change_summary?.trim())
-      .filter((item): item is string => Boolean(item)),
+      .filter((item): item is string => typeof item === "string" && item.length > 0 && containsChinese(item)),
   ));
   if (unitSummaries.length) return unitSummaries.join("；").slice(0, 520);
-  return `本次 Pull Request 修改 ${props.task.changed_files.length} 个文件，并被划分为 ${props.task.review_units.length} 个语义相关的变更组进行证据化审查。`;
+
+  const additions = props.task.changed_files.reduce((sum, file) => sum + file.additions, 0);
+  const deletions = props.task.changed_files.reduce((sum, file) => sum + file.deletions, 0);
+  return `本次 Pull Request 涉及 ${props.task.changed_files.length} 个文件，共新增 ${additions} 行、删除 ${deletions} 行；系统已将改动划分为 ${props.task.review_units.length} 个语义相关的变更组进行证据化审查。`;
 });
 
 function unitResult(unitId: string): ReviewUnitResult | undefined {
