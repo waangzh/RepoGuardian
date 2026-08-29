@@ -59,6 +59,7 @@ async def test_provider_constructs_chatopenai_with_json_mode_and_model_override(
         "model": "override-model",
         "temperature": 0.1,
         "max_tokens": 1200,
+        "max_retries": 1,
         "model_kwargs": {"response_format": {"type": "json_object"}},
     }
     assert isinstance(chat.messages[0], SystemMessage)
@@ -283,8 +284,51 @@ async def test_provider_wraps_chatopenai_failures(fake_chat: type[FakeChatOpenAI
     fake_chat.responses = [RuntimeError("network unavailable")]
     provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
 
-    with pytest.raises(LLMProviderError, match="LLM request failed"):
+    with pytest.raises(LLMProviderError, match="RuntimeError: network unavailable") as raised:
         await provider.decide({}, None)
+    assert raised.value.usage
+    assert raised.value.usage.usage_available is False
+    assert raised.value.usage.response_metadata["request_attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_provider_retries_retryable_connection_failure(
+    fake_chat: type[FakeChatOpenAI],
+) -> None:
+    class APIConnectionError(RuntimeError):
+        pass
+
+    fake_chat.responses = [
+        APIConnectionError("temporary outage"),
+        AIMessage(content='{"action":"finish_report","reason":"完成"}'),
+    ]
+    provider = OpenAICompatibleProvider(
+        "key", "https://example.com/v1", "model", retry_backoff_seconds=0
+    )
+
+    result = await provider.decide({}, None)
+
+    assert result.action == "finish_report"
+    assert len(fake_chat.instances[0].messages) == 2
+    assert fake_chat.responses == []
+
+
+@pytest.mark.asyncio
+async def test_provider_redacts_credentials_from_failure_detail(
+    fake_chat: type[FakeChatOpenAI],
+) -> None:
+    fake_chat.responses = [
+        RuntimeError("Authorization: Bearer secret-token api_key=secret-token")
+    ]
+    provider = OpenAICompatibleProvider(
+        "secret-token", "https://example.com/v1", "model"
+    )
+
+    with pytest.raises(LLMProviderError) as raised:
+        await provider.decide({}, None)
+
+    assert "secret-token" not in str(raised.value)
+    assert "secret-token" not in str(raised.value.usage.response_metadata)
 
 
 def test_provider_rejects_non_string_ai_message_content() -> None:

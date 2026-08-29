@@ -57,9 +57,11 @@ export async function previewReview(
   mode: ReviewMode = "review",
   generatePatches = false,
   validationBackend: ValidationBackend = "none",
+  signal?: AbortSignal,
 ): Promise<ReviewPreviewResponse> {
   return request<ReviewPreviewResponse>("/api/reviews/preview", {
     method: "POST",
+    signal,
     body: JSON.stringify({
       pr_url: prUrl,
       mode,

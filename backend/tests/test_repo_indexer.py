@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 
 from app.tools.repo_indexer import RepoIndexer
@@ -224,3 +226,109 @@ async def test_detect_project_meta_for_mixed_language_repository(tmp_path):
     assert meta["languages"] == ["typescript", "python"]
     assert meta["language_counts"] == {"typescript": 2, "python": 1}
     assert meta["is_mixed_language"] is True
+
+
+@pytest.mark.asyncio
+async def test_execute_builds_repository_graph_off_event_loop_thread(monkeypatch):
+    indexer = RepoIndexer()
+    main_thread_id = threading.get_ident()
+    seen: dict[str, int] = {}
+
+    async def fake_build_file_index(repo_path: str):
+        assert repo_path == "repo"
+        return [{"path": "app.py", "language": "python", "imports": []}]
+
+    async def fake_build_symbol_index(repo_path: str):
+        assert repo_path == "repo"
+        return []
+
+    def fake_build_repository_graph(file_index, symbol_index):
+        seen["thread_id"] = threading.get_ident()
+        return {"files": file_index, "symbols": symbol_index, "edges": [], "metadata": {}}
+
+    async def fake_detect_project_meta(repo_path: str, file_index):
+        assert repo_path == "repo"
+        assert file_index[0]["path"] == "app.py"
+        return {"language": "python"}
+
+    monkeypatch.setattr(indexer, "build_file_index", fake_build_file_index)
+    monkeypatch.setattr(indexer, "build_symbol_index", fake_build_symbol_index)
+    monkeypatch.setattr("app.tools.repo_indexer.build_repository_graph", fake_build_repository_graph)
+    monkeypatch.setattr(indexer, "detect_project_meta", fake_detect_project_meta)
+
+    result = await indexer.execute(repo_path="repo")
+
+    assert result["repository_graph"]["edges"] == []
+    assert seen["thread_id"] != main_thread_id
+
+
+def test_repository_graph_links_test_and_config_files_without_full_cross_scan():
+    from app.tools.repository_graph import build_repository_graph
+
+    file_index = [
+        {"path": "src/service/user.py", "language": "python", "imports": []},
+        {"path": "src/service/account.py", "language": "python", "imports": []},
+        {"path": "tests/test_user.py", "language": "python", "imports": []},
+        {"path": "src/service/pyproject.toml", "language": "unknown", "imports": []},
+        {"path": "docs/readme.md", "language": "unknown", "imports": []},
+    ]
+
+    graph = build_repository_graph(file_index, [])
+    test_edges = [
+        edge for edge in graph["edges"]
+        if edge["type"] == "test_of" and edge["source"] == "tests/test_user.py"
+    ]
+    config_edges = [
+        edge for edge in graph["edges"]
+        if edge["type"] == "configures" and edge["source"] == "src/service/pyproject.toml"
+    ]
+
+    assert test_edges == [
+        {
+            "source_kind": "file",
+            "source": "tests/test_user.py",
+            "target_kind": "file",
+            "target": "src/service/user.py",
+            "type": "test_of",
+            "confidence": pytest.approx(0.98),
+            "why": "tests/test_user.py matches tests for src/service/user.py",
+        }
+    ]
+    assert {edge["target"] for edge in config_edges} == {
+        "src/service/account.py",
+        "src/service/user.py",
+    }
+
+
+def test_repository_graph_preserves_directory_and_java_import_resolution():
+    from app.tools.repository_graph import build_repository_graph
+
+    file_index = [
+        {
+            "path": "src/main/java/com/example/UserService.java",
+            "language": "java",
+            "imports": ["com.example.User"],
+        },
+        {
+            "path": "src/main/java/com/example/User.java",
+            "language": "java",
+            "imports": [],
+        },
+        {"path": "src/shared/account.py", "language": "python", "imports": []},
+        {"path": "tests/shared/test_feature.py", "language": "python", "imports": []},
+    ]
+
+    graph = build_repository_graph(file_index, [])
+
+    assert any(
+        edge["type"] == "imports"
+        and edge["source"] == "src/main/java/com/example/UserService.java"
+        and edge["target"] == "src/main/java/com/example/User.java"
+        for edge in graph["edges"]
+    )
+    assert any(
+        edge["type"] == "test_of"
+        and edge["source"] == "tests/shared/test_feature.py"
+        and edge["target"] == "src/shared/account.py"
+        for edge in graph["edges"]
+    )

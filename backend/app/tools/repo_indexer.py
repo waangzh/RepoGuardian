@@ -64,7 +64,9 @@ class RepoIndexer(BaseTool):
         repo_path = kwargs["repo_path"]
         file_index = await self.build_file_index(repo_path)
         symbol_index = await self.build_symbol_index(repo_path)
-        repository_graph = build_repository_graph(file_index, symbol_index)
+        repository_graph = await asyncio.to_thread(
+            build_repository_graph, file_index, symbol_index
+        )
         project_meta = await self.detect_project_meta(repo_path, file_index)
         return {
             "file_index": file_index,

@@ -253,7 +253,10 @@ class ReviewUnitExecutor:
                 else ReviewUnitTerminalReason.no_issue
             )
         else:
-            terminal_reason = ReviewUnitTerminalReason.execution_error
+            terminal_reason = (
+                result.get("terminal_reason")
+                or ReviewUnitTerminalReason.execution_error
+            )
         return ReviewUnitResult(
             review_unit_id=unit.id,
             status=(
@@ -425,7 +428,40 @@ class ReviewUnitExecutor:
                     state["unit"].id, action, "selected", action.reason
                 )],
             }
-        action, budget, legacy, model_usages, terminal_reason = await self._decide_unit(state)
+        from app.agents.providers import LLMProviderError
+        from app.services.model_usage import annotate_usage, append_usage
+
+        try:
+            action, budget, legacy, model_usages, terminal_reason = await self._decide_unit(
+                state
+            )
+        except LLMProviderError as exc:
+            budget = state["budget"]
+            if budget.can_consume(model_calls=1, token_usage=600):
+                budget = budget.consume(model_calls=1, token_usage=600)
+            usage = annotate_usage(
+                exc.usage,
+                accounted_tokens_estimate=600,
+                review_unit_id=state["unit"].id,
+                unit_complexity=state["unit"].complexity,
+            )
+            detail = f"{type(exc).__name__}: {exc}"
+            action = AgentAction(
+                action=AgentActionName.task_done,
+                reason="模型决策请求失败，终止当前 Review Unit",
+            )
+            return {
+                "next_action": action,
+                "budget": budget,
+                "error": detail,
+                "terminal_reason": ReviewUnitTerminalReason.provider_error,
+                "model_usages": append_usage(
+                    state.get("model_usages") or [], usage
+                ),
+                "messages": [*state["messages"], self._event(
+                    state["unit"].id, action, "failed", detail
+                )],
+            }
         return {
             "next_action": action,
             "budget": budget,
@@ -861,6 +897,21 @@ class ReviewUnitExecutor:
                 "error": "review unit requires human input",
                 "human_request": action.human_request,
                 "terminal_reason": ReviewUnitTerminalReason.human_required,
+            }
+        if state.get("error"):
+            return {
+                "done": True,
+                "terminal_reason": (
+                    state.get("terminal_reason")
+                    or ReviewUnitTerminalReason.execution_error
+                ),
+                "messages": [*state["messages"], AgentEvent(
+                    action=AgentActionName.task_done,
+                    reason=action.reason,
+                    status="failed",
+                    message=state["error"],
+                    review_unit_id=state["unit"].id,
+                )],
             }
         return {
             "done": True,

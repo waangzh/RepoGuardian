@@ -97,6 +97,22 @@ def test_usage_summary_reports_percentiles_missing_rate_and_estimation_delta() -
     assert by_complexity["task"].usage_missing_calls == 1
 
 
+def test_model_usage_can_be_rebuilt_from_serialized_computed_field() -> None:
+    usage = _usage(
+        "decide",
+        100,
+        20,
+        estimate=600,
+        complexity=ReviewUnitComplexity.small,
+    )
+
+    serialized = usage.model_dump(mode="json")
+    rebuilt = ModelUsage.model_validate(serialized)
+
+    assert serialized["estimation_delta_tokens"] == 480
+    assert rebuilt == usage
+
+
 def test_pricing_uses_cached_rate_without_double_counting_tokens() -> None:
     pricing = json.dumps({
         "openai:model": {"input": 2, "output": 8, "cached_input": 0.5}

@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     repoguardian_model: str = "gpt-4.1-mini"
     repoguardian_provider: str = "openai"  # openai / deepseek / openai-compatible
+    repoguardian_model_request_attempts: int = Field(default=2, ge=1, le=5)
+    repoguardian_model_retry_backoff_seconds: float = Field(default=1.0, ge=0, le=30)
     # JSON: {"provider:model":{"input":0.40,"output":1.60,"cached_input":0.10}}
     # Rates are USD per one million tokens. Missing entries keep observed cost unknown.
     repoguardian_model_pricing_json: str = "{}"

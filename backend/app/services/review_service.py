@@ -908,7 +908,12 @@ class ReviewService:
             ):
                 task.status = TaskStatus.completed_with_warnings
                 task.warnings.append(
-                    f"{len(incomplete)} 个 Review Unit 未完整完成，其他 {completed} 个 Unit 已完成"
+                    (
+                        f"{len(incomplete)} 个 Review Unit 未完整完成，"
+                        f"其他 {completed} 个 Unit 已完成"
+                    )
+                    if completed
+                    else f"{len(incomplete)} 个 Review Unit 未完整完成，本次没有 Unit 成功完成"
                 )
                 task.error = None
             elif incomplete:

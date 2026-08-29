@@ -375,7 +375,7 @@ async def test_budget_exhausted_unit_is_incomplete_and_adds_warning() -> None:
 
     assert aggregate["review_issues"] == []
     assert "完成 0/1 个 Review Unit" in aggregate["step_progress"][-1]["message"]
-    assert any("未完整完成" in warning for warning in aggregate["warnings"])
+    assert "1 个 Review Unit 未完整完成，本次没有 Unit 成功完成" in aggregate["warnings"]
     assert (await complete_node(aggregate))["status"] == "completed_with_warnings"
 
 
@@ -531,6 +531,37 @@ async def test_unit_plan_failure_degrades_to_normal_decision() -> None:
     assert result.plan_skip_reason == "planning_failed"
     assert "invalid plan" in (result.plan_error or "")
     assert provider.decide_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_preserves_unit_plan_budget_and_events() -> None:
+    from app.agents.providers import LLMProviderError
+
+    files = _parse(_diff("provider_failure.py"))
+    unit = DeterministicReviewPlanner().plan(
+        files, base_sha="b", head_sha="h"
+    ).review_units[0].model_copy(update={
+        "complexity": ReviewUnitComplexity.medium,
+        "risk_tags": ["public_api"],
+    })
+
+    class FailingRequestProvider(UnitProvider):
+        async def plan_review_unit(self, state: dict[str, Any], model: str | None):
+            raise LLMProviderError("plan transport failed")
+
+        async def decide(self, state: dict[str, Any], model: str | None):
+            raise LLMProviderError("decision transport failed")
+
+    result = await ReviewUnitExecutor(
+        FailingRequestProvider(), concurrency=1, timeout_seconds=2
+    ).execute_unit(unit, _state(files))
+
+    assert result.status == ReviewUnitStatus.failed
+    assert result.terminal_reason == ReviewUnitTerminalReason.provider_error
+    assert result.execution_budget.model_calls == 2
+    assert "plan transport failed" in (result.plan_error or "")
+    assert "decision transport failed" in (result.error or "")
+    assert [event.status for event in result.messages][-2:] == ["failed", "failed"]
 
 
 @pytest.mark.asyncio

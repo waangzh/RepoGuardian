@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -122,12 +123,16 @@ class OpenAICompatibleProvider(LLMProvider):
         default_model: str,
         disable_thinking: bool = False,
         provider_name: str = "openai-compatible",
+        request_attempts: int = 2,
+        retry_backoff_seconds: float = 1.0,
     ) -> None:
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._default_model = default_model
         self._disable_thinking = disable_thinking
         self._provider_name = provider_name
+        self._request_attempts = max(1, request_attempts)
+        self._retry_backoff_seconds = max(0.0, retry_backoff_seconds)
         self._issue_adapter = TypeAdapter(list[ReviewIssueInput])
         self._patch_adapter = TypeAdapter(list[PatchResult])
         self._patch_request_adapter = TypeAdapter(list[PatchGenerationRequest])
@@ -408,22 +413,80 @@ class OpenAICompatibleProvider(LLMProvider):
         system: str,
         max_tokens: int,
     ) -> ModelCallResult[str]:
+        requested_model = model or self._default_model
         chat_model = self._build_chat_model(model, max_tokens)
         started_at = time.monotonic()
-        try:
-            response = await chat_model.ainvoke([
-                SystemMessage(content=system),
-                HumanMessage(content=prompt),
-            ])
-        except Exception as exc:
-            logger.error("🌐 [LLM] ChatOpenAI 调用失败: %s", type(exc).__name__)
-            raise LLMProviderError("LLM request failed") from exc
+        messages = [SystemMessage(content=system), HumanMessage(content=prompt)]
+        attempt_errors: list[dict[str, Any]] = []
+        response: AIMessage | None = None
+        for attempt in range(1, self._request_attempts + 1):
+            try:
+                response = await chat_model.ainvoke(messages)
+                break
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                retryable = self._is_retryable_request_error(exc)
+                detail = self._safe_exception_detail(exc)
+                status_code = self._error_status_code(exc)
+                attempt_errors.append({
+                    "attempt": attempt,
+                    "error_type": type(exc).__name__,
+                    "error_detail": detail,
+                    "status_code": status_code,
+                    "retryable": retryable,
+                })
+                if retryable and attempt < self._request_attempts:
+                    delay = self._retry_backoff_seconds * (2 ** (attempt - 1))
+                    logger.warning(
+                        "🌐 [LLM] 请求失败，将重试：operation=%s attempt=%d/%d "
+                        "type=%s status=%s delay=%.1fs",
+                        operation,
+                        attempt,
+                        self._request_attempts,
+                        type(exc).__name__,
+                        status_code,
+                        delay,
+                    )
+                    if delay:
+                        await asyncio.sleep(delay)
+                    continue
+                latency_ms = max(0, round((time.monotonic() - started_at) * 1_000))
+                usage = ModelUsage(
+                    provider=self._provider_name,
+                    model=requested_model,
+                    operation=operation,
+                    estimated_input_tokens=max(1, (len(system) + len(prompt) + 3) // 4),
+                    max_output_tokens=max_tokens,
+                    latency_ms=latency_ms,
+                    usage_available=False,
+                    accounting_source="missing",
+                    response_metadata={
+                        "request_attempts": attempt,
+                        "request_errors": attempt_errors,
+                    },
+                )
+                logger.error(
+                    "🌐 [LLM] ChatOpenAI 调用最终失败：operation=%s attempts=%d "
+                    "type=%s status=%s detail=%s",
+                    operation,
+                    attempt,
+                    type(exc).__name__,
+                    status_code,
+                    detail,
+                )
+                raise LLMProviderError(
+                    f"LLM request failed after {attempt} attempt(s): "
+                    f"{type(exc).__name__}: {detail}",
+                    usage=usage,
+                ) from exc
+        assert response is not None
         latency_ms = max(0, round((time.monotonic() - started_at) * 1_000))
         content = self._extract_message_content(response)
         usage = self._extract_model_usage(
             response,
             operation=operation,
-            requested_model=model or self._default_model,
+            requested_model=requested_model,
             estimated_input_tokens=max(1, (len(system) + len(prompt) + 3) // 4),
             max_output_tokens=max_tokens,
             latency_ms=latency_ms,
@@ -511,6 +574,7 @@ class OpenAICompatibleProvider(LLMProvider):
             "model": model or self._default_model,
             "temperature": 0.1,
             "max_tokens": max_tokens,
+            "max_retries": 1,
             # JSON mode 比 tool calling 更适合 DeepSeek 和通用兼容端点。
             "model_kwargs": {"response_format": {"type": "json_object"}},
         }
@@ -518,6 +582,35 @@ class OpenAICompatibleProvider(LLMProvider):
             # 非标准字段必须放进 OpenAI SDK 的 extra_body，不能作为普通模型参数。
             options["extra_body"] = {"thinking": {"type": "disabled"}}
         return ChatOpenAI(**options)
+
+    @staticmethod
+    def _error_status_code(exc: Exception) -> int | None:
+        value = getattr(exc, "status_code", None)
+        return value if isinstance(value, int) else None
+
+    @classmethod
+    def _is_retryable_request_error(cls, exc: Exception) -> bool:
+        status_code = cls._error_status_code(exc)
+        if status_code in {408, 409, 429} or (
+            status_code is not None and status_code >= 500
+        ):
+            return True
+        error_name = type(exc).__name__.casefold()
+        return any(token in error_name for token in (
+            "connection", "timeout", "ratelimit", "internalserver", "serviceunavailable"
+        ))
+
+    def _safe_exception_detail(self, exc: Exception) -> str:
+        detail = re.sub(r"\s+", " ", str(exc)).strip() or "no detail"
+        if self._api_key:
+            detail = detail.replace(self._api_key, "[REDACTED]")
+        detail = re.sub(
+            r"(?i)(authorization|api[_-]?key)(\s*[:=]\s*)([^\s,;]+)",
+            r"\1\2[REDACTED]",
+            detail,
+        )
+        detail = re.sub(r"(?i)bearer\s+[^\s,;]+", "Bearer [REDACTED]", detail)
+        return detail[:800]
 
     @staticmethod
     def _extract_message_content(message: AIMessage) -> str:
@@ -977,6 +1070,8 @@ def build_provider(
     normalized_provider = provider_name.strip().lower()
     logger.info("🔌 构建 LLM Provider: %s（模型=%s）", normalized_provider, default_model)
     if normalized_provider in {"openai", "deepseek", "openai-compatible"}:
+        from app.core.config import settings
+
         disable_thinking = normalized_provider == "deepseek" or "deepseek.com" in base_url.lower()
         if disable_thinking:
             logger.info("🔌 检测到 DeepSeek，已禁用 thinking 模式")
@@ -986,6 +1081,8 @@ def build_provider(
             default_model,
             disable_thinking,
             provider_name=normalized_provider,
+            request_attempts=settings.repoguardian_model_request_attempts,
+            retry_backoff_seconds=settings.repoguardian_model_retry_backoff_seconds,
         )
     raise ValueError(
         "REPOGUARDIAN_PROVIDER must be one of: openai, deepseek, openai-compatible"
