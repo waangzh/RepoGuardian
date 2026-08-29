@@ -25,6 +25,7 @@ from app.models.review import (
     ExecutionBudget,
     HumanReviewRequest,
     IssueMetrics,
+    IssueStatus,
     PatchStatus,
     PatchValidationResult,
     ReviewCreateRequest,
@@ -102,6 +103,24 @@ _TASK_STATUS_BY_GRAPH_NODE = {
     "validation": TaskStatus.validating,
     "repair_assessment": TaskStatus.validating,
 }
+
+
+def _issues_from_unit_results(results: list[ReviewUnitResult]) -> list[ReviewIssue]:
+    """从 per-unit verified issues 重建全局去重输入，并清理旧版 canonical 污染。"""
+    issues: list[ReviewIssue] = []
+    for result in results:
+        for issue in result.issues:
+            legacy_global_issue = set(issue.source_review_unit_ids) != {
+                result.review_unit_id
+            }
+            issues.append(issue.model_copy(update={
+                "source_review_unit_ids": [result.review_unit_id],
+                "source_issue_ids": [issue.id],
+                "supporting_evidence": (
+                    [] if legacy_global_issue else issue.supporting_evidence
+                ),
+            }))
+    return issues
 
 
 class ReviewService:
@@ -740,9 +759,9 @@ class ReviewService:
     def cancel_task(self, task_id: str) -> bool:
         if self._repository:
             cancelled = self._repository.cancel_task(task_id)
-            if self._task_queue:
+            if cancelled and self._task_queue:
                 self._task_queue.cancel_for_task(task_id)
-            if self._worker:
+            if cancelled and self._worker:
                 self._worker.cancel_task(task_id)
             return cancelled
         """取消主任务；取消会沿 await 链传播到所有 Unit worker。"""
@@ -827,12 +846,27 @@ class ReviewService:
                     lifecycle_state = ReviewState(**{**lifecycle_state, **checked})
                     verified = await issue_verifier_node(lifecycle_state)
                     lifecycle_state = ReviewState(**{**lifecycle_state, **verified})
-                    verified_new = [
-                        item for item in lifecycle_state.get("review_issues") or []
-                    ]
-                    existing = [
-                        item for item in task.issues if item.review_unit_id != unit_id
-                    ]
+                    verified_result = next(
+                        (
+                            ReviewUnitResult.model_validate(item)
+                            for item in lifecycle_state.get("review_unit_results") or []
+                            if item.get("review_unit_id") == unit_id
+                        ),
+                        result,
+                    )
+                    result = verified_result.model_copy(update={
+                        "issues": [
+                            issue for issue in verified_result.issues
+                            if issue.status in {
+                                IssueStatus.confirmed, IssueStatus.needs_human
+                            }
+                        ],
+                    })
+                    source_results = [
+                        item for item in task.review_unit_results
+                        if item.review_unit_id != unit_id
+                    ] + [result]
+                    source_issues = _issues_from_unit_results(source_results)
                     retry_metrics = IssueMetrics.model_validate(
                         lifecycle_state.get("issue_metrics") or {}
                     ).model_copy(update={
@@ -841,10 +875,7 @@ class ReviewService:
                         ),
                     })
                     deduplicated = await IssueDeduplicationService().aggregate(
-                        [
-                            *existing,
-                            *(ReviewIssue.model_validate(item) for item in verified_new),
-                        ],
+                        source_issues,
                         self._provider,
                         task.model,
                         retry_metrics,
@@ -852,12 +883,6 @@ class ReviewService:
                     aggregated_issues = deduplicated.issues
                     retry_metrics = deduplicated.metrics
                     lifecycle_warnings = list(lifecycle_state.get("warnings") or [])
-                    result = result.model_copy(update={
-                        "issues": [
-                            issue for issue in aggregated_issues
-                            if issue.review_unit_id == unit_id
-                        ],
-                    })
             except BaseException:
                 task.status = previous_status
                 task.phase = previous_phase

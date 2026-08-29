@@ -126,6 +126,7 @@ class ReviewUnitTerminalReason(str, Enum):
 
 
 class ReviewFileStatus(str, Enum):
+    unknown = "unknown"
     pending = "pending"
     reviewed = "reviewed"
     partial = "partial"

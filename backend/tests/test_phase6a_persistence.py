@@ -26,6 +26,7 @@ from app.models.review import (
     DiffHunk,
     HumanReviewRequest,
     PatchProposal,
+    ReviewIssue,
     ReviewTask,
     TaskStatus,
     ReviewUnit,
@@ -95,6 +96,68 @@ def test_task_survives_repository_restart_and_api_does_not_need_memory_dict(pers
     loaded = restarted.get_task(task.id)
     assert loaded is not None and loaded.id == task.id
     assert restarted.list_tasks(status="queued", page=1, page_size=10).total == 1
+
+
+def test_issue_detail_only_exposes_current_aggregate_issue(persistence) -> None:
+    repository, _, _ = persistence
+    task = _task()
+    issue = ReviewIssue(
+        id="issue-current",
+        review_unit_id="ru-test",
+        title="返回值错误",
+        category="correctness",
+        severity="medium",
+        confidence=0.9,
+        affected_behavior="调用方收到错误返回值",
+        failure_scenario="有效输入稳定返回错误结果",
+        recommendation="修复返回条件",
+        primary_evidence={"file_path": "app.py", "existing_code": "return wrong"},
+        status="confirmed",
+    )
+    task.issues = [issue]
+    repository.create_task(task)
+    repository.save_task(task)
+    assert repository.get_issue(task.id, issue.id) is not None
+
+    task.issues = []
+    repository.save_task(task)
+
+    assert repository.get_issue(task.id, issue.id) is None
+
+
+@pytest.mark.parametrize(
+    "terminal_status",
+    [TaskStatus.completed, TaskStatus.completed_with_warnings, TaskStatus.failed],
+)
+def test_terminal_review_cannot_be_cancelled(persistence, terminal_status: TaskStatus) -> None:
+    repository, _, _ = persistence
+    task = _task()
+    repository.create_task(task)
+    task.status = terminal_status
+    repository.save_task(task)
+
+    assert repository.cancel_task(task.id) is False
+    assert repository.get_task(task.id).status == terminal_status
+
+
+@pytest.mark.asyncio
+async def test_cancel_api_rejects_terminal_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = _task().model_copy(update={"status": TaskStatus.completed})
+
+    class TerminalService:
+        def get_task(self, task_id: str) -> ReviewTask | None:
+            return task if task_id == task.id else None
+
+        def cancel_task(self, task_id: str) -> bool:
+            raise AssertionError(f"terminal task {task_id} must not reach cancellation")
+
+    monkeypatch.setattr(reviews_api, "get_review_service", lambda: TerminalService())
+
+    with pytest.raises(HTTPException) as raised:
+        await reviews_api.cancel_review(task.id)
+    assert raised.value.status_code == 409
 
 
 def test_completed_unit_reuses_but_failed_unit_and_version_mismatch_do_not(persistence) -> None:

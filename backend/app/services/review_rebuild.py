@@ -10,9 +10,7 @@ from app.graph.state import ReviewState
 from app.models.review import (
     AgentEvent,
     ChangedFile,
-    ChangedLine,
     ContextSnippet,
-    DiffHunk,
     PatchResult,
     PatchEligibilityDecision,
     PatchStatus,
@@ -163,52 +161,13 @@ def rebuild_validation_backend(value: object) -> ValidationBackend:
 
 
 def rebuild_changed_files(data: list[dict]) -> list[ChangedFile]:
-    """从 dict 列表重建 ChangedFile（含嵌套的 DiffHunk 和 ChangedLine）。"""
-    result: list[ChangedFile] = []
-    for file_data in data:
-        hunks = []
-        for hunk_data in file_data.get("hunks", []):
-            added = [
-                ChangedLine(line_no=line.get("line_no"), content=line.get("content", ""))
-                for line in hunk_data.get("added_lines", [])
-            ]
-            removed = [
-                ChangedLine(line_no=line.get("line_no"), content=line.get("content", ""))
-                for line in hunk_data.get("removed_lines", [])
-            ]
-            hunks.append(DiffHunk(
-                old_start=hunk_data.get("old_start", 0),
-                old_length=hunk_data.get("old_length", 0),
-                new_start=hunk_data.get("new_start", 0),
-                new_length=hunk_data.get("new_length", 0),
-                added_lines=added,
-                removed_lines=removed,
-            ))
-        result.append(ChangedFile(
-            file_path=file_data.get("file_path", ""),
-            old_file_path=file_data.get("old_file_path"),
-            change_type=file_data.get("change_type", "modified"),
-            additions=file_data.get("additions", 0),
-            deletions=file_data.get("deletions", 0),
-            hunks=hunks,
-        ))
-    return result
+    """按领域模型完整恢复文件、hunk、ordered diff 与二进制标记。"""
+    return [ChangedFile.model_validate(item) for item in data]
 
 
 def rebuild_context_snippets(data: list[dict]) -> list[ContextSnippet]:
-    """从 dict 列表重建 ContextSnippet。"""
-    return [
-        ContextSnippet(
-            file=item.get("file", ""),
-            start_line=item.get("start_line", 1),
-            end_line=item.get("end_line", item.get("start_line", 1)),
-            content=item.get("content", ""),
-            relevance=item.get("relevance", "adjacent"),
-            symbol=item.get("symbol"),
-            review_unit_id=item.get("review_unit_id"),
-        )
-        for item in data
-    ]
+    """按领域模型完整恢复检索片段及 provenance 字段。"""
+    return [ContextSnippet.model_validate(item) for item in data]
 
 
 def rebuild_repo_snapshot(data: dict) -> RepoSnapshot | None:

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
 from collections import defaultdict
 from dataclasses import dataclass
 
 from app.agents.providers import LLMProvider
+from app.core.config import settings
 from app.models.review import (
     EvidenceAnchor,
     IssueDeduplicationDecision,
@@ -17,6 +20,8 @@ from app.models.review import (
     Severity,
 )
 from app.services.model_usage import unpack_model_call
+
+logger = logging.getLogger("RepoGuardian.IssueDeduplication")
 
 
 @dataclass(frozen=True)
@@ -37,6 +42,12 @@ class IssueDeduplicationService:
         Severity.low: 3,
     }
 
+    def __init__(self, timeout_seconds: float | None = None) -> None:
+        self._timeout_seconds = (
+            settings.repoguardian_issue_dedup_timeout_seconds
+            if timeout_seconds is None else max(0.0, timeout_seconds)
+        )
+
     async def aggregate(
         self,
         issues: list[ReviewIssue],
@@ -53,28 +64,40 @@ class IssueDeduplicationService:
         decisions: list[IssueDeduplicationDecision] = []
         model_usages: list[ModelUsage] = []
 
+        deadline = asyncio.get_running_loop().time() + self._timeout_seconds
         for group, exact_anchor_group in self._candidate_groups(publishable):
             active = [by_id[issue.id] for issue in group if issue.id not in removed]
             if len(active) < 2:
                 continue
             decision: IssueDeduplicationDecision | None = None
-            try:
-                raw_result = await provider.deduplicate_issues(active, model)
-                proposed, usage = unpack_model_call(raw_result)
-                if usage is not None:
-                    model_usages.append(usage)
-                decision = IssueDeduplicationDecision.model_validate(proposed)
-                self._validate_decision(active, decision, exact_anchor_group)
-            except Exception as exc:
-                usage = getattr(exc, "usage", None)
-                if usage is not None and all(item.id != usage.id for item in model_usages):
-                    model_usages.append(usage)
-                if exact_anchor_group:
-                    decision = IssueDeduplicationDecision(
-                        canonical_issue_id=active[0].id,
-                        duplicate_issue_ids=[issue.id for issue in active[1:]],
-                        merged_rationale="deterministic_same_category_and_anchor",
-                    )
+            if exact_anchor_group:
+                decision = IssueDeduplicationDecision(
+                    canonical_issue_id=active[0].id,
+                    duplicate_issue_ids=[issue.id for issue in active[1:]],
+                    merged_rationale="deterministic_same_category_and_anchor",
+                )
+            else:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    logger.warning("Semantic dedup 超过 %.1f 秒硬上限，保留未合并 Issue", self._timeout_seconds)
+                    break
+                try:
+                    async with asyncio.timeout(remaining):
+                        raw_result = await provider.deduplicate_issues(active, model)
+                    proposed, usage = unpack_model_call(raw_result)
+                    if usage is not None:
+                        model_usages.append(usage)
+                    decision = IssueDeduplicationDecision.model_validate(proposed)
+                    self._validate_decision(active, decision, exact_anchor_group)
+                except TimeoutError:
+                    logger.warning("Semantic dedup 超过 %.1f 秒硬上限，保留未合并 Issue", self._timeout_seconds)
+                    break
+                except Exception as exc:
+                    usage = getattr(exc, "usage", None)
+                    if usage is not None and all(
+                        item.id != usage.id for item in model_usages
+                    ):
+                        model_usages.append(usage)
             if decision is None or not decision.duplicate_issue_ids:
                 continue
 
