@@ -66,11 +66,21 @@ const backendOptions = [
   { value: "project_ci", label: "项目 CI", description: "使用项目现有 CI 流程" },
   { value: "gvisor", label: "gVisor（已废弃）", description: "不可执行兼容占位；请使用 Project CI" },
 ];
+
+function handleSubmit() {
+  if (props.submitting || props.previewing || props.active || !props.prUrl.trim()) return;
+  emit("submit");
+}
+
+function handlePreview() {
+  if (props.previewing || props.submitting || props.active || !props.prUrl.trim()) return;
+  emit("preview");
+}
 </script>
 
 <template>
   <aside class="review-launcher">
-    <form class="launcher-form" @submit.prevent="$emit('submit')">
+    <form class="launcher-form" @submit.prevent="handleSubmit">
       <div class="launcher-heading">
         <span class="launcher-heading__icon"><AppIcon name="play" :size="18" /></span>
         <div><h2>启动新审查</h2><p>配置审查任务并启动 AI 评审流程</p></div>
@@ -124,10 +134,10 @@ const backendOptions = [
         <button v-if="active" type="button" class="button button--secondary" :disabled="cancelling" @click="$emit('cancel')">
           {{ cancelling ? "取消中…" : "取消审查" }}
         </button>
-        <button v-else type="button" class="button button--secondary" :disabled="previewing || !prUrl" @click="$emit('preview')">
+        <button v-else type="button" class="button button--secondary" :disabled="previewing || submitting || !prUrl" @click="handlePreview">
           {{ previewing ? "分析中…" : "Preview" }}
         </button>
-        <button type="submit" class="button button--primary" :disabled="submitting || active || !prUrl" :aria-busy="submitting || active">
+        <button type="submit" class="button button--primary" :disabled="submitting || previewing || active || !prUrl" :aria-busy="submitting || previewing || active">
           {{ submitting ? "提交中…" : active ? "审查进行中…" : "开始审查" }}
         </button>
       </div>

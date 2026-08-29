@@ -160,7 +160,12 @@ async def review_units_node(state: ReviewState) -> ReviewState:
     warnings = list(state.get("warnings") or [])
     if incomplete:
         warnings.append(
-            f"{len(incomplete)} 个 Review Unit 未完整完成，其他 {len(successful)} 个 Unit 已完成"
+            (
+                f"{len(incomplete)} 个 Review Unit 未完整完成，"
+                f"其他 {len(successful)} 个 Unit 已完成"
+            )
+            if successful
+            else f"{len(incomplete)} 个 Review Unit 未完整完成，本次没有 Unit 成功完成"
         )
     return ReviewState(
         status="reviewing",
