@@ -71,10 +71,14 @@ async def issue_policy_node(state: ReviewState) -> ReviewState:
         "deterministic_drop_count": deterministic_drops,
         "severity_adjustment_count": severity_adjustments,
     })
+    unit_results = _replace_unit_result_issues(
+        state.get("review_unit_results") or [], checked
+    )
     return ReviewState(
         status="verifying_issues",
         review_units=[unit.model_dump(mode="json") for unit in units],
         review_issues=[issue.model_dump(mode="json") for issue in checked],
+        review_unit_results=unit_results,
         deterministic_issue_checks=[check.model_dump(mode="json") for check in checks],
         issue_metrics=metrics.model_dump(mode="json"),
         step_progress=append_step(
@@ -105,11 +109,15 @@ async def issue_verifier_node(state: ReviewState) -> ReviewState:
             max_calls_per_unit=settings.repoguardian_issue_verifier_max_calls_per_unit,
         )
     result = await service.verify_issues(issues, units, dict(state), metrics)
+    unit_results = _replace_unit_result_issues(
+        state.get("review_unit_results") or [], result.issues
+    )
     warnings = list(dict.fromkeys([*(state.get("warnings") or []), *result.warnings]))
     verified_count = sum(issue.status == IssueStatus.confirmed for issue in result.issues)
     return ReviewState(
         status="verifying_issues",
         review_issues=[issue.model_dump(mode="json") for issue in result.issues],
+        review_unit_results=unit_results,
         issue_verifications=[item.model_dump(mode="json") for item in result.verifications],
         issue_metrics=result.metrics.model_dump(mode="json"),
         model_usages=[
@@ -138,20 +146,11 @@ async def issue_deduplication_node(state: ReviewState) -> ReviewState:
     service: Any = state.get("_issue_deduplication_service") or IssueDeduplicationService()
     result = await service.aggregate(issues, provider, state.get("model"), metrics)
 
-    by_unit: dict[str, list[ReviewIssue]] = {}
-    for issue in result.issues:
-        by_unit.setdefault(issue.review_unit_id, []).append(issue)
-    unit_results: list[dict] = []
-    for raw in state.get("review_unit_results") or []:
-        unit_result = ReviewUnitResult.model_validate(raw)
-        unit_results.append(unit_result.model_copy(update={
-            "issues": by_unit.get(unit_result.review_unit_id, []),
-        }).model_dump(mode="json"))
-
     return ReviewState(
         status="verifying_issues",
         review_issues=[issue.model_dump(mode="json") for issue in result.issues],
-        review_unit_results=unit_results,
+        # Unit 结果保存 verifier 后的原始结果；全局去重只生成派生发布视图。
+        review_unit_results=list(state.get("review_unit_results") or []),
         issue_deduplication_decisions=[
             item.model_dump(mode="json") for item in result.decisions
         ],
@@ -167,3 +166,18 @@ async def issue_deduplication_node(state: ReviewState) -> ReviewState:
             f"最终发布 {len(result.issues)} 个 Issue，合并 {result.metrics.duplicate_count} 个重复项",
         ),
     )
+
+
+def _replace_unit_result_issues(
+    raw_results: list[dict], issues: list[ReviewIssue]
+) -> list[dict]:
+    """把当前生命周期阶段的 Issue 同步回各 Unit 的 canonical 结果。"""
+    by_unit: dict[str, list[ReviewIssue]] = {}
+    for issue in issues:
+        by_unit.setdefault(issue.review_unit_id, []).append(issue)
+    return [
+        ReviewUnitResult.model_validate(raw).model_copy(update={
+            "issues": by_unit.get(str(raw.get("review_unit_id") or ""), []),
+        }).model_dump(mode="json")
+        for raw in raw_results
+    ]

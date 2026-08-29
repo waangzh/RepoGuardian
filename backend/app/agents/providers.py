@@ -125,6 +125,7 @@ class OpenAICompatibleProvider(LLMProvider):
         provider_name: str = "openai-compatible",
         request_attempts: int = 2,
         retry_backoff_seconds: float = 1.0,
+        request_timeout_seconds: float = 60.0,
     ) -> None:
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
@@ -133,6 +134,7 @@ class OpenAICompatibleProvider(LLMProvider):
         self._provider_name = provider_name
         self._request_attempts = max(1, request_attempts)
         self._retry_backoff_seconds = max(0.0, retry_backoff_seconds)
+        self._request_timeout_seconds = max(1.0, request_timeout_seconds)
         self._issue_adapter = TypeAdapter(list[ReviewIssueInput])
         self._patch_adapter = TypeAdapter(list[PatchResult])
         self._patch_request_adapter = TypeAdapter(list[PatchGenerationRequest])
@@ -574,7 +576,9 @@ class OpenAICompatibleProvider(LLMProvider):
             "model": model or self._default_model,
             "temperature": 0.1,
             "max_tokens": max_tokens,
-            "max_retries": 1,
+            # RepoGuardian 自己记录 retry attempt；关闭 SDK 内部重试以保持可观测性。
+            "max_retries": 0,
+            "timeout": self._request_timeout_seconds,
             # JSON mode 比 tool calling 更适合 DeepSeek 和通用兼容端点。
             "model_kwargs": {"response_format": {"type": "json_object"}},
         }
@@ -1083,6 +1087,7 @@ def build_provider(
             provider_name=normalized_provider,
             request_attempts=settings.repoguardian_model_request_attempts,
             retry_backoff_seconds=settings.repoguardian_model_retry_backoff_seconds,
+            request_timeout_seconds=settings.repoguardian_model_request_timeout_seconds,
         )
     raise ValueError(
         "REPOGUARDIAN_PROVIDER must be one of: openai, deepseek, openai-compatible"

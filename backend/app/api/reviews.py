@@ -24,6 +24,7 @@ from app.models.review import (
     ReviewPreviewResponse,
     ReviewTask,
     ReviewUnitResult,
+    TaskStatus,
 )
 from app.models.persistence import (
     HumanRequestAnswer,
@@ -93,8 +94,19 @@ async def preview_review(request: ReviewPreviewRequest) -> ReviewPreviewResponse
 @router.post("/{task_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
 async def cancel_review(task_id: str) -> dict[str, str]:
     service = get_review_service()
-    if service.get_task(task_id) is None:
+    task = service.get_task(task_id)
+    if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    if task.status in {
+        TaskStatus.completed,
+        TaskStatus.completed_with_warnings,
+        TaskStatus.failed,
+        TaskStatus.cancelled,
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Terminal review tasks cannot be cancelled",
+        )
     graph_cancelled = service.cancel_task(task_id)
     from app.validation.project_ci import get_project_ci_service
 

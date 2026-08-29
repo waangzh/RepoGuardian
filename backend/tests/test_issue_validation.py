@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -14,12 +15,16 @@ from app.models.review import (
     ReviewIssue,
     ReviewUnit,
     ReviewUnitComplexity,
+    ReviewUnitResult,
+    ReviewUnitStatus,
     Severity,
 )
+from app.graph.nodes.issue_validation import issue_deduplication_node
 from app.services.issue_deduplication import IssueDeduplicationService
 from app.services.issue_policy import IssuePolicyService, SeverityPolicy
 from app.services.issue_verifier import IssueVerifierService
 from app.services.review_rebuild import rebuild_task_from_state
+from app.services.review_service import _issues_from_unit_results
 
 
 def _unit(unit_id: str = "unit-1", path: str = "app.py") -> ReviewUnit:
@@ -100,6 +105,7 @@ class VerifierProvider:
     def __init__(self, responses: list[Any]) -> None:
         self.responses = list(responses)
         self.calls = 0
+        self.dedup_calls = 0
 
     async def verify_issue(self, request: Any, model: str | None) -> IssueVerification:
         del model
@@ -115,6 +121,7 @@ class VerifierProvider:
         self, issues: list[ReviewIssue], model: str | None
     ) -> IssueDeduplicationDecision:
         del issues, model
+        self.dedup_calls += 1
         raise RuntimeError("semantic dedup should not be needed")
 
 
@@ -254,6 +261,82 @@ async def test_same_anchor_and_category_are_merged_with_evidence_and_sources() -
     assert result.issues[0].supporting_evidence[0].anchor_hash == "support-hash"
     assert result.issues[0].source_review_unit_ids == ["unit-1", "unit-2"]
     assert result.issues[0].source_issue_ids == ["first", "second"]
+    assert provider.dedup_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_semantic_dedup_timeout_fails_open_without_blocking() -> None:
+    class HangingProvider(VerifierProvider):
+        async def deduplicate_issues(
+            self, issues: list[ReviewIssue], model: str | None
+        ) -> IssueDeduplicationDecision:
+            del issues, model
+            self.dedup_calls += 1
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    provider = HangingProvider([])
+    issues = [
+        _issue("first", anchor_hash="a").model_copy(update={"status": IssueStatus.confirmed}),
+        _issue("second", anchor_hash="b").model_copy(update={"status": IssueStatus.confirmed}),
+    ]
+
+    result = await IssueDeduplicationService(timeout_seconds=0.01).aggregate(
+        issues, provider, None, IssueMetrics()  # type: ignore[arg-type]
+    )
+
+    assert provider.dedup_calls == 1
+    assert [issue.id for issue in result.issues] == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_global_dedup_does_not_overwrite_per_unit_verified_issues() -> None:
+    first = _issue("first", unit_id="unit-1", status="confirmed")
+    second = _issue("second", unit_id="unit-2", status="confirmed")
+    provider = VerifierProvider([])
+
+    result = await issue_deduplication_node({
+        "review_issues": [first.model_dump(mode="json"), second.model_dump(mode="json")],
+        "review_unit_results": [
+            ReviewUnitResult(
+                review_unit_id="unit-1", status=ReviewUnitStatus.completed, issues=[first]
+            ).model_dump(mode="json"),
+            ReviewUnitResult(
+                review_unit_id="unit-2", status=ReviewUnitStatus.completed, issues=[second]
+            ).model_dump(mode="json"),
+        ],
+        "issue_metrics": IssueMetrics().model_dump(mode="json"),
+        "_provider": provider,
+    })
+
+    assert len(result["review_issues"]) == 1
+    assert [
+        item["issues"][0]["id"] for item in result["review_unit_results"]
+    ] == ["first", "second"]
+
+
+def test_retry_sources_remove_legacy_dedup_contributions() -> None:
+    first = _issue("first", unit_id="unit-1", status="confirmed")
+    second = _issue("second", unit_id="unit-2", status="confirmed")
+    legacy = first.model_copy(update={
+        "source_review_unit_ids": ["unit-1", "unit-2"],
+        "source_issue_ids": ["first", "second"],
+        "supporting_evidence": [second.primary_evidence],
+    })
+
+    issues = _issues_from_unit_results([
+        ReviewUnitResult(
+            review_unit_id="unit-1", status=ReviewUnitStatus.completed, issues=[legacy]
+        ),
+        ReviewUnitResult(
+            review_unit_id="unit-2", status=ReviewUnitStatus.completed, issues=[]
+        ),
+    ])
+
+    assert len(issues) == 1
+    assert issues[0].source_review_unit_ids == ["unit-1"]
+    assert issues[0].source_issue_ids == ["first"]
+    assert issues[0].supporting_evidence == []
 
 
 @pytest.mark.asyncio
@@ -310,3 +393,52 @@ def test_api_rebuild_only_publishes_confirmed_or_needs_human() -> None:
     })
 
     assert [issue.id for issue in task.issues] == ["confirmed", "human"]
+
+
+def test_api_rebuild_preserves_diff_lines_binary_flag_and_context_provenance() -> None:
+    task = rebuild_task_from_state({
+        "task_id": "task",
+        "status": "completed",
+        "phase": "completed",
+        "changed_files": [{
+            "file_path": "asset.bin",
+            "change_type": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "is_binary": True,
+            "hunks": [{
+                "old_start": 4,
+                "old_length": 2,
+                "new_start": 4,
+                "new_length": 2,
+                "hunk_id": "hunk-1",
+                "lines": [
+                    {"kind": "deleted", "content": "old", "old_line_no": 4},
+                    {"kind": "added", "content": "new", "new_line_no": 4},
+                ],
+                "added_lines": [{"line_no": 4, "content": "new"}],
+                "removed_lines": [{"line_no": 4, "content": "old"}],
+            }],
+        }],
+        "context_snippets": [{
+            "file": "app.py",
+            "start_line": 1,
+            "end_line": 2,
+            "content": "value = 1",
+            "relevance": "caller",
+            "source": "repository_graph",
+            "distance": 1,
+            "confidence": 0.85,
+            "why_retrieved": "调用目标函数",
+        }],
+    })
+
+    changed = task.changed_files[0]
+    assert changed.is_binary is True
+    assert changed.hunks[0].hunk_id == "hunk-1"
+    assert [line.kind for line in changed.hunks[0].lines] == ["deleted", "added"]
+    snippet = task.context_snippets[0]
+    assert (snippet.source, snippet.distance, snippet.confidence) == (
+        "repository_graph", 1, 0.85
+    )
+    assert snippet.why_retrieved == "调用目标函数"

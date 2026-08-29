@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from app.agents.providers import LLMProvider
+from app.core.config import settings
 from app.graph.nodes.report import complete_node, report_node
 from app.graph.nodes.review_units import review_units_node
 from app.models.review import (
@@ -428,6 +429,28 @@ async def test_report_uses_final_status_and_original_created_at() -> None:
     assert result["phase"] == "completed"
     assert "- 状态：completed" in result["report_markdown"]
     assert "- 创建时间：2026-08-07T09:59:38+00:00" in result["report_markdown"]
+
+
+@pytest.mark.asyncio
+async def test_report_purpose_timeout_uses_deterministic_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class HangingPurposeProvider:
+        async def summarize_pr_purpose(self, *args: Any) -> str:
+            del args
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    monkeypatch.setattr(settings, "repoguardian_report_purpose_timeout_seconds", 0.01)
+    result = await report_node({
+        **_state([]),
+        "status": "verifying_issues",
+        "warnings": [],
+        "_provider": HangingPurposeProvider(),
+    })
+
+    assert result["status"] == "completed"
+    assert result["report_markdown"]
 
 
 @pytest.mark.asyncio

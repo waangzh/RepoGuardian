@@ -59,7 +59,8 @@ async def test_provider_constructs_chatopenai_with_json_mode_and_model_override(
         "model": "override-model",
         "temperature": 0.1,
         "max_tokens": 1200,
-        "max_retries": 1,
+        "max_retries": 0,
+        "timeout": 60.0,
         "model_kwargs": {"response_format": {"type": "json_object"}},
     }
     assert isinstance(chat.messages[0], SystemMessage)

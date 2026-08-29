@@ -76,13 +76,20 @@ const coverage = computed(() => props.task.coverage || {
 });
 const fileCoveragePercent = computed(() => Math.round(coverage.value.coverage_rate * 1000) / 10);
 const unitCoveragePercent = computed(() => Math.round(coverage.value.unit_coverage_rate * 1000) / 10);
-const highPriorityCount = computed(() => props.task.issues.filter((issue) => ["critical", "high"].includes(issue.severity)).length);
+const confirmedIssues = computed(() => props.task.issues.filter((issue) => issue.status === "confirmed"));
+const confirmedIssueCount = computed(() => confirmedIssues.value.length);
+const needsHumanIssueCount = computed(() => props.task.issues.filter((issue) => issue.status === "needs_human").length);
+const highPriorityCount = computed(() => confirmedIssues.value.filter((issue) => ["critical", "high"].includes(issue.severity)).length);
 const resolvedEvidenceCount = computed(() => props.task.issues.filter((issue) => issue.primary_evidence.resolution_status !== "unresolved").length);
 const severityCounts = computed(() => ({
   critical: props.task.issues.filter((issue) => issue.severity === "critical").length,
   high: props.task.issues.filter((issue) => issue.severity === "high").length,
   medium: props.task.issues.filter((issue) => issue.severity === "medium").length,
   low: props.task.issues.filter((issue) => issue.severity === "low").length,
+}));
+const confirmedSeverityCounts = computed(() => ({
+  medium: confirmedIssues.value.filter((issue) => issue.severity === "medium").length,
+  low: confirmedIssues.value.filter((issue) => issue.severity === "low").length,
 }));
 const categories = computed(() => Array.from(new Set(props.task.issues.map((issue) => issue.category))).sort());
 
@@ -109,10 +116,14 @@ const ciPresentation = computed(() => {
 });
 
 const purposeSummary = computed(() => {
-  const plannedSummary = props.task.review_unit_results.find((item) => item.plan?.change_summary)?.plan?.change_summary;
   const body = props.task.pr?.body?.trim();
-  if (plannedSummary) return plannedSummary;
   if (body) return body.replace(/[#*_>`\[\]]/g, "").split(/\n\s*\n/)[0].slice(0, 520);
+  const unitSummaries = Array.from(new Set(
+    props.task.review_unit_results
+      .map((item) => item.plan?.change_summary?.trim())
+      .filter((item): item is string => Boolean(item)),
+  ));
+  if (unitSummaries.length) return unitSummaries.join("；").slice(0, 520);
   return `本次 Pull Request 修改 ${props.task.changed_files.length} 个文件，并被划分为 ${props.task.review_units.length} 个语义相关的变更组进行证据化审查。`;
 });
 
@@ -169,10 +180,19 @@ function rowsFromEvidence(evidence: EvidenceAnchor): CodeRow[] {
   const target = evidence.existing_code.split("\n");
   const start = evidence.resolved_start_line || 1;
   const beforeStart = Math.max(1, start - evidence.context_before.length);
+  const useBase = evidence.resolved_side === "base" || (!evidence.resolved_side && evidence.expected_side === "base");
+  const row = (key: string, line: number, content: string, highlighted: boolean): CodeRow => ({
+    key,
+    oldLine: useBase ? line : null,
+    newLine: useBase ? null : line,
+    content,
+    kind: "evidence",
+    highlighted,
+  });
   return [
-    ...evidence.context_before.map((content, index) => ({ key: `b-${index}`, oldLine: null, newLine: beforeStart + index, content, kind: "evidence" as const, highlighted: false })),
-    ...target.map((content, index) => ({ key: `t-${index}`, oldLine: null, newLine: start + index, content, kind: "evidence" as const, highlighted: true })),
-    ...evidence.context_after.map((content, index) => ({ key: `a-${index}`, oldLine: null, newLine: start + target.length + index, content, kind: "evidence" as const, highlighted: false })),
+    ...evidence.context_before.map((content, index) => row(`b-${index}`, beforeStart + index, content, false)),
+    ...target.map((content, index) => row(`t-${index}`, start + index, content, true)),
+    ...evidence.context_after.map((content, index) => row(`a-${index}`, start + target.length + index, content, false)),
   ];
 }
 
@@ -183,17 +203,26 @@ const codeRows = computed<CodeRow[]>(() => {
   if (file) {
     const evidence = issue.primary_evidence;
     const line = evidence.resolved_start_line;
-    const hunk = file.hunks.find((item) => item.hunk_id === evidence.expected_hunk_id)
-      || file.hunks.find((item) => line && line >= item.new_start && line <= item.new_start + Math.max(item.new_length, 1))
+    const useBase = evidence.resolved_side === "base" || (!evidence.resolved_side && evidence.expected_side === "base");
+    const hunkId = issue.resolved_location?.hunk_id || evidence.expected_hunk_id;
+    const hunk = file.hunks.find((item) => hunkId && item.hunk_id === hunkId)
+      || file.hunks.find((item) => {
+        const start = useBase ? item.old_start : item.new_start;
+        const length = useBase ? item.old_length : item.new_length;
+        return Boolean(line && line >= start && line < start + Math.max(length, 1));
+      })
       || file.hunks[0];
-    if (hunk) {
+    if (hunk?.lines.length) {
       return hunk.lines.map((item, index) => ({
         key: `${hunk.hunk_id}-${index}`,
         oldLine: item.old_line_no ?? null,
         newLine: item.new_line_no ?? null,
         content: item.content,
         kind: item.kind,
-        highlighted: Boolean(line && item.new_line_no && item.new_line_no >= line && item.new_line_no <= (evidence.resolved_end_line || line)),
+        highlighted: (() => {
+          const itemLine = useBase ? item.old_line_no : item.new_line_no;
+          return Boolean(line && itemLine && itemLine >= line && itemLine <= (evidence.resolved_end_line || line));
+        })(),
       }));
     }
   }
@@ -237,6 +266,7 @@ function severityLabel(severity: ReviewIssue["severity"]): string {
 function statusLabel(status: string): string {
   const labels: Record<string, string> = {
     reviewed: "已审查",
+    unknown: "未知",
     partial: "部分完成",
     pending: "等待中",
     excluded_binary: "已排除 · 二进制",
@@ -264,7 +294,7 @@ const fileRows = computed(() => {
     return {
       ...file,
       eligible: item?.eligible ?? true,
-      status: item?.status || (terminal.value ? "reviewed" : "pending") as ReviewFileStatus,
+      status: item?.status || (terminal.value ? "unknown" : "pending") as ReviewFileStatus,
       reviewUnitIds: item?.review_unit_ids || props.task.review_units.filter((unit) => unitFiles(unit).includes(file.file_path)).map((unit) => unit.id),
       reason: item?.reason,
     };
@@ -337,7 +367,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
         </article>
         <article class="review-metric-card">
           <span class="review-metric-card__icon is-danger"><AppIcon name="alert" :size="20" /></span>
-          <p>已确认发现</p><strong>{{ task.issues.length }}</strong><small>{{ highPriorityCount }} 高 · {{ severityCounts.medium }} 中 · {{ severityCounts.low }} 低</small>
+          <p>已确认发现</p><strong>{{ confirmedIssueCount }}</strong><small>{{ highPriorityCount }} 高 · {{ confirmedSeverityCounts.medium }} 中 · {{ confirmedSeverityCounts.low }} 低<span v-if="needsHumanIssueCount"> · {{ needsHumanIssueCount }} 待人工</span></small>
         </article>
         <article class="review-metric-card">
           <span class="review-metric-card__icon is-info"><AppIcon name="server" :size="20" /></span>

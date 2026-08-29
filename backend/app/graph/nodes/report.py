@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -43,13 +44,18 @@ async def report_node(state: ReviewState) -> ReviewState:
             )
         if provider is not None:
             try:
-                raw_result = await provider.summarize_pr_purpose(
-                    task.pr, task.changed_files, task.model
-                )
+                async with asyncio.timeout(
+                    settings.repoguardian_report_purpose_timeout_seconds
+                ):
+                    raw_result = await provider.summarize_pr_purpose(
+                        task.pr, task.changed_files, task.model
+                    )
                 purpose_summary, usage = unpack_model_call(raw_result)
                 model_usages = append_usage(model_usages, usage)
-            except LLMProviderError as exc:
-                model_usages = append_usage(model_usages, exc.usage)
+            except (LLMProviderError, TimeoutError) as exc:
+                model_usages = append_usage(
+                    model_usages, getattr(exc, "usage", None)
+                )
                 logger.warning("PR 作用中文概括生成失败，使用确定性中文兜底：%s", exc)
     completed_at = datetime.fromisoformat(updated_at)
     manifest_state = {

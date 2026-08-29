@@ -492,6 +492,7 @@ export interface ReviewUnitResult {
 }
 
 export type ReviewFileStatus =
+  | "unknown"
   | "pending"
   | "reviewed"
   | "partial"

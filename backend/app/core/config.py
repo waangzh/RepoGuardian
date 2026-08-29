@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     repoguardian_provider: str = "openai"  # openai / deepseek / openai-compatible
     repoguardian_model_request_attempts: int = Field(default=2, ge=1, le=5)
     repoguardian_model_retry_backoff_seconds: float = Field(default=1.0, ge=0, le=30)
+    repoguardian_model_request_timeout_seconds: float = Field(default=60, ge=1, le=600)
+    repoguardian_issue_dedup_timeout_seconds: float = Field(default=30, ge=0.1, le=300)
+    repoguardian_report_purpose_timeout_seconds: float = Field(default=15, ge=0.1, le=120)
     # JSON: {"provider:model":{"input":0.40,"output":1.60,"cached_input":0.10}}
     # Rates are USD per one million tokens. Missing entries keep observed cost unknown.
     repoguardian_model_pricing_json: str = "{}"

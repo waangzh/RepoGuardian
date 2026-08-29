@@ -204,6 +204,14 @@ class ReviewRepository:
 
     def get_issue(self, task_id: str, issue_id: str) -> ReviewIssueDetail | None:
         with self._session_factory() as session:
+            task_row = session.get(ReviewTaskOrm, task_id)
+            if task_row is None or task_row.deleted_at is not None:
+                return None
+            snapshot = self._load_task_snapshot(task_row)
+            if not any(
+                str(item.get("id")) == issue_id for item in snapshot.get("issues") or []
+            ):
+                return None
             row = session.scalar(select(ReviewIssueOrm).where(
                 ReviewIssueOrm.task_id == task_id, ReviewIssueOrm.issue_id == issue_id
             ))
@@ -545,7 +553,7 @@ class ReviewRepository:
         now = utcnow()
         with self._session_factory.begin() as session:
             task = session.get(ReviewTaskOrm, task_id)
-            if task is None or task.status == TaskStatus.cancelled.value:
+            if task is None or task.status in TERMINAL_TASK_STATUSES:
                 return False
             task.status = TaskStatus.cancelled.value
             task.current_phase = "failed"
