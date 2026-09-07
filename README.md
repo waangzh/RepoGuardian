@@ -21,15 +21,7 @@ RepoGuardian 将 PR 拆分为边界明确的 Review Unit，通过安全的 Git-t
 - **独立 Project CI**：只发送服务端注册的 profile、request ID 和 SHA 绑定信息，不发送模型生成的 shell command；Fork PR 默认不 dispatch。
 
 ## 工作流程
-
-```text
-GitHub PR
-  → 确定性解析 diff、索引仓库并拆分 Review Units
-  → 为复杂 Unit 生成风险与证据 Plan
-  → 在安全 Git-tracked repository 中发现并有界读取 supporting context
-  → 解析 Evidence、执行 Issue Policy、Selective Verifier 与去重
-  → 输出 Coverage、Run Manifest 和 Review Report
-```
+<img width="1510" height="693" alt="image" src="https://github.com/user-attachments/assets/e405f29f-0587-43b1-aac8-1f2a20ab1066" />
 
 Plan 是待验证的审查指导，不是已确认 Issue，也不是固定步骤队列。后续 Agent 可以根据工具反馈调整动作，并发现 Plan 之外的明确缺陷。
 
