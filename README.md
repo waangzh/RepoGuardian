@@ -4,7 +4,9 @@
 
 RepoGuardian 将 PR 拆分为边界明确的 Review Unit，通过安全的 Git-tracked repository 发现与有界读取补充上下文，再以可解析、可审计的 Evidence Chain 输出 Issue、Coverage 和 Run Manifest。
 
-**RepoGuardian Server 永远不执行目标仓库代码。** 测试、构建和运行时验证统一委托给仓库自身的 GitHub Project CI，并与 Review lifecycle 异步解耦。
+**RepoGuardian Server 永远不执行目标仓库代码。** 测试、构建和运行时验证通过显式配置的 GitHub Project CI 或外部 User Runner 发起，与审查生命周期异步解耦；默认不启用动态验证。
+
+[快速开始](#快速开始) · [工作流程](#工作流程) · [安全边界](#安全边界) · [反馈问题](https://github.com/waangzh/RepoGuardian/issues)
 
 > [!IMPORTANT]
 > 项目仍处于早期开发阶段。只读分析可识别 Python、TypeScript/JavaScript、Java、Go、Rust；Python 与 TS/JS 使用 Tree-sitter，其他语言按置信度降级到启发式索引。项目不提供本地 Sandbox，也尚未声明开源许可证。
@@ -21,7 +23,9 @@ RepoGuardian 将 PR 拆分为边界明确的 Review Unit，通过安全的 Git-t
 - **独立 Project CI**：只发送服务端注册的 profile、request ID 和 SHA 绑定信息，不发送模型生成的 shell command；Fork PR 默认不 dispatch。
 
 ## 工作流程
-<img width="1510" height="693" alt="image" src="https://github.com/user-attachments/assets/e405f29f-0587-43b1-aac8-1f2a20ab1066" />
+![RepoGuardian 最新架构图](https://github.com/user-attachments/assets/e405f29f-0587-43b1-aac8-1f2a20ab1066)
+
+主审查流程由 LangGraph 编排：接收 PR → 准备仓库、解析 diff、索引与项目检测 → 拆分 Review Units 并独立执行 → 解析证据、应用 Issue Policy、选择性验证与去重 → 生成报告。Unit 内部根据工具反馈探索上下文，主流程负责边界控制与结果聚合。
 
 Plan 是待验证的审查指导，不是已确认 Issue，也不是固定步骤队列。后续 Agent 可以根据工具反馈调整动作，并发现 Plan 之外的明确缺陷。
 
@@ -33,7 +37,7 @@ Project CI 是独立异步状态机：Review 可以先完成，Validation 随后
 
 ## 快速开始
 
-环境要求：Git、uv、Node.js 18+、npm，以及一个 OpenAI 或 OpenAI 兼容服务的 API Key。
+环境要求：Git、uv、Python 3.12+、Node.js 18.x、20.x 或 22+（与锁定的 Vite 6 兼容）、npm，以及一个 OpenAI 或 OpenAI 兼容服务的 API Key。以下命令使用 PowerShell。
 
 ### 1. 启动后端
 
@@ -63,7 +67,7 @@ API 默认运行在 <http://127.0.0.1:8000>，完整接口见 [Swagger UI](http:
 
 ### 2. 启动前端
 
-在另一个终端执行：
+在另一个终端中，从克隆后的 `RepoGuardian` 仓库根目录执行：
 
 ```powershell
 cd frontend
@@ -71,7 +75,25 @@ npm install
 npm run dev
 ```
 
-打开 Vite 输出的地址，输入 GitHub PR URL。建议先运行 **Preview**，再创建审查任务。
+打开 Vite 输出的地址（默认 <http://localhost:5173>）。前端开发服务器会将 `/api` 和 `/health` 请求代理到本机的 `8000` 端口，后端需保持运行。
+
+### 3. 完成第一次审查
+
+1. 输入可访问的 GitHub PR URL，先运行 **Preview**，检查文件范围、Review Units 和预计模型调用数。此步骤不调用模型，但需要访问 GitHub 并准备仓库。
+2. 确认范围后启动审查，查看任务进度、Unit 状态与问题证据。
+3. 在结果中结合 Evidence 和 Coverage 复核问题，并查看 Markdown 报告。出现 `completed_with_warnings` 时检查未完整完成的 Unit，不要把部分覆盖视为全部审查完成。
+
+### 可选配置
+
+配置写入 `backend/.env`，修改后重启后端；完整变量说明见 [`.env.example`](.env.example)。
+
+| 场景 | 配置入口 | 默认行为 |
+| --- | --- | --- |
+| GitHub API 认证 | `GITHUB_TOKEN` | 未配置 Token |
+| 兼容模型服务 | `OPENAI_BASE_URL`、`REPOGUARDIAN_PROVIDER`、`REPOGUARDIAN_MODEL` | OpenAI / `gpt-4.1-mini` |
+| Unit 并发与超时 | `REPOGUARDIAN_REVIEW_UNIT_CONCURRENCY`、`REPOGUARDIAN_REVIEW_UNIT_TIMEOUT_SECONDS` | 并发 4，单 Unit 180 秒 |
+| 外部动态验证 | `REPOGUARDIAN_DEFAULT_VALIDATION_BACKEND` 及对应 CI / Runner 配置 | `none`；需额外配置执行端 |
+| LangSmith 追踪 | `REPOGUARDIAN_LANGSMITH_TRACING` | 关闭；启用后默认仍不上传审查正文 |
 
 ## 工作模式
 
@@ -104,6 +126,8 @@ npm run dev
 
 ## 开发与验证
 
+从仓库根目录执行：
+
 ```powershell
 cd backend
 uv run pytest
@@ -114,6 +138,18 @@ npm run build
 ```
 
 配置项及默认值见 [`.env.example`](.env.example)。后端模型和前端类型必须保持同步，相关约束见 [AGENTS.md](AGENTS.md)。
+
+阅读实现时可从以下入口开始：
+
+| 入口 | 职责 |
+| --- | --- |
+| [`backend/app/graph/review_graph.py`](backend/app/graph/review_graph.py) | 主审查图与 Review Unit 阶段编排 |
+| [`backend/app/services/review_service.py`](backend/app/services/review_service.py) | 任务创建、执行调度与恢复编排 |
+| [`backend/app/services/review_unit_executor.py`](backend/app/services/review_unit_executor.py) | Unit 内的模型与只读工具反馈循环 |
+| [`backend/app/api/reviews.py`](backend/app/api/reviews.py) | Preview、任务查询、Unit 重试和进度接口 |
+| [`frontend/src/App.vue`](frontend/src/App.vue) | 审查、历史记录、验证后端与设置页面入口 |
+
+遇到问题可提交 [GitHub Issue](https://github.com/waangzh/RepoGuardian/issues)，附上复现步骤、预期与实际结果，以及脱敏后的错误信息。提交代码变更前运行对应的后端检查或前端构建；不要提交 `.env`、密钥或任务运行产物。
 
 ## 许可证
 
