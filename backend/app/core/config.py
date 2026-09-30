@@ -129,7 +129,7 @@ class Settings(BaseSettings):
 
     # ---- 可复用结论版本 ----
     repoguardian_config_version: str = "6A-v2"
-    repoguardian_prompt_version: str = "review-v4"
+    repoguardian_prompt_version: str = "review-v5"
     repoguardian_rule_version: str = "rules-v2"
     repoguardian_tool_schema_version: str = "tools-v3"
     repoguardian_review_policy_version: str = "review-policy-v1"

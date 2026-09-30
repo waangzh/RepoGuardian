@@ -4,6 +4,7 @@ from langgraph.graph import END, StateGraph
 
 from app.graph.nodes.agent_decide import agent_decide_node
 from app.graph.nodes.context_retrieve import context_retrieve_node
+from app.graph.nodes.cross_unit_risk import cross_unit_risk_node
 from app.graph.nodes.diff_parse import diff_parse_node
 from app.graph.nodes.human_required import human_required_node
 from app.graph.nodes.intake import intake_node
@@ -95,6 +96,7 @@ def _build_review_unit_graph() -> StateGraph:
     graph.add_node("resolve_evidence", resolve_evidence_node)
     graph.add_node("issue_policy", issue_policy_node)
     graph.add_node("issue_verifier", issue_verifier_node)
+    graph.add_node("cross_unit_risk", cross_unit_risk_node)
     graph.add_node("issue_deduplication", issue_deduplication_node)
     graph.add_node("report", report_node)
     graph.add_node("complete", complete_node)
@@ -126,7 +128,8 @@ def _build_review_unit_graph() -> StateGraph:
     )
     graph.add_edge("resolve_evidence", "issue_policy")
     graph.add_edge("issue_policy", "issue_verifier")
-    graph.add_edge("issue_verifier", "issue_deduplication")
+    graph.add_edge("issue_verifier", "cross_unit_risk")
+    graph.add_edge("cross_unit_risk", "issue_deduplication")
     graph.add_edge("issue_deduplication", "report")
     graph.add_edge("report", "complete")
     graph.add_edge("complete", END)

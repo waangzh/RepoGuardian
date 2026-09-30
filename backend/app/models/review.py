@@ -1707,6 +1707,211 @@ class IssueVerificationRequest(BaseModel):
     budget: IssueVerificationBudget
 
 
+class UnitEvidenceReference(BaseModel):
+    """服务端生成的证据目录项，绑定当前仓库快照。"""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(min_length=1, max_length=100)
+    file_path: str
+    source: Literal["diff", "context"]
+    start_line: int = Field(ge=0)
+    end_line: int = Field(ge=0)
+    head_sha: str
+    base_sha: str = ""
+    content_hash: str
+
+    @field_validator("file_path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        return _validate_repo_relative_path(value)
+
+    @model_validator(mode="after")
+    def ordered_lines(self) -> "UnitEvidenceReference":
+        if self.end_line < self.start_line:
+            raise ValueError("evidence line range is reversed")
+        return self
+
+
+class UnitTargetCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    target: str = Field(min_length=1, max_length=1_000)
+    status: Literal["checked", "unresolved", "not_checked"]
+    evidence_ids: list[str] = Field(default_factory=list, max_length=12)
+    reason: str = Field(min_length=1, max_length=1_000)
+
+    @model_validator(mode="after")
+    def checked_requires_evidence(self) -> "UnitTargetCheck":
+        if self.status == "checked" and not self.evidence_ids:
+            raise ValueError("checked target requires evidence")
+        return self
+
+
+class UnitHypothesisCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    hypothesis_id: str = Field(min_length=1, max_length=100)
+    status: Literal["supported", "refuted", "unresolved"]
+    evidence_ids: list[str] = Field(default_factory=list, max_length=12)
+    reason: str = Field(min_length=1, max_length=1_000)
+
+    @model_validator(mode="after")
+    def conclusion_requires_evidence(self) -> "UnitHypothesisCheck":
+        if self.status != "unresolved" and not self.evidence_ids:
+            raise ValueError("hypothesis conclusion requires evidence")
+        return self
+
+
+class UnitContractDependency(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    file_path: str
+    symbol: str | None = None
+    assumption: str = Field(min_length=1, max_length=1_000)
+    status: Literal["verified", "unresolved", "conflicting"]
+    evidence_ids: list[str] = Field(default_factory=list, max_length=12)
+
+    @field_validator("file_path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        return _validate_repo_relative_path(value)
+
+    @model_validator(mode="after")
+    def conclusion_requires_evidence(self) -> "UnitContractDependency":
+        if self.status != "unresolved" and not self.evidence_ids:
+            raise ValueError("contract conclusion requires evidence")
+        return self
+
+
+class UnitUnresolvedQuestion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    question: str = Field(min_length=1, max_length=1_000)
+    affected_files: list[str] = Field(default_factory=list, max_length=12)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=12)
+
+    @field_validator("affected_files")
+    @classmethod
+    def validate_paths(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(_validate_repo_relative_path(value) for value in values))
+
+
+class UnitReviewRecord(BaseModel):
+    """模型提供的语义检查记录；引用由执行器核对，checked 不等于正确性证明。"""
+
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["unit-review-record-v1"] = "unit-review-record-v1"
+    change_summary: str = Field(min_length=1, max_length=1_500)
+    target_checks: list[UnitTargetCheck] = Field(default_factory=list, max_length=40)
+    hypothesis_checks: list[UnitHypothesisCheck] = Field(default_factory=list, max_length=12)
+    contract_dependencies: list[UnitContractDependency] = Field(default_factory=list, max_length=60)
+    unresolved_questions: list[UnitUnresolvedQuestion] = Field(default_factory=list, max_length=60)
+
+    @model_validator(mode="after")
+    def unique_checks(self) -> "UnitReviewRecord":
+        for identifiers in (
+            [item.target for item in self.target_checks],
+            [item.hypothesis_id for item in self.hypothesis_checks],
+        ):
+            if len(identifiers) != len(set(identifiers)):
+                raise ValueError("review record contains duplicate checks")
+        return self
+
+
+class UnitReviewResponse(BaseModel):
+    """一次既有 diagnosis 调用的结果，不额外请求摘要模型。"""
+
+    model_config = ConfigDict(extra="forbid")
+    issues: list[ReviewIssue] = Field(default_factory=list)
+    review_record: UnitReviewRecord | None = None
+    record_error: str | None = None
+
+
+class UnitReviewSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["unit-review-summary-v1"] = "unit-review-summary-v1"
+    status: Literal["reported", "unknown"] = "unknown"
+    record: UnitReviewRecord | None = None
+    evidence: list[UnitEvidenceReference] = Field(default_factory=list)
+    record_history: list[UnitReviewRecord] = Field(default_factory=list, max_length=3)
+    reason: str = "legacy_or_missing_record"
+
+    @model_validator(mode="after")
+    def consistent_record(self) -> "UnitReviewSummary":
+        if (self.status == "reported") != (self.record is not None):
+            raise ValueError("reported summary requires a record; unknown summary cannot contain one")
+        return self
+
+
+class CrossUnitRiskReason(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    code: Literal[
+        "changed_contract", "unresolved_dependency", "conflicting_contract",
+        "dependency_coverage_gap", "unresolved_cross_unit_question",
+        "relationship_unknown", "summary_unknown", "independent_changes",
+        "no_cross_unit_scope",
+    ]
+    unit_ids: list[str] = Field(default_factory=list)
+    files: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    detail: str
+
+
+class CrossUnitRelationship(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    source_unit_id: str
+    target_unit_id: str
+    source_file: str
+    target_file: str
+    type: Literal["imports", "calls", "test_of", "configures", "declared_dependency"]
+    confidence: float = Field(ge=0, le=1)
+    source_symbol: str | None = None
+    target_symbol: str | None = None
+    parser_id: str | None = None
+    provenance: str = ""
+
+
+class CrossUnitRiskAssessment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["cross-unit-risk-v1"] = "cross-unit-risk-v1"
+    policy_version: str = "cross-unit-policy-v1"
+    decision: Literal["required", "uncertain", "skip"]
+    reasons: list[CrossUnitRiskReason] = Field(default_factory=list)
+    relationships: list[CrossUnitRelationship] = Field(default_factory=list)
+    index_status: Literal["available", "partial", "unknown"] = "unknown"
+    execution_status: Literal["not_requested", "not_implemented"] = "not_requested"
+    non_execution_reason: str | None = None
+
+
+class CrossUnitFollowupRequest(BaseModel):
+    """阶段 C 的补查输入协议；本阶段只定义协议，不执行补查。"""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(min_length=1, max_length=100)
+    question: str = Field(min_length=1, max_length=1_000)
+    unit_ids: list[str] = Field(min_length=1, max_length=12)
+    primary_files: list[str] = Field(min_length=1, max_length=12)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=20)
+    counterevidence_goal: str = Field(min_length=1, max_length=1_000)
+    stop_condition: str = Field(min_length=1, max_length=1_000)
+
+    @field_validator("primary_files")
+    @classmethod
+    def validate_paths(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(_validate_repo_relative_path(value) for value in values))
+
+
+class CrossUnitCoordinationPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["cross-unit-plan-v1"] = "cross-unit-plan-v1"
+    followups: list[CrossUnitFollowupRequest] = Field(default_factory=list, max_length=3)
+    unresolved_questions: list[str] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def unique_followups(self) -> "CrossUnitCoordinationPlan":
+        ids = [item.id for item in self.followups]
+        if len(ids) != len(set(ids)):
+            raise ValueError("followup ids must be unique")
+        return self
+
+
 class ReviewUnitResult(BaseModel):
     review_unit_id: str
     status: ReviewUnitStatus = ReviewUnitStatus.pending
@@ -1716,6 +1921,7 @@ class ReviewUnitResult(BaseModel):
     plan_status: UnitPlanStatus | None = None
     plan_skip_reason: str | None = None
     plan_error: str | None = None
+    review_summary: UnitReviewSummary = Field(default_factory=UnitReviewSummary)
     issues: list[ReviewIssue] = Field(default_factory=list)
     context_snippets: list[ContextSnippet] = Field(default_factory=list)
     messages: list[AgentEvent] = Field(default_factory=list)
@@ -1724,6 +1930,15 @@ class ReviewUnitResult(BaseModel):
     model_usages: list[ModelUsage] = Field(default_factory=list)
     error: str | None = None
     human_request: HumanReviewRequest | None = None
+
+
+class CrossUnitFollowupResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: str = Field(min_length=1, max_length=100)
+    outcome: Literal["candidate_found", "refuted", "unresolved", "failed"]
+    unit_result: ReviewUnitResult | None = None
+    evidence_ids: list[str] = Field(default_factory=list, max_length=20)
+    reason: str = Field(min_length=1, max_length=1_000)
 
 
 class ReviewFileCoverage(BaseModel):
@@ -1852,6 +2067,9 @@ class ReviewTask(BaseModel):
     changed_files: list[ChangedFile] = Field(default_factory=list)
     review_units: list[ReviewUnit] = Field(default_factory=list)
     review_unit_results: list[ReviewUnitResult] = Field(default_factory=list)
+    cross_unit_risk: CrossUnitRiskAssessment | None = None
+    coordination_plan: CrossUnitCoordinationPlan | None = None
+    followup_results: list[CrossUnitFollowupResult] = Field(default_factory=list)
     model_usages: list[ModelUsage] = Field(default_factory=list)
     model_usage_summary: ModelUsageSummary = Field(default_factory=ModelUsageSummary)
     excluded_files: list[ExcludedReviewFile] = Field(default_factory=list)

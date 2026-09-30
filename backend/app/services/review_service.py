@@ -95,6 +95,7 @@ _TASK_STATUS_BY_GRAPH_NODE = {
     "resolve_evidence": TaskStatus.resolving_evidence,
     "issue_policy": TaskStatus.verifying_issues,
     "issue_verifier": TaskStatus.verifying_issues,
+    "cross_unit_risk": TaskStatus.verifying_issues,
     "issue_deduplication": TaskStatus.verifying_issues,
     "verification": TaskStatus.verifying_issues,
     "generate_patch": TaskStatus.generating_patches,
@@ -724,6 +725,9 @@ class ReviewService:
         task.changed_files = rebuilt.changed_files
         task.review_units = rebuilt.review_units
         task.review_unit_results = rebuilt.review_unit_results
+        task.cross_unit_risk = rebuilt.cross_unit_risk
+        task.coordination_plan = rebuilt.coordination_plan
+        task.followup_results = rebuilt.followup_results
         task.model_usages = rebuilt.model_usages
         task.model_usage_summary = rebuilt.model_usage_summary
         task.excluded_files = rebuilt.excluded_files
@@ -895,6 +899,10 @@ class ReviewService:
 
             previous = {item.review_unit_id: item for item in task.review_unit_results}
             previous[unit_id] = result
+            # 重试改变了筛查输入；不能继续展示旧跨 Unit 判断。
+            task.cross_unit_risk = None
+            task.coordination_plan = None
+            task.followup_results = []
             task.review_unit_results = [
                 previous[item.id] for item in task.review_units if item.id in previous
             ]

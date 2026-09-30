@@ -42,6 +42,9 @@ class ReviewState(TypedDict, total=False):
     review_plan: dict[str, Any] | None
     review_units: list[dict[str, Any]] | None
     review_unit_results: list[dict[str, Any]] | None
+    cross_unit_risk: dict[str, Any] | None
+    coordination_plan: dict[str, Any] | None
+    followup_results: list[dict[str, Any]] | None
     model_usages: list[dict[str, Any]] | None
     excluded_files: list[dict[str, Any]] | None
     review_coverage: dict[str, Any] | None

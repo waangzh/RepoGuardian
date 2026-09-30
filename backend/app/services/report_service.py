@@ -30,6 +30,8 @@ class ReportService:
         _append_pr_purpose(lines, task, purpose_summary=purpose_summary)
         _append_issue_summary(lines, task)
         _append_coverage(lines, task)
+        _append_cross_unit_risk(lines, task)
+        _append_unit_review_records(lines, task)
         _append_change_summary(lines, task)
         _append_issue_details(lines, task)
         _append_static_results(lines, task)
@@ -39,6 +41,33 @@ class ReportService:
         _append_limitations(lines, task)
         _append_execution_details(lines, task)
         return "\n".join(lines)
+
+
+def _append_unit_review_records(lines: list[str], task: ReviewTask) -> None:
+    if not task.review_unit_results:
+        return
+    lines.extend(["## Unit 检查记录", "", "检查状态描述实际检查范围，不代表代码正确性证明。", "",
+                  "| Unit | 已检查目标 | 未解决或未检查目标 | 未决问题 |",
+                  "|---|---:|---|---|"])
+    for result in task.review_unit_results:
+        record = result.review_summary.record
+        checked = sum(item.status == "checked" for item in record.target_checks) if record else 0
+        missing = "；".join(item.target for item in record.target_checks if item.status != "checked") if record else "检查记录未知"
+        questions = "；".join(item.question for item in record.unresolved_questions) if record else "未知"
+        lines.append(f"| {_table_cell(result.review_unit_id)} | {checked} | {_table_cell(missing or '-')} | {_table_cell(questions or '-')} |")
+    lines.append("")
+
+
+def _append_cross_unit_risk(lines: list[str], task: ReviewTask) -> None:
+    assessment = task.cross_unit_risk
+    if assessment is None:
+        return
+    labels = {"required": "需要检查", "uncertain": "关系不明确", "skip": "可以跳过"}
+    lines.extend(["## 跨 Unit 风险筛查", "", f"- 判定：{labels[assessment.decision]}",
+                  "- 本阶段仅做确定性筛查，未执行跨 Unit 协调或补查。", ""])
+    for reason in assessment.reasons:
+        lines.append(f"- {_inline_text(reason.detail)}")
+    lines.append("")
 
 
 def _append_coverage(lines: list[str], task: ReviewTask) -> None:
