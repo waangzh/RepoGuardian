@@ -465,6 +465,122 @@ export interface UnitReviewPlan {
   initial_action: Record<string, unknown>;
 }
 
+export interface UnitEvidenceReference {
+  id: string;
+  file_path: string;
+  source: "diff" | "context";
+  start_line: number;
+  end_line: number;
+  head_sha: string;
+  base_sha: string;
+  content_hash: string;
+}
+
+export interface UnitTargetCheck {
+  target: string;
+  status: "checked" | "unresolved" | "not_checked";
+  evidence_ids: string[];
+  reason: string;
+}
+
+export interface UnitHypothesisCheck {
+  hypothesis_id: string;
+  status: "supported" | "refuted" | "unresolved";
+  evidence_ids: string[];
+  reason: string;
+}
+
+export interface UnitContractDependency {
+  file_path: string;
+  symbol?: string | null;
+  assumption: string;
+  status: "verified" | "unresolved" | "conflicting";
+  evidence_ids: string[];
+}
+
+export interface UnitUnresolvedQuestion {
+  question: string;
+  affected_files: string[];
+  evidence_ids: string[];
+}
+
+export interface UnitReviewRecord {
+  schema_version: "unit-review-record-v1";
+  change_summary: string;
+  target_checks: UnitTargetCheck[];
+  hypothesis_checks: UnitHypothesisCheck[];
+  contract_dependencies: UnitContractDependency[];
+  unresolved_questions: UnitUnresolvedQuestion[];
+}
+
+export interface UnitReviewSummary {
+  schema_version: "unit-review-summary-v1";
+  status: "reported" | "unknown";
+  record?: UnitReviewRecord | null;
+  evidence: UnitEvidenceReference[];
+  record_history: UnitReviewRecord[];
+  reason: string;
+}
+
+export interface CrossUnitRiskReason {
+  code: "changed_contract" | "unresolved_dependency" | "conflicting_contract"
+    | "dependency_coverage_gap" | "unresolved_cross_unit_question"
+    | "relationship_unknown" | "summary_unknown" | "independent_changes" | "no_cross_unit_scope";
+  unit_ids: string[];
+  files: string[];
+  evidence_ids: string[];
+  detail: string;
+}
+
+export interface CrossUnitRelationship {
+  id: string;
+  source_unit_id: string;
+  target_unit_id: string;
+  source_file: string;
+  target_file: string;
+  type: "imports" | "calls" | "test_of" | "configures" | "declared_dependency";
+  confidence: number;
+  source_symbol?: string | null;
+  target_symbol?: string | null;
+  parser_id?: string | null;
+  provenance: string;
+}
+
+export interface CrossUnitRiskAssessment {
+  schema_version: "cross-unit-risk-v1";
+  policy_version: string;
+  decision: "required" | "uncertain" | "skip";
+  reasons: CrossUnitRiskReason[];
+  relationships: CrossUnitRelationship[];
+  index_status: "available" | "partial" | "unknown";
+  execution_status: "not_requested" | "not_implemented";
+  non_execution_reason?: string | null;
+}
+
+export interface CrossUnitFollowupRequest {
+  id: string;
+  question: string;
+  unit_ids: string[];
+  primary_files: string[];
+  evidence_ids: string[];
+  counterevidence_goal: string;
+  stop_condition: string;
+}
+
+export interface CrossUnitCoordinationPlan {
+  schema_version: "cross-unit-plan-v1";
+  followups: CrossUnitFollowupRequest[];
+  unresolved_questions: string[];
+}
+
+export interface CrossUnitFollowupResult {
+  request_id: string;
+  outcome: "candidate_found" | "refuted" | "unresolved" | "failed";
+  unit_result?: ReviewUnitResult | null;
+  evidence_ids: string[];
+  reason: string;
+}
+
 export interface ReviewUnitResult {
   review_unit_id: string;
   status: ReviewUnitStatus;
@@ -474,6 +590,7 @@ export interface ReviewUnitResult {
   plan_status?: "planned" | "skipped" | "failed" | null;
   plan_skip_reason?: string | null;
   plan_error?: string | null;
+  review_summary: UnitReviewSummary;
   issues: ReviewIssue[];
   issue_metrics: IssueMetrics;
   context_snippets: ContextSnippet[];
@@ -637,6 +754,9 @@ export interface ReviewTask {
   changed_files: ChangedFile[];
   review_units: ReviewUnit[];
   review_unit_results: ReviewUnitResult[];
+  cross_unit_risk?: CrossUnitRiskAssessment | null;
+  coordination_plan?: CrossUnitCoordinationPlan | null;
+  followup_results: CrossUnitFollowupResult[];
   model_usages: ModelUsage[];
   model_usage_summary: ModelUsageSummary;
   excluded_files: ExcludedReviewFile[];

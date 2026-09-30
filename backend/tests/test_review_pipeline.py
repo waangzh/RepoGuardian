@@ -214,6 +214,11 @@ index 1111111..2222222 100644
     assert completed.changed_files[0].file_path == "sample.py"
     assert completed.issues
     assert completed.report_markdown is not None
+    assert completed.cross_unit_risk is not None
+    assert completed.cross_unit_risk.decision == "skip"
+    names = [step.name for step in completed.steps]
+    assert names.index("issue_verifier") < names.index("cross_unit_risk") < names.index("issue_deduplication")
+    assert "跨 Unit 风险筛查" in completed.report_markdown
 
 
 @pytest.mark.asyncio

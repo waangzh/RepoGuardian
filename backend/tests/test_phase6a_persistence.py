@@ -98,6 +98,39 @@ def test_task_survives_repository_restart_and_api_does_not_need_memory_dict(pers
     assert restarted.list_tasks(status="queued", page=1, page_size=10).total == 1
 
 
+def test_unit_record_and_cross_unit_risk_survive_task_and_unit_snapshot_restart(persistence) -> None:
+    from app.models.review import (
+        CrossUnitRiskAssessment, CrossUnitCoordinationPlan, CrossUnitFollowupRequest,
+        CrossUnitFollowupResult, UnitReviewRecord, UnitReviewSummary,
+    )
+
+    repository, _, sessions = persistence
+    task = _task()
+    unit = _unit()
+    result = ReviewUnitResult(review_unit_id=unit.id, status="completed", terminal_reason="no_issue",
+                              review_summary=UnitReviewSummary(status="reported", record=UnitReviewRecord(
+                                  change_summary="修改实现", unresolved_questions=[{"question": "边界条件未知"}],
+                              )))
+    task.review_units = [unit]
+    task.review_unit_results = [result]
+    task.cross_unit_risk = CrossUnitRiskAssessment(decision="uncertain", execution_status="not_implemented")
+    task.coordination_plan = CrossUnitCoordinationPlan(followups=[CrossUnitFollowupRequest(
+        id="check-1", question="检查返回值", unit_ids=[unit.id], primary_files=["app.py"],
+        counterevidence_goal="查找空值防护", stop_condition="找到完整调用路径或预算耗尽",
+    )])
+    task.followup_results = [CrossUnitFollowupResult(request_id="check-1", outcome="unresolved", reason="未执行")]
+    repository.create_task(task)
+    repository.record_unit_result(task_id=task.id, unit=unit, result=result)
+    restarted = ReviewRepository(sessions, repository._artifacts, require_migration=False)
+    loaded = restarted.get_task(task.id)
+    assert loaded.cross_unit_risk.decision == "uncertain"
+    assert loaded.review_unit_results[0].review_summary.record.unresolved_questions[0].question == "边界条件未知"
+    detail = restarted.get_unit(task.id, unit.id)
+    assert detail.result.review_summary.status == "reported"
+    assert loaded.coordination_plan.followups[0].primary_files == ["app.py"]
+    assert loaded.followup_results[0].request_id == "check-1"
+
+
 def test_issue_detail_only_exposes_current_aggregate_issue(persistence) -> None:
     repository, _, _ = persistence
     task = _task()

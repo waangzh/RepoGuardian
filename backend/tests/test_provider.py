@@ -43,6 +43,41 @@ def fake_chat(monkeypatch: pytest.MonkeyPatch) -> type[FakeChatOpenAI]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", [False, True])
+async def test_unit_review_record_shares_diagnosis_call_and_invalid_record_preserves_issues(
+    fake_chat: type[FakeChatOpenAI], invalid: bool,
+) -> None:
+    record = {"change_summary": "修改返回值", "target_checks": [{
+        "target": "检查返回值", "status": "checked", "evidence_ids": ["e1"], "reason": "已检查",
+    }]}
+    if invalid:
+        record["target_checks"][0]["evidence_ids"] = []
+    issue = {"severity": "high", "category": "correctness", "title": "空值未处理", "confidence": 0.9,
+             "affected_behavior": "空值会失败", "failure_scenario": "输入为空", "recommendation": "处理空值",
+             "primary_evidence": {"file_path": "a.py", "existing_code": "return value"}}
+    fake_chat.responses = [AIMessage(content=json.dumps({"issues": [issue], "review_record": record}))]
+    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
+    record_input = {"targets": ["检查返回值"], "evidence": [{"id": "e1", "content": "return value"}]}
+    result = await provider.review_unit(_sample_pr(), [], "", None, record_input)
+    assert len(fake_chat.instances) == 1
+    assert len(result.value.issues) == 1
+    assert (result.value.review_record is None) == invalid
+    assert bool(result.value.record_error) == invalid
+    assert result.usage.operation == "diagnosis"
+    assert "review_record" in fake_chat.instances[0].messages[1].content
+    assert "return value" in fake_chat.instances[0].messages[1].content
+    assert '"id": "e1"' in fake_chat.instances[0].messages[1].content
+
+
+@pytest.mark.asyncio
+async def test_unit_review_legacy_response_does_not_invent_record(fake_chat: type[FakeChatOpenAI]) -> None:
+    fake_chat.responses = [AIMessage(content='{"issues":[]}')]
+    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
+    result = await provider.review_unit(_sample_pr(), [], "", None, {})
+    assert result.value.review_record is None
+
+
+@pytest.mark.asyncio
 async def test_provider_constructs_chatopenai_with_json_mode_and_model_override(
     fake_chat: type[FakeChatOpenAI],
 ) -> None:
