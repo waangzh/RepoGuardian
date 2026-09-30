@@ -35,8 +35,10 @@ from app.models.review import (
     ReviewUnitToolEvent,
     UnitPlanStatus,
     UnitReviewPlan,
+    UnitReviewSummary,
 )
 from app.services.review_planner import DeterministicReviewPlanner
+from app.services.unit_review_summary import build_record_input, merge_review_summaries, validate_record
 from app.tools.code_search import CodeSearchTool
 from app.tools.context_files import ScopedContextTool
 from app.graph.checkpointer import unit_thread_config
@@ -79,6 +81,7 @@ class _ReviewUnitGraphState(TypedDict, total=False):
     needs_human: bool
     human_request: HumanReviewRequest | None
     terminal_reason: ReviewUnitTerminalReason | None
+    review_summary: UnitReviewSummary
 
 
 class ReviewUnitExecutor:
@@ -239,6 +242,7 @@ class ReviewUnitExecutor:
             "legacy_review_action": False,
             "done": False,
             "terminal_reason": None,
+            "review_summary": UnitReviewSummary(reason="diagnosis_not_executed"),
         }
         config = None
         if getattr(self.unit_graph, "checkpointer", None) is not None:
@@ -272,6 +276,7 @@ class ReviewUnitExecutor:
             plan_status=result.get("plan_status"),
             plan_skip_reason=result.get("plan_skip_reason"),
             plan_error=result.get("plan_error"),
+            review_summary=result.get("review_summary") or UnitReviewSummary(),
             issues=result.get("issues") or [],
             context_snippets=[
                 ContextSnippet.model_validate(item) for item in result.get("context") or []
@@ -853,7 +858,12 @@ class ReviewUnitExecutor:
         pr = PullRequestInfo.model_validate(state["parent_state"].get("pr_info") or {})
         from app.services.model_usage import annotate_usage, append_usage, unpack_model_call
 
-        raw_result = await self.provider.review(
+        record_input = build_record_input(
+            state["unit_files"], state["context"], state.get("unit_plan"),
+            str(state["parent_state"].get("head_sha") or ""),
+            str(state["parent_state"].get("base_sha") or ""),
+        )
+        raw_result = await self.provider.review_unit(
             pr,
             state["unit_files"],
             self._enhanced_diff(
@@ -867,8 +877,16 @@ class ReviewUnitExecutor:
                 ),
             ),
             state["parent_state"].get("model"),
+            record_input,
         )
-        model_issues, usage = unpack_model_call(raw_result)
+        response, usage = unpack_model_call(raw_result)
+        summary = validate_record(
+            response.review_record, record_input, state["scope"].readable_files,
+            response.record_error,
+        )
+        summary = merge_review_summaries(
+            state.get("review_summary") or UnitReviewSummary(), summary, response.review_record,
+        )
         usage = annotate_usage(
             usage,
             accounted_tokens_estimate=4_096,
@@ -876,7 +894,8 @@ class ReviewUnitExecutor:
             unit_complexity=state["unit"].complexity,
         )
         return {
-            "pending_issues": model_issues,
+            "pending_issues": response.issues,
+            "review_summary": summary,
             "budget": budget,
             "model_usages": append_usage(state.get("model_usages") or [], usage),
         }

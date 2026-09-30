@@ -24,6 +24,9 @@ from app.models.review import (
     ReviewIssue,
     ReviewUnit,
     ReviewUnitResult,
+    CrossUnitRiskAssessment,
+    CrossUnitCoordinationPlan,
+    CrossUnitFollowupResult,
     ReviewCoverage,
     ReviewRunManifest,
     ExcludedReviewFile,
@@ -63,6 +66,12 @@ def rebuild_task_from_state(state: ReviewState) -> ReviewTask:
         changed_files=rebuild_changed_files(state.get("changed_files") or []),
         review_units=[ReviewUnit.model_validate(item) for item in state.get("review_units") or []],
         review_unit_results=rebuild_review_unit_results(state.get("review_unit_results") or []),
+        cross_unit_risk=(CrossUnitRiskAssessment.model_validate(state["cross_unit_risk"])
+                         if state.get("cross_unit_risk") else None),
+        coordination_plan=(CrossUnitCoordinationPlan.model_validate(state["coordination_plan"])
+                           if state.get("coordination_plan") else None),
+        followup_results=[CrossUnitFollowupResult.model_validate(item)
+                          for item in state.get("followup_results") or []],
         model_usages=model_usages,
         model_usage_summary=summarize_model_usage(model_usages),
         excluded_files=[
