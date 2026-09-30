@@ -553,7 +553,7 @@ export interface CrossUnitRiskAssessment {
   reasons: CrossUnitRiskReason[];
   relationships: CrossUnitRelationship[];
   index_status: "available" | "partial" | "unknown";
-  execution_status: "not_requested" | "not_implemented";
+  execution_status: "not_requested" | "not_implemented" | "completed" | "unresolved" | "failed";
   non_execution_reason?: string | null;
 }
 
@@ -567,10 +567,29 @@ export interface CrossUnitFollowupRequest {
   stop_condition: string;
 }
 
+export interface ExecutionBudget {
+  context_retrievals: number;
+  max_context_retrievals: number;
+  diagnosis_attempts: number;
+  max_diagnosis_attempts: number;
+  patch_attempts: number;
+  max_patch_attempts: number;
+  model_calls: number;
+  max_model_calls: number;
+  token_usage: number;
+  max_token_usage: number;
+}
+
 export interface CrossUnitCoordinationPlan {
   schema_version: "cross-unit-plan-v1";
   followups: CrossUnitFollowupRequest[];
   unresolved_questions: string[];
+  decision: "required" | "uncertain" | "skip";
+  reason: string;
+  relationship_ids: string[];
+  evidence_ids: string[];
+  status: "proposed" | "validated" | "completed" | "unresolved" | "failed";
+  execution_budget: ExecutionBudget;
 }
 
 export interface CrossUnitFollowupResult {

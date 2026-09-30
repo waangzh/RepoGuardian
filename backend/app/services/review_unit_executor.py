@@ -36,6 +36,7 @@ from app.models.review import (
     UnitPlanStatus,
     UnitReviewPlan,
     UnitReviewSummary,
+    UnitRiskHypothesis,
 )
 from app.services.review_planner import DeterministicReviewPlanner
 from app.services.unit_review_summary import build_record_input, merge_review_summaries, validate_record
@@ -219,6 +220,32 @@ class ReviewUnitExecutor:
         )
         budget = self._budget_for(unit)
         skip_plan = self.planner.should_skip_plan(unit, all_changed)
+        followup = state.get("cross_unit_followup")
+        followup_plan = None
+        if followup:
+            # 补查复用只读子图，但禁止发现范围扩张，并跳过二次规划。
+            scope = scope.model_copy(update={
+                "readable_files": set(unit.primary_files) | set(unit.related_files),
+                "repository_discovery_enabled": False,
+                "max_context_chars": 12_000,
+            })
+            budget = ExecutionBudget(max_model_calls=3, max_token_usage=6_000,
+                                     max_diagnosis_attempts=1, max_context_retrievals=2,
+                                     max_patch_attempts=0)
+            skip_plan = True
+            followup_plan = UnitReviewPlan(
+                change_summary=followup["question"],
+                review_objectives=[followup["question"], followup["counterevidence_goal"]],
+                coverage_targets=[followup["stop_condition"]],
+                risk_hypotheses=[UnitRiskHypothesis(
+                    id="followup-question", category="correctness", priority="high",
+                    description=followup["question"], affected_files=unit.primary_files,
+                    evidence_needed=[followup["counterevidence_goal"]],
+                    completion_criteria=followup["stop_condition"][:500],
+                )],
+                initial_action=AgentAction(action=AgentActionName.report_issue,
+                                           reason="执行有界定向补查"),
+            )
         graph_state: _ReviewUnitGraphState = {
             "parent_state": {key: value for key, value in state.items() if not key.startswith("_")},
             "unit": unit,
@@ -227,11 +254,14 @@ class ReviewUnitExecutor:
             "unit_diff": self._unit_diff(unit, by_path),
             "budget": budget,
             "skip_plan": skip_plan,
-            "unit_plan": None,
+            "unit_plan": followup_plan,
             "plan_status": UnitPlanStatus.skipped if skip_plan else UnitPlanStatus.failed,
             "plan_skip_reason": "small_low_risk_unit" if skip_plan else None,
             "plan_error": None,
-            "context": [],
+            "context": self._fit_context_budget([], [
+                item for item in state.get("cross_unit_followup_context") or []
+                if item.get("file") in scope.readable_files
+            ], scope.max_context_chars) if followup else [],
             "issues": [],
             "model_usages": [],
             "messages": [],

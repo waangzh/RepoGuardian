@@ -118,6 +118,8 @@ def test_unit_record_and_cross_unit_risk_survive_task_and_unit_snapshot_restart(
         id="check-1", question="检查返回值", unit_ids=[unit.id], primary_files=["app.py"],
         counterevidence_goal="查找空值防护", stop_condition="找到完整调用路径或预算耗尽",
     )])
+    task.coordination_plan.status = "unresolved"
+    task.coordination_plan.execution_budget.model_calls = 5
     task.followup_results = [CrossUnitFollowupResult(request_id="check-1", outcome="unresolved", reason="未执行")]
     repository.create_task(task)
     repository.record_unit_result(task_id=task.id, unit=unit, result=result)
@@ -128,6 +130,8 @@ def test_unit_record_and_cross_unit_risk_survive_task_and_unit_snapshot_restart(
     detail = restarted.get_unit(task.id, unit.id)
     assert detail.result.review_summary.status == "reported"
     assert loaded.coordination_plan.followups[0].primary_files == ["app.py"]
+    assert loaded.coordination_plan.status == "unresolved"
+    assert loaded.coordination_plan.execution_budget.model_calls == 5
     assert loaded.followup_results[0].request_id == "check-1"
 
 

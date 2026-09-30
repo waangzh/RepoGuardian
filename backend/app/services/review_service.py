@@ -96,6 +96,7 @@ _TASK_STATUS_BY_GRAPH_NODE = {
     "issue_policy": TaskStatus.verifying_issues,
     "issue_verifier": TaskStatus.verifying_issues,
     "cross_unit_risk": TaskStatus.verifying_issues,
+    "cross_unit_coordination": TaskStatus.verifying_issues,
     "issue_deduplication": TaskStatus.verifying_issues,
     "verification": TaskStatus.verifying_issues,
     "generate_patch": TaskStatus.generating_patches,

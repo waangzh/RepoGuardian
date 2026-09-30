@@ -9,6 +9,7 @@ from typing import Any, Literal
 from app.agents.providers import LLMProvider
 from app.models.review import (
     ChangedFile,
+    CommentPlacement,
     ContextSnippet,
     EvidenceAnchor,
     EvidenceResolutionMethod,
@@ -162,7 +163,7 @@ class IssueVerifierService:
                     "status": IssueStatus.needs_human,
                     "requires_human_confirmation": True,
                     "auto_fix_eligible": False,
-                    "placement": "needs_human",
+                    "placement": CommentPlacement.needs_human,
                     "unresolved_reason": "verifier_needs_human",
                 })
             output.append(updated)
@@ -236,7 +237,7 @@ class IssueVerifierService:
                 "status": IssueStatus.needs_human,
                 "requires_human_confirmation": True,
                 "auto_fix_eligible": False,
-                "placement": "needs_human",
+                "placement": CommentPlacement.needs_human,
                 "unresolved_reason": f"verifier_failure:{reason}",
             })
         return issue.model_copy(update={
