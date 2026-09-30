@@ -1876,12 +1876,12 @@ class CrossUnitRiskAssessment(BaseModel):
     reasons: list[CrossUnitRiskReason] = Field(default_factory=list)
     relationships: list[CrossUnitRelationship] = Field(default_factory=list)
     index_status: Literal["available", "partial", "unknown"] = "unknown"
-    execution_status: Literal["not_requested", "not_implemented"] = "not_requested"
+    execution_status: Literal["not_requested", "not_implemented", "completed", "unresolved", "failed"] = "not_requested"
     non_execution_reason: str | None = None
 
 
 class CrossUnitFollowupRequest(BaseModel):
-    """阶段 C 的补查输入协议；本阶段只定义协议，不执行补查。"""
+    """协调模型提出的只读定向补查；执行前由服务端验证。"""
 
     model_config = ConfigDict(extra="forbid")
     id: str = Field(min_length=1, max_length=100)
@@ -1903,6 +1903,14 @@ class CrossUnitCoordinationPlan(BaseModel):
     schema_version: Literal["cross-unit-plan-v1"] = "cross-unit-plan-v1"
     followups: list[CrossUnitFollowupRequest] = Field(default_factory=list, max_length=3)
     unresolved_questions: list[str] = Field(default_factory=list, max_length=20)
+    decision: Literal["required", "uncertain", "skip"] = "uncertain"
+    reason: str = Field(default="尚未完成协调", max_length=1_000)
+    relationship_ids: list[str] = Field(default_factory=list, max_length=40)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=40)
+    status: Literal["proposed", "validated", "completed", "unresolved", "failed"] = "proposed"
+    execution_budget: ExecutionBudget = Field(default_factory=lambda: ExecutionBudget(
+        max_model_calls=16, max_token_usage=120_000, max_patch_attempts=0,
+    ))
 
     @model_validator(mode="after")
     def unique_followups(self) -> "CrossUnitCoordinationPlan":

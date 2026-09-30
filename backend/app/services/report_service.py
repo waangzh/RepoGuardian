@@ -64,9 +64,26 @@ def _append_cross_unit_risk(lines: list[str], task: ReviewTask) -> None:
         return
     labels = {"required": "需要检查", "uncertain": "关系不明确", "skip": "可以跳过"}
     lines.extend(["## 跨 Unit 风险筛查", "", f"- 判定：{labels[assessment.decision]}",
-                  "- 本阶段仅做确定性筛查，未执行跨 Unit 协调或补查。", ""])
+                  f"- 协调执行状态：{assessment.execution_status}", ""])
     for reason in assessment.reasons:
         lines.append(f"- {_inline_text(reason.detail)}")
+    lines.append("")
+    plan = task.coordination_plan
+    if plan is None:
+        lines.extend(["未执行跨 Unit 协调或补查。", ""])
+        return
+    lines.extend(["### 跨 Unit 协调与定向补查", "",
+                  f"- 协调判定：{labels[plan.decision]}；状态：{plan.status}",
+                  f"- 理由：{_inline_text(plan.reason)}",
+                  f"- 共享调用预算：{plan.execution_budget.model_calls}/{plan.execution_budget.max_model_calls}",
+                  f"- 估算 token 预算：{plan.execution_budget.token_usage}/{plan.execution_budget.max_token_usage}",
+                  "- 补查独立记录，不计入原始 Unit 覆盖率。", ""])
+    for request in plan.followups:
+        lines.append(f"- {_inline_text(request.id)}：{_inline_text(request.question)}")
+    for result in task.followup_results:
+        lines.append(f"- {_inline_text(result.request_id)}：{result.outcome}；{_inline_text(result.reason)}")
+    for question in plan.unresolved_questions:
+        lines.append(f"- 未决：{_inline_text(question)}")
     lines.append("")
 
 
