@@ -275,7 +275,7 @@ class ReviewUnitExecutor:
             "review_summary": UnitReviewSummary(reason="diagnosis_not_executed"),
         }
         config = None
-        if getattr(self.unit_graph, "checkpointer", None) is not None:
+        if getattr(self.unit_graph, "checkpointer", None) not in (None, False):
             config = unit_thread_config(str(state.get("task_id") or "unknown"), unit.id)
         result = await self.unit_graph.ainvoke(graph_state, config=config)
         if result.get("needs_human"):

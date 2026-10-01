@@ -111,6 +111,8 @@ def _rebuild_model_usages(state: ReviewState) -> list[ModelUsage]:
     raw_items = list(state.get("model_usages") or [])
     for raw_result in state.get("review_unit_results") or []:
         raw_items.extend(raw_result.get("model_usages") or [])
+    for raw_result in state.get("followup_results") or []:
+        raw_items.extend((raw_result.get("unit_result") or {}).get("model_usages") or [])
     by_id: dict[str, ModelUsage] = {}
     for raw in raw_items:
         usage = ModelUsage.model_validate(raw)

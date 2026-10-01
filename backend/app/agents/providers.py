@@ -17,6 +17,7 @@ from app.graph.policies import (
     render_unit_action_protocol,
 )
 from app.services.model_pricing import calculate_cost_microusd
+from app.services.model_usage import model_request_budget_hook
 from app.models.review import (
     AgentAction,
     ChangedFile,
@@ -501,7 +502,9 @@ class OpenAICompatibleProvider(LLMProvider):
         try:
             raw = self._load_json(response.value)
             # 执行状态和预算是服务端权威字段，模型不得提供。
-            if isinstance(raw, dict) and {"status", "execution_budget"} & raw.keys():
+            if isinstance(raw, dict) and {
+                "status", "execution_budget", "runtime_fingerprint", "cache_namespace", "runtime_metrics",
+            } & raw.keys():
                 raise ValueError("coordinator cannot set execution state or budget")
             return ModelCallResult(CrossUnitCoordinationPlan.model_validate(raw), response.usage)
         except LLMProviderError as exc:
@@ -525,6 +528,8 @@ class OpenAICompatibleProvider(LLMProvider):
         attempt_errors: list[dict[str, Any]] = []
         response: AIMessage | None = None
         for attempt in range(1, self._request_attempts + 1):
+            if attempt > 1 and model_request_budget_hook.get() is not None:
+                await model_request_budget_hook.get()()
             try:
                 response = await chat_model.ainvoke(messages)
                 break

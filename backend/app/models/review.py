@@ -1876,7 +1876,7 @@ class CrossUnitRiskAssessment(BaseModel):
     reasons: list[CrossUnitRiskReason] = Field(default_factory=list)
     relationships: list[CrossUnitRelationship] = Field(default_factory=list)
     index_status: Literal["available", "partial", "unknown"] = "unknown"
-    execution_status: Literal["not_requested", "not_implemented", "completed", "unresolved", "failed"] = "not_requested"
+    execution_status: Literal["not_requested", "not_implemented", "completed", "unresolved", "failed", "cancelled"] = "not_requested"
     non_execution_reason: str | None = None
 
 
@@ -1898,6 +1898,23 @@ class CrossUnitFollowupRequest(BaseModel):
         return list(dict.fromkeys(_validate_repo_relative_path(value) for value in values))
 
 
+class CrossUnitRuntimeMetrics(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model_calls: int = Field(default=0, ge=0)
+    failed_calls: int = Field(default=0, ge=0)
+    unknown_calls: int = Field(default=0, ge=0)
+    cache_hits: int = Field(default=0, ge=0)
+    resume_count: int = Field(default=0, ge=0)
+    estimated_tokens: int = Field(default=0, ge=0)
+    actual_tokens: int = Field(default=0, ge=0)
+    usage_reported_calls: int = Field(default=0, ge=0)
+    cost_microusd: int | None = Field(default=None, ge=0)
+    latency_ms: int = Field(default=0, ge=0)
+    completed_followups: int = Field(default=0, ge=0)
+    candidate_count: int = Field(default=0, ge=0)
+    confirmed_count: int = Field(default=0, ge=0)
+
+
 class CrossUnitCoordinationPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
     schema_version: Literal["cross-unit-plan-v1"] = "cross-unit-plan-v1"
@@ -1907,7 +1924,10 @@ class CrossUnitCoordinationPlan(BaseModel):
     reason: str = Field(default="尚未完成协调", max_length=1_000)
     relationship_ids: list[str] = Field(default_factory=list, max_length=40)
     evidence_ids: list[str] = Field(default_factory=list, max_length=40)
-    status: Literal["proposed", "validated", "completed", "unresolved", "failed"] = "proposed"
+    status: Literal["proposed", "validated", "completed", "unresolved", "failed", "cancelled"] = "proposed"
+    runtime_fingerprint: str | None = None
+    cache_namespace: Literal["cross-unit-runtime-v1"] = "cross-unit-runtime-v1"
+    runtime_metrics: CrossUnitRuntimeMetrics = Field(default_factory=CrossUnitRuntimeMetrics)
     execution_budget: ExecutionBudget = Field(default_factory=lambda: ExecutionBudget(
         max_model_calls=16, max_token_usage=120_000, max_patch_attempts=0,
     ))
@@ -1947,6 +1967,8 @@ class CrossUnitFollowupResult(BaseModel):
     unit_result: ReviewUnitResult | None = None
     evidence_ids: list[str] = Field(default_factory=list, max_length=20)
     reason: str = Field(min_length=1, max_length=1_000)
+    fingerprint: str | None = None
+    validation_status: Literal["pending", "completed"] = "pending"
 
 
 class ReviewFileCoverage(BaseModel):
@@ -2012,6 +2034,8 @@ class ReviewRunManifest(BaseModel):
     total_tokens: int = Field(default=0, ge=0)
     confirmed_issues: int = Field(default=0, ge=0)
     coverage: ReviewCoverage
+    coordination_metrics: CrossUnitRuntimeMetrics | None = None
+    coordination_fingerprint: str | None = None
     warnings: list[str] = Field(default_factory=list)
 
 

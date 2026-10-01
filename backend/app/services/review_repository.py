@@ -107,7 +107,7 @@ class ReviewRepository:
                 task_snapshot_artifact_uri=snapshot_uri,
                 report_markdown=task.report_markdown,
                 thread_id=task.id,
-                checkpoint_ns="review",
+                checkpoint_ns="",
                 created_at=task.created_at,
                 updated_at=task.updated_at,
                 retention_until=now + timedelta(days=settings.repoguardian_retention_days),
@@ -123,6 +123,8 @@ class ReviewRepository:
             row = session.get(ReviewTaskOrm, task.id)
             if row is None:
                 raise KeyError(task.id)
+            if row.status == TaskStatus.cancelled.value and task.status != TaskStatus.cancelled:
+                return  # 迟到的进度/worker 结果不能覆盖用户取消。
             row.status = task.status.value
             row.current_phase = task.phase.value
             row.mode = task.mode.value
@@ -297,6 +299,8 @@ class ReviewRepository:
                 select(ReviewUnitOrm).where(*filters).order_by(ReviewUnitOrm.finished_at.desc())
             )
             for row in rows:
+                if row.unit_snapshot.get("grouping_reason") == "cross_unit_followup":
+                    continue
                 if not row.result_snapshot:
                     continue
                 result = ReviewUnitResult.model_validate(row.result_snapshot)
@@ -312,6 +316,8 @@ class ReviewRepository:
         result: ReviewUnitResult,
         reused_from_id: int | None = None,
     ) -> None:
+        if unit.grouping_reason == "cross_unit_followup":
+            raise ValueError("followup results must use the isolated coordination runtime")
         now = utcnow()
         with self._session_factory.begin() as session:
             task = session.get(ReviewTaskOrm, task_id)
@@ -627,6 +633,72 @@ class ReviewRepository:
                 ).limit(limit)
             ))
 
+    def load_coordination_runtime(self, task_id: str, fingerprint: str) -> tuple[dict | None, dict | None]:
+        with self._session_factory() as session:
+            row = session.get(SideEffectOrm, f"cross-unit:{task_id}:{fingerprint}")
+            budget = session.get(SideEffectOrm, f"cross-unit-budget:{task_id}")
+            return (dict(row.result) if row and row.result else None,
+                    dict(budget.result["budget"]) if budget and budget.result else None)
+
+    def save_coordination_runtime(self, task_id: str, fingerprint: str, payload: dict,
+                                  expected_revision: int, expected_budget: dict | None,
+                                  lease: dict | None = None) -> None:
+        """运行账本与任务共享预算在一个事务内 CAS；旧 worker 不能预留或发布。"""
+        from app.services.coordination_runtime import CoordinationLeaseLost
+        from sqlalchemy.exc import IntegrityError
+
+        try:
+            with self._session_factory.begin() as session:
+                task = session.get(ReviewTaskOrm, task_id)
+                if task is None or task.deleted_at is not None:
+                    raise CoordinationLeaseLost("missing coordination task")
+                cancelled = task.status == TaskStatus.cancelled.value
+                if cancelled:
+                    if payload["status"] not in {"interrupted", "cancelled"}:
+                        raise CoordinationLeaseLost("coordination task cancelled")
+                    payload["status"] = "cancelled"
+                    if payload.get("plan"):
+                        payload["plan"]["status"] = "cancelled"
+                if lease and not cancelled:
+                    job = session.get(WorkerJobOrm, lease["job_id"])
+                    if (job is None or job.status != "leased" or job.lease_owner != lease["owner"]
+                            or job.attempts != lease["attempt"] or job.lease_until is None
+                            or job.lease_until.replace(tzinfo=timezone.utc) <= utcnow()):
+                        raise CoordinationLeaseLost("coordination worker lease lost")
+                key = f"cross-unit:{task_id}:{fingerprint}"
+                row = session.get(SideEffectOrm, key)
+                if row is None:
+                    if expected_revision != -1:
+                        raise CoordinationLeaseLost("coordination runtime missing")
+                    session.add(SideEffectOrm(idempotency_key=key, task_id=task_id,
+                        effect_type="cross-unit-runtime-v1", target=fingerprint, status=payload["status"],
+                        request_hash=fingerprint, result=payload))
+                else:
+                    changed = session.execute(update(SideEffectOrm).where(
+                        SideEffectOrm.idempotency_key == key,
+                        SideEffectOrm.result["revision"].as_integer() == expected_revision,
+                    ).values(result=payload, status=payload["status"]))
+                    if changed.rowcount != 1:
+                        raise CoordinationLeaseLost("coordination runtime revision changed")
+                budget_key = f"cross-unit-budget:{task_id}"
+                budget_row = session.get(SideEffectOrm, budget_key)
+                new_budget = {"budget": payload["budget"]}
+                if budget_row is None:
+                    if expected_budget is not None:
+                        raise CoordinationLeaseLost("shared budget missing")
+                    session.add(SideEffectOrm(idempotency_key=budget_key, task_id=task_id,
+                        effect_type="cross-unit-budget-v1", target=task_id, status="active",
+                        request_hash=stable_hash(task_id), result=new_budget))
+                else:
+                    changed = session.execute(update(SideEffectOrm).where(
+                        SideEffectOrm.idempotency_key == budget_key,
+                        SideEffectOrm.result == {"budget": expected_budget},
+                    ).values(result=new_budget))
+                    if changed.rowcount != 1:
+                        raise CoordinationLeaseLost("shared coordination budget changed")
+        except IntegrityError as exc:
+            raise CoordinationLeaseLost("concurrent coordination runtime writer") from exc
+
     def begin_side_effect(
         self, *, task_id: str, effect_type: str, target: str, payload: dict[str, Any]
     ) -> tuple[str, bool]:
@@ -668,6 +740,8 @@ class ReviewRepository:
         }
         now = utcnow()
         for unit in task.review_units:
+            if unit.grouping_reason == "cross_unit_followup":
+                raise ValueError("followup Unit cannot enter normal Unit cache")
             result = results.get(unit.id)
             status = result.status.value if result else ReviewUnitStatus.pending.value
             row = existing.get(unit.id)
@@ -695,7 +769,7 @@ class ReviewRepository:
             row.failure_reason = result.error if result else None
             row.updated_at = now
             if result:
-                row.attempts = max(row.attempts, 1)
+                row.attempts = max(row.attempts or 0, 1)
                 row.started_at = row.started_at or now
                 if result.status in {
                     ReviewUnitStatus.completed,
@@ -881,6 +955,12 @@ class ReviewRepository:
             },
         })
         payload["review"] = review
+        if row.status == TaskStatus.cancelled.value:
+            if payload.get("coordination_plan"):
+                payload["coordination_plan"]["status"] = "cancelled"
+            if payload.get("cross_unit_risk"):
+                payload["cross_unit_risk"].update(execution_status="cancelled",
+                                                  non_execution_reason="用户已取消任务")
         return payload
 
     def _externalize_text(self, task_id: str, kind: str, content: str) -> tuple[str | None, str | None]:
