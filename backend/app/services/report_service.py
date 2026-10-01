@@ -78,6 +78,11 @@ def _append_cross_unit_risk(lines: list[str], task: ReviewTask) -> None:
                   f"- 共享调用预算：{plan.execution_budget.model_calls}/{plan.execution_budget.max_model_calls}",
                   f"- 估算 token 预算：{plan.execution_budget.token_usage}/{plan.execution_budget.max_token_usage}",
                   "- 补查独立记录，不计入原始 Unit 覆盖率。", ""])
+    metrics = plan.runtime_metrics
+    lines.extend([f"- 协调运行指纹：{plan.runtime_fingerprint or '旧记录无运行指纹'}",
+                  f"- 本轮调用尝试：{metrics.model_calls}；失败：{metrics.failed_calls}；结果未知：{metrics.unknown_calls}",
+                  f"- 恢复次数：{metrics.resume_count}；账本复用：{metrics.cache_hits}",
+                  f"- 补查候选：{metrics.candidate_count}；独立验证确认：{metrics.confirmed_count}", ""])
     for request in plan.followups:
         lines.append(f"- {_inline_text(request.id)}：{_inline_text(request.question)}")
     for result in task.followup_results:

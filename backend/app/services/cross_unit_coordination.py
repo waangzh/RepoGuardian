@@ -1,7 +1,6 @@
 """一轮有界协调：模型提议，服务端校验，独立补查与候选批次验证。"""
 
 import asyncio
-import hashlib
 import json
 from typing import Any
 
@@ -16,6 +15,8 @@ from app.services.model_usage import unpack_model_call
 from app.services.review_unit_executor import ReviewUnitExecutor
 from app.services.review_planner import DeterministicReviewPlanner
 from app.services.unit_review_summary import build_record_input
+from app.services.coordination_runtime import CoordinationRuntime, coordination_fingerprint
+from app.services.fingerprints import stable_hash
 
 
 class SharedBudgetProvider:
@@ -23,18 +24,25 @@ class SharedBudgetProvider:
 
     def __init__(self, provider: Any, budget: ExecutionBudget) -> None:
         self.provider = provider
-        self.budget = budget
+        self._budget = budget
+        self.runtime: CoordinationRuntime | None = None
+
+    @property
+    def budget(self) -> ExecutionBudget:
+        return self.runtime.budget if self.runtime else self._budget
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.provider, name)
 
     async def _call(self, name: str, args: tuple, output_tokens: int) -> Any:
+        if self.runtime is not None:
+            return await self.runtime.call(self.provider, name, args, output_tokens)
         def encode(value: Any) -> Any:
             return value.model_dump(mode="json") if hasattr(value, "model_dump") else str(value)
         estimate = (len(json.dumps(args, default=encode, ensure_ascii=False)) + 3) // 4 + output_tokens
         if not self.budget.can_consume(model_calls=1, token_usage=estimate):
             raise LLMProviderError("cross_unit_shared_budget_exhausted")
-        self.budget = self.budget.consume(model_calls=1, token_usage=estimate)
+        self._budget = self.budget.consume(model_calls=1, token_usage=estimate)
         return await getattr(self.provider, name)(*args)
 
     async def coordinate_cross_units(self, *args: Any) -> Any:
@@ -52,11 +60,14 @@ class SharedBudgetProvider:
 
 class CrossUnitCoordinationService:
     def __init__(self, provider: Any, *, timeout_seconds: int = 660,
-                 budget: ExecutionBudget | None = None) -> None:
+                 budget: ExecutionBudget | None = None, repository: Any = None,
+                 lease: dict | None = None, progress: Any = None) -> None:
         self.provider = SharedBudgetProvider(provider, budget or ExecutionBudget(
             max_model_calls=16, max_token_usage=120_000, max_patch_attempts=0,
         ))
         self.timeout_seconds = timeout_seconds
+        self.repository, self.lease, self.progress = repository, lease, progress
+        self.runtime: CoordinationRuntime | None = None
 
     @staticmethod
     def catalog(state: dict[str, Any]) -> dict[str, Any]:
@@ -147,13 +158,25 @@ class CrossUnitCoordinationService:
             seen_scope.add(scope_key)
 
     async def run(self, state: dict[str, Any]) -> dict[str, Any]:
-        # 节点再次进入时复用终态，不发起第二轮协调；崩溃恢复由阶段 D 扩展。
+        fingerprint = coordination_fingerprint(state)
         existing = state.get("coordination_plan")
-        if existing and existing.get("status") in {"completed", "unresolved", "failed"}:
+        if (existing and existing.get("runtime_fingerprint") == fingerprint
+                and existing.get("status") in {"completed", "unresolved", "failed", "cancelled"}):
             return {}
         risk = CrossUnitRiskAssessment.model_validate(state["cross_unit_risk"])
         if risk.decision == "skip":
             return {}
+        self.runtime = CoordinationRuntime(str(state.get("task_id") or ""), fingerprint,
+            self.provider.budget, self.repository, self.lease, self.progress)
+        await self.runtime.load()
+        self.provider.runtime = self.runtime
+        if self.runtime.data["output"] is not None:
+            self.runtime.data["cache_hits"] += 1
+            await self.runtime.persist()
+            return {**self.runtime.data["output"], **self.runtime.public_state()}
+        if self.runtime.data["revision"] == -1:
+            self.runtime.data["base_metrics"] = dict(state.get("issue_metrics") or {})
+        await self.runtime.persist()
         plan = CrossUnitCoordinationPlan(decision=risk.decision)
         usages: list[dict] = []
         try:
@@ -162,19 +185,26 @@ class CrossUnitCoordinationService:
                 if len(json.dumps(payload, ensure_ascii=False)) > 48_000:
                     raise ValueError("coordination_catalog_exceeds_48000_chars")
                 try:
-                    async with asyncio.timeout(60):
-                        raw = await self.provider.coordinate_cross_units(payload, state.get("model"))
-                    proposed, usage = unpack_model_call(raw)
-                    if usage is not None:
-                        usages.append(usage.model_dump(mode="json"))
-                    plan = CrossUnitCoordinationPlan.model_validate(proposed)
-                    self.validate_plan(plan, payload, self.provider.budget)
+                    saved_plan = self.runtime.data["plan"]
+                    if saved_plan and saved_plan["status"] == "validated":
+                        plan = CrossUnitCoordinationPlan.model_validate(saved_plan)
+                        self.validate_plan(plan, payload)
+                    else:
+                        async with asyncio.timeout(60):
+                            raw = await self.provider.coordinate_cross_units(payload, state.get("model"))
+                        proposed, usage = unpack_model_call(raw)
+                        if usage is not None:
+                            usages.append(usage.model_dump(mode="json"))
+                        plan = CrossUnitCoordinationPlan.model_validate(proposed)
+                        self.validate_plan(plan, payload, self.provider.budget)
                 except Exception as exc:
                     usage = getattr(exc, "usage", None)
                     if usage is not None:
                         usages.append(usage.model_dump(mode="json"))
                     raise
                 plan = plan.model_copy(update={"status": "validated"})
+                self.runtime.data["plan"] = plan.model_dump(mode="json")
+                await self.runtime.persist()
                 result = await self.execute_followups(plan, state)
                 status = "completed" if plan.decision == "skip" or (
                     result.get("followup_results") and all(
@@ -188,11 +218,18 @@ class CrossUnitCoordinationService:
                 result["model_usages"] = [*(state.get("model_usages") or []), *usages,
                                           *result.get("model_usages", [])]
         except asyncio.CancelledError:
+            self.runtime.data["status"] = "interrupted"
+            self.runtime.data["plan"] = plan.model_dump(mode="json")
+            # 调用已预留的预算不退还；取消状态不会转成成功结果。
+            try:
+                await asyncio.shield(self.runtime.persist())
+            except asyncio.CancelledError:
+                pass
             raise
         except Exception as exc:
             plan = plan.model_copy(update={"status": "failed",
                                           "reason": f"{type(exc).__name__}: {exc}"[:1000]})
-            result = {"warnings": [*(state.get("warnings") or []),
+            result = {**self._aggregate_output(state), "warnings": [*(state.get("warnings") or []),
                                    f"跨 Unit 协调未完成：{plan.reason}"],
                       "model_usages": [*(state.get("model_usages") or []), *usages]}
         plan = plan.model_copy(update={"execution_budget": self.provider.budget})
@@ -201,7 +238,43 @@ class CrossUnitCoordinationService:
             "execution_status": plan.status if plan.status in {"completed", "failed"} else "unresolved",
             "non_execution_reason": None if plan.status == "completed" else plan.reason,
         }).model_dump(mode="json")
+        if plan.status == "unresolved":
+            result["warnings"] = list(dict.fromkeys([*(result.get("warnings") or []),
+                "跨 Unit 补查仍有未决项，请结合补查记录确认。"] ))
+        self.runtime.data["plan"] = plan.model_dump(mode="json")
+        self.runtime.data["status"] = plan.status
+        # 账本保存派生输出，重复恢复时直接返回，指标不再次累加。
+        known = {usage["id"]: usage for usage in result.get("model_usages") or []}
+        for call in self.runtime.data["calls"].values():
+            if call.get("usage"):
+                known.setdefault(call["usage"]["id"], call["usage"])
+        result["model_usages"] = list(known.values())
+        self.runtime.data["output"] = result
+        await self.runtime.persist()
+        result.update(self.runtime.public_state())
         return result
+
+    def _aggregate_output(self, state: dict) -> dict:
+        batches = list(self.runtime.data["batches"].values()) if self.runtime else []
+        metrics = dict(self.runtime.data["base_metrics"] if self.runtime else state.get("issue_metrics") or {})
+        for batch in batches:
+            for key, value in batch.get("issue_metrics", {}).items():
+                metrics[key] = metrics.get(key, 0) + value
+        issues = {item["id"]: item for item in state.get("review_issues") or []}
+        for batch in batches:
+            issues.update({item["id"]: item for item in batch.get("review_issues") or []})
+        return {"review_issues": list(issues.values()), "issue_metrics": metrics,
+            "followup_results": list(self.runtime.data["followups"].values()) if self.runtime else [],
+            "model_usages": [usage for batch in batches for usage in batch.get("model_usages") or []],
+            "deterministic_issue_checks": [*(state.get("deterministic_issue_checks") or []),
+                *(item for batch in batches for item in batch.get("deterministic_issue_checks") or [])],
+            "issue_verifications": [*(state.get("issue_verifications") or []),
+                *(item for batch in batches for item in batch.get("issue_verifications") or [])],
+            "warnings": list(dict.fromkeys([*(state.get("warnings") or []),
+                *(item for batch in batches for item in batch.get("warnings") or [])])),
+            "context_snippets": [*(state.get("context_snippets") or []),
+                *(item for raw in (self.runtime.data["followups"].values() if self.runtime else [])
+                  for item in (raw.get("unit_result") or {}).get("context_snippets") or [])]}
 
     async def execute_followups(self, plan: CrossUnitCoordinationPlan,
                                state: dict[str, Any]) -> dict[str, Any]:
@@ -210,18 +283,16 @@ class CrossUnitCoordinationService:
         from app.services.issue_verifier import IssueVerifierService
 
         by_id = {raw["id"]: ReviewUnit.model_validate(raw) for raw in state["review_units"]}
-        executor = ReviewUnitExecutor(self.provider, concurrency=1, timeout_seconds=60)
-        output = []
-        candidates = []
+        # 补查仅由专属账本恢复，显式禁止继承父图的 Unit checkpoint/cache。
+        executor = ReviewUnitExecutor(self.provider, concurrency=1, timeout_seconds=60, checkpointer=False)
         usages = []
-        contexts = []
-        followup_units = []
-        existing_ids = {raw["id"] for raw in state.get("review_issues") or []}
         for request in plan.followups:
             selected = [by_id[key] for key in request.unit_ids]
-            digest = hashlib.sha256(json.dumps([
-                state.get("base_sha"), state.get("head_sha"), request.model_dump(mode="json"),
-            ], sort_keys=True).encode()).hexdigest()
+            digest = stable_hash({"purpose": "cross-unit-followup-v1",
+                "runtime": self.runtime.fingerprint, "request": request.model_dump(mode="json")})
+            if request.id in self.runtime.data["batches"]:
+                self.runtime.data["cache_hits"] += 1
+                continue
             readable = {path for unit in selected for path in [*unit.primary_files, *unit.related_files]}
             unit = ReviewUnit(
                 id="followup-" + digest[:24], primary_files=request.primary_files,
@@ -231,7 +302,6 @@ class CrossUnitCoordinationService:
                 risk_tags=["cross_module"], complexity="small", estimated_tokens=0,
                 fingerprint=digest, grouping_reason="cross_unit_followup",
             )
-            followup_units.append(unit)
             local = {**state, "cross_unit_followup": request.model_dump(mode="json"),
                      "cross_unit_followup_context": [
                          {**snippet, "review_unit_id": unit.id}
@@ -240,14 +310,15 @@ class CrossUnitCoordinationService:
                          for snippet in raw.get("context_snippets") or []
                          if snippet.get("file") in readable
                      ]}
-            result = await executor.execute_unit(unit, local)
+            saved = self.runtime.data["followups"].get(request.id)
+            if saved:
+                self.runtime.data["cache_hits"] += 1
+            result = (ReviewUnitResult.model_validate(saved["unit_result"]) if saved
+                      else await executor.execute_unit(unit, local))
             # 候选 ID 和生命周期由服务端重新赋值；补查不能冒充已确认 Issue。
             issues = []
             for index, issue in enumerate(result.issues[:20]):
                 identity = f"{unit.id}-issue-{index}"
-                if identity in existing_ids:
-                    continue
-                existing_ids.add(identity)
                 raw_issue = issue.model_dump(mode="json", include=set(ReviewIssueInput.model_fields))
                 raw_issue["primary_evidence"] = issue.primary_evidence.model_dump(
                     mode="json", include=set(EvidenceAnchorInput.model_fields))
@@ -259,8 +330,6 @@ class CrossUnitCoordinationService:
                 issues.append(candidate.model_copy(update={"id": identity, "status": IssueStatus.candidate,
                     "source_issue_ids": [identity], "source_review_unit_ids": request.unit_ids}))
             result = result.model_copy(update={"issues": issues})
-            candidates.extend(issues)
-            contexts.extend(item.model_dump(mode="json") for item in result.context_snippets)
             usages.extend(item.model_dump(mode="json") for item in result.model_usages)
             # 零候选不是反证；只有目标检查完成且具有证据的 refuted 假设才是反证。
             record = result.review_summary.record
@@ -274,44 +343,41 @@ class CrossUnitCoordinationService:
                 refuted = all(set(item.primary_files) & paths for item in selected)
             outcome = "failed" if result.status != ReviewUnitStatus.completed else (
                 "candidate_found" if issues else "refuted" if refuted else "unresolved")
-            output.append(CrossUnitFollowupResult(
+            followup = CrossUnitFollowupResult(
                 request_id=request.id, outcome=outcome, unit_result=result,
+                fingerprint=digest,
                 evidence_ids=request.evidence_ids, reason=result.error or (
                     "新增候选将接受证据、策略与独立验证" if issues else
                     "已找到相关 Unit 的反证且完成目标检查" if refuted else
                     "未发现候选；没有充分反证时保留未决"
                 ),
-            ))
-        if candidates:
+            )
+            self.runtime.data["followups"][request.id] = followup.model_dump(mode="json")
+            await self.runtime.persist()
+            if not issues:
+                self.runtime.data["batches"][request.id] = {"review_issues": [], "issue_metrics": {}}
+                followup = followup.model_copy(update={"validation_status": "completed"})
+                self.runtime.data["followups"][request.id] = followup.model_dump(mode="json")
+                await self.runtime.persist()
+                continue
             # 只处理新增批次，不重验或重新计数原有候选，不写入普通 Unit 结果。
-            batch = {**state, "review_units": [item.model_dump(mode="json") for item in followup_units],
-                     "review_unit_results": [], "review_issues": [item.model_dump(mode="json") for item in candidates],
+            batch = {**state, "review_units": [unit.model_dump(mode="json")],
+                     "review_unit_results": [], "review_issues": [item.model_dump(mode="json") for item in issues],
                      "model_usages": [], "issue_metrics": {}, "step_progress": [],
-                     "context_snippets": contexts,
+                     "context_snippets": [item.model_dump(mode="json") for item in result.context_snippets],
                      "_issue_verifier_service": IssueVerifierService(
                          self.provider, enabled=True, fail_mode="needs_human", max_calls_per_unit=2,
                      )}
             for node in (resolve_evidence_node, issue_policy_node, issue_verifier_node):
                 batch.update(await node(batch))
-            resolved = {raw["id"]: raw for raw in batch["review_issues"]}
-            for index, item in enumerate(output):
-                result = item.unit_result
-                if result is not None:
-                    output[index] = item.model_copy(update={"unit_result": result.model_copy(update={
-                        "issues": [type(issue).model_validate(resolved[issue.id]) for issue in result.issues],
-                    })})
-            metrics = {key: value + (state.get("issue_metrics") or {}).get(key, 0)
-                       for key, value in batch["issue_metrics"].items()}
-            usages.extend(batch.get("model_usages") or [])
-        else:
-            batch = {"review_issues": [], "warnings": state.get("warnings") or []}
-            metrics = state.get("issue_metrics") or {}
-        return {"followup_results": [item.model_dump(mode="json") for item in output],
-                "review_issues": [*(state.get("review_issues") or []), *batch["review_issues"]],
-                "issue_metrics": metrics, "model_usages": usages,
-                "deterministic_issue_checks": [*(state.get("deterministic_issue_checks") or []),
-                                               *batch.get("deterministic_issue_checks", [])],
-                "issue_verifications": [*(state.get("issue_verifications") or []),
-                                        *batch.get("issue_verifications", [])],
-                "warnings": batch.get("warnings") or [],
-                "context_snippets": [*(state.get("context_snippets") or []), *contexts]}
+            self.runtime.data["batches"][request.id] = {key: batch.get(key) for key in (
+                "review_issues", "issue_metrics", "model_usages", "deterministic_issue_checks",
+                "issue_verifications", "warnings")}
+            result = result.model_copy(update={"issues": [type(issues[0]).model_validate(raw)
+                                                           for raw in batch["review_issues"]]})
+            followup = followup.model_copy(update={"unit_result": result, "validation_status": "completed"})
+            self.runtime.data["followups"][request.id] = followup.model_dump(mode="json")
+            await self.runtime.persist()
+        aggregated = self._aggregate_output(state)
+        aggregated["model_usages"].extend(usages)
+        return aggregated

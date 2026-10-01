@@ -553,7 +553,7 @@ export interface CrossUnitRiskAssessment {
   reasons: CrossUnitRiskReason[];
   relationships: CrossUnitRelationship[];
   index_status: "available" | "partial" | "unknown";
-  execution_status: "not_requested" | "not_implemented" | "completed" | "unresolved" | "failed";
+  execution_status: "not_requested" | "not_implemented" | "completed" | "unresolved" | "failed" | "cancelled";
   non_execution_reason?: string | null;
 }
 
@@ -588,7 +588,10 @@ export interface CrossUnitCoordinationPlan {
   reason: string;
   relationship_ids: string[];
   evidence_ids: string[];
-  status: "proposed" | "validated" | "completed" | "unresolved" | "failed";
+  status: "proposed" | "validated" | "completed" | "unresolved" | "failed" | "cancelled";
+  runtime_fingerprint?: string | null;
+  cache_namespace: "cross-unit-runtime-v1";
+  runtime_metrics: CrossUnitRuntimeMetrics;
   execution_budget: ExecutionBudget;
 }
 
@@ -598,6 +601,24 @@ export interface CrossUnitFollowupResult {
   unit_result?: ReviewUnitResult | null;
   evidence_ids: string[];
   reason: string;
+  fingerprint?: string | null;
+  validation_status: "pending" | "completed";
+}
+
+export interface CrossUnitRuntimeMetrics {
+  model_calls: number;
+  failed_calls: number;
+  unknown_calls: number;
+  cache_hits: number;
+  resume_count: number;
+  estimated_tokens: number;
+  actual_tokens: number;
+  usage_reported_calls: number;
+  cost_microusd?: number | null;
+  latency_ms: number;
+  completed_followups: number;
+  candidate_count: number;
+  confirmed_count: number;
 }
 
 export interface ReviewUnitResult {
@@ -701,6 +722,8 @@ export interface ReviewRunManifest {
   total_tokens: number;
   confirmed_issues: number;
   coverage: ReviewCoverage;
+  coordination_metrics?: CrossUnitRuntimeMetrics | null;
+  coordination_fingerprint?: string | null;
   warnings: string[];
 }
 

@@ -222,8 +222,8 @@ class ReviewWorker:
         job = await asyncio.to_thread(self.queue.claim, worker_id=self.worker_id)
         if job is None:
             return False
-        heartbeat = asyncio.create_task(self._heartbeat(job.id))
         handler_task = asyncio.create_task(self.handler(job))
+        heartbeat = asyncio.create_task(self._heartbeat(job.id, handler_task))
         self._active[job.task_id] = handler_task
         try:
             await handler_task
@@ -270,10 +270,12 @@ class ReviewWorker:
         task.cancel()
         return True
 
-    async def _heartbeat(self, job_id: str) -> None:
+    async def _heartbeat(self, job_id: str, handler_task: asyncio.Task | None = None) -> None:
         interval = max(1.0, settings.repoguardian_worker_lease_seconds / 3)
         while True:
             await asyncio.sleep(interval)
             renewed = await asyncio.to_thread(self.queue.heartbeat, job_id, self.worker_id)
             if not renewed:
+                if handler_task is not None:
+                    handler_task.cancel()
                 return

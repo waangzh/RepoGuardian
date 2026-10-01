@@ -402,7 +402,7 @@ class ReviewService:
 
     async def _handle_job(self, job: ClaimedJob) -> None:
         if job.kind == "review":
-            await self._run_graph(job.task_id, resume=job.payload.get("resume"))
+            await self._run_graph(job.task_id, resume=job.payload.get("resume"), job=job)
             return
         if job.kind == "unit_retry":
             await self.retry_unit(job.task_id, str(job.payload["unit_id"]))
@@ -413,7 +413,8 @@ class ReviewService:
         if self._worker is not None and (self._worker_task is None or self._worker_task.done()):
             self._worker_task = asyncio.create_task(self._worker.run_forever())
 
-    async def _run_graph(self, task_id: str, *, resume: dict[str, Any] | None = None) -> None:
+    async def _run_graph(self, task_id: str, *, resume: dict[str, Any] | None = None,
+                         job: ClaimedJob | None = None) -> None:
         """执行 LangGraph 审查流程的核心方法。
 
         1. 构建初始状态字典（ReviewState），注入所有工具实例
@@ -473,6 +474,7 @@ class ReviewService:
             initial_state["_report_purpose_model_enabled"] = True
 
         result = None
+        interrupted = False
         try:
             graph = build_review_graph(phase=2)
             checkpointer = await get_checkpointer() if self._repository else None
@@ -493,15 +495,35 @@ class ReviewService:
             }
             if self._repository:
                 run_config.update(review_thread_config(task_id))
+                if job:
+                    run_config["configurable"]["review_job_lease"] = {
+                        "job_id": job.id, "owner": job.lease_owner, "attempt": job.attempts,
+                    }
             tracing, callbacks = _build_langsmith_tracing(run_metadata)
             if callbacks:
                 run_config["callbacks"] = callbacks
             logger.info("📊 开始流式执行审查图...")
             with tracing:
                 graph_input: Any = Command(resume=resume) if resume is not None else initial_state
-                result = await self._invoke_graph_with_progress(
-                    compiled, graph_input, run_config, task
-                )
+                if self._repository and resume is None:
+                    snapshot = await compiled.aget_state(run_config)
+                    if not snapshot.next and snapshot.values.get("status") in {
+                        TaskStatus.completed.value, TaskStatus.completed_with_warnings.value,
+                    }:
+                        result = snapshot.values
+                    elif snapshot.next:
+                        existing_path = snapshot.values.get("repo_path")
+                        if not existing_path or await asyncio.to_thread(Path(existing_path).is_dir):
+                            graph_input = None
+                            if existing_path:
+                                self._repo_paths[task_id] = Path(existing_path)
+                        else:
+                            # clone 已消失时重建主图；不能把旧状态合并进新快照。
+                            await delete_thread_checkpoints(task_id)
+                if result is None:
+                    result = await self._invoke_graph_with_progress(
+                        compiled, graph_input, run_config, task
+                    )
             interrupt_payload = _extract_interrupt_payload(result)
             if interrupt_payload and self._repository:
                 request = HumanReviewRequest.model_validate(interrupt_payload["request"])
@@ -533,10 +555,19 @@ class ReviewService:
                 self._repository.save_issue_lifecycle(task_id, result)
             logger.info("🎉 审查任务 %s 完成", task_id[:8])
         except asyncio.CancelledError:
-            task.status = TaskStatus.cancelled
-            task.error = None
-            self._touch(task)
-            self._persist(task)
+            current = self.get_task(task_id)
+            user_cancelled = current is not None and current.status == TaskStatus.cancelled
+            interrupted = bool(self._repository and not user_cancelled)
+            if not interrupted:
+                task.status = TaskStatus.cancelled
+                task.error = None
+                if task.coordination_plan:
+                    task.coordination_plan.status = "cancelled"
+                if task.cross_unit_risk:
+                    task.cross_unit_risk.execution_status = "cancelled"
+                    task.cross_unit_risk.non_execution_reason = "任务已取消"
+                self._touch(task)
+                self._persist(task)
             raise
         except Exception as exc:
             logger.error("❌ 审查任务 %s 执行失败: %s", task_id[:8], exc)
@@ -553,9 +584,9 @@ class ReviewService:
                 if result and result.get("repo_path")
                 else self._repo_paths.get(task_id)
             )
-            if repo_path is not None and task.status != TaskStatus.waiting_for_human:
+            if repo_path is not None and not interrupted and task.status != TaskStatus.waiting_for_human:
                 await _cleanup_repo(repo_path)
-            if self._repository and task.status in {
+            if self._repository and not interrupted and task.status in {
                 TaskStatus.completed,
                 TaskStatus.completed_with_warnings,
                 TaskStatus.failed,
@@ -581,9 +612,11 @@ class ReviewService:
     ) -> dict[str, Any]:
         """流式执行图，并在节点开始、结束时立即更新任务进度。"""
         stream = getattr(compiled, "astream", None)
+        runtime_options = ({"context": {"coordination_repository": self._repository}}
+                           if self._repository is not None else {})
         if not callable(stream):
             # 保留对测试替身以及旧编译器接口的兼容。
-            return await compiled.ainvoke(graph_input, config=run_config)
+            return await compiled.ainvoke(graph_input, config=run_config, **runtime_options)
 
         result: dict[str, Any] | None = None
         async for chunk in stream(
@@ -592,6 +625,7 @@ class ReviewService:
             stream_mode=["debug", "values", "custom"],
             subgraphs=True,
             version="v2",
+            **runtime_options,
         ):
             if not isinstance(chunk, dict):
                 continue
@@ -605,6 +639,12 @@ class ReviewService:
                 progress = chunk.get("data")
                 if isinstance(progress, dict) and progress.get("kind") == "git_progress":
                     self._sync_custom_progress_event(task, progress)
+                elif isinstance(progress, dict) and progress.get("kind") == "coordination_progress":
+                    delta = progress.get("state") or {}
+                    steps = task.steps
+                    self._sync_result_to_task(task, {**(result or {}), **delta})
+                    task.steps = steps
+                    await asyncio.to_thread(self._persist, task)
                 continue
             if chunk_type != "debug":
                 continue
