@@ -30,6 +30,8 @@ const flow: FlowItem[] = [
   { title: "Unit 并发审查", description: "独立分析各审查单元", aliases: ["review_units"] },
   { title: "证据解析", description: "定位问题证据与代码上下文", aliases: ["resolve_evidence"] },
   { title: "问题验证", description: "核验问题有效性与影响范围", aliases: ["issue_policy", "issue_verifier"] },
+  { title: "跨组风险筛查", description: "检查跨组契约、关联与覆盖疑点", aliases: ["cross_unit_risk"] },
+  { title: "协调与定向补查", description: "生成有界计划，补查并独立验证候选", aliases: ["cross_unit_coordination"] },
   { title: "问题去重", description: "合并重复发现并统一结论", aliases: ["issue_deduplication"] },
   { title: "固化验证结论", description: "固化 Head 基线与自动修复边界", aliases: ["verification"] },
   { title: "评估修复策略", description: "判断问题是否满足候选修复条件", aliases: ["repair_policy"] },
