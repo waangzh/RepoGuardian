@@ -139,7 +139,8 @@ async def compact_checkpoints_if_needed(
 
 
 def review_thread_config(task_id: str, *, checkpoint_id: str | None = None) -> dict:
-    configurable = {"thread_id": task_id, "checkpoint_ns": "review"}
+    # LangGraph 根图执行实际保存到空 namespace；非空值会被 get_state 当作子图路径。
+    configurable = {"thread_id": task_id, "checkpoint_ns": ""}
     if checkpoint_id:
         configurable["checkpoint_id"] = checkpoint_id
     return {"configurable": configurable}

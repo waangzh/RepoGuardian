@@ -18,6 +18,7 @@ from app.models.review import (
     ReviewUnitCoverage,
     ReviewUnitResult,
     ReviewUnitStatus,
+    CrossUnitCoordinationPlan,
 )
 from app.review.unit_completion import (
     is_review_unit_budget_exhausted,
@@ -145,6 +146,8 @@ def build_review_manifest(state: dict[str, Any], completed_at: datetime) -> Revi
     started_at = _as_datetime(state.get("created_at"), completed_at)
     pr = state.get("pr_info") or {}
     issues = state.get("review_issues") or []
+    coordination = (CrossUnitCoordinationPlan.model_validate(state["coordination_plan"])
+                    if state.get("coordination_plan") else None)
     return ReviewRunManifest(
         review_id=str(state.get("task_id") or ""),
         repository=(f"{pr.get('owner')}/{pr.get('repo')}" if pr.get("owner") and pr.get("repo") else None),
@@ -163,6 +166,8 @@ def build_review_manifest(state: dict[str, Any], completed_at: datetime) -> Revi
         total_tokens=sum(usage.actual_total_tokens or usage.accounted_tokens_estimate or 0 for usage in usages),
         confirmed_issues=sum(item.get("status") == IssueStatus.confirmed.value for item in issues),
         coverage=coverage,
+        coordination_metrics=coordination.runtime_metrics if coordination else None,
+        coordination_fingerprint=coordination.runtime_fingerprint if coordination else None,
         warnings=list(state.get("warnings") or []),
     )
 
@@ -171,6 +176,8 @@ def _all_usages(state: dict[str, Any]) -> list[ModelUsage]:
     raw = list(state.get("model_usages") or [])
     for result in state.get("review_unit_results") or []:
         raw.extend(result.get("model_usages") or [])
+    for result in state.get("followup_results") or []:
+        raw.extend((result.get("unit_result") or {}).get("model_usages") or [])
     by_id = {usage.id: usage for usage in (ModelUsage.model_validate(item) for item in raw)}
     return list(by_id.values())
 

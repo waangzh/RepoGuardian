@@ -22,7 +22,7 @@ from app.graph.nodes.review import review_node
 from app.graph.nodes.review_units import review_plan_node, review_units_node
 from app.graph.nodes.resolve_evidence import resolve_evidence_node
 from app.graph.routers import route_discovery_action
-from app.graph.state import ReviewState
+from app.graph.state import ReviewState, ReviewRunContext
 
 
 def build_review_graph(phase: int | None = None) -> StateGraph:
@@ -85,7 +85,7 @@ def build_review_graph(phase: int | None = None) -> StateGraph:
 
 def _build_review_unit_graph() -> StateGraph:
     """阶段二主图：确定性拆分、Unit 独立执行、稳定聚合。"""
-    graph = StateGraph(ReviewState)
+    graph = StateGraph(ReviewState, context_schema=ReviewRunContext)
     graph.add_node("intake", intake_node)
     graph.add_node("repo_prepare", repo_prepare_node)
     graph.add_node("diff_parse", diff_parse_node)

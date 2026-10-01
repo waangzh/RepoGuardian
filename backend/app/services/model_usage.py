@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from contextvars import ContextVar
 from collections import defaultdict
 from typing import Any, Iterable, TypeVar
 
@@ -17,6 +18,8 @@ from app.models.review import (
 
 
 T = TypeVar("T")
+# 外层运行账本可为兼容 Provider 的每次传输重试预留预算；默认无钩子。
+model_request_budget_hook: ContextVar[Any] = ContextVar("model_request_budget_hook", default=None)
 
 
 def unpack_model_call(value: T | ModelCallResult[T]) -> tuple[T, ModelUsage | None]:

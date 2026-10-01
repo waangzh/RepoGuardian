@@ -10,6 +10,11 @@ from typing import Any, TypedDict
 from app.models.review import ExecutionBudget, ReviewPhase
 
 
+class ReviewRunContext(TypedDict, total=False):
+    """每次调用重新注入的进程依赖，不进入业务状态或 checkpoint。"""
+    coordination_repository: Any
+
+
 class ReviewState(TypedDict, total=False):
     # ---- 基础标识 ----
     task_id: str
@@ -113,6 +118,7 @@ class ReviewState(TypedDict, total=False):
     _project_registry: Any
     _review_planner: Any
     _review_unit_executor: Any
+    _coordination_repository: Any
     _issue_policy_service: Any
     _issue_verifier_service: Any
     _issue_deduplication_service: Any
