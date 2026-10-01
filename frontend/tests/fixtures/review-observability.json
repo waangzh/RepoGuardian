@@ -1,0 +1,827 @@
+{
+  "id": "task",
+  "status": "completed_with_warnings",
+  "phase": "completed",
+  "pr_url": "https://github.com/local/sample/pull/1",
+  "model": null,
+  "mode": "review",
+  "generate_patches": false,
+  "validation_backend": "none",
+  "validation_profile": "unit",
+  "review": {
+    "mode": "review",
+    "status": "completed_with_warnings",
+    "completed": true
+  },
+  "steps": [
+    {
+      "name": "issue_verifier",
+      "status": "completed",
+      "message": null,
+      "progress": null,
+      "started_at": null,
+      "updated_at": null,
+      "finished_at": null
+    },
+    {
+      "name": "cross_unit_risk",
+      "status": "completed",
+      "message": null,
+      "progress": null,
+      "started_at": null,
+      "updated_at": null,
+      "finished_at": null
+    },
+    {
+      "name": "cross_unit_coordination",
+      "status": "completed",
+      "message": null,
+      "progress": null,
+      "started_at": null,
+      "updated_at": null,
+      "finished_at": null
+    },
+    {
+      "name": "issue_deduplication",
+      "status": "completed",
+      "message": null,
+      "progress": null,
+      "started_at": null,
+      "updated_at": null,
+      "finished_at": null
+    }
+  ],
+  "pr": {
+    "owner": "local",
+    "repo": "sample",
+    "number": 1,
+    "title": "调整用户查询返回值，核验调用方空值处理",
+    "body": "用户查询返回空值后，调用方需要处理非空契约。",
+    "html_url": "https://github.com/local/sample/pull/1",
+    "clone_url": "https://github.com/local/sample.git",
+    "base": {
+      "ref": "main",
+      "sha": "b",
+      "repo_clone_url": "https://github.com/local/sample.git"
+    },
+    "head": {
+      "ref": "feature",
+      "sha": "h",
+      "repo_clone_url": "https://github.com/local/sample.git"
+    }
+  },
+  "changed_files": [
+    {
+      "file_path": "caller.py",
+      "old_file_path": null,
+      "change_type": "modified",
+      "additions": 1,
+      "deletions": 1,
+      "is_binary": false,
+      "hunks": [
+        {
+          "old_start": 1,
+          "old_length": 1,
+          "new_start": 1,
+          "new_length": 1,
+          "hunk_id": "",
+          "lines": [],
+          "added_lines": [
+            {
+              "line_no": 1,
+              "content": "return None"
+            }
+          ],
+          "removed_lines": []
+        }
+      ]
+    },
+    {
+      "file_path": "callee.py",
+      "old_file_path": null,
+      "change_type": "modified",
+      "additions": 1,
+      "deletions": 1,
+      "is_binary": false,
+      "hunks": [
+        {
+          "old_start": 1,
+          "old_length": 1,
+          "new_start": 1,
+          "new_length": 1,
+          "hunk_id": "",
+          "lines": [],
+          "added_lines": [
+            {
+              "line_no": 1,
+              "content": "return None"
+            }
+          ],
+          "removed_lines": []
+        }
+      ]
+    }
+  ],
+  "review_units": [
+    {
+      "id": "u0",
+      "primary_files": [
+        "caller.py"
+      ],
+      "related_files": [],
+      "context_provenance": [],
+      "diff_hunk_ids": [],
+      "changed_symbols": [
+        "load_user"
+      ],
+      "rule_ids": [],
+      "risk_tags": [],
+      "estimated_tokens": 10,
+      "complexity": "small",
+      "fingerprint": "0",
+      "grouping_reason": "single"
+    },
+    {
+      "id": "u1",
+      "primary_files": [
+        "callee.py"
+      ],
+      "related_files": [],
+      "context_provenance": [],
+      "diff_hunk_ids": [],
+      "changed_symbols": [
+        "get_profile"
+      ],
+      "rule_ids": [],
+      "risk_tags": [],
+      "estimated_tokens": 10,
+      "complexity": "small",
+      "fingerprint": "1",
+      "grouping_reason": "single"
+    }
+  ],
+  "review_unit_results": [
+    {
+      "review_unit_id": "u0",
+      "status": "completed",
+      "terminal_reason": "no_issue",
+      "plan_skipped": false,
+      "plan": null,
+      "plan_status": null,
+      "plan_skip_reason": null,
+      "plan_error": null,
+      "review_summary": {
+        "schema_version": "unit-review-summary-v1",
+        "status": "reported",
+        "record": {
+          "schema_version": "unit-review-record-v1",
+          "change_summary": "检查调用方依赖的返回值契约",
+          "target_checks": [
+            {
+              "target": "检查正常查询路径",
+              "status": "checked",
+              "evidence_ids": [
+                "evidence-dfc10a65954e0c97adc56e6d"
+              ],
+              "reason": "已检查返回值读取路径。"
+            },
+            {
+              "target": "检查空值输入边界",
+              "status": "unresolved",
+              "evidence_ids": [
+                "evidence-dfc10a65954e0c97adc56e6d"
+              ],
+              "reason": "依赖调用方的非空保证，仍需补查。"
+            }
+          ],
+          "hypothesis_checks": [],
+          "contract_dependencies": [
+            {
+              "file_path": "callee.py",
+              "symbol": null,
+              "assumption": "调用方依赖返回值非空",
+              "status": "unresolved",
+              "evidence_ids": [
+                "evidence-dfc10a65954e0c97adc56e6d"
+              ]
+            }
+          ],
+          "unresolved_questions": [
+            {
+              "question": "空值保护应由哪一层负责？",
+              "affected_files": [
+                "caller.py",
+                "callee.py"
+              ],
+              "evidence_ids": [
+                "evidence-dfc10a65954e0c97adc56e6d"
+              ]
+            }
+          ]
+        },
+        "evidence": [
+          {
+            "id": "evidence-dfc10a65954e0c97adc56e6d",
+            "file_path": "caller.py",
+            "source": "diff",
+            "start_line": 1,
+            "end_line": 1,
+            "head_sha": "h",
+            "base_sha": "b",
+            "content_hash": "9bb58c97570fb27d690f4af33a543debeee4bfe572ea44862aa0352581a40670"
+          }
+        ],
+        "record_history": [],
+        "reason": "references_validated_not_correctness_proof"
+      },
+      "issues": [],
+      "context_snippets": [],
+      "messages": [],
+      "tool_events": [],
+      "execution_budget": {
+        "context_retrievals": 0,
+        "max_context_retrievals": 2,
+        "diagnosis_attempts": 0,
+        "max_diagnosis_attempts": 1,
+        "patch_attempts": 0,
+        "max_patch_attempts": 3,
+        "model_calls": 0,
+        "max_model_calls": 6,
+        "token_usage": 0,
+        "max_token_usage": 24000
+      },
+      "model_usages": [],
+      "error": null,
+      "human_request": null
+    },
+    {
+      "review_unit_id": "u1",
+      "status": "completed",
+      "terminal_reason": "no_issue",
+      "plan_skipped": false,
+      "plan": null,
+      "plan_status": null,
+      "plan_skip_reason": null,
+      "plan_error": null,
+      "review_summary": {
+        "schema_version": "unit-review-summary-v1",
+        "status": "reported",
+        "record": {
+          "schema_version": "unit-review-record-v1",
+          "change_summary": "修改返回值",
+          "target_checks": [
+            {
+              "target": "审查 callee.py 的变更",
+              "status": "not_checked",
+              "evidence_ids": [],
+              "reason": "模型未提供该目标的检查记录"
+            }
+          ],
+          "hypothesis_checks": [],
+          "contract_dependencies": [],
+          "unresolved_questions": []
+        },
+        "evidence": [
+          {
+            "id": "evidence-1d71fff821cde346fb1643e6",
+            "file_path": "callee.py",
+            "source": "diff",
+            "start_line": 1,
+            "end_line": 1,
+            "head_sha": "h",
+            "base_sha": "b",
+            "content_hash": "9bb58c97570fb27d690f4af33a543debeee4bfe572ea44862aa0352581a40670"
+          }
+        ],
+        "record_history": [],
+        "reason": "references_validated_not_correctness_proof"
+      },
+      "issues": [],
+      "context_snippets": [],
+      "messages": [],
+      "tool_events": [],
+      "execution_budget": {
+        "context_retrievals": 0,
+        "max_context_retrievals": 2,
+        "diagnosis_attempts": 0,
+        "max_diagnosis_attempts": 1,
+        "patch_attempts": 0,
+        "max_patch_attempts": 3,
+        "model_calls": 0,
+        "max_model_calls": 6,
+        "token_usage": 0,
+        "max_token_usage": 24000
+      },
+      "model_usages": [],
+      "error": null,
+      "human_request": null
+    }
+  ],
+  "cross_unit_risk": {
+    "schema_version": "cross-unit-risk-v1",
+    "policy_version": "cross-unit-policy-v1",
+    "decision": "required",
+    "reasons": [
+      {
+        "code": "changed_contract",
+        "unit_ids": [
+          "u0",
+          "u1"
+        ],
+        "files": [
+          "callee.py",
+          "caller.py"
+        ],
+        "evidence_ids": [
+          "evidence-1d71fff821cde346fb1643e6",
+          "evidence-dfc10a65954e0c97adc56e6d",
+          "relation-e0cd9c5f9ef7ec63f1a48948"
+        ],
+        "detail": "不同 Unit 的变更存在调用或契约导入关系，需要核验组合行为"
+      },
+      {
+        "code": "relationship_unknown",
+        "unit_ids": [
+          "u0"
+        ],
+        "files": [
+          "caller.py"
+        ],
+        "evidence_ids": [],
+        "detail": "检查目标或风险假设仍未完成，不能据此确认变更独立"
+      },
+      {
+        "code": "relationship_unknown",
+        "unit_ids": [
+          "u1"
+        ],
+        "files": [
+          "callee.py"
+        ],
+        "evidence_ids": [],
+        "detail": "检查目标或风险假设仍未完成，不能据此确认变更独立"
+      }
+    ],
+    "relationships": [
+      {
+        "id": "relation-e0cd9c5f9ef7ec63f1a48948",
+        "source_unit_id": "u0",
+        "target_unit_id": "u1",
+        "source_file": "caller.py",
+        "target_file": "callee.py",
+        "type": "calls",
+        "confidence": 0.92,
+        "source_symbol": "load",
+        "target_symbol": "load",
+        "parser_id": "tree-sitter.python.v1",
+        "provenance": ""
+      }
+    ],
+    "index_status": "available",
+    "execution_status": "completed",
+    "non_execution_reason": null
+  },
+  "coordination_plan": {
+    "schema_version": "cross-unit-plan-v1",
+    "followups": [
+      {
+        "id": "f1",
+        "question": "返回 None 时调用方是否处理空值？",
+        "unit_ids": [
+          "u0",
+          "u1"
+        ],
+        "primary_files": [
+          "callee.py"
+        ],
+        "evidence_ids": [
+          "evidence-dfc10a65954e0c97adc56e6d"
+        ],
+        "counterevidence_goal": "寻找调用方空值防护",
+        "stop_condition": "完成契约路径检查或预算耗尽"
+      }
+    ],
+    "unresolved_questions": [],
+    "decision": "required",
+    "reason": "核验跨模块空值契约",
+    "relationship_ids": [],
+    "evidence_ids": [],
+    "status": "completed",
+    "runtime_fingerprint": "9c62c4c85fd3fa3fb0c38bfedcd554fe25393e6ba3bac87cdb819f2bb4364fb3",
+    "cache_namespace": "cross-unit-runtime-v1",
+    "runtime_metrics": {
+      "model_calls": 5,
+      "failed_calls": 0,
+      "unknown_calls": 0,
+      "cache_hits": 0,
+      "resume_count": 0,
+      "estimated_tokens": 15849,
+      "actual_tokens": 0,
+      "usage_reported_calls": 0,
+      "cost_microusd": null,
+      "latency_ms": 0,
+      "completed_followups": 1,
+      "candidate_count": 1,
+      "confirmed_count": 1
+    },
+    "execution_budget": {
+      "context_retrievals": 0,
+      "max_context_retrievals": 2,
+      "diagnosis_attempts": 0,
+      "max_diagnosis_attempts": 1,
+      "patch_attempts": 0,
+      "max_patch_attempts": 0,
+      "model_calls": 5,
+      "max_model_calls": 16,
+      "token_usage": 15849,
+      "max_token_usage": 120000
+    }
+  },
+  "followup_results": [
+    {
+      "request_id": "f1",
+      "outcome": "candidate_found",
+      "unit_result": {
+        "review_unit_id": "followup-ca19a226cdfd6db361cde032",
+        "status": "completed",
+        "terminal_reason": "completed",
+        "plan_skipped": true,
+        "plan": {
+          "schema_version": "unit-review-plan-v1",
+          "change_summary": "返回 None 时调用方是否处理空值？",
+          "review_objectives": [
+            "返回 None 时调用方是否处理空值？",
+            "寻找调用方空值防护"
+          ],
+          "risk_hypotheses": [
+            {
+              "id": "followup-question",
+              "category": "correctness",
+              "priority": "high",
+              "description": "返回 None 时调用方是否处理空值？",
+              "affected_files": [
+                "callee.py"
+              ],
+              "affected_symbols": [],
+              "evidence_needed": [
+                "寻找调用方空值防护"
+              ],
+              "retrieval_suggestions": [],
+              "completion_criteria": "完成契约路径检查或预算耗尽"
+            }
+          ],
+          "coverage_targets": [
+            "完成契约路径检查或预算耗尽"
+          ],
+          "initial_action": {
+            "action": "report_issue",
+            "reason": "执行有界定向补查",
+            "target_issue_ids": [],
+            "tool_args": {},
+            "human_request": null
+          }
+        },
+        "plan_status": "skipped",
+        "plan_skip_reason": "small_low_risk_unit",
+        "plan_error": null,
+        "review_summary": {
+          "schema_version": "unit-review-summary-v1",
+          "status": "unknown",
+          "record": null,
+          "evidence": [
+            {
+              "id": "evidence-1d71fff821cde346fb1643e6",
+              "file_path": "callee.py",
+              "source": "diff",
+              "start_line": 1,
+              "end_line": 1,
+              "head_sha": "h",
+              "base_sha": "b",
+              "content_hash": "9bb58c97570fb27d690f4af33a543debeee4bfe572ea44862aa0352581a40670"
+            }
+          ],
+          "record_history": [],
+          "reason": "missing_review_record"
+        },
+        "issues": [
+          {
+            "id": "followup-ca19a226cdfd6db361cde032-issue-0",
+            "review_unit_id": "followup-ca19a226cdfd6db361cde032",
+            "title": "空值返回导致调用方失败",
+            "category": "correctness",
+            "severity": "medium",
+            "confidence": 0.95,
+            "affected_behavior": "调用方无法读取返回值",
+            "failure_scenario": "返回 None 后调用方读取字段失败",
+            "reasoning_summary": {
+              "change": "PR 修改了 callee.py 中的相关行为",
+              "invariant": "调用方无法读取返回值",
+              "violation": "返回 None 后调用方读取字段失败",
+              "consequence": "调用方无法读取返回值"
+            },
+            "recommendation": "处理空值返回",
+            "primary_evidence": {
+              "file_path": "callee.py",
+              "existing_code": "return None",
+              "symbol": null,
+              "expected_side": "head",
+              "expected_hunk_id": null,
+              "context_before": [],
+              "context_after": [],
+              "resolved_start_line": 1,
+              "resolved_end_line": 1,
+              "resolution_method": "file_exact",
+              "resolution_status": "relocated",
+              "provenance": "repository_file",
+              "match_count": 1,
+              "anchor_hash": "aa75aaba0c993b52623719b5c18562f014f0405ede34fbc5f2df7935544bccdc",
+              "resolved_side": "head",
+              "candidate_locations": [
+                {
+                  "file_path": "callee.py",
+                  "side": "head",
+                  "start_line": 1,
+                  "end_line": 1,
+                  "hunk_id": null
+                }
+              ],
+              "unresolved_reason": null
+            },
+            "supporting_evidence": [],
+            "assumptions": [],
+            "related_tests": [],
+            "requires_human_confirmation": false,
+            "auto_fix_eligible": false,
+            "fix_risk": "low",
+            "status": "confirmed",
+            "placement": "summary",
+            "unresolved_reason": "resolved_outside_diff",
+            "resolved_location": {
+              "file_path": "callee.py",
+              "start_line": 1,
+              "end_line": 1,
+              "side": "head",
+              "hunk_id": null
+            },
+            "source_review_unit_ids": [
+              "u0",
+              "u1"
+            ],
+            "source_issue_ids": [
+              "followup-ca19a226cdfd6db361cde032-issue-0"
+            ]
+          }
+        ],
+        "context_snippets": [],
+        "messages": [
+          {
+            "action": "prepare_unit",
+            "reason": "建立不可扩张的 Unit 文件范围与执行预算",
+            "status": "completed",
+            "message": null,
+            "review_unit_id": "followup-ca19a226cdfd6db361cde032",
+            "created_at": "2026-10-01T06:40:08.514346Z"
+          },
+          {
+            "action": "report_issue",
+            "reason": "定向检查",
+            "status": "selected",
+            "message": "定向检查",
+            "review_unit_id": "followup-ca19a226cdfd6db361cde032",
+            "created_at": "2026-10-01T06:40:08.519347Z"
+          },
+          {
+            "action": "report_issue",
+            "reason": "执行 Unit 独立审查并收集结构化问题",
+            "status": "completed",
+            "message": "本轮报告 1 个问题",
+            "review_unit_id": "followup-ca19a226cdfd6db361cde032",
+            "created_at": "2026-10-01T06:40:08.523857Z"
+          },
+          {
+            "action": "task_done",
+            "reason": "定向检查",
+            "status": "selected",
+            "message": "定向检查",
+            "review_unit_id": "followup-ca19a226cdfd6db361cde032",
+            "created_at": "2026-10-01T06:40:08.525858Z"
+          },
+          {
+            "action": "task_done",
+            "reason": "定向检查",
+            "status": "completed",
+            "message": "Review Unit 显式结束",
+            "review_unit_id": "followup-ca19a226cdfd6db361cde032",
+            "created_at": "2026-10-01T06:40:08.526858Z"
+          }
+        ],
+        "tool_events": [],
+        "execution_budget": {
+          "context_retrievals": 0,
+          "max_context_retrievals": 2,
+          "diagnosis_attempts": 1,
+          "max_diagnosis_attempts": 1,
+          "patch_attempts": 0,
+          "max_patch_attempts": 0,
+          "model_calls": 3,
+          "max_model_calls": 3,
+          "token_usage": 5296,
+          "max_token_usage": 6000
+        },
+        "model_usages": [],
+        "error": null,
+        "human_request": null
+      },
+      "evidence_ids": [
+        "evidence-dfc10a65954e0c97adc56e6d"
+      ],
+      "reason": "新增候选将接受证据、策略与独立验证",
+      "fingerprint": "ca19a226cdfd6db361cde03204cafc0a292b341cc38a6c55b6f65ded2c1c0394",
+      "validation_status": "completed"
+    }
+  ],
+  "model_usages": [],
+  "model_usage_summary": {
+    "overall": {
+      "calls": 0,
+      "usage_available_calls": 0,
+      "usage_missing_calls": 0,
+      "usage_coverage_rate": 0.0,
+      "actual_input_tokens": 0,
+      "actual_output_tokens": 0,
+      "actual_total_tokens": 0,
+      "cached_input_tokens": 0,
+      "reasoning_output_tokens": 0,
+      "accounted_tokens_estimate": 0,
+      "estimation_delta_tokens": 0,
+      "cost_microusd": 0,
+      "cost_available_calls": 0,
+      "input_tokens_p50": null,
+      "input_tokens_p95": null,
+      "output_tokens_p50": null,
+      "output_tokens_p95": null,
+      "latency_ms_p50": null,
+      "latency_ms_p95": null
+    },
+    "by_operation": [],
+    "by_unit_complexity": [],
+    "by_provider": []
+  },
+  "excluded_files": [],
+  "coverage": {
+    "changed_files": 2,
+    "eligible_files": 2,
+    "reviewed_files": 2,
+    "partial_files": 0,
+    "skipped_files": 0,
+    "failed_files": 0,
+    "coverage_rate": 1.0,
+    "completed_units": 2,
+    "total_units": 2,
+    "unit_coverage_rate": 1.0,
+    "files": [
+      {
+        "file_path": "caller.py",
+        "eligible": true,
+        "status": "reviewed",
+        "review_unit_ids": [
+          "u0"
+        ],
+        "reason": null
+      },
+      {
+        "file_path": "callee.py",
+        "eligible": true,
+        "status": "reviewed",
+        "review_unit_ids": [
+          "u1"
+        ],
+        "reason": null
+      }
+    ],
+    "units": [
+      {
+        "review_unit_id": "u0",
+        "files": [
+          "caller.py"
+        ],
+        "status": "completed",
+        "terminal_reason": "no_issue",
+        "failure_reason": null,
+        "model_calls": 0,
+        "tokens": 0,
+        "duration_ms": 0
+      },
+      {
+        "review_unit_id": "u1",
+        "files": [
+          "callee.py"
+        ],
+        "status": "completed",
+        "terminal_reason": "no_issue",
+        "failure_reason": null,
+        "model_calls": 0,
+        "tokens": 0,
+        "duration_ms": 0
+      }
+    ]
+  },
+  "run_manifest": null,
+  "issues": [
+    {
+      "id": "followup-ca19a226cdfd6db361cde032-issue-0",
+      "review_unit_id": "followup-ca19a226cdfd6db361cde032",
+      "title": "空值返回导致调用方失败",
+      "category": "correctness",
+      "severity": "medium",
+      "confidence": 0.95,
+      "affected_behavior": "调用方无法读取返回值",
+      "failure_scenario": "返回 None 后调用方读取字段失败",
+      "reasoning_summary": {
+        "change": "PR 修改了 callee.py 中的相关行为",
+        "invariant": "调用方无法读取返回值",
+        "violation": "返回 None 后调用方读取字段失败",
+        "consequence": "调用方无法读取返回值"
+      },
+      "recommendation": "处理空值返回",
+      "primary_evidence": {
+        "file_path": "callee.py",
+        "existing_code": "return None",
+        "symbol": null,
+        "expected_side": "head",
+        "expected_hunk_id": null,
+        "context_before": [],
+        "context_after": [],
+        "resolved_start_line": 1,
+        "resolved_end_line": 1,
+        "resolution_method": "file_exact",
+        "resolution_status": "relocated",
+        "provenance": "repository_file",
+        "match_count": 1,
+        "anchor_hash": "aa75aaba0c993b52623719b5c18562f014f0405ede34fbc5f2df7935544bccdc",
+        "resolved_side": "head",
+        "candidate_locations": [
+          {
+            "file_path": "callee.py",
+            "side": "head",
+            "start_line": 1,
+            "end_line": 1,
+            "hunk_id": null
+          }
+        ],
+        "unresolved_reason": null
+      },
+      "supporting_evidence": [],
+      "assumptions": [],
+      "related_tests": [],
+      "requires_human_confirmation": false,
+      "auto_fix_eligible": false,
+      "fix_risk": "low",
+      "status": "confirmed",
+      "placement": "summary",
+      "unresolved_reason": "resolved_outside_diff",
+      "resolved_location": {
+        "file_path": "callee.py",
+        "start_line": 1,
+        "end_line": 1,
+        "side": "head",
+        "hunk_id": null
+      },
+      "source_review_unit_ids": [
+        "u0",
+        "u1"
+      ],
+      "source_issue_ids": [
+        "followup-ca19a226cdfd6db361cde032-issue-0"
+      ]
+    }
+  ],
+  "issue_metrics": {
+    "candidate_issue_count": 1,
+    "deterministic_drop_count": 0,
+    "verifier_drop_count": 0,
+    "needs_human_count": 0,
+    "duplicate_count": 0,
+    "confirmed_count": 0,
+    "severity_adjustment_count": 1,
+    "verifier_call_count": 1,
+    "verifier_token_count": 623
+  },
+  "context_snippets": [],
+  "repo_snapshot": null,
+  "project_profile": null,
+  "static_results": [],
+  "validation_snapshots": [],
+  "validation_deltas": [],
+  "validation": [],
+  "patch_eligibility": [],
+  "patches": [],
+  "test_results": [],
+  "agent_events": [],
+  "human_request": null,
+  "report_markdown": null,
+  "warnings": [],
+  "error": null,
+  "created_at": "2026-10-01T06:40:08.546106Z",
+  "updated_at": "2026-10-01T06:40:08.546106Z"
+}

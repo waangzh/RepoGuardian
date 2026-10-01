@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import type {
   ChangedFile,
   DiffLine,
@@ -15,8 +15,11 @@ import EmptyState from "../common/EmptyState.vue";
 import StatusBadge from "../common/StatusBadge.vue";
 import ReportPanel from "../ReportPanel.vue";
 import ExecutionTimeline from "./ExecutionTimeline.vue";
+import CrossUnitReview from "./CrossUnitReview.vue";
+import UnitReviewRecord from "./UnitReviewRecord.vue";
+import { crossUnitPresentation, originalIssueUnit, unitFindingLabel } from "../../utils/reviewObservability";
 
-type ReviewTab = "overview" | "review" | "files" | "activity";
+type ReviewTab = "overview" | "review" | "checks" | "files" | "activity";
 type SeverityFilter = "all" | ReviewIssue["severity"];
 type StatusFilter = "all" | "confirmed" | "needs_human";
 
@@ -52,6 +55,7 @@ const fileStatusFilter = ref("all");
 const fileGroupFilter = ref("all");
 const selectedUnitId = ref(props.task.review_units[0]?.id || "");
 const selectedIssueId = ref(props.task.issues[0]?.id || "");
+const crossUnitSummary = computed(() => crossUnitPresentation(props.task));
 
 watch(() => props.task.id, () => {
   activeTab.value = "overview";
@@ -267,14 +271,24 @@ function chooseUnit(unitId: string) {
 }
 
 function openIssue(issue: ReviewIssue) {
+  severityFilter.value = "all";
+  statusFilter.value = "all";
+  categoryFilter.value = "all";
   activeTab.value = "review";
-  selectedUnitId.value = issue.review_unit_id;
+  selectedUnitId.value = originalIssueUnit(issue, props.task.review_units.map((unit) => unit.id));
   selectedIssueId.value = issue.id;
 }
 
 function openUnit(unitId: string) {
   activeTab.value = "review";
   chooseUnit(unitId);
+}
+
+async function openUnitChecks(unitId: string) {
+  activeTab.value = "checks";
+  chooseUnit(unitId);
+  await nextTick();
+  document.getElementById("unit-review-records")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function unitNames(unitIds: string[]): string {
@@ -375,7 +389,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
     </header>
 
     <nav class="review-tabs" aria-label="审查结果导航">
-      <button v-for="tab in ([['overview', '概览'], ['review', `审查 ${task.issues.length || ''}`], ['files', `文件 ${task.changed_files.length || ''}`], ['activity', '活动']] as const)" :key="tab[0]" type="button" :class="{ 'is-active': activeTab === tab[0] }" :aria-current="activeTab === tab[0] ? 'page' : undefined" @click="activeTab = tab[0]">
+      <button v-for="tab in ([['overview', '概览'], ['review', `审查 ${task.issues.length || ''}`], ['checks', '检查与协作'], ['files', `文件 ${task.changed_files.length || ''}`], ['activity', '活动']] as const)" :key="tab[0]" type="button" :class="{ 'is-active': activeTab === tab[0] }" :aria-current="activeTab === tab[0] ? 'page' : undefined" @click="activeTab = tab[0]">
         {{ tab[1] }}
       </button>
     </nav>
@@ -406,6 +420,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
         </article>
       </div>
 
+      <button type="button" class="cross-unit-overview" @click="activeTab = 'checks'"><AppIcon name="branch" :size="20" /><span><strong>检查与协作</strong><small>{{ crossUnitSummary.decisionLabel }} · {{ crossUnitSummary.executionLabel }}</small></span><span>查看检查依据与补查记录 →</span></button>
       <div class="overview-grid">
         <article class="overview-card overview-card--change">
           <header><div><h2>这次改了什么</h2><p>PR 目的与确定性变更结构</p></div><StatusBadge :status="task.status" /></header>
@@ -429,7 +444,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
             <span class="overview-group-row__mark"><AppIcon name="units" :size="15" /></span>
             <span><strong>{{ unitTitle(unit) }}</strong><small>{{ unitResult(unit.id)?.plan?.change_summary || unit.grouping_reason }}</small></span>
             <span>{{ unitFiles(unit).length }} 文件</span>
-            <b :class="{ 'is-clean': issueCountForUnit(unit.id) === 0 }">{{ issueCountForUnit(unit.id) ? `${issueCountForUnit(unit.id)} 个发现` : '✓ 清洁' }}</b>
+            <b>{{ unitFindingLabel(unitResult(unit.id), issueCountForUnit(unit.id)) }}</b>
           </button>
         </article>
 
@@ -439,7 +454,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
           <div class="health-row"><span>变更组完成</span><i><b :style="{ width: `${unitCoveragePercent}%` }" /></i><strong>{{ coverage.completed_units }}/{{ coverage.total_units }}</strong></div>
           <div class="health-row"><span>证据链已定位</span><i><b :style="{ width: `${task.issues.length ? (resolvedEvidenceCount / task.issues.length) * 100 : 100}%` }" /></i><strong>{{ resolvedEvidenceCount }}/{{ task.issues.length }}</strong></div>
           <div v-if="task.warnings.length" class="health-warning"><AppIcon name="alert" :size="16" /><span><strong>{{ task.warnings.length }} 条运行警告</strong>{{ task.warnings[0] }}</span></div>
-          <div class="health-usage"><span>模型使用</span><code>{{ task.model_usage_summary.overall.calls }} 次调用 · {{ formatTokens(task.model_usage_summary.overall.actual_total_tokens || task.model_usage_summary.overall.accounted_tokens_estimate) }} tokens · {{ formatDuration(task.model_usage_summary.overall.latency_ms_p50 || 0) }} p50</code></div>
+          <div class="health-usage"><span>已保存用量记录</span><code>{{ task.model_usage_summary.overall.calls }} 条 · {{ formatTokens(task.model_usage_summary.overall.actual_total_tokens || task.model_usage_summary.overall.accounted_tokens_estimate) }} tokens · {{ formatDuration(task.model_usage_summary.overall.latency_ms_p50 || 0) }} p50</code></div>
         </article>
       </div>
     </section>
@@ -461,7 +476,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
         <aside class="change-group-nav">
           <header><div><h2>变更组</h2><p>语义相关的改动故事</p></div><strong>{{ fileCoveragePercent }}%</strong></header>
           <button v-for="unit in task.review_units" :key="unit.id" type="button" :class="{ 'is-active': selectedUnit?.id === unit.id }" @click="chooseUnit(unit.id)">
-            <strong>{{ unitTitle(unit) }}</strong><p>{{ unitResult(unit.id)?.plan?.change_summary || unit.grouping_reason }}</p><span>{{ unitFiles(unit).length }} 文件 · {{ issueCountForUnit(unit.id) ? `${issueCountForUnit(unit.id)} 个发现` : '清洁' }}</span>
+            <strong>{{ unitTitle(unit) }}</strong><p>{{ unitResult(unit.id)?.plan?.change_summary || unit.grouping_reason }}</p><span>{{ unitFiles(unit).length }} 文件 · {{ unitFindingLabel(unitResult(unit.id), issueCountForUnit(unit.id)) }}</span>
           </button>
           <div v-if="selectedUnit" class="change-group-files">
             <span>组内文件</span><code v-for="file in unitFiles(selectedUnit)" :key="file">{{ file }}</code>
@@ -489,7 +504,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
             <header><div><h2>发现与证据</h2><p>{{ selectedIssue.category }}</p></div><StatusBadge :status="selectedIssue.severity" :label="severityLabel(selectedIssue.severity)" /></header>
             <div class="finding-badges"><StatusBadge :status="selectedIssue.status" /><StatusBadge :status="selectedIssue.placement" /></div>
             <h3>{{ selectedIssue.title }}</h3>
-            <p class="finding-confidence">正确性 · {{ Math.round(selectedIssue.confidence * 100) }}% 置信度</p>
+            <p class="finding-confidence">模型置信度 {{ Math.round(selectedIssue.confidence * 100) }}% · 未经校准</p>
             <dl class="evidence-facts">
               <div><dt>证据定位</dt><dd>{{ selectedIssue.primary_evidence.resolution_status }} · {{ selectedIssue.primary_evidence.resolution_method }} · {{ selectedIssue.primary_evidence.provenance || '未知来源' }}</dd></div>
               <div><dt>为什么重要</dt><dd>{{ selectedIssue.affected_behavior }}</dd></div>
@@ -510,6 +525,14 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
           <EmptyState v-else icon="check-circle" title="没有选中的发现" description="请选择包含发现的变更组。" />
         </aside>
       </div>
+    </section>
+
+    <section v-else-if="activeTab === 'checks'" class="review-tab-panel checks-view">
+      <CrossUnitReview :task="task" @open-unit="openUnitChecks" @open-issue="openIssue" />
+      <section id="unit-review-records" class="unit-records-section" aria-label="原始变更组检查记录"><header><h2>变更组实际检查范围</h2><p>覆盖率只描述原始审查范围；检查记录用于解释已检查、未检查和仍未解决的内容。</p></header>
+        <div v-if="task.review_units.length" class="unit-records-layout"><nav class="unit-records-nav" aria-label="选择变更组检查记录"><button v-for="unit in task.review_units" :key="unit.id" type="button" :class="{ 'is-active': selectedUnit?.id === unit.id }" :aria-current="selectedUnit?.id === unit.id ? 'true' : undefined" @click="chooseUnit(unit.id)"><strong>{{ unitTitle(unit) }}</strong><code>{{ unit.primary_files[0] }}</code><StatusBadge :status="unitResult(unit.id)?.status || 'pending'" /><small>{{ unitResult(unit.id)?.review_summary?.status === 'reported' ? '已保存检查记录' : '检查记录未知' }}</small></button></nav><UnitReviewRecord :key="selectedUnit?.id" :result="selectedUnitResult" :head-sha="task.pr?.head.sha" :base-sha="task.pr?.base.sha" /></div>
+        <EmptyState v-else icon="units" title="尚无变更组" description="确定性规划完成后，这里会展示每个变更组的检查记录。" />
+      </section>
     </section>
 
     <section v-else-if="activeTab === 'files'" class="review-tab-panel files-view">
@@ -554,7 +577,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
         <ExecutionTimeline :steps="task.steps || []" :task-status="task.status" :events="task.agent_events || []" :static-results="task.static_results || []" :test-results="task.test_results || []" />
         <aside class="run-summary-card">
           <header><h2>运行摘要</h2><p>模型调用、Token 与覆盖清单</p></header>
-          <div class="run-summary-metrics"><span><small>耗时</small><strong>{{ task.run_manifest ? formatDuration(task.run_manifest.duration_ms) : taskDuration || '进行中' }}</strong></span><span><small>模型调用</small><strong>{{ task.model_usage_summary.overall.calls }}</strong></span><span><small>Tokens</small><strong>{{ formatTokens(task.model_usage_summary.overall.actual_total_tokens || task.model_usage_summary.overall.accounted_tokens_estimate) }}</strong></span><span><small>发现</small><strong>{{ task.issues.length }}</strong></span></div>
+          <div class="run-summary-metrics"><span><small>耗时</small><strong>{{ task.run_manifest ? formatDuration(task.run_manifest.duration_ms) : taskDuration || '进行中' }}</strong></span><span><small>已保存调用记录</small><strong>{{ task.model_usage_summary.overall.calls }}</strong></span><span><small>Tokens</small><strong>{{ formatTokens(task.model_usage_summary.overall.actual_total_tokens || task.model_usage_summary.overall.accounted_tokens_estimate) }}</strong></span><span><small>发现</small><strong>{{ task.issues.length }}</strong></span></div>
           <h3>按操作统计</h3>
           <div v-for="operation in task.model_usage_summary.by_operation" :key="operation.key" class="operation-row"><code>{{ operation.key }}</code><i><b :style="{ width: `${operation.stats.calls / maxOperationCalls * 100}%` }" /></i><span>{{ operation.stats.calls }} 次 · {{ formatTokens(operation.stats.actual_total_tokens || operation.stats.accounted_tokens_estimate) }}</span></div>
           <h3>覆盖清单</h3>
@@ -568,3 +591,27 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
     <footer class="app-footer"><span>只读审查 · 证据可追溯 · 不写回目标仓库</span><span><i /> RepoGuardian Review Viewer</span></footer>
   </main>
 </template>
+
+<style scoped>
+.review-tabs { overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.review-tabs button { flex-shrink: 0; }
+.cross-unit-overview { display: flex; align-items: center; gap: 14px; width: 100%; padding: 16px 20px; margin-bottom: 20px; border: 1px solid var(--border); border-left: 3px solid var(--primary); background: var(--surface); border-radius: var(--radius-md); text-align: left; color: var(--text-primary); cursor: pointer; }
+.cross-unit-overview:hover { border-color: var(--primary); }
+.cross-unit-overview > .app-icon { color: var(--primary); }
+.cross-unit-overview strong, .cross-unit-overview small { display: block; }
+.cross-unit-overview strong { font-size: 14px; margin-bottom: 4px; }
+.cross-unit-overview small { color: var(--text-secondary); font-size: 12px; }
+.cross-unit-overview > span:last-child { margin-left: auto; color: var(--primary); font-size: 12px; }
+.unit-records-section { margin-top: 30px; scroll-margin-top: 90px; }
+.unit-records-section > header h2 { font-size: 20px; margin-bottom: 8px; }
+.unit-records-section > header p { color: var(--text-secondary); font-size: 13px; line-height: 1.7; }
+.unit-records-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 18px; align-items: start; }
+.unit-records-nav { display: grid; gap: 8px; min-width: 0; }
+.unit-records-nav button { display: grid; gap: 7px; min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); text-align: left; color: var(--text-primary); cursor: pointer; }
+.unit-records-nav button.is-active { border-color: var(--primary); background: var(--primary-soft); }
+.unit-records-nav strong { font-size: 14px; }
+.unit-records-nav code, .unit-records-nav small { color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; }
+.unit-records-nav :deep(.status-badge) { justify-self: start; }
+@media (max-width: 850px) { .unit-records-layout { grid-template-columns: minmax(0, 1fr); } .unit-records-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .cross-unit-overview { flex-wrap: wrap; padding: 14px; } .cross-unit-overview > span:last-child { margin-left: 34px; } .unit-records-nav { grid-template-columns: minmax(0, 1fr); } }
+</style>
