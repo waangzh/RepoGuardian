@@ -1940,6 +1940,29 @@ class CrossUnitCoordinationPlan(BaseModel):
         return self
 
 
+class CrossUnitFollowupProposal(CrossUnitFollowupRequest):
+    """新模型输出的结构约束；历史失败计划仍用领域模型读取。"""
+
+    unit_ids: list[str] = Field(min_length=2, max_length=12)
+
+    @field_validator("unit_ids")
+    @classmethod
+    def distinct_units(cls, values: list[str]) -> list[str]:
+        if len(set(values)) < 2:
+            raise ValueError("followup must name at least two distinct Units")
+        return list(dict.fromkeys(values))
+
+
+class CrossUnitCoordinationProposal(CrossUnitCoordinationPlan):
+    followups: list[CrossUnitFollowupProposal] = Field(default_factory=list, max_length=3)
+
+    @model_validator(mode="after")
+    def followups_require_required_decision(self) -> "CrossUnitCoordinationProposal":
+        if self.followups and self.decision != "required":
+            raise ValueError("followups require a required decision")
+        return self
+
+
 class ReviewUnitResult(BaseModel):
     review_unit_id: str
     status: ReviewUnitStatus = ReviewUnitStatus.pending

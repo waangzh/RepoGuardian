@@ -1,6 +1,7 @@
 """协调专用运行账本：预算预留、调用幂等、结果检查点与版本隔离。"""
 
 import asyncio
+import json
 import time
 from copy import deepcopy
 from typing import Any
@@ -30,12 +31,32 @@ def normalize(value: Any) -> Any:
     return value
 
 
+def estimate_request(provider: Any, name: str, args: tuple, output_tokens: int) -> dict:
+    estimator = getattr(provider, "coordination_request_chars", None)
+    chars = (estimator(name, args) if callable(estimator) else
+             len(json.dumps(normalize(args), ensure_ascii=False)))
+    return {"estimate": (chars + 3) // 4 + output_tokens, "input_chars": chars,
+            "output_token_allowance": output_tokens,
+            "estimate_source": "provider_prompt" if callable(estimator) else "serialized_arguments"}
+
+
+def budget_rejection(budget: ExecutionBudget, name: str, estimate: int) -> dict:
+    return {"operation": name,
+            "exhausted_dimensions": [key for key, amount in (("model_calls", 1), ("token_usage", estimate))
+                                     if not budget.can_consume(**{key: amount})],
+            "requested_tokens": estimate, "used_tokens": budget.token_usage,
+            "remaining_tokens": max(0, budget.max_token_usage - budget.token_usage),
+            "used_calls": budget.model_calls,
+            "remaining_calls": max(0, budget.max_model_calls - budget.model_calls)}
+
+
 def coordination_fingerprint(state: dict) -> str:
     risk = {key: item for key, item in (state.get("cross_unit_risk") or {}).items()
             if key not in {"execution_status", "non_execution_reason"}}
     return stable_hash({
         "purpose": "cross-unit-runtime-v1", "task_id": state.get("task_id"),
         "catalog_version": "coordination-reference-catalog-v2",
+        "request_contract_version": "coordination-prompt-budget-v2",
         "repository": (state.get("pr_info") or {}).get("clone_url"),
         "base_sha": state.get("base_sha"), "head_sha": state.get("head_sha"),
         "model": state.get("model") or settings.repoguardian_model,
@@ -108,7 +129,10 @@ class CoordinationRuntime:
                           if len(usages) == attempts and all(item.cost_microusd is not None for item in usages)
                           else None),
             latency_ms=sum(item.get("latency_ms", 0) for item in calls),
-            completed_followups=len(self.data["batches"]), candidate_count=len(issues),
+            completed_followups=sum(
+                item.get("outcome") != "failed" and (item.get("unit_result") or {}).get("status") == "completed"
+                for identity, item in self.data["followups"].items() if identity in self.data["batches"]
+            ), candidate_count=len(issues),
             confirmed_count=sum(item["status"] == "confirmed" for item in issues),
         )
 
@@ -137,21 +161,30 @@ class CoordinationRuntime:
                     existing["status"] = "unknown"
                 await self.persist()
                 raise LLMProviderError(existing.get("error") or "previous_call_outcome_unknown")
-            import json
-            estimate = (len(json.dumps(payload, ensure_ascii=False)) + 3) // 4 + output_tokens
+            reservation = estimate_request(provider, name, args, output_tokens)
+            estimate = reservation["estimate"]
             if not self.budget.can_consume(model_calls=1, token_usage=estimate):
-                raise LLMProviderError("cross_unit_shared_budget_exhausted")
+                rejection = budget_rejection(self.budget, name, estimate)
+                self.data.setdefault("budget_rejections", []).append(rejection)
+                await self.persist()
+                raise LLMProviderError("cross_unit_shared_budget_exhausted: " + json.dumps(rejection))
             self.data["budget"] = self.budget.consume(model_calls=1, token_usage=estimate).model_dump(mode="json")
-            self.data["calls"][key] = {"status": "running", "operation": name, "estimate": estimate, "attempts": 1}
+            self.data["calls"][key] = {"status": "running", "operation": name,
+                                       **reservation, "attempts": 1, "correction_tokens": 0}
             await self.persist()  # 预留落盘成功后，才允许发起外部请求。
             started = time.monotonic()
             async def reserve_retry() -> None:
                 if not self.budget.can_consume(model_calls=1, token_usage=estimate):
-                    raise LLMProviderError("cross_unit_shared_budget_exhausted_before_transport_retry")
+                    rejection = {**budget_rejection(self.budget, name, estimate), "transport_retry": True}
+                    self.data.setdefault("budget_rejections", []).append(rejection)
+                    await self.persist()
+                    raise LLMProviderError("cross_unit_shared_budget_exhausted_before_transport_retry: "
+                                           + json.dumps(rejection))
                 self.data["budget"] = self.budget.consume(model_calls=1, token_usage=estimate).model_dump(mode="json")
                 self.data["calls"][key]["attempts"] += 1
                 await self.persist()
             hook_token = model_request_budget_hook.set(reserve_retry)
+            usage = None
             try:
                 raw = await getattr(provider, name)(*args)
                 value, usage = unpack_model_call(raw)
@@ -161,6 +194,7 @@ class CoordinationRuntime:
                 if usage and usage.actual_total_tokens is not None:
                     # 不退还已预留的失败/重试预算；实际用量高于估算时补记并阻止后续超额调用。
                     correction = max(0, usage.actual_total_tokens - estimate)
+                    self.data["calls"][key]["correction_tokens"] = correction
                     self.data["budget"] = self.budget.model_copy(update={
                         "token_usage": self.budget.token_usage + correction,
                     }).model_dump(mode="json")
@@ -168,9 +202,16 @@ class CoordinationRuntime:
                 self.data["calls"][key].update(status="unknown", error="cancelled_call_outcome_unknown")
                 raise
             except Exception as exc:
-                usage = getattr(exc, "usage", None)
+                usage = getattr(exc, "usage", None) or usage
                 self.data["calls"][key].update(status="failed", error=f"{type(exc).__name__}: {exc}",
                     usage=usage.model_dump(mode="json") if usage else None)
+                if usage and usage.actual_total_tokens is not None:
+                    correction = max(0, usage.actual_total_tokens - estimate)
+                    self.data["calls"][key]["correction_tokens"] = correction
+                    self.data["budget"] = self.budget.model_copy(update={
+                        "token_usage": self.budget.token_usage + correction,
+                    }).model_dump(mode="json")
+                self.data["calls"][key]["latency_ms"] = int((time.monotonic() - started) * 1000)
                 await self.persist()
                 raise
             finally:
