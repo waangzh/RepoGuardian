@@ -18,6 +18,7 @@ from app.services.issue_deduplication import IssueDeduplicationService
 from app.services.issue_policy import IssuePolicyService
 from app.services.issue_verifier import IssueVerifierService
 from app.services.model_usage import append_usage
+from app.review.issue_audit import audit_issue
 
 
 async def issue_policy_node(state: ReviewState) -> ReviewState:
@@ -66,6 +67,7 @@ async def issue_policy_node(state: ReviewState) -> ReviewState:
                 "unresolved_reason": issue.unresolved_reason or ";".join(check.reasons),
             })
         checked.append(updated)
+        audit_issue("policy", updated, reason=";".join(check.reasons) or "passed")
 
     metrics = metrics.model_copy(update={
         "deterministic_drop_count": deterministic_drops,
@@ -109,6 +111,11 @@ async def issue_verifier_node(state: ReviewState) -> ReviewState:
             max_calls_per_unit=settings.repoguardian_issue_verifier_max_calls_per_unit,
         )
     result = await service.verify_issues(issues, units, dict(state), metrics)
+    decisions = {item.issue_id: item for item in result.verifications}
+    for issue in result.issues:
+        decision = decisions.get(issue.id)
+        audit_issue("verifier", issue, reason=(decision.reason if decision else
+                    issue.unresolved_reason or "no_model_decision"))
     unit_results = _replace_unit_result_issues(
         state.get("review_unit_results") or [], result.issues
     )
@@ -145,6 +152,14 @@ async def issue_deduplication_node(state: ReviewState) -> ReviewState:
     )
     service: Any = state.get("_issue_deduplication_service") or IssueDeduplicationService()
     result = await service.aggregate(issues, provider, state.get("model"), metrics)
+    merged = {key: decision for decision in result.decisions for key in decision.duplicate_issue_ids}
+    for issue in issues:
+        decision = merged.get(issue.id)
+        audit_issue("deduplication", issue,
+                    canonical_id=decision.canonical_issue_id if decision else None,
+                    reason=decision.merged_rationale if decision else
+                    "retained" if issue.status in {IssueStatus.confirmed, IssueStatus.needs_human}
+                    else "not_publishable")
 
     return ReviewState(
         status="verifying_issues",

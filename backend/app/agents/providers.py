@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import time
+from uuid import uuid4
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -22,6 +23,7 @@ from app.models.review import (
     AgentAction,
     ChangedFile,
     CrossUnitCoordinationPlan,
+    EvidenceAnchorInput,
     IssueDeduplicationDecision,
     IssueVerification,
     IssueVerificationRequest,
@@ -288,19 +290,18 @@ class OpenAICompatibleProvider(LLMProvider):
             max_tokens=4096,
         )
         try:
+            issues = self._parse_issues(response.value, require_array=True)
             raw = self._load_json(response.value)
-            if not isinstance(raw, list) and (
-                not isinstance(raw, dict) or not isinstance(raw.get("issues"), list)
-            ):
-                raise LLMProviderError("Unit review output requires an issues array")
-            issues = self._parse_issues(response.value)
             record = None
             record_error = None
             if isinstance(raw, dict) and raw.get("review_record") is not None:
                 try:
                     record = UnitReviewRecord.model_validate(raw["review_record"])
                 except ValidationError as exc:
-                    record_error = f"invalid_review_record_schema: {exc}"
+                    record_error = "invalid_review_record_schema: " + ",".join(
+                        sorted({item["type"] for item in exc.errors(include_input=False,
+                                                                  include_context=False)})
+                    )
             return ModelCallResult(UnitReviewResponse(
                 issues=issues, review_record=record, record_error=record_error,
             ), response.usage)
@@ -739,17 +740,56 @@ class OpenAICompatibleProvider(LLMProvider):
 
         raise LLMProviderError("LLM response missing string content")
 
-    def _parse_issues(self, content: str) -> list[ReviewIssue]:
-        raw = self._load_json(content)
+    def _parse_issues(self, content: str, *, require_array: bool = True) -> list[ReviewIssue]:
+        from app.review.issue_audit import audit_schema_input, audit_schema_result
 
-        raw_issues = self._extract_raw_issues(raw)
+        decoded = False
+        try:
+            raw = self._load_json(content)
+            decoded = True
+            if require_array and not isinstance(raw, list) and (
+                not isinstance(raw, dict) or not isinstance(raw.get("issues"), list)
+            ):
+                raise LLMProviderError("Unit review output requires an issues array")
+            raw_issues = self._extract_raw_issues(raw)
+        except (LLMProviderError, json.JSONDecodeError) as exc:
+            identity = audit_schema_input(content, stage="response_decode")
+            reason = "invalid_issue_envelope" if decoded else "invalid_json"
+            audit_schema_result(identity, status="dismissed", reason=reason)
+            raise LLMProviderError("LLM issue response rejected: " + reason) from exc
+
+        batch_id = "schema-batch-" + uuid4().hex
+        identities = [audit_schema_input(issue, batch_id=batch_id, candidate_index=index)
+                      for index, issue in enumerate(raw_issues)]
         normalized_issues = [self._normalize_issue(issue) for issue in raw_issues]
 
+        conversion_index = None
         try:
             proposals = self._issue_adapter.validate_python(normalized_issues)
-            return [proposal.to_issue() for proposal in proposals]
+            issues = []
+            for conversion_index, proposal in enumerate(proposals):
+                issues.append(proposal.to_issue())
+            conversion_index = None
+            for identity, issue in zip(identities, issues):
+                audit_schema_result(identity, status="candidate", reason="schema_accepted",
+                                    canonical_id=issue.id)
+            return issues
         except ValidationError as exc:
-            raise LLMProviderError(f"LLM issue schema validation failed: {exc}") from exc
+            # loc 中的模型字典键也不可信；只保留 schema 已知字段与数组下标。
+            safe_fields = set(ReviewIssueInput.model_fields) | set(EvidenceAnchorInput.model_fields)
+            errors = [{"type": item["type"], "loc": (
+                [conversion_index] if conversion_index is not None else []
+            ) + [
+                key if isinstance(key, int) or key in safe_fields else "unknown_field"
+                for key in item["loc"]
+            ]} for item in exc.errors(include_input=False, include_context=False, include_url=False)]
+            for index, identity in enumerate(identities):
+                item_errors = [item for item in errors if item["loc"] and item["loc"][0] == index]
+                audit_schema_result(identity, status="dismissed",
+                                    reason="schema_rejected" if item_errors else "batch_schema_rejected",
+                                    errors=item_errors)
+            raise LLMProviderError("LLM issue schema validation failed: " +
+                                   json.dumps(errors, ensure_ascii=False)[:1000]) from exc
 
     @staticmethod
     def _extract_raw_issues(raw: Any) -> list[Any]:
@@ -899,7 +939,11 @@ class OpenAICompatibleProvider(LLMProvider):
             if normalized in cls._CONFIDENCE_LABELS:
                 return cls._CONFIDENCE_LABELS[normalized]
             if normalized.endswith("%"):
-                return cls._clamp_confidence(float(normalized[:-1]) / 100)
+                try:
+                    return cls._clamp_confidence(float(normalized[:-1]) / 100)
+                except ValueError:
+                    # 交给 Issue schema 拒绝，避免裸 ValueError 绕过用量和候选审计。
+                    return value
             try:
                 return cls._clamp_confidence(float(normalized))
             except ValueError:

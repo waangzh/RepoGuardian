@@ -2007,6 +2007,12 @@ class ReviewCoverage(BaseModel):
     completed_units: int = Field(default=0, ge=0)
     total_units: int = Field(default=0, ge=0)
     unit_coverage_rate: float = Field(default=0.0, ge=0, le=1)
+    coordination_status: Literal[
+        "unknown", "not_required", "not_run", "completed", "unresolved", "failed", "cancelled"
+    ] = "unknown"
+    coordination_reason: str | None = None
+    # 旧记录缺少整体覆盖证据时保留未知，不能由文件覆盖率推断完成。
+    review_complete: bool | None = None
     files: list[ReviewFileCoverage] = Field(default_factory=list)
     units: list[ReviewUnitCoverage] = Field(default_factory=list)
 

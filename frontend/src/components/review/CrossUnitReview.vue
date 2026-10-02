@@ -43,6 +43,7 @@ const orphanResults = computed(() => results.value.filter((item) => !plan.value?
         </template>
         <div v-if="plan" class="coordination-decision"><h3>协调记录</h3><StatusBadge status="neutral" :label="coordinationDecisionLabel(plan)" /><p>{{ plan.reason }}</p><EvidenceReferences :ids="plan.evidence_ids || []" :catalog="catalog" :head-sha="task.pr?.head.sha" :base-sha="task.pr?.base.sha" /></div>
         <p v-else-if="risk?.non_execution_reason" class="index-note">{{ risk.non_execution_reason }}</p>
+        <p v-else-if="task.coverage?.coordination_reason" class="index-note">{{ task.coverage.coordination_reason }}</p>
       </article>
 
       <aside class="coordination-resources">

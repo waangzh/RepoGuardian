@@ -95,9 +95,16 @@ class CrossUnitCoordinationService:
             for item in records["evidence"]:
                 reference = {key: value for key, value in item.items() if key != "content"}
                 if trusted.get(item["id"]) == reference:
-                    evidence[item["id"]] = item
+                    # 协调只规划补查，不以重复的仓库全文直接确认 Issue。
+                    evidence[item["id"]] = reference
             summaries.append({"unit_id": unit.id, "status": result.status.value,
-                              "summary": result.review_summary.model_dump(mode="json")})
+                              "summary": {
+                                  "status": result.review_summary.status,
+                                  "record": (result.review_summary.record.model_dump(mode="json")
+                                             if result.review_summary.record else None),
+                                  "reason": result.review_summary.reason,
+                                  "evidence_ids": [key for key in trusted if key in evidence],
+                              }})
         return {
             "risk": state["cross_unit_risk"],
             "units": [item.model_dump(mode="json") for item in units],
@@ -281,6 +288,7 @@ class CrossUnitCoordinationService:
         from app.graph.nodes.resolve_evidence import resolve_evidence_node
         from app.graph.nodes.issue_validation import issue_policy_node, issue_verifier_node
         from app.services.issue_verifier import IssueVerifierService
+        from app.review.issue_audit import audit_issue
 
         by_id = {raw["id"]: ReviewUnit.model_validate(raw) for raw in state["review_units"]}
         # 补查仅由专属账本恢复，显式禁止继承父图的 Unit checkpoint/cache。
@@ -327,8 +335,11 @@ class CrossUnitCoordinationService:
                     for anchor in issue.supporting_evidence]
                 raw_issue["auto_fix_eligible"] = False
                 candidate = ReviewIssueInput.model_validate(raw_issue).to_issue(unit.id)
-                issues.append(candidate.model_copy(update={"id": identity, "status": IssueStatus.candidate,
-                    "source_issue_ids": [identity], "source_review_unit_ids": request.unit_ids}))
+                candidate = candidate.model_copy(update={"id": identity, "status": IssueStatus.candidate,
+                    "source_issue_ids": [identity], "source_review_unit_ids": request.unit_ids})
+                audit_issue("identity", issue, reason="followup_server_identity", canonical_id=identity)
+                audit_issue("identity_assigned", candidate, reason="followup_server_identity")
+                issues.append(candidate)
             result = result.model_copy(update={"issues": issues})
             usages.extend(item.model_dump(mode="json") for item in result.model_usages)
             # 零候选不是反证；只有目标检查完成且具有证据的 refuted 假设才是反证。

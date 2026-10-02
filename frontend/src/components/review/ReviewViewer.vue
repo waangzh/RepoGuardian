@@ -17,7 +17,7 @@ import ReportPanel from "../ReportPanel.vue";
 import ExecutionTimeline from "./ExecutionTimeline.vue";
 import CrossUnitReview from "./CrossUnitReview.vue";
 import UnitReviewRecord from "./UnitReviewRecord.vue";
-import { crossUnitPresentation, originalIssueUnit, unitFindingLabel } from "../../utils/reviewObservability";
+import { coverageCompletionLabel, crossUnitPresentation, originalIssueUnit, unitFindingLabel } from "../../utils/reviewObservability";
 
 type ReviewTab = "overview" | "review" | "checks" | "files" | "activity";
 type SeverityFilter = "all" | ReviewIssue["severity"];
@@ -75,6 +75,9 @@ const coverage = computed(() => props.task.coverage || {
   completed_units: 0,
   total_units: props.task.review_units.length,
   unit_coverage_rate: 0,
+  coordination_status: "unknown" as const,
+  coordination_reason: null,
+  review_complete: null,
   files: [],
   units: [],
 });
@@ -450,6 +453,8 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
 
         <article class="overview-card overview-card--health">
           <header><div><h2>审查健康度</h2><p>覆盖率、证据链和运行警告</p></div><StatusBadge :status="task.status" /></header>
+          <p>{{ coverageCompletionLabel(coverage) }} · {{ crossUnitSummary.executionLabel }}</p>
+          <p v-if="coverage.coordination_reason" class="health-warning">{{ coverage.coordination_reason }}</p>
           <div class="health-row"><span>可审查文件</span><i><b :style="{ width: `${fileCoveragePercent}%` }" /></i><strong>{{ coverage.reviewed_files }}/{{ coverage.eligible_files }}</strong></div>
           <div class="health-row"><span>变更组完成</span><i><b :style="{ width: `${unitCoveragePercent}%` }" /></i><strong>{{ coverage.completed_units }}/{{ coverage.total_units }}</strong></div>
           <div class="health-row"><span>证据链已定位</span><i><b :style="{ width: `${task.issues.length ? (resolvedEvidenceCount / task.issues.length) * 100 : 100}%` }" /></i><strong>{{ resolvedEvidenceCount }}/{{ task.issues.length }}</strong></div>

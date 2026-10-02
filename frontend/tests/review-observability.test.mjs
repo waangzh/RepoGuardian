@@ -24,6 +24,15 @@ test("旧记录缺失不显示跳过，零问题不显示清洁", () => {
   assert.equal(ui.unitFindingLabel({ status: "completed" }, 0), "未报告问题");
 });
 
+test("普通覆盖100%不能掩盖协调失败或整体完成情况未知", () => {
+  const coverage = { coverage_rate: 1, unit_coverage_rate: 1, review_complete: false, coordination_status: "failed" };
+  assert.equal(ui.coverageCompletionLabel(coverage), "整体审查未完整完成");
+  assert.equal(ui.crossUnitPresentation({ status: "completed_with_warnings", coverage }).executionLabel, "协调失败");
+  assert.equal(ui.coverageCompletionLabel({}), "整体完成情况未知");
+  assert.equal(ui.coverageCompletionLabel({ review_complete: true }), "整体审查完整");
+  assert.equal(ui.crossUnitPresentation({ status: "completed", coverage: { coordination_status: "unknown" }, cross_unit_risk: { decision: "required", execution_status: "failed" } }).executionLabel, "协调失败");
+});
+
 test("未生成、失败或取消的计划默认判定不伪装成已完成协调结论", () => {
   assert.equal(ui.coordinationDecisionLabel({ status: "proposed", decision: "uncertain" }), "判别尚未完成");
   assert.equal(ui.coordinationDecisionLabel({ status: "failed", decision: "required" }), "未形成完整协调结论");

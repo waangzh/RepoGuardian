@@ -106,6 +106,9 @@ def _append_coverage(lines: list[str], task: ReviewTask) -> None:
         f"- File Coverage：{coverage.coverage_rate:.1%}",
         f"- Unit Coverage：{coverage.unit_coverage_rate:.1%} "
         f"({coverage.completed_units}/{coverage.total_units})",
+        f"- 整体审查：{'完整' if coverage.review_complete is True else '未完整完成' if coverage.review_complete is False else '未知'}",
+        f"- 跨 Unit 协调状态：{coverage.coordination_status}",
+        f"- 协调说明：{_inline_text(coverage.coordination_reason or '未记录')}",
         "",
     ])
     incomplete = [item for item in coverage.files if item.status.value != "reviewed"]
