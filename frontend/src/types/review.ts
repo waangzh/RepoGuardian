@@ -672,6 +672,9 @@ export interface ReviewCoverage {
   completed_units: number;
   total_units: number;
   unit_coverage_rate: number;
+  coordination_status?: "unknown" | "not_required" | "not_run" | "completed" | "unresolved" | "failed" | "cancelled";
+  coordination_reason?: string | null;
+  review_complete?: boolean | null;
   files: Array<{
     file_path: string;
     eligible: boolean;

@@ -32,7 +32,9 @@ async def cross_unit_coordination_node(state: ReviewState, config: RunnableConfi
         lease=(config or {}).get("configurable", {}).get("review_job_lease"),
         progress=(lambda delta: writer({"kind": "coordination_progress", "state": delta})) if writer else None,
     ).run(dict(state))
+    plan = result.get("coordination_plan") or state.get("coordination_plan") or {}
+    status = plan.get("status", "unresolved")
     return ReviewState(**result, step_progress=append_step(
-        state, "cross_unit_coordination", "completed",
-        "跨 Unit 协调：" + (result.get("coordination_plan") or {}).get("status", "复用既有结果"),
+        state, "cross_unit_coordination", "completed" if status == "completed" else "failed",
+        "跨 Unit 协调：" + status,
     ))

@@ -1,4 +1,4 @@
-import type { CrossUnitCoordinationPlan, CrossUnitFollowupResult, ReviewIssue, ReviewTask, ReviewUnitResult, UnitEvidenceReference } from "../types/review";
+import type { CrossUnitCoordinationPlan, CrossUnitFollowupResult, ReviewCoverage, ReviewIssue, ReviewTask, ReviewUnitResult, UnitEvidenceReference } from "../types/review";
 
 export const decisionLabels = { required: "需要跨组检查", uncertain: "关联尚不明确", skip: "本次可跳过" };
 export const checkLabels: Record<string, string> = {
@@ -16,7 +16,11 @@ export function isTerminal(status: string): boolean {
   return ["completed", "completed_with_warnings", "failed", "cancelled"].includes(status);
 }
 
-export function crossUnitPresentation(task: Pick<ReviewTask, "status" | "cross_unit_risk" | "coordination_plan">) {
+export function coverageCompletionLabel(coverage: Pick<ReviewCoverage, "review_complete">): string {
+  return coverage.review_complete === true ? "整体审查完整" : coverage.review_complete === false ? "整体审查未完整完成" : "整体完成情况未知";
+}
+
+export function crossUnitPresentation(task: Pick<ReviewTask, "status" | "cross_unit_risk" | "coordination_plan"> & { coverage?: ReviewCoverage }) {
   const risk = task.cross_unit_risk;
   const plan = task.coordination_plan;
   const terminal = isTerminal(task.status);
@@ -30,15 +34,17 @@ export function crossUnitPresentation(task: Pick<ReviewTask, "status" | "cross_u
   } else if (plan?.status === "validated") {
     executionLabel = terminal ? "补查未完成" : "定向补查进行中";
     executionTone = terminal ? "warning" : "running";
-  } else if (plan || risk) {
-    const status = plan?.status || risk?.execution_status;
+  } else if (plan || task.coverage?.coordination_status || risk) {
+    const coverageStatus = task.coverage?.coordination_status;
+    const status = plan?.status || (coverageStatus !== "unknown" ? coverageStatus : undefined) || risk?.execution_status;
     const labels: Record<string, string> = {
       completed: "协调已结束", unresolved: "仍有未决项", failed: "协调失败",
       not_requested: "未请求补查", not_implemented: terminal ? "未执行补查" : "等待协调",
+      not_required: "无需跨组补查", not_run: "协调未执行", cancelled: "已取消",
     };
     executionLabel = labels[status || ""] || executionLabel;
     executionTone = status === "failed" ? "failed" : status === "unresolved" ? "warning"
-      : status === "not_implemented" && !terminal ? "pending" : "neutral";
+      : status === "not_run" ? "warning" : status === "not_implemented" && !terminal ? "pending" : "neutral";
   }
   return {
     decisionLabel: risk ? decisionLabels[risk.decision] : terminal ? "筛查记录未知" : "尚未筛查",

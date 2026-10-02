@@ -10,7 +10,7 @@ from app.models.review import ReviewPhase
 from app.services.review_rebuild import rebuild_task_from_state
 from app.services.report_service import ReportService
 from app.services.model_usage import append_usage, unpack_model_call
-from app.services.review_manifest import build_review_manifest
+from app.services.review_manifest import build_review_manifest, coordination_coverage
 
 logger = logging.getLogger("RepoGuardian.Node")
 
@@ -97,4 +97,6 @@ async def complete_node(state: ReviewState) -> ReviewState:
 def _final_status(state: ReviewState) -> str:
     if state.get("status") == "failed":
         return "failed"
-    return "completed_with_warnings" if state.get("warnings") else "completed"
+    coordination_status, _ = coordination_coverage(state)
+    incomplete_coordination = coordination_status in {"not_run", "failed", "cancelled", "unresolved"}
+    return "completed_with_warnings" if state.get("warnings") or incomplete_coordination else "completed"

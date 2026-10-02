@@ -127,6 +127,7 @@ def build_review_manifest(state: dict[str, Any], completed_at: datetime) -> Revi
         result is not None and is_review_unit_complete(result)
         for result in (results.get(unit.id) for unit in units)
     )
+    coordination_status, coordination_reason = coordination_coverage(state)
     coverage = ReviewCoverage(
         changed_files=len(files),
         eligible_files=eligible,
@@ -138,6 +139,12 @@ def build_review_manifest(state: dict[str, Any], completed_at: datetime) -> Revi
         completed_units=completed_units,
         total_units=len(units),
         unit_coverage_rate=(completed_units / len(units) if units else 1.0),
+        coordination_status=coordination_status,
+        coordination_reason=coordination_reason,
+        review_complete=(None if coordination_status == "unknown"
+                         and completed_units == len(units) and reviewed == eligible else
+                         completed_units == len(units) and reviewed == eligible
+                         and coordination_status in {"completed", "not_required"}),
         files=files,
         units=unit_coverage,
     )
@@ -170,6 +177,22 @@ def build_review_manifest(state: dict[str, Any], completed_at: datetime) -> Revi
         coordination_fingerprint=coordination.runtime_fingerprint if coordination else None,
         warnings=list(state.get("warnings") or []),
     )
+
+
+def coordination_coverage(state: dict[str, Any]) -> tuple[str, str | None]:
+    """协调完成与普通 Unit 文件覆盖分别记录，包括尚未执行和旧数据未知。"""
+    plan = state.get("coordination_plan") or {}
+    if plan:
+        status = plan.get("status")
+        if status in {"completed", "unresolved", "failed", "cancelled"}:
+            return status, plan.get("reason")
+        return "not_run", plan.get("reason") or "coordination_not_completed"
+    risk = state.get("cross_unit_risk") or {}
+    if risk.get("decision") == "skip":
+        return "not_required", risk.get("non_execution_reason")
+    if risk.get("decision") in {"required", "uncertain"}:
+        return "not_run", risk.get("non_execution_reason") or "coordination_not_executed"
+    return "unknown", "cross_unit_assessment_missing"
 
 
 def _all_usages(state: dict[str, Any]) -> list[ModelUsage]:

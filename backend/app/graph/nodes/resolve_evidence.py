@@ -14,6 +14,7 @@ from app.models.review import (
 )
 from app.tools.git_tool import GitTool
 from app.review.tool_scope import ReviewPathPolicyError, validate_repository_file
+from app.review.issue_audit import audit_issue
 
 
 async def resolve_evidence_node(state: ReviewState) -> ReviewState:
@@ -65,7 +66,9 @@ async def resolve_evidence_node(state: ReviewState) -> ReviewState:
         if unit is None:
             unit = next(iter(by_unit.values()))
             issue = issue.model_copy(update={"review_unit_id": unit.id})
-        resolved.append(await asyncio.to_thread(resolver.resolve_issue, issue, unit))
+        updated = await asyncio.to_thread(resolver.resolve_issue, issue, unit)
+        resolved.append(updated)
+        audit_issue("evidence", updated, reason=updated.unresolved_reason)
 
     resolved_by_id = {issue.id: issue for issue in resolved}
     unit_results: list[dict] = []
