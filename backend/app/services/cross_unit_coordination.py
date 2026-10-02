@@ -15,7 +15,9 @@ from app.services.model_usage import unpack_model_call
 from app.services.review_unit_executor import ReviewUnitExecutor
 from app.services.review_planner import DeterministicReviewPlanner
 from app.services.unit_review_summary import build_record_input
-from app.services.coordination_runtime import CoordinationRuntime, coordination_fingerprint
+from app.services.coordination_runtime import (
+    CoordinationRuntime, coordination_fingerprint, estimate_request, budget_rejection,
+)
 from app.services.fingerprints import stable_hash
 
 
@@ -37,11 +39,10 @@ class SharedBudgetProvider:
     async def _call(self, name: str, args: tuple, output_tokens: int) -> Any:
         if self.runtime is not None:
             return await self.runtime.call(self.provider, name, args, output_tokens)
-        def encode(value: Any) -> Any:
-            return value.model_dump(mode="json") if hasattr(value, "model_dump") else str(value)
-        estimate = (len(json.dumps(args, default=encode, ensure_ascii=False)) + 3) // 4 + output_tokens
+        estimate = estimate_request(self.provider, name, args, output_tokens)["estimate"]
         if not self.budget.can_consume(model_calls=1, token_usage=estimate):
-            raise LLMProviderError("cross_unit_shared_budget_exhausted")
+            raise LLMProviderError("cross_unit_shared_budget_exhausted: " + json.dumps(
+                budget_rejection(self.budget, name, estimate)))
         self._budget = self.budget.consume(model_calls=1, token_usage=estimate)
         return await getattr(self.provider, name)(*args)
 
@@ -137,6 +138,7 @@ class CrossUnitCoordinationService:
             model_calls=5 * len(plan.followups), token_usage=18_000 * len(plan.followups),
         ):
             raise ValueError("insufficient shared budget for proposed followups and verification")
+        # 这是计划准入门槛，不是实际调用预留；每次请求仍按真实提示和实测补记控制。
         seen: set[tuple] = set()
         seen_scope: set[tuple] = set()
         for request in plan.followups:
