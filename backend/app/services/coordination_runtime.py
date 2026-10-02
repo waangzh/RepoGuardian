@@ -35,6 +35,7 @@ def coordination_fingerprint(state: dict) -> str:
             if key not in {"execution_status", "non_execution_reason"}}
     return stable_hash({
         "purpose": "cross-unit-runtime-v1", "task_id": state.get("task_id"),
+        "catalog_version": "coordination-reference-catalog-v2",
         "repository": (state.get("pr_info") or {}).get("clone_url"),
         "base_sha": state.get("base_sha"), "head_sha": state.get("head_sha"),
         "model": state.get("model") or settings.repoguardian_model,

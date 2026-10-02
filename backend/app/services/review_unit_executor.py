@@ -893,23 +893,30 @@ class ReviewUnitExecutor:
             str(state["parent_state"].get("head_sha") or ""),
             str(state["parent_state"].get("base_sha") or ""),
         )
-        raw_result = await self.provider.review_unit(
-            pr,
-            state["unit_files"],
-            self._enhanced_diff(
-                state["unit_diff"],
-                state["context"],
-                state.get("unit_plan"),
-                build_language_context(
-                    (item.file_path for item in state["unit_files"]),
-                    state["parent_state"].get("file_index") or [],
-                    state["parent_state"].get("project_meta") or {},
+        from app.review.issue_audit import issue_audit_unit
+
+        with issue_audit_unit(state["unit"].id):
+            raw_result = await self.provider.review_unit(
+                pr,
+                state["unit_files"],
+                self._enhanced_diff(
+                    state["unit_diff"],
+                    state["context"],
+                    state.get("unit_plan"),
+                    build_language_context(
+                        (item.file_path for item in state["unit_files"]),
+                        state["parent_state"].get("file_index") or [],
+                        state["parent_state"].get("project_meta") or {},
+                    ),
                 ),
-            ),
-            state["parent_state"].get("model"),
-            record_input,
-        )
+                state["parent_state"].get("model"),
+                record_input,
+            )
         response, usage = unpack_model_call(raw_result)
+        from app.review.issue_audit import audit_issue
+
+        for issue in response.issues:
+            audit_issue("generated", issue.model_copy(update={"review_unit_id": state["unit"].id}))
         summary = validate_record(
             response.review_record, record_input, state["scope"].readable_files,
             response.record_error,
@@ -937,6 +944,11 @@ class ReviewUnitExecutor:
             state.get("pending_issues") or [], state["unit"], state["scope"]
         )
         known = {issue.id for issue in state["issues"]}
+        from app.review.issue_audit import audit_issue
+
+        for issue in accepted:
+            if issue.id in known:
+                audit_issue("unit_filter", issue, reason="duplicate_from_previous_round")
         accepted = [issue for issue in accepted if issue.id not in known]
         return {
             "next_action": None,
@@ -1216,19 +1228,26 @@ class ReviewUnitExecutor:
         unit: ReviewUnit,
         scope: ReviewToolScope,
     ) -> list[ReviewIssue]:
+        from app.review.issue_audit import audit_issue
+
         accepted: list[ReviewIssue] = []
         seen: set[str] = set()
         for issue in model_issues:
+            issue = issue.model_copy(update={"review_unit_id": unit.id})
             if issue.id in seen:
+                audit_issue("unit_filter", issue, reason="duplicate_issue_id")
                 continue
             seen.add(issue.id)
             if issue.primary_evidence.file_path not in scope.commentable_files:
+                audit_issue("unit_filter", issue, reason="primary_file_out_of_scope")
                 continue
             if any(
                 anchor.file_path not in scope.readable_files
                 for anchor in issue.supporting_evidence
             ):
+                audit_issue("unit_filter", issue, reason="supporting_file_out_of_scope")
                 continue
+            audit_issue("unit_filter", issue, reason="accepted")
             accepted.append(issue.model_copy(update={"review_unit_id": unit.id}))
         return accepted
 
