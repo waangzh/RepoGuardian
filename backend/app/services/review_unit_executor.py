@@ -893,6 +893,12 @@ class ReviewUnitExecutor:
             str(state["parent_state"].get("head_sha") or ""),
             str(state["parent_state"].get("base_sha") or ""),
         )
+        record_input["readonly_context"] = state["context"]
+        record_input["review_guidance"] = render_language_rule_context(build_language_context(
+            (item.file_path for item in state["unit_files"]),
+            state["parent_state"].get("file_index") or [],
+            state["parent_state"].get("project_meta") or {},
+        ))
         from app.review.issue_audit import issue_audit_unit
 
         with issue_audit_unit(state["unit"].id):

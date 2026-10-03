@@ -28,6 +28,7 @@ class SharedBudgetProvider:
         self.provider = provider
         self._budget = budget
         self.runtime: CoordinationRuntime | None = None
+        self.holdback: dict | None = None
 
     @property
     def budget(self) -> ExecutionBudget:
@@ -38,11 +39,13 @@ class SharedBudgetProvider:
 
     async def _call(self, name: str, args: tuple, output_tokens: int) -> Any:
         if self.runtime is not None:
-            return await self.runtime.call(self.provider, name, args, output_tokens)
+            return await self.runtime.call(self.provider, name, args, output_tokens, holdback=self.holdback)
         estimate = estimate_request(self.provider, name, args, output_tokens)["estimate"]
-        if not self.budget.can_consume(model_calls=1, token_usage=estimate):
+        held = self.holdback or {}
+        if not self.budget.can_consume(model_calls=1 + held.get("model_calls", 0),
+                                       token_usage=estimate + held.get("token_usage", 0)):
             raise LLMProviderError("cross_unit_shared_budget_exhausted: " + json.dumps(
-                budget_rejection(self.budget, name, estimate)))
+                budget_rejection(self.budget, name, estimate, held)))
         self._budget = self.budget.consume(model_calls=1, token_usage=estimate)
         return await getattr(self.provider, name)(*args)
 
@@ -140,7 +143,6 @@ class CrossUnitCoordinationService:
             raise ValueError("insufficient shared budget for proposed followups and verification")
         # 这是计划准入门槛，不是实际调用预留；每次请求仍按真实提示和实测补记控制。
         seen: set[tuple] = set()
-        seen_scope: set[tuple] = set()
         for request in plan.followups:
             if len(set(request.unit_ids)) < 2 or set(request.unit_ids) - units.keys():
                 raise ValueError("followup must name at least two known Units")
@@ -155,16 +157,33 @@ class CrossUnitCoordinationService:
                 raise ValueError("followup requires current evidence references")
             if any(evidence[key]["file_path"] not in readable for key in request.evidence_ids):
                 raise ValueError("followup evidence outside selected Units")
-            identity = (tuple(sorted(request.primary_files)),
-                        "".join(request.question.casefold().split()))
+            identity = CrossUnitCoordinationService.followup_identity(request)
             if identity in seen:
                 raise ValueError("duplicate followup task")
             seen.add(identity)
-            scope_key = (tuple(sorted(set(request.unit_ids))), tuple(sorted(request.primary_files)),
-                         tuple(sorted(request.evidence_ids)))
-            if scope_key in seen_scope:
-                raise ValueError("duplicate followup scope and evidence")
-            seen_scope.add(scope_key)
+
+    @staticmethod
+    def followup_identity(request) -> tuple:
+        return (tuple(sorted(set(request.unit_ids))), tuple(sorted(set(request.primary_files))),
+                tuple(sorted(set(request.evidence_ids))), request.question.strip(),
+                request.counterevidence_goal.strip(), request.stop_condition.strip())
+
+    @classmethod
+    def normalize_plan(cls, plan, payload, budget):
+        plan = CrossUnitCoordinationPlan.model_validate(plan.model_dump(mode="json"))
+        unique, seen, warnings = [], {}, []
+        for request in plan.followups:
+            # 去重前逐项核验，不能因重复而绕过路径或引用校验。
+            cls.validate_plan(plan.model_copy(update={"followups": [request]}), payload)
+            identity = cls.followup_identity(request)
+            if identity in seen:
+                warnings.append(f"完全重复补查已合并：{request.id} -> {seen[identity]}")
+            else:
+                unique.append(request)
+                seen[identity] = request.id
+        normalized = plan.model_copy(update={"followups": unique})
+        cls.validate_plan(normalized, payload, budget)
+        return normalized, warnings
 
     async def run(self, state: dict[str, Any]) -> dict[str, Any]:
         fingerprint = coordination_fingerprint(state)
@@ -205,7 +224,8 @@ class CrossUnitCoordinationService:
                         if usage is not None:
                             usages.append(usage.model_dump(mode="json"))
                         plan = CrossUnitCoordinationPlan.model_validate(proposed)
-                        self.validate_plan(plan, payload, self.provider.budget)
+                        plan, plan_warnings = self.normalize_plan(plan, payload, self.provider.budget)
+                        self.runtime.data["plan_warnings"] = plan_warnings
                 except Exception as exc:
                     usage = getattr(exc, "usage", None)
                     if usage is not None:
@@ -280,6 +300,7 @@ class CrossUnitCoordinationService:
             "issue_verifications": [*(state.get("issue_verifications") or []),
                 *(item for batch in batches for item in batch.get("issue_verifications") or [])],
             "warnings": list(dict.fromkeys([*(state.get("warnings") or []),
+                *(self.runtime.data.get("plan_warnings") or [] if self.runtime else []),
                 *(item for batch in batches for item in batch.get("warnings") or [])])),
             "context_snippets": [*(state.get("context_snippets") or []),
                 *(item for raw in (self.runtime.data["followups"].values() if self.runtime else [])
@@ -321,10 +342,32 @@ class CrossUnitCoordinationService:
                          if snippet.get("file") in readable
                      ]}
             saved = self.runtime.data["followups"].get(request.id)
+            allocations = self.runtime.data.setdefault("allocations", {})
+            if request.id not in allocations:
+                pending = sum(item.id not in self.runtime.data["batches"] for item in plan.followups)
+                budget = self.provider.budget
+                calls = max(0, budget.max_model_calls - budget.model_calls)
+                tokens = max(0, budget.max_token_usage - budget.token_usage)
+                share_calls, share_tokens = calls // max(1, pending), tokens // max(1, pending)
+                allocations[request.id] = {
+                    "followup_id": request.id, "future_calls": calls - share_calls,
+                    "future_tokens": tokens - share_tokens,
+                    "verification_calls": min(2, share_calls), "verification_tokens": share_tokens // 3,
+                }
+                await self.runtime.persist()
+            allocation = allocations[request.id]
             if saved:
                 self.runtime.data["cache_hits"] += 1
-            result = (ReviewUnitResult.model_validate(saved["unit_result"]) if saved
-                      else await executor.execute_unit(unit, local))
+            self.provider.holdback = {
+                "followup_id": request.id, "phase": "exploration",
+                "model_calls": allocation["future_calls"] + allocation["verification_calls"],
+                "token_usage": allocation["future_tokens"] + allocation["verification_tokens"],
+            }
+            try:
+                result = (ReviewUnitResult.model_validate(saved["unit_result"]) if saved
+                          else await executor.execute_unit(unit, local))
+            finally:
+                self.provider.holdback = None
             # 候选 ID 和生命周期由服务端重新赋值；补查不能冒充已确认 Issue。
             issues = []
             for index, issue in enumerate(result.issues[:20]):
@@ -381,8 +424,15 @@ class CrossUnitCoordinationService:
                      "_issue_verifier_service": IssueVerifierService(
                          self.provider, enabled=True, fail_mode="needs_human", max_calls_per_unit=2,
                      )}
-            for node in (resolve_evidence_node, issue_policy_node, issue_verifier_node):
-                batch.update(await node(batch))
+            self.provider.holdback = {
+                "followup_id": request.id, "phase": "verification",
+                "model_calls": allocation["future_calls"], "token_usage": allocation["future_tokens"],
+            }
+            try:
+                for node in (resolve_evidence_node, issue_policy_node, issue_verifier_node):
+                    batch.update(await node(batch))
+            finally:
+                self.provider.holdback = None
             self.runtime.data["batches"][request.id] = {key: batch.get(key) for key in (
                 "review_issues", "issue_metrics", "model_usages", "deterministic_issue_checks",
                 "issue_verifications", "warnings")}
