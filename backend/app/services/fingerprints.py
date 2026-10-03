@@ -7,6 +7,8 @@ import json
 import re
 from typing import Any, Iterable
 
+DIAGNOSIS_INPUT_VERSION = "canonical-evidence-v2"
+
 
 def stable_hash(value: Any) -> str:
     payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -47,6 +49,7 @@ def unit_fingerprint(
         "rule_ids": sorted(rule_ids),
         "rule_version": rule_version,
         "prompt_version": prompt_version,
+        "diagnosis_input_version": DIAGNOSIS_INPUT_VERSION,
         "tool_schema_version": tool_schema_version,
         "planner_version": planner_version,
         "review_policy_version": review_policy_version,

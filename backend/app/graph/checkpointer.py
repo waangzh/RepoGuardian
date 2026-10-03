@@ -16,6 +16,7 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from app.core.config import settings
+from app.services.fingerprints import DIAGNOSIS_INPUT_VERSION
 
 _checkpointer: AsyncSqliteSaver | None = None
 _connection: aiosqlite.Connection | None = None
@@ -150,6 +151,6 @@ def unit_thread_config(task_id: str, unit_id: str) -> dict:
     return {
         "configurable": {
             "thread_id": task_id,
-            "checkpoint_ns": f"unit:{unit_id}",
+            "checkpoint_ns": f"unit:{unit_id}:{DIAGNOSIS_INPUT_VERSION}",
         }
     }

@@ -40,14 +40,21 @@ def estimate_request(provider: Any, name: str, args: tuple, output_tokens: int) 
             "estimate_source": "provider_prompt" if callable(estimator) else "serialized_arguments"}
 
 
-def budget_rejection(budget: ExecutionBudget, name: str, estimate: int) -> dict:
+def budget_rejection(budget: ExecutionBudget, name: str, estimate: int,
+                     holdback: dict | None = None) -> dict:
+    held = holdback or {}
     return {"operation": name,
-            "exhausted_dimensions": [key for key, amount in (("model_calls", 1), ("token_usage", estimate))
+            "exhausted_dimensions": [key for key, amount in (
+                ("model_calls", 1 + held.get("model_calls", 0)),
+                ("token_usage", estimate + held.get("token_usage", 0)))
                                      if not budget.can_consume(**{key: amount})],
             "requested_tokens": estimate, "used_tokens": budget.token_usage,
             "remaining_tokens": max(0, budget.max_token_usage - budget.token_usage),
             "used_calls": budget.model_calls,
-            "remaining_calls": max(0, budget.max_model_calls - budget.model_calls)}
+            "remaining_calls": max(0, budget.max_model_calls - budget.model_calls),
+            "holdback": held,
+            "available_tokens": max(0, budget.max_token_usage - budget.token_usage - held.get("token_usage", 0)),
+            "available_calls": max(0, budget.max_model_calls - budget.model_calls - held.get("model_calls", 0))}
 
 
 def coordination_fingerprint(state: dict) -> str:
@@ -56,7 +63,7 @@ def coordination_fingerprint(state: dict) -> str:
     return stable_hash({
         "purpose": "cross-unit-runtime-v1", "task_id": state.get("task_id"),
         "catalog_version": "coordination-reference-catalog-v2",
-        "request_contract_version": "coordination-prompt-budget-v2",
+        "request_contract_version": "coordination-canonical-evidence-allocation-v3",
         "repository": (state.get("pr_info") or {}).get("clone_url"),
         "base_sha": state.get("base_sha"), "head_sha": state.get("head_sha"),
         "model": state.get("model") or settings.repoguardian_model,
@@ -143,9 +150,12 @@ class CoordinationRuntime:
         return {"coordination_plan": plan.model_dump(mode="json"),
                 "followup_results": list(self.data["followups"].values())}
 
-    async def call(self, provider: Any, name: str, args: tuple, output_tokens: int) -> Any:
+    async def call(self, provider: Any, name: str, args: tuple, output_tokens: int,
+                   *, holdback: dict | None = None) -> Any:
+        held = holdback or {}
         payload = normalize(args)
-        key = stable_hash({"operation": name, "input": payload})
+        key = stable_hash({"operation": name, "input": payload,
+                           "allocation": held.get("followup_id"), "phase": held.get("phase")})
         types = {"coordinate_cross_units": CrossUnitCoordinationPlan, "decide": AgentAction,
                  "review_unit": UnitReviewResponse, "verify_issue": IssueVerification}
         async with self.lock:
@@ -163,19 +173,21 @@ class CoordinationRuntime:
                 raise LLMProviderError(existing.get("error") or "previous_call_outcome_unknown")
             reservation = estimate_request(provider, name, args, output_tokens)
             estimate = reservation["estimate"]
-            if not self.budget.can_consume(model_calls=1, token_usage=estimate):
-                rejection = budget_rejection(self.budget, name, estimate)
+            if not self.budget.can_consume(model_calls=1 + held.get("model_calls", 0),
+                                           token_usage=estimate + held.get("token_usage", 0)):
+                rejection = budget_rejection(self.budget, name, estimate, held)
                 self.data.setdefault("budget_rejections", []).append(rejection)
                 await self.persist()
                 raise LLMProviderError("cross_unit_shared_budget_exhausted: " + json.dumps(rejection))
             self.data["budget"] = self.budget.consume(model_calls=1, token_usage=estimate).model_dump(mode="json")
             self.data["calls"][key] = {"status": "running", "operation": name,
-                                       **reservation, "attempts": 1, "correction_tokens": 0}
+                                       **reservation, "holdback": held, "attempts": 1, "correction_tokens": 0}
             await self.persist()  # 预留落盘成功后，才允许发起外部请求。
             started = time.monotonic()
             async def reserve_retry() -> None:
-                if not self.budget.can_consume(model_calls=1, token_usage=estimate):
-                    rejection = {**budget_rejection(self.budget, name, estimate), "transport_retry": True}
+                if not self.budget.can_consume(model_calls=1 + held.get("model_calls", 0),
+                                               token_usage=estimate + held.get("token_usage", 0)):
+                    rejection = {**budget_rejection(self.budget, name, estimate, held), "transport_retry": True}
                     self.data.setdefault("budget_rejections", []).append(rejection)
                     await self.persist()
                     raise LLMProviderError("cross_unit_shared_budget_exhausted_before_transport_retry: "
