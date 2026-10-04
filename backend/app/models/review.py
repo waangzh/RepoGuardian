@@ -525,7 +525,7 @@ class ExecutionBudget(BaseModel):
 
 
 class ModelUsage(BaseModel):
-    """一次模型调用的只读资源观测；不参与当前逻辑预算判定。"""
+    """一次模型调用的资源观测；实际用量用于补记超过请求预留的消耗。"""
 
     model_config = ConfigDict(extra="forbid")
 
