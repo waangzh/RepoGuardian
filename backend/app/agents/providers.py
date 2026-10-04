@@ -20,6 +20,10 @@ from app.graph.policies import (
 )
 from app.services.model_pricing import calculate_cost_microusd
 from app.services.model_usage import model_request_budget_hook
+from app.services.context_assembler import assemble_context, RequiredInputTooLarge
+from app.services.model_request_budgeter import (
+    ModelRequestProfile, PreparedModelRequest, RequestAdmissionError, request_budget_reserver,
+)
 from app.models.review import (
     AgentAction,
     ChangedFile,
@@ -132,6 +136,7 @@ class LLMProvider(ABC):
 
 
 class OpenAICompatibleProvider(LLMProvider):
+    supports_request_admission = True
     _CONFIDENCE_LABELS = {
         "very_low": 0.15,
         "low": 0.35,
@@ -151,6 +156,8 @@ class OpenAICompatibleProvider(LLMProvider):
         request_attempts: int = 2,
         retry_backoff_seconds: float = 1.0,
         request_timeout_seconds: float = 60.0,
+        request_profile: ModelRequestProfile | None = None,
+        model_profiles: dict[str, ModelRequestProfile] | None = None,
     ) -> None:
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
@@ -160,6 +167,8 @@ class OpenAICompatibleProvider(LLMProvider):
         self._request_attempts = max(1, request_attempts)
         self._retry_backoff_seconds = max(0.0, retry_backoff_seconds)
         self._request_timeout_seconds = max(1.0, request_timeout_seconds)
+        self._request_profile = request_profile or ModelRequestProfile()
+        self._model_profiles = model_profiles or {}
         self._issue_adapter = TypeAdapter(list[ReviewIssueInput])
         self._patch_adapter = TypeAdapter(list[PatchResult])
         self._patch_request_adapter = TypeAdapter(list[PatchGenerationRequest])
@@ -626,13 +635,40 @@ class OpenAICompatibleProvider(LLMProvider):
         max_tokens: int,
     ) -> ModelCallResult[str]:
         requested_model = model or self._default_model
-        chat_model = self._build_chat_model(model, max_tokens)
+        request = PreparedModelRequest(
+            model=requested_model, operation=operation, system=system, prompt=prompt,
+            output_tokens=max_tokens,
+            extra_body_json=json.dumps({"thinking": {"type": "disabled"}}
+                                       if self._disable_thinking else {}),
+        )
+        profile = self._model_profiles.get(requested_model, self._request_profile)
+        try:
+            admission = request.estimate(profile)
+        except RequestAdmissionError as exc:
+            raise LLMProviderError(str(exc)) from exc
+        chat_model = self._build_chat_model(request.model, request.output_tokens)
         started_at = time.monotonic()
-        messages = [SystemMessage(content=system), HumanMessage(content=prompt)]
+        messages = [SystemMessage(content=request.system), HumanMessage(content=request.prompt)]
         attempt_errors: list[dict[str, Any]] = []
         response: AIMessage | None = None
+
         for attempt in range(1, self._request_attempts + 1):
-            if attempt > 1 and model_request_budget_hook.get() is not None:
+            reserver = request_budget_reserver.get()
+            if reserver is not None:
+                try:
+                    await reserver(admission)
+                except RequestAdmissionError as exc:
+                    usage = (ModelUsage(
+                        provider=self._provider_name, model=request.model, operation=operation,
+                        estimated_input_tokens=admission["estimated_input_tokens"],
+                        max_output_tokens=request.output_tokens, latency_ms=max(
+                            0, round((time.monotonic() - started_at) * 1000)),
+                        response_metadata={"request_admission": admission,
+                                           "request_attempts": attempt - 1,
+                                           "request_errors": attempt_errors},
+                    ) if attempt_errors else None)
+                    raise LLMProviderError(str(exc), usage=usage) from exc
+            elif attempt > 1 and model_request_budget_hook.get() is not None:
                 await model_request_budget_hook.get()()
             try:
                 response = await chat_model.ainvoke(messages)
@@ -670,12 +706,13 @@ class OpenAICompatibleProvider(LLMProvider):
                     provider=self._provider_name,
                     model=requested_model,
                     operation=operation,
-                    estimated_input_tokens=max(1, (len(system) + len(prompt) + 3) // 4),
+                    estimated_input_tokens=admission["estimated_input_tokens"],
                     max_output_tokens=max_tokens,
                     latency_ms=latency_ms,
                     usage_available=False,
                     accounting_source="missing",
                     response_metadata={
+                        "request_admission": admission,
                         "request_attempts": attempt,
                         "request_errors": attempt_errors,
                     },
@@ -696,15 +733,19 @@ class OpenAICompatibleProvider(LLMProvider):
                 ) from exc
         assert response is not None
         latency_ms = max(0, round((time.monotonic() - started_at) * 1_000))
-        content = self._extract_message_content(response)
         usage = self._extract_model_usage(
             response,
             operation=operation,
             requested_model=requested_model,
-            estimated_input_tokens=max(1, (len(system) + len(prompt) + 3) // 4),
+            estimated_input_tokens=admission["estimated_input_tokens"],
             max_output_tokens=max_tokens,
             latency_ms=latency_ms,
         )
+        usage = usage.model_copy(update={"response_metadata": {
+            "request_admission": admission,
+            **usage.response_metadata, "request_attempts": attempt, "request_errors": attempt_errors,
+        }})
+        content = self._extract_message_content(response)
         return ModelCallResult(content, usage)
 
     def _extract_model_usage(
@@ -1123,7 +1164,7 @@ class OpenAICompatibleProvider(LLMProvider):
             "review_unit": unit,
             "project": state.get("project_meta") or {},
             "language_context": state.get("language_context") or {},
-            "unit_diff": (state.get("unit_diff") or "")[:60_000],
+            "unit_diff": state.get("unit_diff") or "",
             "changed_files": state.get("changed_files") or [],
             "retrieval_catalog": {
                 "files": [item.get("path") for item in state.get("file_index") or []],
@@ -1163,7 +1204,7 @@ class OpenAICompatibleProvider(LLMProvider):
             '["需要确认的证据"],"retrieval_suggestions":[],"completion_criteria":"完成条件"}],'
             '"coverage_targets":["覆盖目标"],"initial_action":{"action":"report_issue",'
             '"reason":"中文理由","target_issue_ids":[],"tool_args":{},"human_request":null}}\n\n'
-            f"Bounded Unit input JSON:\n{json.dumps(payload, ensure_ascii=False)[:80_000]}"
+            f"Bounded Unit input JSON:\n{_assemble_unit_context(payload, {'review_unit', 'unit_diff', 'changed_files', 'scope'}, 80_000)}"
         )
 
     @staticmethod
@@ -1193,10 +1234,10 @@ class OpenAICompatibleProvider(LLMProvider):
             "language_context": state.get("language_context") or {},
             "changed_files": [item.get("file_path") for item in state.get("changed_files") or []],
             "retrieval_catalog": {
-                "files": [item.get("path") for item in (state.get("file_index") or [])[:200]],
+                "files": [item.get("path") for item in state.get("file_index") or []],
                 "symbols": [
                     {"file": item.get("file"), "symbol": item.get("symbol"), "type": item.get("type")}
-                    for item in (state.get("symbol_index") or [])[:300]
+                    for item in state.get("symbol_index") or []
                 ],
             },
             "observed_context": {
@@ -1208,9 +1249,9 @@ class OpenAICompatibleProvider(LLMProvider):
                         "start_line": snippet.get("start_line"),
                         "end_line": snippet.get("end_line"),
                         "source": snippet.get("source"),
-                        "content": (snippet.get("content") or "")[:4_000],
+                        "content": snippet.get("content") or "",
                     }
-                    for snippet in context_snippets[-12:]
+                    for snippet in reversed(context_snippets)
                 ],
                 "coverage": {
                     kind: sum(1 for snippet in context_snippets if snippet.get("relevance") == kind)
@@ -1267,7 +1308,7 @@ class OpenAICompatibleProvider(LLMProvider):
         }
         if state.get("unit_agent"):
             compact["review_unit"] = state.get("review_unit") or {}
-            compact["unit_diff"] = (state.get("unit_diff") or "")[:40_000]
+            compact["unit_diff"] = state.get("unit_diff") or ""
             compact["unit_plan"] = state.get("unit_plan")
         unit_agent = bool(state.get("unit_agent"))
         allowed = (
@@ -1312,7 +1353,7 @@ class OpenAICompatibleProvider(LLMProvider):
             "\"tool_args\":{},\"human_request\":{\"missing_information\":[\"缺失信息\"],"
             "\"known_evidence\":[\"已知证据\"],\"questions\":[\"待确认问题\"],"
             "\"prohibited_operations\":[\"确认前禁止执行的操作\"]}}\n\n"
-            f"Current state JSON:\n{json.dumps(compact, ensure_ascii=False)[:50000]}"
+            f"Current state JSON:\n{_assemble_unit_context(compact, {'phase', 'execution_budget', 'changed_files', 'repair_feedback'} | ({'review_unit', 'unit_diff', 'unit_plan'} if unit_agent else set()), 50_000)}"
         )
 
     @staticmethod
@@ -1410,7 +1451,16 @@ def build_provider(
             request_attempts=settings.repoguardian_model_request_attempts,
             retry_backoff_seconds=settings.repoguardian_model_retry_backoff_seconds,
             request_timeout_seconds=settings.repoguardian_model_request_timeout_seconds,
+            request_profile=settings.repoguardian_model_request_profile,
+            model_profiles=settings.repoguardian_model_request_profiles,
         )
     raise ValueError(
         "REPOGUARDIAN_PROVIDER must be one of: openai, deepseek, openai-compatible"
     )
+
+
+def _assemble_unit_context(payload, required, limit):
+    try:
+        return assemble_context(payload, required, limit)
+    except RequiredInputTooLarge as exc:
+        raise LLMProviderError(str(exc)) from exc

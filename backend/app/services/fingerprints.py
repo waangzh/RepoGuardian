@@ -7,7 +7,7 @@ import json
 import re
 from typing import Any, Iterable
 
-DIAGNOSIS_INPUT_VERSION = "canonical-evidence-v2"
+DIAGNOSIS_INPUT_VERSION = "request-admission-v1-canonical-evidence-v2"
 
 
 def stable_hash(value: Any) -> str:
@@ -40,6 +40,8 @@ def unit_fingerprint(
     model: str,
     provider: str,
 ) -> str:
+    from app.core.config import settings
+
     return stable_hash({
         "base_sha": base_sha,
         "head_sha": head_sha,
@@ -50,6 +52,8 @@ def unit_fingerprint(
         "rule_version": rule_version,
         "prompt_version": prompt_version,
         "diagnosis_input_version": DIAGNOSIS_INPUT_VERSION,
+        "request_profile": settings.repoguardian_model_request_profiles.get(
+            model, settings.repoguardian_model_request_profile).model_dump(mode="json"),
         "tool_schema_version": tool_schema_version,
         "planner_version": planner_version,
         "review_policy_version": review_policy_version,

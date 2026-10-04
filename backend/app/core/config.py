@@ -5,6 +5,7 @@ from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from app.services.model_request_budgeter import ModelRequestProfile
 
 
 class Settings(BaseSettings):
@@ -25,6 +26,11 @@ class Settings(BaseSettings):
     # JSON: {"provider:model":{"input":0.40,"output":1.60,"cached_input":0.10}}
     # Rates are USD per one million tokens. Missing entries keep observed cost unknown.
     repoguardian_model_pricing_json: str = "{}"
+    # 本地保守准入上限；部署时按供应商实际能力设置，模型覆写可单独配置。
+    repoguardian_model_request_profile: ModelRequestProfile = Field(
+        default_factory=ModelRequestProfile)
+    repoguardian_model_request_profiles: dict[str, ModelRequestProfile] = Field(
+        default_factory=dict)
 
     # ---- LangSmith 可观测性（默认不追踪，也不上传审查内容）----
     repoguardian_langsmith_tracing: bool = False
