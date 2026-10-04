@@ -148,6 +148,10 @@ class ReviewUnitExecutor:
         unit: ReviewUnit,
         state: dict[str, Any],
     ) -> ReviewUnitResult:
+        from app.services.model_request_budgeter import unit_budget_snapshot
+
+        snapshot = {"budget": self._budget_for(unit)}
+        snapshot_token = unit_budget_snapshot.set(snapshot)
         try:
             async with asyncio.timeout(self.timeout_seconds):
                 return await self._execute_unit(unit, state)
@@ -157,7 +161,7 @@ class ReviewUnitExecutor:
                 status=ReviewUnitStatus.timed_out,
                 terminal_reason=ReviewUnitTerminalReason.timed_out,
                 plan_skipped=False,
-                execution_budget=self._budget_for(unit),
+                execution_budget=snapshot["budget"],
                 error=f"review unit timed out after {self.timeout_seconds} seconds",
             )
         except asyncio.CancelledError:
@@ -181,10 +185,12 @@ class ReviewUnitExecutor:
                     else ReviewUnitTerminalReason.execution_error
                 ),
                 plan_skipped=False,
-                execution_budget=self._budget_for(unit),
+                execution_budget=getattr(exc, "execution_budget", snapshot["budget"]),
                 model_usages=[usage] if usage is not None else [],
                 error=f"{type(exc).__name__}: {exc}",
             )
+        finally:
+            unit_budget_snapshot.reset(snapshot_token)
 
     async def _execute_unit(
         self,
@@ -229,7 +235,7 @@ class ReviewUnitExecutor:
                 "repository_discovery_enabled": False,
                 "max_context_chars": 12_000,
             })
-            budget = ExecutionBudget(max_model_calls=3, max_token_usage=6_000,
+            budget = ExecutionBudget(max_model_calls=3, max_token_usage=12_000,
                                      max_diagnosis_attempts=1, max_context_retrievals=2,
                                      max_patch_attempts=0)
             skip_plan = True
@@ -364,12 +370,11 @@ class ReviewUnitExecutor:
         from app.services.model_usage import annotate_usage, append_usage, unpack_model_call
 
         budget = state["budget"]
-        if not budget.can_consume(model_calls=1, token_usage=1_200):
+        if not budget.can_consume(model_calls=1):
             return {
                 "plan_status": UnitPlanStatus.skipped,
                 "plan_skip_reason": "budget_insufficient",
             }
-        budget = budget.consume(model_calls=1, token_usage=1_200)
         planning_state = self._unit_state(
             state["parent_state"], state["unit"], state["scope"],
             state["unit_files"], budget, state["context"],
@@ -377,8 +382,10 @@ class ReviewUnitExecutor:
         )
         usage = None
         try:
-            raw_result = await self.provider.plan_review_unit(
-                planning_state, state["parent_state"].get("model")
+            raw_result, budget = await self._call_unit_model(
+                budget, planning_state, 2_400,
+                lambda: self.provider.plan_review_unit(
+                    planning_state, state["parent_state"].get("model")),
             )
             plan, usage = unpack_model_call(raw_result)
             self._validate_unit_plan_scope(
@@ -387,19 +394,22 @@ class ReviewUnitExecutor:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            budget = getattr(exc, "execution_budget", budget)
             if isinstance(exc, LLMProviderError):
                 usage = exc.usage
             usage = annotate_usage(
                 usage,
-                accounted_tokens_estimate=1_200,
+                accounted_tokens_estimate=usage.accounted_tokens_estimate if usage else None,
                 review_unit_id=state["unit"].id,
                 unit_complexity=state["unit"].complexity,
             )
             detail = f"{type(exc).__name__}: {exc}"
             return {
                 "budget": budget,
-                "plan_status": UnitPlanStatus.failed,
-                "plan_skip_reason": "planning_failed",
+                "plan_status": (UnitPlanStatus.skipped if "unit_request_budget_exhausted" in str(exc)
+                                else UnitPlanStatus.failed),
+                "plan_skip_reason": ("budget_insufficient" if "unit_request_budget_exhausted" in str(exc)
+                                     else "planning_failed"),
                 "plan_error": detail,
                 "model_usages": append_usage(state.get("model_usages") or [], usage),
                 "messages": [*state["messages"], AgentEvent(
@@ -412,7 +422,7 @@ class ReviewUnitExecutor:
             }
         usage = annotate_usage(
             usage,
-            accounted_tokens_estimate=1_200,
+            accounted_tokens_estimate=usage.accounted_tokens_estimate if usage else None,
             review_unit_id=state["unit"].id,
             unit_complexity=state["unit"].complexity,
         )
@@ -471,12 +481,10 @@ class ReviewUnitExecutor:
                 state
             )
         except LLMProviderError as exc:
-            budget = state["budget"]
-            if budget.can_consume(model_calls=1, token_usage=600):
-                budget = budget.consume(model_calls=1, token_usage=600)
+            budget = getattr(exc, "execution_budget", state["budget"])
             usage = annotate_usage(
                 exc.usage,
-                accounted_tokens_estimate=600,
+                accounted_tokens_estimate=exc.usage.accounted_tokens_estimate if exc.usage else None,
                 review_unit_id=state["unit"].id,
                 unit_complexity=state["unit"].complexity,
             )
@@ -489,7 +497,9 @@ class ReviewUnitExecutor:
                 "next_action": action,
                 "budget": budget,
                 "error": detail,
-                "terminal_reason": ReviewUnitTerminalReason.provider_error,
+                "terminal_reason": (ReviewUnitTerminalReason.model_budget_exhausted
+                                    if "unit_request_budget_exhausted" in detail
+                                    else ReviewUnitTerminalReason.provider_error),
                 "model_usages": append_usage(
                     state.get("model_usages") or [], usage
                 ),
@@ -518,7 +528,7 @@ class ReviewUnitExecutor:
         ReviewUnitTerminalReason | None,
     ]:
         budget = state["budget"]
-        if not budget.can_consume(model_calls=1, token_usage=600):
+        if not budget.can_consume(model_calls=1):
             issue_round_completed = bool(state.get("issue_round_completed"))
             if issue_round_completed:
                 terminal_reason = (
@@ -543,7 +553,6 @@ class ReviewUnitExecutor:
                 list(state.get("model_usages") or []),
                 ReviewUnitTerminalReason.model_budget_exhausted,
             )
-        budget = budget.consume(model_calls=1, token_usage=600)
         decision_state = self._unit_state(
             state["parent_state"], state["unit"], state["scope"],
             state["unit_files"], budget, state["context"],
@@ -559,13 +568,14 @@ class ReviewUnitExecutor:
         })
         from app.services.model_usage import annotate_usage, append_usage, unpack_model_call
 
-        raw_result = await self.provider.decide(
-            decision_state, state["parent_state"].get("model")
+        raw_result, budget = await self._call_unit_model(
+            budget, decision_state, 1_200,
+            lambda: self.provider.decide(decision_state, state["parent_state"].get("model")),
         )
         action, usage = unpack_model_call(raw_result)
         usage = annotate_usage(
             usage,
-            accounted_tokens_estimate=600,
+            accounted_tokens_estimate=usage.accounted_tokens_estimate if usage else None,
             review_unit_id=state["unit"].id,
             unit_complexity=state["unit"].complexity,
         )
@@ -585,6 +595,41 @@ class ReviewUnitExecutor:
         if action.action not in UNIT_ALLOWED_ACTIONS:
             action = AgentAction(action=AgentActionName.task_done, reason="Unit 动作不在只读白名单")
         return action, budget, legacy_review, model_usages, None
+
+    async def _call_unit_model(self, budget, payload, output_tokens, invoke):
+        from app.agents.providers import LLMProviderError
+        from app.services.model_request_budgeter import UnitRequestLedger
+        from app.services.model_usage import unpack_model_call
+
+        ledger = UnitRequestLedger(budget)
+        try:
+            with ledger.activate():
+                if not getattr(self.provider, "supports_request_admission", False):
+                    # 旧 Provider 不暴露最终请求；显式近似估算参数，不能声称窗口已验证。
+                    chars = len(json.dumps(payload, ensure_ascii=False, default=str))
+                    await ledger.reserve({"reserved_tokens": (chars + 3) // 4 + output_tokens})
+                result = await invoke()
+            _, usage = unpack_model_call(result)
+            if ledger.reserved_tokens:
+                ledger.settle(usage)
+            if usage is not None and ledger.reserved_tokens:
+                usage.accounted_tokens_estimate = ledger.reserved_tokens
+            return result, ledger.budget
+        except Exception as exc:
+            usage = getattr(exc, "usage", None)
+            if ledger.reserved_tokens:
+                ledger.settle(usage)
+            if usage is not None:
+                usage.accounted_tokens_estimate = ledger.reserved_tokens
+            error = exc if isinstance(exc, LLMProviderError) else LLMProviderError(str(exc))
+            error.execution_budget = ledger.budget
+            raise error from exc if error is not exc else None
+        finally:
+            from app.services.model_request_budgeter import unit_budget_snapshot
+
+            snapshot = unit_budget_snapshot.get()
+            if snapshot is not None:
+                snapshot["budget"] = ledger.budget
 
     @staticmethod
     def _route_unit_action(state: "_ReviewUnitGraphState") -> str:
@@ -647,6 +692,8 @@ class ReviewUnitExecutor:
         history: list[dict[str, Any]],
     ) -> "_ReviewUnitGraphState":
         tool_name = action.action.value
+
+
         if not budget.can_consume(context_retrievals=1):
             events.append(ReviewUnitToolEvent(
                 review_unit_id=state["unit"].id,
@@ -806,6 +853,7 @@ class ReviewUnitExecutor:
         fingerprint: str,
     ) -> "_ReviewUnitGraphState":
         budget = budget.consume(context_retrievals=1)
+
         try:
             snippets = await CodeSearchTool().retrieve_context(
                 changed_files=[item.model_dump(mode="json") for item in state["unit_files"]],
@@ -878,13 +926,13 @@ class ReviewUnitExecutor:
         self, state: "_ReviewUnitGraphState"
     ) -> "_ReviewUnitGraphState":
         budget = state["budget"]
-        if not budget.can_consume(diagnosis_attempts=1, model_calls=1, token_usage=4_096):
+        if not budget.can_consume(diagnosis_attempts=1, model_calls=1):
             return {
                 "pending_issues": [],
                 "next_action": None,
                 "terminal_reason": ReviewUnitTerminalReason.diagnosis_budget_exhausted,
             }
-        budget = budget.consume(diagnosis_attempts=1, model_calls=1, token_usage=4_096)
+        budget = budget.consume(diagnosis_attempts=1)
         pr = PullRequestInfo.model_validate(state["parent_state"].get("pr_info") or {})
         from app.services.model_usage import annotate_usage, append_usage, unpack_model_call
 
@@ -901,23 +949,38 @@ class ReviewUnitExecutor:
         ))
         from app.review.issue_audit import issue_audit_unit
 
-        with issue_audit_unit(state["unit"].id):
-            raw_result = await self.provider.review_unit(
-                pr,
-                state["unit_files"],
-                self._enhanced_diff(
-                    state["unit_diff"],
-                    state["context"],
-                    state.get("unit_plan"),
-                    build_language_context(
-                        (item.file_path for item in state["unit_files"]),
-                        state["parent_state"].get("file_index") or [],
-                        state["parent_state"].get("project_meta") or {},
+        from app.agents.providers import LLMProviderError
+        try:
+            with issue_audit_unit(state["unit"].id):
+                raw_result, budget = await self._call_unit_model(
+                    budget, record_input, 4_096, lambda: self.provider.review_unit(
+                        pr,
+                        state["unit_files"],
+                        self._enhanced_diff(
+                            state["unit_diff"], state["context"], state.get("unit_plan"),
+                            build_language_context(
+                                (item.file_path for item in state["unit_files"]),
+                                state["parent_state"].get("file_index") or [],
+                                state["parent_state"].get("project_meta") or {},
+                            ),
+                        ),
+                        state["parent_state"].get("model"), record_input,
                     ),
-                ),
-                state["parent_state"].get("model"),
-                record_input,
+                )
+        except LLMProviderError as exc:
+            usage = annotate_usage(
+                exc.usage,
+                accounted_tokens_estimate=exc.usage.accounted_tokens_estimate if exc.usage else None,
+                review_unit_id=state["unit"].id, unit_complexity=state["unit"].complexity,
             )
+            return {
+                "pending_issues": [], "next_action": None,
+                "budget": getattr(exc, "execution_budget", budget), "error": str(exc),
+                "terminal_reason": (ReviewUnitTerminalReason.diagnosis_budget_exhausted
+                                    if "unit_request_budget_exhausted" in str(exc)
+                                    else ReviewUnitTerminalReason.provider_error),
+                "model_usages": append_usage(state.get("model_usages") or [], usage),
+            }
         response, usage = unpack_model_call(raw_result)
         from app.review.issue_audit import audit_issue
 
@@ -932,7 +995,7 @@ class ReviewUnitExecutor:
         )
         usage = annotate_usage(
             usage,
-            accounted_tokens_estimate=4_096,
+            accounted_tokens_estimate=usage.accounted_tokens_estimate if usage else None,
             review_unit_id=state["unit"].id,
             unit_complexity=state["unit"].complexity,
         )
@@ -946,6 +1009,9 @@ class ReviewUnitExecutor:
     async def _collect_issue_node(
         self, state: "_ReviewUnitGraphState"
     ) -> "_ReviewUnitGraphState":
+        if state.get("error") or state.get("terminal_reason") == ReviewUnitTerminalReason.diagnosis_budget_exhausted:
+            return {"pending_issues": [], "next_action": AgentAction(
+                action=AgentActionName.task_done, reason="诊断未完成，保留失败或预算拒绝状态")}
         accepted = self._filter_issues(
             state.get("pending_issues") or [], state["unit"], state["scope"]
         )
@@ -1024,7 +1090,7 @@ class ReviewUnitExecutor:
                 max_diagnosis_attempts=1,
                 max_patch_attempts=0,
                 max_model_calls=3,
-                max_token_usage=max(6_000, unit.estimated_tokens + 4_096),
+                max_token_usage=max(12_000, unit.estimated_tokens + 8_192),
             )
         if unit.complexity == ReviewUnitComplexity.medium:
             return ExecutionBudget(
@@ -1032,14 +1098,14 @@ class ReviewUnitExecutor:
                 max_diagnosis_attempts=2,
                 max_patch_attempts=0,
                 max_model_calls=5,
-                max_token_usage=max(12_000, unit.estimated_tokens + 6_000),
+                max_token_usage=max(24_000, unit.estimated_tokens + 12_000),
             )
         return ExecutionBudget(
             max_context_retrievals=12,
             max_diagnosis_attempts=3,
             max_patch_attempts=0,
             max_model_calls=7,
-            max_token_usage=max(20_000, unit.estimated_tokens + 8_000),
+            max_token_usage=max(48_000, unit.estimated_tokens + 20_000),
         )
 
     def _unit_diff(self, unit: ReviewUnit, by_path: dict[str, ChangedFile]) -> str:

@@ -14,6 +14,7 @@ from app.models.review import (
 )
 from app.services.fingerprints import stable_hash
 from app.services.model_usage import unpack_model_call, model_request_budget_hook
+from app.services.model_request_budgeter import request_budget_reserver
 
 
 class CoordinationLeaseLost(asyncio.CancelledError):
@@ -61,7 +62,10 @@ def coordination_fingerprint(state: dict) -> str:
     risk = {key: item for key, item in (state.get("cross_unit_risk") or {}).items()
             if key not in {"execution_status", "non_execution_reason"}}
     return stable_hash({
-        "purpose": "cross-unit-runtime-v1", "task_id": state.get("task_id"),
+        "purpose": "cross-unit-runtime-v1-request-admission-v1", "task_id": state.get("task_id"),
+        "request_profile": settings.repoguardian_model_request_profile.model_dump(mode="json"),
+        "model_profiles": {key: value.model_dump(mode="json") for key, value in
+                           settings.repoguardian_model_request_profiles.items()},
         "catalog_version": "coordination-reference-catalog-v2",
         "request_contract_version": "coordination-canonical-evidence-allocation-v3",
         "repository": (state.get("pr_info") or {}).get("clone_url"),
@@ -171,7 +175,10 @@ class CoordinationRuntime:
                     existing["status"] = "unknown"
                 await self.persist()
                 raise LLMProviderError(existing.get("error") or "previous_call_outcome_unknown")
-            reservation = estimate_request(provider, name, args, output_tokens)
+            prepared = bool(getattr(provider, "supports_request_admission", False))
+            reservation = ({"estimate": 0, "estimate_source": "provider_prompt",
+                            "estimate_method": "prepared_request"}
+                           if prepared else estimate_request(provider, name, args, output_tokens))
             estimate = reservation["estimate"]
             if not self.budget.can_consume(model_calls=1 + held.get("model_calls", 0),
                                            token_usage=estimate + held.get("token_usage", 0)):
@@ -179,9 +186,11 @@ class CoordinationRuntime:
                 self.data.setdefault("budget_rejections", []).append(rejection)
                 await self.persist()
                 raise LLMProviderError("cross_unit_shared_budget_exhausted: " + json.dumps(rejection))
-            self.data["budget"] = self.budget.consume(model_calls=1, token_usage=estimate).model_dump(mode="json")
+            if not prepared:
+                self.data["budget"] = self.budget.consume(model_calls=1, token_usage=estimate).model_dump(mode="json")
             self.data["calls"][key] = {"status": "running", "operation": name,
-                                       **reservation, "holdback": held, "attempts": 1, "correction_tokens": 0}
+                                       **reservation, "holdback": held, "attempts": 0 if prepared else 1,
+                                       "correction_tokens": 0}
             await self.persist()  # 预留落盘成功后，才允许发起外部请求。
             started = time.monotonic()
             async def reserve_retry() -> None:
@@ -195,7 +204,33 @@ class CoordinationRuntime:
                 self.data["budget"] = self.budget.consume(model_calls=1, token_usage=estimate).model_dump(mode="json")
                 self.data["calls"][key]["attempts"] += 1
                 await self.persist()
+            outer_reserver = request_budget_reserver.get()
+            async def reserve_prepared(metadata: dict) -> None:
+                nonlocal estimate
+                estimate = metadata["reserved_tokens"]
+                if not self.budget.can_consume(model_calls=1 + held.get("model_calls", 0),
+                                               token_usage=estimate + held.get("token_usage", 0)):
+                    rejection = {**budget_rejection(self.budget, name, estimate, held),
+                                 "transport_retry": self.data["calls"][key]["attempts"] > 0}
+                    self.data.setdefault("budget_rejections", []).append(rejection)
+                    await self.persist()
+                    reason = ("cross_unit_shared_budget_exhausted_before_transport_retry"
+                              if rejection["transport_retry"] else "cross_unit_shared_budget_exhausted")
+                    raise LLMProviderError(reason + ": " + json.dumps(rejection))
+                if outer_reserver is not None:
+                    # A follow-up Unit also owns a local budget. Check both ledgers
+                    # against this exact request, without masking the Unit hook.
+                    await outer_reserver(metadata)
+                self.data["budget"] = self.budget.consume(
+                    model_calls=1, token_usage=estimate).model_dump(mode="json")
+                self.data["calls"][key].update(estimate=estimate, request_admission=metadata,
+                    # Keep the legacy diagnostic character estimate readable.
+                    # Admission/accounting use reserved_tokens, never this field.
+                    input_chars=metadata["prompt_chars"] + 512)
+                self.data["calls"][key]["attempts"] += 1
+                await self.persist()
             hook_token = model_request_budget_hook.set(reserve_retry)
+            prepared_token = request_budget_reserver.set(reserve_prepared) if prepared else None
             usage = None
             try:
                 raw = await getattr(provider, name)(*args)
@@ -227,6 +262,8 @@ class CoordinationRuntime:
                 await self.persist()
                 raise
             finally:
+                if prepared_token is not None:
+                    request_budget_reserver.reset(prepared_token)
                 model_request_budget_hook.reset(hook_token)
                 self.data["calls"][key]["latency_ms"] = int((time.monotonic() - started) * 1000)
             await self.persist()
