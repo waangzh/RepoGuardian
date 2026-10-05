@@ -63,6 +63,7 @@ def coordination_fingerprint(state: dict) -> str:
             if key not in {"execution_status", "non_execution_reason"}}
     return stable_hash({
         "purpose": "cross-unit-runtime-v1-request-admission-v1", "task_id": state.get("task_id"),
+        "unit_input_mode": settings.repoguardian_unit_input_mode,
         "request_profile": settings.repoguardian_model_request_profile.model_dump(mode="json"),
         "model_profiles": {key: value.model_dump(mode="json") for key, value in
                            settings.repoguardian_model_request_profiles.items()},

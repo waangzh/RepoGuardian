@@ -221,9 +221,14 @@ class CodeSearchTool(BaseTool):
         result = _dedupe_and_limit(snippets, normalized_plan.max_results)
         if normalized_scope is not None:
             for snippet in result:
+                requested_end = int(snippet.get("end_line") or snippet.get("start_line") or 1)
                 lines = snippet.get("content", "").splitlines()
                 if len(lines) > normalized_scope.max_lines_per_read:
-                    snippet["content"] = "\n".join(lines[:normalized_scope.max_lines_per_read]) + "\n...(truncated)"
+                    snippet["content"] = "\n".join(lines[:normalized_scope.max_lines_per_read])
+                snippet["end_line"] = int(snippet.get("start_line") or 1) + max(
+                    0, len(snippet.get("content", "").splitlines()) - 1)
+                snippet["requested_end_line"] = requested_end
+                snippet["truncated"] = snippet["end_line"] < requested_end
                 snippet["review_unit_id"] = normalized_scope.review_unit_id
                 provenance = normalized_scope.context_provenance.get(str(snippet.get("file")))
                 if provenance is not None:
@@ -403,7 +408,9 @@ def _read_snippet(git_tool: GitTool, repo_path: str, file_path: str, start: int,
 
 
 def _truncate(content: str, limit: int) -> str:
-    return content if len(content) <= limit else content[:limit] + "\n...(truncated)"
+    from app.services.review_input_context import complete_line_prefix
+
+    return complete_line_prefix(content, limit)
 
 
 def _find_test_files(

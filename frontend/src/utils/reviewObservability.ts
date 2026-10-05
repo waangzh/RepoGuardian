@@ -1,10 +1,23 @@
-import type { CrossUnitCoordinationPlan, CrossUnitFollowupResult, ReviewCoverage, ReviewIssue, ReviewTask, ReviewUnitResult, UnitEvidenceReference } from "../types/review";
+import type { CrossUnitCoordinationPlan, CrossUnitFollowupResult, ReviewCoverage, ReviewIssue, ReviewTask, ReviewUnitResult, UnitEvidenceReference, UnitReviewSummary } from "../types/review";
 
 export const decisionLabels = { required: "需要跨组检查", uncertain: "关联尚不明确", skip: "本次可跳过" };
 export const checkLabels: Record<string, string> = {
   checked: "已检查", not_checked: "未检查", unresolved: "未决", supported: "假设得到支持",
   refuted: "找到反证", verified: "依赖已核验", conflicting: "契约冲突",
 };
+
+export function unitRecordPresentation(summary?: UnitReviewSummary) {
+  const latest = summary?.latest_attempt_status || summary?.status || "unknown";
+  const labels: Record<string, string> = { reported: "本轮记录有效", missing: "本轮缺少记录",
+    invalid: "本轮记录无效", failed: "本轮诊断失败", not_executed: "尚未执行诊断", unknown: "本轮记录未知" };
+  const current = summary?.status === "reported" && latest === "reported";
+  const record = current ? summary?.record || null : summary?.last_valid_record || summary?.record || null;
+  const retained = !!record && !current;
+  const checked = record?.target_checks.filter((item) => item.status === "checked").length || 0;
+  const latestLabel = labels[latest] || labels.unknown;
+  return { record, retained, latestLabel, tone: retained || !record ? "inconclusive" : "neutral",
+    label: retained ? `${latestLabel}；保留上次有效记录` : record ? `${checked} / ${record.target_checks.length} 个目标已检查` : "记录未知" };
+}
 export const reasonLabels: Record<string, string> = {
   changed_contract: "变更影响契约", unresolved_dependency: "依赖尚未核验", conflicting_contract: "契约结论冲突",
   dependency_coverage_gap: "关联组覆盖不足", unresolved_cross_unit_question: "跨组问题未决",

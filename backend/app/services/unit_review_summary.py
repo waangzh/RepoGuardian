@@ -1,6 +1,5 @@
 """Unit 检查记录的证据目录、范围核验与保守补全。"""
 
-import hashlib
 import json
 from typing import Any
 
@@ -8,6 +7,8 @@ from app.models.review import (
     ChangedFile, UnitEvidenceReference, UnitHypothesisCheck, UnitReviewRecord,
     UnitReviewSummary, UnitTargetCheck,
 )
+from app.services.review_input_context import build_context_evidence, make_evidence, EVIDENCE_INPUT_VERSION, input_snapshot
+from app.review.input_protocol import CANONICAL_UNIT_INPUT_PROTOCOL
 
 
 def build_record_input(
@@ -19,34 +20,24 @@ def build_record_input(
     )) or [f"审查 {item.file_path} 的变更" for item in files]
     evidence: list[dict[str, Any]] = []
 
-    def add(path: str, source: str, start: int, end: int, content: str) -> None:
-        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        identity = json.dumps([base_sha, head_sha, path, source, start, end, digest], ensure_ascii=False)
-        reference = UnitEvidenceReference(
-            id="evidence-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24],
-            file_path=path, source=source, start_line=max(0, start),
-            end_line=max(0, start, end), head_sha=head_sha, base_sha=base_sha, content_hash=digest,
-        )
-        evidence.append({**reference.model_dump(mode="json"), "content": content})
-
     for item in files:
         for hunk in item.hunks:
             content = json.dumps(
-                hunk.model_dump(exclude={"removed_lines"}), ensure_ascii=False, sort_keys=True,
+                hunk.model_dump(), ensure_ascii=False, sort_keys=True,
             )
-            add(item.file_path, "diff", hunk.new_start,
-                hunk.new_start + max(0, hunk.new_length - 1), content)
-    for snippet in context[-20:]:
-        content = str(snippet.get("content") or "")[:1_000]
-        if content:
-            start = int(snippet.get("start_line") or 1)
-            add(str(snippet["file"]), "context", start,
-                min(int(snippet.get("end_line") or start), start + len(content.splitlines()) - 1),
-                content)
+            evidence.append(make_evidence(item.file_path, "diff", hunk.new_start,
+                hunk.new_start + max(0, hunk.new_length - 1), content, head_sha, base_sha))
+    chunks, context_evidence = build_context_evidence(context, head_sha, base_sha)
+    evidence.extend(context_evidence)
     return {
         "targets": targets,
+        "input_protocol": CANONICAL_UNIT_INPUT_PROTOCOL,
         "hypotheses": [item.model_dump(mode="json") for item in plan.risk_hypotheses] if plan else [],
         "evidence": evidence,
+        "readonly_context": chunks,
+        "snapshot": {"head_sha": head_sha, "base_sha": base_sha, "input_version": EVIDENCE_INPUT_VERSION},
+        "context_coverage": {"source_snippets": len(context), "included_chunks": len(chunks),
+                             "rendered_diff_snippets": sum(item.get("source") == "file_read_diff" for item in context)},
     }
 
 
@@ -57,8 +48,16 @@ def validate_record(
     catalog = [UnitEvidenceReference.model_validate({
         key: value for key, value in item.items() if key != "content"
     }) for item in record_input["evidence"]]
+    snapshot = input_snapshot(record_input)
+    common = {"evidence": catalog, "input_protocol": record_input.get("input_protocol") or CANONICAL_UNIT_INPUT_PROTOCOL,
+              "latest_attempt_snapshot": snapshot}
+    if common["input_protocol"] != CANONICAL_UNIT_INPUT_PROTOCOL:
+        return UnitReviewSummary(**common, reason="legacy_provider_without_canonical_evidence_protocol",
+            latest_attempt_status="unknown", latest_attempt_reason="legacy_provider_without_canonical_evidence_protocol")
     if record is None:
-        return UnitReviewSummary(evidence=catalog, reason=error or "missing_review_record")
+        reason = error or "missing_review_record"
+        return UnitReviewSummary(**common, reason=reason, latest_attempt_reason=reason,
+                                 latest_attempt_status="invalid" if error else "missing")
     try:
         if len(record.contract_dependencies) > 20 or len(record.unresolved_questions) > 20:
             raise ValueError("one diagnosis record exceeds its 20-item limit")
@@ -94,33 +93,49 @@ def validate_record(
                 hypothesis_id=item["id"], status="unresolved", reason="模型未提供该假设的核验结果",
             ) for item in record_input["hypotheses"]],
         })
-        return UnitReviewSummary(status="reported", record=normalized, evidence=catalog,
+        return UnitReviewSummary(**common, status="reported", record=normalized,
+                                 last_valid_record=normalized, last_valid_snapshot=snapshot,
+                                 latest_attempt_status="reported", latest_attempt_reason="references_validated_not_correctness_proof",
                                  reason="references_validated_not_correctness_proof")
     except ValueError as exc:
-        return UnitReviewSummary(evidence=catalog, reason=f"invalid_review_record: {exc}")
+        reason = f"invalid_review_record: {exc}"
+        return UnitReviewSummary(**common, reason=reason, latest_attempt_status="invalid",
+                                 latest_attempt_reason=reason)
 
 
 def merge_review_summaries(
     previous: UnitReviewSummary, current: UnitReviewSummary, declared: UnitReviewRecord | None,
 ) -> UnitReviewSummary:
     """保留多轮证据；缺省目标不抹掉前轮检查，显式新结论优先。"""
-    evidence = {item.id: item for item in [*previous.evidence, *current.evidence]}
-    history = list(previous.record_history)
-    if not history and previous.record is not None:
-        history.append(previous.record)
+    by_id = {item.id: item for item in current.evidence}
+    old = previous.last_valid_record or previous.record
+    references = {identity for check in [*(old.target_checks if old else []),
+        *(old.hypothesis_checks if old else []), *(old.contract_dependencies if old else []),
+        *(old.unresolved_questions if old else [])] for identity in check.evidence_ids}
+    trusted = {item.id: item for item in previous.evidence}
+    compatible = (bool(previous.last_valid_snapshot.get("head_sha"))
+                  and previous.last_valid_snapshot.get("input_version") == EVIDENCE_INPUT_VERSION
+                  and previous.last_valid_snapshot == current.latest_attempt_snapshot
+                  and current.input_protocol == CANONICAL_UNIT_INPUT_PROTOCOL
+                  and all(identity in by_id and trusted.get(identity) == by_id[identity] for identity in references))
+    history = list(previous.record_history) if compatible else []
+    if not history and old is not None and compatible:
+        history.append(old)
     if current.record is not None:
         history.append(current.record)
-    updates: dict[str, Any] = {"evidence": list(evidence.values()), "record_history": history[-3:]}
-    if previous.record is not None and current.record is not None and declared is not None:
-        old_targets = {item.target: item for item in previous.record.target_checks}
-        old_hypotheses = {item.hypothesis_id: item for item in previous.record.hypothesis_checks}
+    updates: dict[str, Any] = {"record_history": history[-3:]}
+    if current.record is None and compatible and old is not None:
+        updates.update(last_valid_record=old, last_valid_snapshot=previous.last_valid_snapshot)
+    if old is not None and compatible and current.record is not None and declared is not None:
+        old_targets = {item.target: item for item in old.target_checks}
+        old_hypotheses = {item.hypothesis_id: item for item in old.hypothesis_checks}
         explicit_targets = {item.target for item in declared.target_checks}
         explicit_hypotheses = {item.hypothesis_id for item in declared.hypothesis_checks}
         dependencies = {(item.file_path, item.symbol, item.assumption): item for item in [
-            *previous.record.contract_dependencies, *current.record.contract_dependencies,
+            *old.contract_dependencies, *current.record.contract_dependencies,
         ]}
         questions = {(item.question, tuple(item.affected_files)): item for item in [
-            *previous.record.unresolved_questions, *current.record.unresolved_questions,
+            *old.unresolved_questions, *current.record.unresolved_questions,
         ]}
         updates["record"] = current.record.model_copy(update={
             "target_checks": [old_targets.get(item.target, item) if item.target not in explicit_targets else item
@@ -131,4 +146,8 @@ def merge_review_summaries(
             "contract_dependencies": list(dependencies.values()),
             "unresolved_questions": list(questions.values()),
         })
+        # History is also a recoverable projection. Store the validated merged
+        # state, so a later missing record cannot hide early checks on reload.
+        updates["record_history"] = [*history[:-1], updates["record"]][-3:]
+        updates["last_valid_record"] = updates["record"]
     return current.model_copy(update=updates)
