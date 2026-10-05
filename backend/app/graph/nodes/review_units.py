@@ -9,6 +9,8 @@ from app.graph.state import ReviewState
 from app.models.review import AgentAction, HumanReviewRequest, ReviewPlan, ReviewUnitResult, ReviewUnitStatus
 from app.graph.checkpointer import get_checkpointer
 from app.services.review_planner import DeterministicReviewPlanner
+from app.services.review_input_context import build_pr_intent
+from app.services.fingerprints import unit_execution_fingerprint
 from app.services.review_unit_executor import ReviewUnitExecutor
 from app.services.review_repository import ReviewRepository
 from app.review.unit_completion import (
@@ -21,13 +23,14 @@ async def review_plan_node(state: ReviewState) -> ReviewState:
     planner: Any = state.get("_review_planner") or DeterministicReviewPlanner()
     plan = planner.plan(
         state.get("changed_files") or [],
-        base_sha=state.get("base_sha") or "",
+        base_sha=str(state.get("base_sha") or ""),
         head_sha=state.get("head_sha") or "",
         file_index=state.get("file_index") or [],
         symbol_index=state.get("symbol_index") or [],
         repository_graph=state.get("repository_graph") or {},
         model=state.get("model") or settings.repoguardian_model,
         provider=settings.repoguardian_provider,
+        pr_intent_hash=build_pr_intent(state.get("pr_info"))["intent_hash"],
     )
     return ReviewState(
         review_plan=plan.model_dump(mode="json"),
@@ -70,13 +73,17 @@ async def review_units_node(state: ReviewState) -> ReviewState:
             timeout_seconds=settings.repoguardian_review_unit_timeout_seconds,
             checkpointer=(await get_checkpointer()) if state.get("_human_interrupt_enabled") else None,
         )
+    mode = getattr(executor, "input_mode", settings.repoguardian_unit_input_mode)
+    provider = getattr(executor, "provider", state.get("_provider"))
+    bindings = {unit.id: unit_execution_fingerprint(unit.fingerprint, state, provider, mode) for unit in plan.review_units}
     previous = {
         item.review_unit_id: item
         for item in (
             ReviewUnitResult.model_validate(raw)
             for raw in state.get("review_unit_results") or []
         )
-        if is_review_unit_complete(item)
+        if is_reusable_review_unit_result(item) and item.input_fingerprint == bindings.get(item.review_unit_id)
+        and item.review_unit_id in bindings and mode == "canonical"
     }
     pending_units = [unit for unit in plan.review_units if unit.id not in previous]
     reusable: dict[str, ReviewUnitResult] = {}
@@ -95,7 +102,7 @@ async def review_units_node(state: ReviewState) -> ReviewState:
             )
             if cached and cached.result_snapshot:
                 result = ReviewUnitResult.model_validate(cached.result_snapshot)
-                if not is_reusable_review_unit_result(result):
+                if not is_reusable_review_unit_result(result) or result.input_fingerprint != bindings[unit.id] or mode != "canonical":
                     still_pending.append(unit)
                     continue
                 result = result.model_copy(update={"model_usages": []})
@@ -158,6 +165,9 @@ async def review_units_node(state: ReviewState) -> ReviewState:
     snippets = [snippet for item in successful for snippet in item.context_snippets]
     events = [event for item in results for event in item.messages]
     warnings = list(state.get("warnings") or [])
+    legacy_units = [item for item in results if item.review_summary.input_protocol == "legacy"]
+    if legacy_units:
+        warnings.append(f"{len(legacy_units)} 个 Unit 使用显式 legacy Provider：缺少 canonical 输入保证，检查记录未知且不缓存")
     if incomplete:
         warnings.append(
             (

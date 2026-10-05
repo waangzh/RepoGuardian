@@ -109,6 +109,7 @@ class DeterministicReviewPlanner:
         repository_graph: dict[str, Any] | None = None,
         model: str | None = None,
         provider: str | None = None,
+        pr_intent_hash: str = "",
     ) -> ReviewPlan:
         files = [
             item if isinstance(item, ChangedFile) else ChangedFile.model_validate(item)
@@ -164,6 +165,7 @@ class DeterministicReviewPlanner:
                 repository_graph or {},
                 model or settings.repoguardian_model,
                 provider or settings.repoguardian_provider,
+                pr_intent_hash,
             )
             for draft in drafts
         ]
@@ -446,6 +448,7 @@ class DeterministicReviewPlanner:
         repository_graph: dict[str, Any],
         model: str,
         provider: str,
+        pr_intent_hash: str = "",
     ) -> ReviewUnit:
         primary = list(draft.primary_files)
         selected_hunks = list(draft.hunk_ids or (
@@ -488,6 +491,7 @@ class DeterministicReviewPlanner:
             "grouping_reason": draft.grouping_reason,
             "symbols": symbols,
             "planner_version": PLANNER_VERSION,
+            "pr_intent_hash": pr_intent_hash,
         }
         unit_id = "ru-" + self._digest(identity)[:16]
         related_context = [item.model_copy(update={"unit_id": unit_id}) for item in related_context]
@@ -505,6 +509,7 @@ class DeterministicReviewPlanner:
             review_policy_version=settings.repoguardian_review_policy_version,
             model=model,
             provider=provider,
+            pr_intent_hash=pr_intent_hash,
         )
         return ReviewUnit(
             id=unit_id,
