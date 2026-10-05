@@ -15,12 +15,13 @@ RepoGuardian 将 PR 拆分为边界明确的 Review Unit，独立探索上下文
 
 - **真正的 Unit Plan**：确定性拆分 Review Unit 后，模型输出结构化变更摘要、审查目标和风险假设；Plan 失败会降级为普通审查，不阻断任务。
 - **结构化检查记录**：记录实际检查目标、假设核验、契约依赖、未决问题和证据引用；缺记录或非法引用保留为未知，未报告问题不等于代码正确。
+- **完整上下文与工作记忆**：按完整对象组装输入，保留必需变更和证据；PR 作者意图进入规划、决策和诊断，历史有效检查记录回灌后续决策。
 - **证据化 Issue**：不直接信任模型行号，服务端解析 primary/supporting evidence、位置、来源、resolution status 和简洁审计摘要；Issue 只能锚定当前 PR 的可评论变更文件，不保存或展示隐藏 Chain-of-Thought。
 - **Repository-aware 探索**：`file_find` / `code_search` 可发现整个安全的 Git-tracked repository；`file_read` 仍受敏感路径、realpath/symlink、大小、行数和 Unit 预算限制。
 - **最小只读工具面**：Unit Agent 只使用 `file_find`、`code_search`、`file_read`、`file_read_diff`、`report_issue` 和 `task_done`；只有需要业务语义或安全决策时才使用结构化 `request_human` 控制动作。
 - **分级多语言分析**：语言适配器统一产出符号、导入和调用引用；解析失败自动从 L2 降级到 L1/L0，Review Unit 仍可安全使用文件读取、路径查找和 diff 读取。
 - **Selective Verifier**：确定性 evidence checks 优先，只对高风险、模糊、跨模块或低置信度问题追加模型验证；Verifier 不得提升 severity。
-- **跨 Unit 定向补查**：确定性筛查输出 `required / uncertain / skip`，协调模型只提议计划，服务端校验范围、引用、重复任务和预算；补查候选按独立批次验证后参与全局汇总。
+- **跨 Unit 定向补查**：确定性筛查输出 `required / uncertain / skip`，大目录按风险关系分批规划并记录覆盖；服务端校验范围、引用、重复任务和预算，补查候选独立验证后参与全局汇总。
 - **可审计、失败隔离**：Coverage / Run Manifest 分别报告 File Coverage 与 Unit Coverage，并记录 partial、终止原因、模型用量、耗时和确认问题；单个 Unit 或 Verifier 失败不会抹掉其他有效结果。
 - **持久协调账本**：保存调用预留、计划、补查和验证批次，恢复时复用已完成结果；失败与传输重试计入共享预算，结果未知的调用不会自动重发。
 - **独立 Project CI**：只发送服务端注册的 profile、request ID 和 SHA 绑定信息，不发送模型生成的 shell command；Fork PR 默认不 dispatch。
@@ -39,6 +40,18 @@ Preview 不调用模型、不运行目标代码，会显示文件和 Unit 范围
 
 Project CI 是独立异步状态机：Review 可以先完成，Validation 随后处于 Pending、Running 或终态。RepoGuardian 会校验 repository、request ID、head SHA、patch SHA、workflow/run identity 和结构化结果。
 
+### 上下文与模型预算
+
+Plan、Decision、Verifier、去重和 Patch 输入先按完整对象组装，再序列化为 JSON；可选目录项的省略写入输入清单，必需内容超限时返回 `required_input_too_large`，不会通过截断 JSON 发送半份核心输入。诊断使用 canonical evidence：展示的源码正文与可引用证据身份对应，证据绑定仓库快照、文件、来源、实际行范围和内容哈希；上下文按完整行截取，截断状态保存在独立元数据中。
+
+PR 标题与受限正文作为 `source=pr_author`、`trust=unverified` 的业务背景进入 Plan、Decision 和 Diagnosis。作者声明不能替代代码证据或扩大工具权限；完整标题和正文的意图哈希参与复用指纹，即使变化发生在未展示的正文中间部分，也会使旧结果失效。
+
+上下文字符额度、单次模型请求窗口与累计执行预算分别控制。内置 Provider 在发送前检查包含 System/Human、JSON mode 和输出额度的完整请求，并预留调用预算；失败、重试和 usage 缺失不退还预留，实际用量超额时补记。有匹配 tokenizer 时按本地 tokenizer 估算，未知模型使用保守 UTF-8 字节估计；这些计数不等同于供应商的精确计费或能力发现。
+
+默认本地模型窗口为 **16,384 token**，安全余量 **512 token**，部署时应按实际模型能力设置 request profile。窗口超限返回 `model_context_window_exceeded` 等明确拒绝原因；累计预算不足也会阻止后续请求，不能把这类未完成状态解释为没有问题。
+
+生产 Unit 默认要求 Provider 声明 `canonical-evidence-v3` 并实现对应接口。不支持该协议的 Provider 在调用前被拒绝；仅显式配置 `legacy` 才能使用旧 Provider，检查记录保持未知且结果不复用。此处的输入协议模式与下文 Review 工作模式分别配置。
+
 ### 跨 Unit 协作
 
 当前默认自动执行风险筛查，并在需要时协调补查、合并验证结果，行为等同于 `auto`；当前版本没有 `off / shadow / auto` 模式选择或对应环境配置。
@@ -51,17 +64,23 @@ Project CI 是独立异步状态机：Review 可以先完成，Validation 随后
 
 筛查结合当前变更、静态关联、Unit 声明的依赖和检查覆盖缺口；静态调用关系本身不等于本次变更存在契约风险，即使原始 Unit 没有报告 Issue，也可能需要补查。
 
-协调最多提出 3 项补查，每项明确关联 Units、主文件、检查问题、反证目标和停止条件。服务端校验当前证据与关系引用、允许范围、重复任务和预算后执行，补查不能扩张到计划之外的读取范围。新增候选单独经过 Evidence → Issue Policy → Independent Verifier，随后进入全局去重；协调模型不能直接确认或删除问题。
+目录超过单批容量时，优先处理契约变化、冲突和依赖缺口，尽量将关联关系放在同批；过大组按完整关系拆分，保留关系两端的 Unit 和摘要。每批提供全 Unit 精简索引，但模型只能引用本批实际加载的条目。单批同时受 **48,000 字符**、模型窗口及输出引用上限约束；规划失败、输入超限和预算不足都会记录批次范围与原因。
+
+分批 proposal 按完整补查任务身份去重，以稳定 ID 合并，最终最多执行 **3 项补查**。每项明确关联 Units、主文件、检查问题、反证目标和停止条件；因数量或预算限制未执行的补查保留为未决。服务端校验当前证据与关系引用、允许范围、重复任务和预算后执行，补查不能扩张到计划之外的读取范围。新增候选单独经过 Evidence → Issue Policy → Independent Verifier，随后进入全局去重；协调模型不能直接确认或删除问题。
 
 协调、所有补查和补查 Verifier 共用任务级预算，默认上限为 **16 次模型调用、120,000 估算 token**，包含传输重试。失败、重启和恢复不返还已消耗预算；实际用量高于估算时补记。补查结果独立保存，不增加原始 Unit 覆盖率分母；零候选不构成反证，反证需要已完成的目标检查和相关 Unit 的证据。
 
+部分批次完成规划不代表整体审查完成。有未覆盖批次、未执行补查或未决问题时，协调保持 `unresolved` 或 `failed`，整体任务可显示 `completed_with_warnings`；目录批次的 `validated` 只表示规划输入与输出通过校验，不表示代码行为已验证。
+
 ### 检查记录与恢复
 
-任务 API 返回结构化 JSON：`review_unit_results[].review_summary` 保存各 Unit 的检查记录与证据元数据，`cross_unit_risk` 保存筛查依据，`coordination_plan` 保存计划、预算和运行指标，`followup_results` 保存补查结果与批次验证状态。Markdown 报告用于阅读，结构化 JSON 用于程序处理；证据引用绑定 base/head SHA、文件、行范围、来源和内容哈希。
+任务 API 返回结构化 JSON：`review_unit_results[].review_summary` 保存各 Unit 的检查记录与证据元数据，`cross_unit_risk` 保存筛查依据，`coordination_plan` 保存计划、预算和运行指标，`coordination_plan.catalog_batches` 保存目录批次的输入哈希、范围与规划状态，`followup_results` 保存补查结果与批次验证状态。Markdown 报告用于阅读，结构化 JSON 用于程序处理；证据引用绑定 base/head SHA、文件、行范围、来源和内容哈希。
 
-前端 **检查与协作** 页分别展示实际检查范围、风险理由、关联路径、补查问题、反证目标、候选处理状态和资源消耗，可以从补查发现跳转到代码证据或关联的原始 Unit。筛查判定、协调执行状态和 Issue 状态分别展示；`checked` 只表示检查过，模型置信度未经校准，缺失记录不会显示为已完成或无风险。
+有效检查记录投影为 Unit 工作记忆，进入下一轮 Decision 和 Diagnosis，并恢复相关证据正文。后续诊断记录缺失或无效时，`record/status` 保留本轮未知语义，`last_valid_record` 保留此前有效记录；`latest_attempt_status` 与快照单独记录本轮尝试。历史有效记录用于工作记忆、审计和展示，不能代替当前有效诊断参与风险判断；SHA、范围、协议或 PR 意图不兼容时不沿用旧记录。
 
-生产任务使用 SQLite 任务队列与 LangGraph checkpoint，协调调用和补查批次另有持久账本。恢复时复用已完成结果，不重复累加候选和指标；已发出但结果未知的调用保留未决。协调运行指纹绑定仓库快照、模型、协议版本和审查输入。页面区分本轮观测与任务累计预算；实际 usage 或成本缺失时保持未知。
+前端 **检查与协作** 页分别展示实际检查范围、风险理由、关联路径、目录批次覆盖、补查问题、反证目标、候选处理状态和资源消耗，可以从补查发现跳转到代码证据或关联的原始 Unit。筛查判定、协调执行状态和 Issue 状态分别展示；`checked` 只表示检查过，模型置信度未经校准。历史记录保留时会明确显示本轮未知，缺失记录不会显示为已完成或无风险。
+
+生产任务使用 SQLite 任务队列与 LangGraph checkpoint，协调调用、目录 proposal 和补查批次另有持久账本。恢复时复用已确认的目录批次与已完成结果，不重复调用、扣费或累加候选和指标；已发出但结果未知的协调调用保留未决，不自动重发。复用指纹绑定仓库快照、模型、协议版本和审查输入；Unit 复用还校验 PR 意图与执行配置。页面区分本轮观测与任务累计预算；实际 usage 或成本缺失时保持未知。
 
 ## 快速开始
 
@@ -120,9 +139,13 @@ npm run dev
 | GitHub API 认证 | `GITHUB_TOKEN` | 未配置 Token |
 | 兼容模型服务 | `OPENAI_BASE_URL`、`REPOGUARDIAN_PROVIDER`、`REPOGUARDIAN_MODEL` | OpenAI / `gpt-4.1-mini` |
 | Unit 并发与超时 | `REPOGUARDIAN_REVIEW_UNIT_CONCURRENCY`、`REPOGUARDIAN_REVIEW_UNIT_TIMEOUT_SECONDS` | 并发 4，单 Unit 180 秒 |
+| 模型请求窗口 | `REPOGUARDIAN_MODEL_REQUEST_PROFILE`、`REPOGUARDIAN_MODEL_REQUEST_PROFILES` | 本地窗口 16,384 token，安全余量 512；支持按实际模型名覆写 |
+| Unit 输入协议 | `REPOGUARDIAN_UNIT_INPUT_MODE` | `canonical`；显式 `legacy` 的检查记录未知且结果不复用 |
 | 模型用量成本 | `REPOGUARDIAN_MODEL_PRICING_JSON` | 未配置价格时成本未知；按 provider/model 设置每百万 token 的美元价格 |
 | 外部动态验证 | `REPOGUARDIAN_DEFAULT_VALIDATION_BACKEND` 及对应 CI / Runner 配置 | `none`；需额外配置执行端 |
 | LangSmith 追踪 | `REPOGUARDIAN_LANGSMITH_TRACING` | 关闭；启用后默认仍不上传审查正文 |
+
+Request profile 使用 JSON，可配置 `context_window`、`max_input_tokens`、`max_output_tokens`、`safety_margin_tokens` 与 `input_output_shared`。`REPOGUARDIAN_MODEL_REQUEST_PROFILES` 是“实际模型名 → profile”的 JSON 映射；未匹配模型使用通用 profile。确认供应商的输入、输出限制与是否共享窗口后再调整这些值，不能仅因请求被拒绝就扩大上限。
 
 ## 工作模式
 
@@ -152,6 +175,7 @@ npm run dev
 - 不写回 GitHub Review、Check Run、suggestion 或 Draft PR。
 - 不提供 Local Sandbox、Docker/gVisor/Firecracker 或通用命令执行能力。
 - Metadata-only semantic grouping 和公开 review benchmark 尚未实现；当前 planner 仍以确定性分组和安全 fallback 为主。
+- 超大必需输入仍可能被拒绝：协调可按关系分批，但单个不可拆分组、全 Unit 精简索引或完整 Unit 必需输入自身超限时保留未覆盖；Verifier、去重和 Patch 尚不自动分批。
 - 尚未完成真实样本上的协作效果对照与人工核验；不能据此声称跨模块召回提升、误报下降或成本收益。
 - 模型结论仍需工程师结合 Evidence 和 Coverage 复核。
 
@@ -169,7 +193,7 @@ npm test
 npm run build
 ```
 
-配置项及默认值见 [`.env.example`](.env.example)。后端模型和前端类型必须保持同步，相关约束见 [AGENTS.md](AGENTS.md)。
+配置项及默认值见 [`.env.example`](.env.example)。修改后端响应模型时同步前端类型与调用方，并验证结构化输入、拒绝路径和旧数据兼容性。
 
 阅读实现时可从以下入口开始：
 
@@ -178,8 +202,13 @@ npm run build
 | [`backend/app/graph/review_graph.py`](backend/app/graph/review_graph.py) | 主审查图与 Review Unit 阶段编排 |
 | [`backend/app/services/review_service.py`](backend/app/services/review_service.py) | 任务创建、执行调度与恢复编排 |
 | [`backend/app/services/review_unit_executor.py`](backend/app/services/review_unit_executor.py) | Unit 内的模型与只读工具反馈循环 |
+| [`backend/app/services/context_assembler.py`](backend/app/services/context_assembler.py) | 完整对象组装、可选内容省略清单与必需输入拒绝 |
+| [`backend/app/services/model_request_budgeter.py`](backend/app/services/model_request_budgeter.py) | 完整模型请求计数、窗口准入与 Unit 预算预留 |
+| [`backend/app/services/review_input_context.py`](backend/app/services/review_input_context.py) | PR 作者背景、完整证据块与 Unit 工作记忆投影 |
+| [`backend/app/services/unit_review_summary.py`](backend/app/services/unit_review_summary.py) | 检查记录校验、历史有效记忆与当前尝试状态 |
 | [`backend/app/services/cross_unit_risk.py`](backend/app/services/cross_unit_risk.py) | 确定性跨 Unit 风险筛查与关联依据 |
 | [`backend/app/services/cross_unit_coordination.py`](backend/app/services/cross_unit_coordination.py) | 受限关系判别、计划校验、定向补查与批次验证 |
+| [`backend/app/services/coordination_catalog.py`](backend/app/services/coordination_catalog.py) | 风险关系分批、完整目录投影与未覆盖范围 |
 | [`backend/app/services/coordination_runtime.py`](backend/app/services/coordination_runtime.py) | 协调运行账本、共享预算与调用恢复 |
 | [`backend/app/api/reviews.py`](backend/app/api/reviews.py) | Preview、任务查询、Unit 重试和进度接口 |
 | [`frontend/src/App.vue`](frontend/src/App.vue) | 审查、历史记录、验证后端与设置页面入口 |
