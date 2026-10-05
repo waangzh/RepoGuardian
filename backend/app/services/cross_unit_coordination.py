@@ -19,6 +19,7 @@ from app.services.coordination_runtime import (
     CoordinationRuntime, coordination_fingerprint, estimate_request, budget_rejection,
 )
 from app.services.fingerprints import stable_hash
+from app.services.coordination_catalog import catalog_batches
 
 
 class SharedBudgetProvider:
@@ -175,7 +176,7 @@ class CrossUnitCoordinationService:
                 request.counterevidence_goal.strip(), request.stop_condition.strip())
 
     @classmethod
-    def normalize_plan(cls, plan, payload, budget):
+    def normalize_plan(cls, plan, payload, budget=None):
         plan = CrossUnitCoordinationPlan.model_validate(plan.model_dump(mode="json"))
         unique, seen, warnings = [], {}, []
         for request in plan.followups:
@@ -216,22 +217,13 @@ class CrossUnitCoordinationService:
         try:
             async with asyncio.timeout(self.timeout_seconds):
                 payload = self.catalog(state)
-                if len(json.dumps(payload, ensure_ascii=False)) > 48_000:
-                    raise ValueError("coordination_catalog_exceeds_48000_chars")
                 try:
                     saved_plan = self.runtime.data["plan"]
                     if saved_plan and saved_plan["status"] == "validated":
                         plan = CrossUnitCoordinationPlan.model_validate(saved_plan)
                         self.validate_plan(plan, payload)
                     else:
-                        async with asyncio.timeout(60):
-                            raw = await self.provider.coordinate_cross_units(payload, state.get("model"))
-                        proposed, usage = unpack_model_call(raw)
-                        if usage is not None:
-                            usages.append(usage.model_dump(mode="json"))
-                        plan = CrossUnitCoordinationPlan.model_validate(proposed)
-                        plan, plan_warnings = self.normalize_plan(plan, payload, self.provider.budget)
-                        self.runtime.data["plan_warnings"] = plan_warnings
+                        plan = await self.plan_catalog(payload, state.get("model"), usages)
                 except Exception as exc:
                     usage = getattr(exc, "usage", None)
                     if usage is not None:
@@ -241,18 +233,21 @@ class CrossUnitCoordinationService:
                 self.runtime.data["plan"] = plan.model_dump(mode="json")
                 await self.runtime.persist()
                 result = await self.execute_followups(plan, state)
-                status = "completed" if plan.decision == "skip" or (
+                status = "completed" if not any(
+                    item.status != "validated" for item in plan.catalog_batches
+                ) and (plan.decision == "skip" or (
                     result.get("followup_results") and all(
                         item["outcome"] in {"candidate_found", "refuted"}
                         for item in result["followup_results"]
                     ) and not plan.unresolved_questions
                 ) and not any(issue["status"] in {"candidate", "evidence_resolved", "needs_human"}
                               for issue in result.get("review_issues") or []
-                              if issue["review_unit_id"].startswith("followup-")) else "unresolved"
+                              if issue["review_unit_id"].startswith("followup-"))) else "unresolved"
                 plan = plan.model_copy(update={"status": status})
                 result["model_usages"] = [*(state.get("model_usages") or []), *usages,
                                           *result.get("model_usages", [])]
         except asyncio.CancelledError:
+            plan = CrossUnitCoordinationPlan.model_validate(self.runtime.data["plan"] or plan)
             self.runtime.data["status"] = "interrupted"
             self.runtime.data["plan"] = plan.model_dump(mode="json")
             # 调用已预留的预算不退还；取消状态不会转成成功结果。
@@ -262,6 +257,7 @@ class CrossUnitCoordinationService:
                 pass
             raise
         except Exception as exc:
+            plan = CrossUnitCoordinationPlan.model_validate(self.runtime.data["plan"] or plan)
             plan = plan.model_copy(update={"status": "failed",
                                           "reason": f"{type(exc).__name__}: {exc}"[:1000]})
             result = {**self._aggregate_output(state), "warnings": [*(state.get("warnings") or []),
@@ -288,6 +284,99 @@ class CrossUnitCoordinationService:
         await self.runtime.persist()
         result.update(self.runtime.public_state())
         return result
+
+    async def plan_catalog(self, payload: dict, model: str | None,
+                           usages: list[dict]) -> CrossUnitCoordinationPlan:
+        admission = getattr(self.provider, "coordination_request_admission", None)
+        batches = catalog_batches(payload, (lambda item: admission(item, model)) if callable(admission) else None)
+        saved = self.runtime.data.setdefault("catalog_batches", {})
+        entries = [type(entry).model_validate(saved.get(entry.id, {}).get("coverage", entry))
+                   for entry, _ in batches]
+        aggregate = CrossUnitCoordinationPlan(decision=payload["risk"]["decision"], catalog_batches=entries)
+        self.runtime.data["plan"] = aggregate.model_dump(mode="json")
+        await self.runtime.persist()
+        followups, identities, questions, relationships, evidence = [], set(), [], set(), set()
+        proposals, warnings = [], []
+        for index, (entry, batch) in enumerate(batches):
+            if entry.id in saved:
+                raw = saved[entry.id]
+                coverage = type(entry).model_validate(raw["coverage"])
+                proposal = CrossUnitCoordinationPlan.model_validate(raw["proposal"]) if raw.get("proposal") else None
+                self.runtime.data["cache_hits"] += 1
+            else:
+                coverage, proposal = entry, None
+                if entry.status == "pending" and len(batch["units"]) < 2:
+                    coverage = entry.model_copy(update={"status": "skipped",
+                        "reason": "coordination_batch_insufficient_cross_unit_scope"})
+                if coverage.status == "pending":
+                    # 已接受的补查仍保留执行/独立验证空间，后续目录不能透支。
+                    self.provider.holdback = ({"model_calls": 5 * len(followups),
+                        "token_usage": 18_000 * len(followups), "phase": "catalog"}
+                        if len(batches) > 1 else None)
+                    try:
+                        async with asyncio.timeout(60):
+                            raw = await self.provider.coordinate_cross_units(batch, model)
+                        proposed, usage = unpack_model_call(raw)
+                        if usage is not None:
+                            usages.append(usage.model_dump(mode="json"))
+                        proposal = CrossUnitCoordinationPlan.model_validate(proposed)
+                        proposal, notes = self.normalize_plan(proposal, batch)
+                        warnings.extend(notes)
+                        if len(batches) == 1:
+                            self.validate_plan(proposal, batch, self.provider.budget)
+                        coverage = entry.model_copy(update={"status": "validated"})
+                    except Exception as exc:
+                        usage = getattr(exc, "usage", None)
+                        if usage is not None:
+                            usages.append(usage.model_dump(mode="json"))
+                        proposal = None
+                        coverage = entry.model_copy(update={"status": "failed",
+                            "reason": f"{type(exc).__name__}: {exc}"[:1000]})
+                    finally:
+                        self.provider.holdback = None
+                saved[entry.id] = {"coverage": coverage.model_dump(mode="json"),
+                                  "proposal": proposal.model_dump(mode="json") if proposal else None}
+            if proposal is not None:
+                self.validate_plan(proposal, batch)
+                proposals.append(proposal)
+                relationships.update(proposal.relationship_ids)
+                evidence.update(proposal.evidence_ids)
+                questions.extend(proposal.unresolved_questions)
+                for request in proposal.followups:
+                    identity = self.followup_identity(request)
+                    if identity in identities:
+                        continue
+                    if len(followups) >= 3 or not self.provider.budget.can_consume(
+                        model_calls=5 * (len(followups) + 1), token_usage=18_000 * (len(followups) + 1),
+                    ):
+                        questions.append(f"补查未执行（数量或共享预算限制）：{request.question}")
+                        warnings.append(f"目录批次 {entry.id} 提出的补查未获准执行：{request.question}")
+                        continue
+                    identities.add(identity)
+                    if len(batches) > 1:
+                        request = request.model_copy(update={"id": "followup-" + stable_hash(identity)[:24]})
+                    followups.append(request)
+            else:
+                message = f"目录批次 {entry.id} 未覆盖：{coverage.reason}"
+                questions.append(message)
+                warnings.append(message)
+            entries[index] = coverage
+            aggregate = aggregate.model_copy(update={"catalog_batches": entries})
+            self.runtime.data["plan"] = aggregate.model_dump(mode="json")
+            self.runtime.data["plan_warnings"] = list(dict.fromkeys(warnings))
+            await self.runtime.persist()
+        if not proposals:
+            raise ValueError(next((entry.reason for entry in entries if entry.reason),
+                                  "coordination_catalog_not_covered"))
+        decision = ("required" if any(item.decision == "required" for item in proposals)
+                    else "skip" if not questions and all(item.decision == "skip" for item in proposals)
+                    else payload["risk"]["decision"])
+        aggregate = aggregate.model_copy(update={"decision": decision, "followups": followups,
+            "unresolved_questions": list(dict.fromkeys(questions)), "relationship_ids": sorted(relationships),
+            "evidence_ids": sorted(evidence), "reason": (proposals[0].reason if len(batches) == 1 else
+                f"目录分为 {len(batches)} 批；{len(proposals)} 批完成规划，{len(batches) - len(proposals)} 批未覆盖")})
+        self.validate_plan(aggregate, payload)
+        return aggregate
 
     def _aggregate_output(self, state: dict) -> dict:
         batches = list(self.runtime.data["batches"].values()) if self.runtime else []

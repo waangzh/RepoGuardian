@@ -631,6 +631,8 @@ class OpenAICompatibleProvider(LLMProvider):
             "范围、问题、反证目标、停止条件完全相同的请求只提出一次。"
             "每项必须明确 question、counterevidence_goal、stop_condition，不能直接确认或删除 Issue。"
             "只有证据充分且全部疑点已排除才返回 skip。返回 JSON，中文理由。"
+            "coverage_index 仅用于定位全部 Unit，不表示它们已被本批检查；"
+            "只引用本批 units/risk/evidence 中的完整条目，不推断省略组已完成。"
             '格式：{"decision":"required|uncertain|skip","reason":"理由",'
             '"relationship_ids":[],"evidence_ids":[],"followups":[{"id":"f1",'
             '"question":"问题","unit_ids":["目录中的第一个Unit ID","目录中的另一个Unit ID"],'
@@ -654,6 +656,20 @@ class OpenAICompatibleProvider(LLMProvider):
             raise ValueError("unsupported coordination operation")
         return len(prompt) + 512
 
+    def coordination_request_admission(self, payload: dict, model: str | None) -> dict:
+        request = self._prepare_json_request(self._build_coordination_prompt(payload), model,
+            "cross_unit_coordination",
+            "You are a bounded read-only cross-unit coordinator. Return valid JSON only.", 4096)
+        return request.estimate(self._model_profiles.get(request.model, self._request_profile))
+
+    def _prepare_json_request(self, prompt, model, operation, system, max_tokens):
+        return PreparedModelRequest(
+            model=model or self._default_model, operation=operation, system=system, prompt=prompt,
+            output_tokens=max_tokens,
+            extra_body_json=json.dumps({"thinking": {"type": "disabled"}}
+                                       if self._disable_thinking else {}),
+        )
+
     async def _request_json_content(
         self,
         prompt: str,
@@ -663,12 +679,7 @@ class OpenAICompatibleProvider(LLMProvider):
         max_tokens: int,
     ) -> ModelCallResult[str]:
         requested_model = model or self._default_model
-        request = PreparedModelRequest(
-            model=requested_model, operation=operation, system=system, prompt=prompt,
-            output_tokens=max_tokens,
-            extra_body_json=json.dumps({"thinking": {"type": "disabled"}}
-                                       if self._disable_thinking else {}),
-        )
+        request = self._prepare_json_request(prompt, model, operation, system, max_tokens)
         profile = self._model_profiles.get(requested_model, self._request_profile)
         try:
             admission = request.estimate(profile)
@@ -679,6 +690,7 @@ class OpenAICompatibleProvider(LLMProvider):
         messages = [SystemMessage(content=request.system), HumanMessage(content=request.prompt)]
         attempt_errors: list[dict[str, Any]] = []
         response: AIMessage | None = None
+
         for attempt in range(1, self._request_attempts + 1):
             reserver = request_budget_reserver.get()
             if reserver is not None:
