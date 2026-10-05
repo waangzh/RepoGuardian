@@ -10,6 +10,9 @@ from typing import Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from app.agents.providers import LLMProvider
+from app.services.review_input_context import build_pr_intent, build_working_memory, complete_line_prefix
+from app.review.input_protocol import CANONICAL_UNIT_INPUT_PROTOCOL, legacy_unit_input_allowed
+from app.services.fingerprints import unit_execution_fingerprint
 from app.models.review import (
     AgentAction,
     AgentActionName,
@@ -83,6 +86,8 @@ class _ReviewUnitGraphState(TypedDict, total=False):
     human_request: HumanReviewRequest | None
     terminal_reason: ReviewUnitTerminalReason | None
     review_summary: UnitReviewSummary
+    last_valid_review_summary: UnitReviewSummary | None
+    latest_review_attempt: dict[str, Any]
 
 
 class ReviewUnitExecutor:
@@ -96,12 +101,18 @@ class ReviewUnitExecutor:
         timeout_seconds: int,
         planner: DeterministicReviewPlanner | None = None,
         checkpointer: Any | None = None,
+        input_mode: str | None = None,
     ) -> None:
         if concurrency < 1:
             raise ValueError("review unit concurrency must be positive")
         if timeout_seconds < 1:
             raise ValueError("review unit timeout must be positive")
         self.provider = provider
+        from app.core.config import settings
+
+        self.input_mode = input_mode or settings.repoguardian_unit_input_mode
+        if self.input_mode not in {"canonical", "legacy"}:
+            raise ValueError("Unit input mode must be canonical or legacy")
         self.concurrency = concurrency
         self.timeout_seconds = timeout_seconds
         self.planner = planner or DeterministicReviewPlanner()
@@ -150,19 +161,27 @@ class ReviewUnitExecutor:
     ) -> ReviewUnitResult:
         from app.services.model_request_budgeter import unit_budget_snapshot
 
-        snapshot = {"budget": self._budget_for(unit)}
+        snapshot = {"budget": self._budget_for(unit), "input_fingerprint": unit_execution_fingerprint(
+            unit.fingerprint, state, self.provider, self.input_mode)}
         snapshot_token = unit_budget_snapshot.set(snapshot)
         try:
+            self._check_provider_protocol()
             async with asyncio.timeout(self.timeout_seconds):
                 return await self._execute_unit(unit, state)
         except TimeoutError:
             return ReviewUnitResult(
                 review_unit_id=unit.id,
+                input_fingerprint=snapshot["input_fingerprint"],
                 status=ReviewUnitStatus.timed_out,
                 terminal_reason=ReviewUnitTerminalReason.timed_out,
                 plan_skipped=False,
                 execution_budget=snapshot["budget"],
                 error=f"review unit timed out after {self.timeout_seconds} seconds",
+                review_summary=self._failure_summary(snapshot, "review_unit_timed_out"),
+                context_snippets=snapshot.get("context") or [],
+                plan=snapshot.get("unit_plan"),
+                plan_status=snapshot.get("plan_status") or UnitPlanStatus.skipped,
+                model_usages=snapshot.get("model_usages") or [],
             )
         except asyncio.CancelledError:
             raise
@@ -178,6 +197,7 @@ class ReviewUnitExecutor:
             )
             return ReviewUnitResult(
                 review_unit_id=unit.id,
+                input_fingerprint=snapshot["input_fingerprint"],
                 status=ReviewUnitStatus.failed,
                 terminal_reason=(
                     ReviewUnitTerminalReason.provider_error
@@ -186,8 +206,12 @@ class ReviewUnitExecutor:
                 ),
                 plan_skipped=False,
                 execution_budget=getattr(exc, "execution_budget", snapshot["budget"]),
-                model_usages=[usage] if usage is not None else [],
+                model_usages=[*snapshot.get("model_usages", []), *([usage] if usage is not None else [])],
                 error=f"{type(exc).__name__}: {exc}",
+                review_summary=self._failure_summary(snapshot, "review_unit_failed"),
+                context_snippets=snapshot.get("context") or [],
+                plan=snapshot.get("unit_plan"),
+                plan_status=snapshot.get("plan_status") or UnitPlanStatus.skipped,
             )
         finally:
             unit_budget_snapshot.reset(snapshot_token)
@@ -278,8 +302,39 @@ class ReviewUnitExecutor:
             "legacy_review_action": False,
             "done": False,
             "terminal_reason": None,
-            "review_summary": UnitReviewSummary(reason="diagnosis_not_executed"),
+            "review_summary": UnitReviewSummary(reason=("legacy_provider_without_canonical_evidence_protocol"
+                if self.input_mode == "legacy" else "diagnosis_not_executed"), latest_attempt_status="not_executed",
+                input_protocol="legacy" if self.input_mode == "legacy" else CANONICAL_UNIT_INPUT_PROTOCOL),
+            "last_valid_review_summary": None,
+            "latest_review_attempt": {"status": "not_executed"},
         }
+        from app.services.model_request_budgeter import unit_budget_snapshot
+
+        observer = unit_budget_snapshot.get()
+        binding = observer["input_fingerprint"] if observer else unit_execution_fingerprint(
+            unit.fingerprint, state, self.provider, self.input_mode)
+        prior = next((ReviewUnitResult.model_validate(raw) for raw in state.get("review_unit_results") or []
+                      if raw.get("review_unit_id") == unit.id and raw.get("input_fingerprint") == binding), None)
+        if prior and self.input_mode == "canonical":
+            restored_context = self._fit_context_budget([], [item.model_dump(mode="json") for item in prior.context_snippets
+                                                            if item.file in scope.readable_files], scope.max_context_chars)
+            restored_plan = followup_plan or prior.plan
+            request = build_record_input(unit_files, restored_context, restored_plan,
+                str(state.get("head_sha") or ""), str(state.get("base_sha") or ""))
+            request["pr_intent"] = build_pr_intent(state.get("pr_info"))
+            recovered = merge_review_summaries(prior.review_summary, validate_record(None, request, scope.readable_files), None)
+            if recovered.last_valid_record:
+                recovered = recovered.model_copy(update={"record": prior.review_summary.record,
+                    "status": prior.review_summary.status, "latest_attempt_status": prior.review_summary.latest_attempt_status,
+                    "latest_attempt_reason": prior.review_summary.latest_attempt_reason, "reason": prior.review_summary.reason})
+            graph_state.update(context=restored_context, unit_plan=restored_plan,
+                skip_plan=True if restored_plan else skip_plan, budget=prior.execution_budget,
+                plan_status=prior.plan_status if restored_plan else graph_state["plan_status"],
+                plan_skip_reason="restored_plan" if restored_plan else graph_state["plan_skip_reason"],
+                review_summary=recovered, last_valid_review_summary=recovered if recovered.last_valid_record else None,
+                latest_review_attempt={"status": recovered.latest_attempt_status or recovered.status, "reason": recovered.reason},
+                model_usages=[item.model_dump(mode="json") for item in prior.model_usages])
+        self._remember_unit_state(graph_state)
         config = None
         if getattr(self.unit_graph, "checkpointer", None) not in (None, False):
             config = unit_thread_config(str(state.get("task_id") or "unknown"), unit.id)
@@ -299,6 +354,7 @@ class ReviewUnitExecutor:
             )
         return ReviewUnitResult(
             review_unit_id=unit.id,
+            input_fingerprint=binding,
             status=(
                 ReviewUnitStatus.needs_human
                 if result.get("needs_human")
@@ -558,6 +614,8 @@ class ReviewUnitExecutor:
             state["unit_files"], budget, state["context"],
             unit_diff=state["unit_diff"],
             unit_plan=state.get("unit_plan"),
+            review_summary=state.get("last_valid_review_summary") or state.get("review_summary"),
+            latest_attempt=state.get("latest_review_attempt"),
         )
         decision_state.update({
             "unit_agent": True,
@@ -602,7 +660,9 @@ class ReviewUnitExecutor:
         from app.services.model_usage import unpack_model_call
 
         ledger = UnitRequestLedger(budget)
+        legacy_token = legacy_unit_input_allowed.set(self.input_mode == "legacy")
         try:
+            self._check_provider_protocol()
             with ledger.activate():
                 if not getattr(self.provider, "supports_request_admission", False):
                     # 旧 Provider 不暴露最终请求；显式近似估算参数，不能声称窗口已验证。
@@ -625,11 +685,21 @@ class ReviewUnitExecutor:
             error.execution_budget = ledger.budget
             raise error from exc if error is not exc else None
         finally:
+            legacy_unit_input_allowed.reset(legacy_token)
             from app.services.model_request_budgeter import unit_budget_snapshot
 
             snapshot = unit_budget_snapshot.get()
             if snapshot is not None:
                 snapshot["budget"] = ledger.budget
+
+    def _check_provider_protocol(self):
+        from app.agents.providers import LLMProviderError
+
+        method = getattr(self.provider, "review_unit", None)
+        inherited_fallback = getattr(method, "__func__", method) is LLMProvider.review_unit
+        if self.input_mode == "canonical" and (getattr(self.provider, "unit_input_protocol", None) != CANONICAL_UNIT_INPUT_PROTOCOL
+                                               or not callable(method) or inherited_fallback):
+            raise LLMProviderError("canonical_unit_provider_required: Provider must declare canonical-evidence-v3")
 
     @staticmethod
     def _route_unit_action(state: "_ReviewUnitGraphState") -> str:
@@ -691,9 +761,8 @@ class ReviewUnitExecutor:
         events: list[ReviewUnitToolEvent],
         history: list[dict[str, Any]],
     ) -> "_ReviewUnitGraphState":
+        self._remember_unit_state(state)
         tool_name = action.action.value
-
-
         if not budget.can_consume(context_retrievals=1):
             events.append(ReviewUnitToolEvent(
                 review_unit_id=state["unit"].id,
@@ -853,7 +922,6 @@ class ReviewUnitExecutor:
         fingerprint: str,
     ) -> "_ReviewUnitGraphState":
         budget = budget.consume(context_retrievals=1)
-
         try:
             snippets = await CodeSearchTool().retrieve_context(
                 changed_files=[item.model_dump(mode="json") for item in state["unit_files"]],
@@ -925,6 +993,7 @@ class ReviewUnitExecutor:
     async def _report_issue_node(
         self, state: "_ReviewUnitGraphState"
     ) -> "_ReviewUnitGraphState":
+        self._remember_unit_state(state)
         budget = state["budget"]
         if not budget.can_consume(diagnosis_attempts=1, model_calls=1):
             return {
@@ -941,7 +1010,12 @@ class ReviewUnitExecutor:
             str(state["parent_state"].get("head_sha") or ""),
             str(state["parent_state"].get("base_sha") or ""),
         )
-        record_input["readonly_context"] = state["context"]
+        record_input["pr_intent"] = build_pr_intent(pr)
+        record_input["input_protocol"] = CANONICAL_UNIT_INPUT_PROTOCOL if self.input_mode == "canonical" else "legacy"
+        record_input["working_memory"], _ = build_working_memory(
+            state.get("last_valid_review_summary") or state.get("review_summary"),
+            record_input, state["unit"].id, state.get("latest_review_attempt"),
+        )
         record_input["review_guidance"] = render_language_rule_context(build_language_context(
             (item.file_path for item in state["unit_files"]),
             state["parent_state"].get("file_index") or [],
@@ -950,6 +1024,11 @@ class ReviewUnitExecutor:
         from app.review.issue_audit import issue_audit_unit
 
         from app.agents.providers import LLMProviderError
+        from app.services.model_request_budgeter import unit_budget_snapshot
+
+        observer = unit_budget_snapshot.get()
+        if observer is not None:
+            observer["diagnosis_pending"] = True
         try:
             with issue_audit_unit(state["unit"].id):
                 raw_result, budget = await self._call_unit_model(
@@ -973,15 +1052,25 @@ class ReviewUnitExecutor:
                 accounted_tokens_estimate=exc.usage.accounted_tokens_estimate if exc.usage else None,
                 review_unit_id=state["unit"].id, unit_complexity=state["unit"].complexity,
             )
+            failed_summary = validate_record(None, record_input, state["scope"].readable_files, str(exc))
+            failed_summary = failed_summary.model_copy(update={"latest_attempt_status": "failed"})
+            failed_summary = merge_review_summaries(state.get("review_summary") or UnitReviewSummary(), failed_summary, None)
+            if observer is not None:
+                observer.update(review_summary=failed_summary, diagnosis_pending=False)
             return {
+                "review_summary": failed_summary,
                 "pending_issues": [], "next_action": None,
                 "budget": getattr(exc, "execution_budget", budget), "error": str(exc),
                 "terminal_reason": (ReviewUnitTerminalReason.diagnosis_budget_exhausted
                                     if "unit_request_budget_exhausted" in str(exc)
                                     else ReviewUnitTerminalReason.provider_error),
                 "model_usages": append_usage(state.get("model_usages") or [], usage),
+                "latest_review_attempt": {"status": "failed", "reason": str(exc)},
             }
         response, usage = unpack_model_call(raw_result)
+        if self.input_mode == "legacy":
+            response = response.model_copy(update={"review_record": None,
+                "record_error": "legacy_provider_without_canonical_evidence_protocol"})
         from app.review.issue_audit import audit_issue
 
         for issue in response.issues:
@@ -990,8 +1079,12 @@ class ReviewUnitExecutor:
             response.review_record, record_input, state["scope"].readable_files,
             response.record_error,
         )
+        if self.input_mode == "legacy":
+            summary = summary.model_copy(update={"latest_attempt_status": "unknown"})
+        latest_attempt = {"status": summary.latest_attempt_status or summary.status, "reason": summary.reason}
         summary = merge_review_summaries(
-            state.get("review_summary") or UnitReviewSummary(), summary, response.review_record,
+            state.get("review_summary") or state.get("last_valid_review_summary") or UnitReviewSummary(),
+            summary, response.review_record,
         )
         usage = annotate_usage(
             usage,
@@ -999,12 +1092,35 @@ class ReviewUnitExecutor:
             review_unit_id=state["unit"].id,
             unit_complexity=state["unit"].complexity,
         )
+        self._remember_unit_state({"review_summary": summary,
+            "model_usages": append_usage(state.get("model_usages") or [], usage)})
+        if observer is not None:
+            observer["diagnosis_pending"] = False
         return {
             "pending_issues": response.issues,
             "review_summary": summary,
+            "last_valid_review_summary": (summary if latest_attempt["status"] == "reported"
+                                          else state.get("last_valid_review_summary")),
+            "latest_review_attempt": latest_attempt,
             "budget": budget,
             "model_usages": append_usage(state.get("model_usages") or [], usage),
         }
+
+    @staticmethod
+    def _remember_unit_state(state):
+        from app.services.model_request_budgeter import unit_budget_snapshot
+
+        observer = unit_budget_snapshot.get()
+        if observer is not None:
+            observer.update({key: state[key] for key in ("review_summary", "context", "unit_plan", "plan_status", "model_usages", "budget") if key in state})
+
+    @staticmethod
+    def _failure_summary(snapshot, reason):
+        summary = snapshot.get("review_summary") or UnitReviewSummary()
+        if snapshot.get("diagnosis_pending"):
+            return summary.model_copy(update={"status": "unknown", "record": None,
+                "latest_attempt_status": "failed", "latest_attempt_reason": reason, "reason": reason})
+        return summary
 
     async def _collect_issue_node(
         self, state: "_ReviewUnitGraphState"
@@ -1145,6 +1261,8 @@ class ReviewUnitExecutor:
         *,
         unit_diff: str = "",
         unit_plan: UnitReviewPlan | None = None,
+        review_summary: UnitReviewSummary | None = None,
+        latest_attempt: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         readable = scope.readable_files
         language_context = build_language_context(
@@ -1153,6 +1271,11 @@ class ReviewUnitExecutor:
             state.get("project_meta") or {},
         )
 
+        record_input = build_record_input(changed_files, context, unit_plan,
+            str(state.get("head_sha") or ""), str(state.get("base_sha") or ""))
+        record_input["pr_intent"] = build_pr_intent(state.get("pr_info"))
+        memory, restored = build_working_memory(review_summary, record_input, unit.id, latest_attempt)
+        restored_ids = {item["id"] for item in restored}
         return {
             "task_id": state.get("task_id"),
             "review_unit_id": unit.id,
@@ -1160,6 +1283,11 @@ class ReviewUnitExecutor:
             "review_tool_scope": scope.model_dump(mode="json"),
             "unit_diff": unit_diff,
             "unit_plan": unit_plan.model_dump(mode="json") if unit_plan else None,
+            "pr_intent": record_input["pr_intent"],
+            "working_memory": memory,
+            "memory_evidence": restored,
+            "evidence_catalog": [{key: value for key, value in item.items() if key != "content"}
+                                 for item in record_input["evidence"]],
             "project_meta": state.get("project_meta") or {},
             "language_context": language_context,
             "phase": ReviewPhase.discovery,
@@ -1173,7 +1301,8 @@ class ReviewUnitExecutor:
             "context_provenance": [
                 item.model_dump(mode="json") for item in unit.context_provenance
             ],
-            "context_snippets": context,
+            "context_snippets": [item for item in record_input["readonly_context"]
+                                 if item["evidence_id"] not in restored_ids],
             "retrieval_history": [],
             "execution_budget": budget.model_dump(),
         }
@@ -1191,10 +1320,19 @@ class ReviewUnitExecutor:
             if remaining <= 0:
                 break
             content = str(item.get("content") or "")
-            if len(content) > remaining:
-                if remaining < 32:
-                    break
-                item = {**item, "content": content[:remaining].rstrip() + "\n...(truncated)"}
+            if item.get("source") == "file_read_diff":
+                continue  # Current canonical hunks already provide both sides.
+            if content.endswith("\n...(truncated)"):
+                # Legacy previews may end in a partial line; they need a bounded reread.
+                continue
+            bounded = complete_line_prefix(content, remaining)
+            if not bounded:
+                continue
+            start = int(item.get("start_line") or 1)
+            item = {**item, "content": bounded,
+                    "truncated": bool(item.get("truncated")) or len(bounded) < len(content),
+                    "requested_end_line": item.get("requested_end_line") or item.get("end_line"),
+                    "end_line": start + len(bounded.splitlines()) - 1}
             accepted.append(item)
             remaining -= len(str(item.get("content") or ""))
         return accepted

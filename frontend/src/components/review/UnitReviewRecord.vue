@@ -1,16 +1,17 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { ReviewUnitResult } from "../../types/review";
-import { checkLabels } from "../../utils/reviewObservability";
+import { checkLabels, unitRecordPresentation } from "../../utils/reviewObservability";
 import StatusBadge from "../common/StatusBadge.vue";
 import EmptyState from "../common/EmptyState.vue";
 import EvidenceReferences from "./EvidenceReferences.vue";
 
 const props = defineProps<{ result?: ReviewUnitResult; headSha?: string; baseSha?: string }>();
 const summary = computed(() => props.result?.review_summary);
-const record = computed(() => summary.value?.status === "reported" ? summary.value.record : null);
+const presentation = computed(() => unitRecordPresentation(summary.value));
+const record = computed(() => presentation.value.record);
+const retained = computed(() => presentation.value.retained);
 const evidence = computed(() => summary.value?.evidence || []);
-const checked = computed(() => record.value?.target_checks.filter((item) => item.status === "checked").length || 0);
 function hypothesis(id: string): string {
   return props.result?.plan?.risk_hypotheses.find((item) => item.id === id)?.description || `假设 ${id}`;
 }
@@ -21,7 +22,8 @@ function tone(status: string): string {
 
 <template>
   <article class="unit-record">
-    <header><div><h3>实际检查记录</h3><p>已检查表示执行过检查，不等于代码正确或问题已确认。</p></div><StatusBadge :status="record ? 'neutral' : 'inconclusive'" :label="record ? `${checked} / ${record.target_checks.length} 个目标已检查` : '记录未知'" /></header>
+    <header><div><h3>实际检查记录</h3><p>已检查表示执行过检查，不等于代码正确或问题已确认。</p></div><StatusBadge :status="presentation.tone" :label="presentation.label" /></header>
+    <p v-if="retained" class="muted">以下为最近有效检查记录，不表示本轮已完成核验。{{ summary?.latest_attempt_reason }}</p>
     <EmptyState v-if="!record" icon="help" title="尚无可用的结构化检查记录" description="可能尚未执行诊断，或旧任务、兼容模型未返回有效记录；不能据此判断无风险。" />
     <template v-else>
       <p class="record-summary">{{ record.change_summary }}</p>

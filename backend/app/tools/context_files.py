@@ -55,6 +55,7 @@ class ScopedContextTool:
                 effective_end,
                 scope.review_unit_id,
                 requested_end > effective_end,
+                requested_end,
             )
         except OSError as exc:
             raise ScopedContextToolError(f"unable to read repository file: {file_path}") from exc
@@ -172,19 +173,22 @@ class ScopedContextTool:
         end_line: int,
         review_unit_id: str,
         truncated_by_scope: bool,
+        requested_end_line: int | None = None,
     ) -> dict[str, Any]:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         if start_line > len(lines) and lines:
             raise ScopedContextToolError("start_line exceeds file length")
         actual_end = min(end_line, max(len(lines), 1))
         content = "\n".join(lines[start_line - 1:actual_end])
-        if truncated_by_scope or end_line < len(lines):
-            content += "\n...(truncated)"
+        content = ScopedContextTool._truncate_content(content)
+        actual_end = start_line + max(0, len(content.splitlines()) - 1)
         return {
             "file": file_path,
             "start_line": start_line,
             "end_line": actual_end,
-            "content": ScopedContextTool._truncate_content(content),
+            "content": content,
+            "requested_end_line": requested_end_line or end_line,
+            "truncated": actual_end < min(requested_end_line or end_line, len(lines)),
             "relevance": "direct",
             "review_unit_id": review_unit_id,
             "source": "file_read",
@@ -197,4 +201,6 @@ class ScopedContextTool:
     def _truncate_content(content: str) -> str:
         if len(content) <= _MAX_CONTENT_CHARS:
             return content
-        return content[:_MAX_CONTENT_CHARS].rstrip() + "\n...(truncated)"
+        from app.services.review_input_context import complete_line_prefix
+
+        return complete_line_prefix(content, _MAX_CONTENT_CHARS)

@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     repoguardian_model: str = "gpt-4.1-mini"
     repoguardian_provider: str = "openai"  # openai / deepseek / openai-compatible
+    repoguardian_unit_input_mode: Literal["canonical", "legacy"] = "canonical"
     repoguardian_model_request_attempts: int = Field(default=2, ge=1, le=5)
     repoguardian_model_retry_backoff_seconds: float = Field(default=1.0, ge=0, le=30)
     repoguardian_model_request_timeout_seconds: float = Field(default=60, ge=1, le=600)

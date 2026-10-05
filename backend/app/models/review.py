@@ -1681,6 +1681,8 @@ class ContextSnippet(BaseModel):
     distance: int | None = Field(default=None, ge=0, le=2)
     confidence: float | None = Field(default=None, ge=0, le=1)
     why_retrieved: str | None = None
+    truncated: bool = False
+    requested_end_line: int | None = Field(default=None, ge=1)
 
 
 class IssueVerificationBudget(BaseModel):
@@ -1828,6 +1830,12 @@ class UnitReviewSummary(BaseModel):
     schema_version: Literal["unit-review-summary-v1"] = "unit-review-summary-v1"
     status: Literal["reported", "unknown"] = "unknown"
     record: UnitReviewRecord | None = None
+    last_valid_record: UnitReviewRecord | None = None
+    last_valid_snapshot: dict[str, str] = Field(default_factory=dict)
+    latest_attempt_status: Literal["reported", "missing", "invalid", "failed", "not_executed", "unknown"] | None = None
+    latest_attempt_reason: str | None = None
+    latest_attempt_snapshot: dict[str, str] = Field(default_factory=dict)
+    input_protocol: Literal["canonical-evidence-v3", "legacy"] | None = None
     evidence: list[UnitEvidenceReference] = Field(default_factory=list)
     record_history: list[UnitReviewRecord] = Field(default_factory=list, max_length=3)
     reason: str = "legacy_or_missing_record"
@@ -1965,6 +1973,7 @@ class CrossUnitCoordinationProposal(CrossUnitCoordinationPlan):
 
 class ReviewUnitResult(BaseModel):
     review_unit_id: str
+    input_fingerprint: str | None = None
     status: ReviewUnitStatus = ReviewUnitStatus.pending
     terminal_reason: ReviewUnitTerminalReason | None = None
     plan_skipped: bool = False

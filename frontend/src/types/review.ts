@@ -283,6 +283,8 @@ export interface ContextSnippet {
   end_line: number;
   content: string;
   relevance: string;
+  truncated?: boolean;
+  requested_end_line?: number | null;
   symbol?: string | null;
   review_unit_id?: string | null;
   source?: string | null;
@@ -517,6 +519,12 @@ export interface UnitReviewSummary {
   schema_version: "unit-review-summary-v1";
   status: "reported" | "unknown";
   record?: UnitReviewRecord | null;
+  last_valid_record?: UnitReviewRecord | null;
+  last_valid_snapshot?: Record<string, string>;
+  latest_attempt_status?: "reported" | "missing" | "invalid" | "failed" | "not_executed" | "unknown" | null;
+  latest_attempt_reason?: string | null;
+  latest_attempt_snapshot?: Record<string, string>;
+  input_protocol?: "canonical-evidence-v3" | "legacy" | null;
   evidence: UnitEvidenceReference[];
   record_history: UnitReviewRecord[];
   reason: string;
@@ -623,6 +631,7 @@ export interface CrossUnitRuntimeMetrics {
 
 export interface ReviewUnitResult {
   review_unit_id: string;
+  input_fingerprint?: string | null;
   status: ReviewUnitStatus;
   terminal_reason?: ReviewUnitTerminalReason | null;
   plan_skipped: boolean;

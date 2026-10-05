@@ -7,7 +7,7 @@ import json
 import re
 from typing import Any, Iterable
 
-DIAGNOSIS_INPUT_VERSION = "request-admission-v1-canonical-evidence-v2"
+DIAGNOSIS_INPUT_VERSION = "provider-memory-v5-unit-context-v3-request-admission-v1-canonical-evidence-v2"
 
 
 def stable_hash(value: Any) -> str:
@@ -39,6 +39,7 @@ def unit_fingerprint(
     review_policy_version: str,
     model: str,
     provider: str,
+    pr_intent_hash: str = "",
 ) -> str:
     from app.core.config import settings
 
@@ -59,6 +60,8 @@ def unit_fingerprint(
         "review_policy_version": review_policy_version,
         "model": model,
         "provider": provider,
+        "pr_intent_hash": pr_intent_hash,
+        "unit_input_mode": settings.repoguardian_unit_input_mode,
     })
 
 
@@ -72,6 +75,27 @@ def patch_fingerprint(
         "unified_diff_hash": diff_hash,
         "patch_policy_version": patch_policy_version,
     }), diff_hash
+
+
+def unit_execution_fingerprint(unit_fp: str, state: dict, provider: Any, input_mode: str) -> str:
+    """即使 plan 来自旧 checkpoint，也绑定本次实际模型、配置和输入版本。"""
+    from app.core.config import settings
+    from app.services.review_input_context import build_pr_intent
+
+    model = state.get("model") or getattr(provider, "_default_model", settings.repoguardian_model)
+    profiles = getattr(provider, "_model_profiles", settings.repoguardian_model_request_profiles)
+    profile = profiles.get(model, getattr(provider, "_request_profile", settings.repoguardian_model_request_profile))
+    return stable_hash({
+        "unit_fp": unit_fp, "input_version": DIAGNOSIS_INPUT_VERSION, "input_mode": input_mode,
+        "head_sha": state.get("head_sha"), "base_sha": state.get("diff_base_sha") or state.get("base_sha"),
+        "pr_intent": build_pr_intent(state.get("pr_info"))["intent_hash"], "model": model,
+        "provider": getattr(provider, "_provider_name", settings.repoguardian_provider),
+        "provider_type": f"{type(provider).__module__}.{type(provider).__qualname__}",
+        "endpoint": getattr(provider, "_base_url", settings.openai_base_url),
+        "profile": profile.model_dump(mode="json"), "prompt": settings.repoguardian_prompt_version,
+        "rules": settings.repoguardian_rule_version, "tools": settings.repoguardian_tool_schema_version,
+        "policy": settings.repoguardian_review_policy_version,
+    })
 
 
 def validation_fingerprint(

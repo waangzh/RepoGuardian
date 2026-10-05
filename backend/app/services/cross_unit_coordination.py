@@ -93,7 +93,8 @@ class CrossUnitCoordinationService:
             ]}) for path in unit.primary_files]
             records = build_record_input(
                 files, [item.model_dump(mode="json") for item in result.context_snippets],
-                None, str(state.get("head_sha") or ""), str(state.get("base_sha") or ""),
+                None, str(state.get("head_sha") or ""),
+                str(state.get("base_sha") or ""),
             )
             trusted = {item.id: item.model_dump(mode="json") for item in result.review_summary.evidence}
             for item in records["evidence"]:
@@ -106,6 +107,11 @@ class CrossUnitCoordinationService:
                                   "status": result.review_summary.status,
                                   "record": (result.review_summary.record.model_dump(mode="json")
                                              if result.review_summary.record else None),
+                                  "last_valid_record": (result.review_summary.last_valid_record.model_dump(mode="json")
+                                                        if result.review_summary.last_valid_record and not result.review_summary.record else None),
+                                  "last_valid_snapshot": result.review_summary.last_valid_snapshot,
+                                  "latest_attempt_status": result.review_summary.latest_attempt_status,
+                                  "latest_attempt_reason": result.review_summary.latest_attempt_reason,
                                   "reason": result.review_summary.reason,
                                   "evidence_ids": [key for key in trusted if key in evidence],
                               }})
