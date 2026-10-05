@@ -18,6 +18,7 @@ const budget = computed(() => plan.value?.execution_budget);
 const results = computed(() => props.task.followup_results || []);
 const relationships = { calls: "调用", imports: "导入", test_of: "测试覆盖", configures: "配置影响", declared_dependency: "声明依赖" };
 const indexLabels = { available: "索引可用", partial: "索引不完整", unknown: "索引状态未知" };
+const batchLabels = { pending: "待规划", validated: "规划已校验", skipped: "输入超限，未覆盖", failed: "规划失败，未覆盖" };
 function unitName(id: string): string {
   const unit = props.task.review_units.find((item) => item.id === id);
   return unit?.primary_files[0] || id;
@@ -58,6 +59,14 @@ const orphanResults = computed(() => results.value.filter((item) => !plan.value?
       </aside>
     </div>
 
+    <section v-if="plan?.catalog_batches?.length" class="followups" aria-label="协调目录覆盖">
+      <header><div><h3>协调目录覆盖</h3><p>每批完整加载相关 Unit 和关系；规划通过不代表补查完成或代码正确。</p></div><span>{{ plan.catalog_batches.filter(item => item.status === 'validated').length }} / {{ plan.catalog_batches.length }} 批完成规划</span></header>
+      <details v-for="(batch, index) in plan.catalog_batches" :key="batch.id" class="followup-item">
+        <summary>目录批次 {{ index + 1 }} · {{ batchLabels[batch.status] }} · {{ batch.unit_ids.length }} 个 Unit · {{ batch.relationship_ids.length }} 条关系</summary>
+        <p v-if="batch.reason" class="index-note">{{ batch.reason }}</p>
+        <div class="scope-links"><button v-for="id in batch.unit_ids" :key="id" type="button" @click="emit('openUnit', id)">{{ unitName(id) }} ↗</button></div>
+      </details>
+    </section>
     <section class="followups"><header><div><h3>定向补查</h3><p>先看检查问题和反证目标，再看候选处理结果。</p></div><span>{{ plan?.followups.length || 0 }} 项计划 · {{ results.length }} 项结果</span></header>
       <EmptyState v-if="!plan?.followups.length && !results.length" icon="branch" :title="risk?.decision === 'skip' ? '本次未请求定向补查' : '尚无定向补查计划'" description="没有补查或没有候选，都不能单独证明变更安全。" />
       <article v-for="(request, index) in plan?.followups || []" :key="request.id" class="followup-item"><header><div><small>补查 {{ index + 1 }}</small><h4>{{ request.question }}</h4></div><StatusBadge :status="followupPresentation(resultFor(request), task.status).tone" :label="followupPresentation(resultFor(request), task.status).label" /></header>

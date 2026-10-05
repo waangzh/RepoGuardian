@@ -1923,15 +1923,30 @@ class CrossUnitRuntimeMetrics(BaseModel):
     confirmed_count: int = Field(default=0, ge=0)
 
 
+class CrossUnitCatalogBatch(BaseModel):
+    """目录批次的规划覆盖；validated 不表示语义已验证或补查已完成。"""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    input_hash: str
+    input_chars: int = Field(ge=0)
+    unit_ids: list[str] = Field(default_factory=list)
+    relationship_ids: list[str] = Field(default_factory=list)
+    risk_reason_ids: list[str] = Field(default_factory=list)
+    status: Literal["pending", "validated", "skipped", "failed"] = "pending"
+    reason: str | None = None
+
+
 class CrossUnitCoordinationPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
     schema_version: Literal["cross-unit-plan-v1"] = "cross-unit-plan-v1"
     followups: list[CrossUnitFollowupRequest] = Field(default_factory=list, max_length=3)
-    unresolved_questions: list[str] = Field(default_factory=list, max_length=20)
+    unresolved_questions: list[str] = Field(default_factory=list)
     decision: Literal["required", "uncertain", "skip"] = "uncertain"
     reason: str = Field(default="尚未完成协调", max_length=1_000)
-    relationship_ids: list[str] = Field(default_factory=list, max_length=40)
-    evidence_ids: list[str] = Field(default_factory=list, max_length=40)
+    relationship_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    catalog_batches: list[CrossUnitCatalogBatch] = Field(default_factory=list)
     status: Literal["proposed", "validated", "completed", "unresolved", "failed", "cancelled"] = "proposed"
     runtime_fingerprint: str | None = None
     cache_namespace: Literal["cross-unit-runtime-v1"] = "cross-unit-runtime-v1"
@@ -1963,6 +1978,10 @@ class CrossUnitFollowupProposal(CrossUnitFollowupRequest):
 
 class CrossUnitCoordinationProposal(CrossUnitCoordinationPlan):
     followups: list[CrossUnitFollowupProposal] = Field(default_factory=list, max_length=3)
+    unresolved_questions: list[str] = Field(default_factory=list, max_length=20)
+    relationship_ids: list[str] = Field(default_factory=list, max_length=40)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=40)
+    catalog_batches: list[CrossUnitCatalogBatch] = Field(default_factory=list, max_length=0)
 
     @model_validator(mode="after")
     def followups_require_required_decision(self) -> "CrossUnitCoordinationProposal":

@@ -83,6 +83,13 @@ def _append_cross_unit_risk(lines: list[str], task: ReviewTask) -> None:
                   f"- 本轮调用尝试：{metrics.model_calls}；失败：{metrics.failed_calls}；结果未知：{metrics.unknown_calls}",
                   f"- 恢复次数：{metrics.resume_count}；账本复用：{metrics.cache_hits}",
                   f"- 补查候选：{metrics.candidate_count}；独立验证确认：{metrics.confirmed_count}", ""])
+    if plan.catalog_batches:
+        validated = sum(item.status == "validated" for item in plan.catalog_batches)
+        lines.append(f"- 目录批次规划覆盖：{validated}/{len(plan.catalog_batches)}；规划校验不表示代码已验证。")
+        for batch in plan.catalog_batches:
+            lines.append(f"- 目录批次 {_inline_text(batch.id)}：{batch.status}；Unit："
+                         f"{_inline_text('、'.join(batch.unit_ids))}；关系数：{len(batch.relationship_ids)}"
+                         + (f"；{_inline_text(batch.reason)}" if batch.reason else ""))
     for request in plan.followups:
         lines.append(f"- {_inline_text(request.id)}：{_inline_text(request.question)}")
     for result in task.followup_results:

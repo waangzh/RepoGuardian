@@ -588,6 +588,17 @@ export interface ExecutionBudget {
   max_token_usage: number;
 }
 
+export interface CrossUnitCatalogBatch {
+  id: string;
+  input_hash: string;
+  input_chars: number;
+  unit_ids: string[];
+  relationship_ids: string[];
+  risk_reason_ids: string[];
+  status: "pending" | "validated" | "skipped" | "failed";
+  reason?: string | null;
+}
+
 export interface CrossUnitCoordinationPlan {
   schema_version: "cross-unit-plan-v1";
   followups: CrossUnitFollowupRequest[];
@@ -596,6 +607,7 @@ export interface CrossUnitCoordinationPlan {
   reason: string;
   relationship_ids: string[];
   evidence_ids: string[];
+  catalog_batches?: CrossUnitCatalogBatch[];
   status: "proposed" | "validated" | "completed" | "unresolved" | "failed" | "cancelled";
   runtime_fingerprint?: string | null;
   cache_namespace: "cross-unit-runtime-v1";
