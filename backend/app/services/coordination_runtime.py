@@ -67,7 +67,7 @@ def coordination_fingerprint(state: dict) -> str:
         "request_profile": settings.repoguardian_model_request_profile.model_dump(mode="json"),
         "model_profiles": {key: value.model_dump(mode="json") for key, value in
                            settings.repoguardian_model_request_profiles.items()},
-        "catalog_version": "coordination-reference-catalog-v2",
+        "catalog_version": "coordination-reference-catalog-batches-v3",
         "request_contract_version": "coordination-canonical-evidence-allocation-v3",
         "repository": (state.get("pr_info") or {}).get("clone_url"),
         "base_sha": state.get("base_sha"), "head_sha": state.get("head_sha"),
