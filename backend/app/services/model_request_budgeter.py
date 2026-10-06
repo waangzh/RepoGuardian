@@ -81,20 +81,28 @@ unit_budget_snapshot: ContextVar[Any] = ContextVar("unit_budget_snapshot", defau
 
 
 class UnitRequestLedger:
-    def __init__(self, budget: ExecutionBudget):
+    def __init__(self, budget: ExecutionBudget, *, holdback: dict[str, Any] | None = None):
         self.budget = budget
+        self.holdback = dict(holdback or {})
+        self.rejection: dict[str, Any] | None = None
         self.reserved_tokens = 0
         self.last_reservation = 0
         self.settled: set[str] = set()
 
     async def reserve(self, metadata: dict[str, Any]) -> None:
         amount = metadata["reserved_tokens"]
-        if not self.budget.can_consume(model_calls=1, token_usage=amount):
-            raise RequestAdmissionError("unit_request_budget_exhausted: " + json.dumps({
+        held_tokens = self.holdback.get("token_usage", 0)
+        held_calls = self.holdback.get("model_calls", 0)
+        if not self.budget.can_consume(model_calls=1 + held_calls, token_usage=amount + held_tokens):
+            self.rejection = {
                 "requested_tokens": amount, "remaining_tokens": max(
                     0, self.budget.max_token_usage - self.budget.token_usage),
                 "remaining_calls": max(0, self.budget.max_model_calls - self.budget.model_calls),
-            }))
+                "holdback": self.holdback,
+                "available_tokens": max(0, self.budget.max_token_usage - self.budget.token_usage - held_tokens),
+                "transport_retry": self.reserved_tokens > 0,
+            }
+            raise RequestAdmissionError("unit_request_budget_exhausted: " + json.dumps(self.rejection))
         # No await between check and consume: one Unit ledger has one writer.
         self.budget = self.budget.consume(model_calls=1, token_usage=amount)
         self.reserved_tokens += amount
