@@ -119,6 +119,8 @@ class CrossUnitCoordinationService:
                                   "latest_attempt_status": result.review_summary.latest_attempt_status,
                                   "latest_attempt_reason": result.review_summary.latest_attempt_reason,
                                   "reason": result.review_summary.reason,
+                                  "input_coverage": (result.input_coverage.model_dump(mode="json", exclude={"omitted_plan"})
+                                                     if result.input_coverage else None),
                                   "evidence_ids": restored_ids,
                               }})
         return {

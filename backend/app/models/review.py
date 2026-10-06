@@ -2010,6 +2010,18 @@ class CrossUnitCoordinationProposal(CrossUnitCoordinationPlan):
         return self
 
 
+class UnitContextOmission(BaseModel):
+    """未进入诊断的检索证据范围；只保存元数据，不复制源码正文。"""
+
+    model_config = ConfigDict(extra="forbid")
+    file_path: str
+    start_line: int
+    end_line: int
+    content_hash: str
+    reason: str
+    diagnosis_admission: dict[str, Any] = Field(default_factory=dict)
+
+
 class UnitInputCoverage(BaseModel):
     """诊断输入展示范围与目标范围；不表示代码正确性或候选验证状态。"""
 
@@ -2020,6 +2032,7 @@ class UnitInputCoverage(BaseModel):
     omitted_components: list[str] = Field(default_factory=list)
     omitted_targets: list[str] = Field(default_factory=list)
     omitted_plan: UnitReviewPlan | None = None
+    omitted_context: list[UnitContextOmission] = Field(default_factory=list)
 
 
 class ReviewUnitResult(BaseModel):

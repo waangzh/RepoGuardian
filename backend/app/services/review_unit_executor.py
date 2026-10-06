@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from datetime import datetime, timezone
 from typing import Any, TypedDict
@@ -10,7 +11,7 @@ from typing import Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from app.agents.providers import LLMProvider
-from app.services.review_input_context import build_pr_intent, build_working_memory, complete_line_prefix
+from app.services.review_input_context import build_pr_intent, build_working_memory, complete_line_prefix, build_context_evidence
 from app.review.input_protocol import CANONICAL_UNIT_INPUT_PROTOCOL, legacy_unit_input_allowed
 from app.review.unit_completion import DIAGNOSIS_BACKGROUND_DEGRADED, review_unit_input_coverage
 from app.services.fingerprints import unit_execution_fingerprint
@@ -42,6 +43,7 @@ from app.models.review import (
     UnitReviewSummary,
     UnitRiskHypothesis,
     UnitInputCoverage,
+    UnitContextOmission,
 )
 from app.services.review_planner import DeterministicReviewPlanner
 from app.services.unit_review_summary import build_record_input, merge_review_summaries, validate_record
@@ -293,10 +295,7 @@ class ReviewUnitExecutor:
             "plan_status": UnitPlanStatus.skipped if skip_plan else UnitPlanStatus.failed,
             "plan_skip_reason": "small_low_risk_unit" if skip_plan else None,
             "plan_error": None,
-            "context": self._fit_context_budget([], [
-                item for item in state.get("cross_unit_followup_context") or []
-                if item.get("file") in scope.readable_files
-            ], scope.max_context_chars) if followup else [],
+            "context": [],
             "issues": [],
             "model_usages": [],
             "messages": [],
@@ -340,6 +339,14 @@ class ReviewUnitExecutor:
                 latest_review_attempt={"status": recovered.latest_attempt_status or recovered.status, "reason": recovered.reason},
                 input_coverage=review_unit_input_coverage(prior),
                 model_usages=[item.model_dump(mode="json") for item in prior.model_usages])
+        if followup and not prior:
+            seeds = [item for item in state.get("cross_unit_followup_context") or [] if item.get("file") in scope.readable_files]
+            context, admission = self._admit_retrieved_context(graph_state, seeds, graph_state["budget"])
+            graph_state.update(context=context, input_coverage=self._retrieval_input_coverage(graph_state, admission))
+            if seeds:
+                graph_state["tool_events"].append(ReviewUnitToolEvent(review_unit_id=unit.id,
+                    tool="followup_context", status=admission["status"], result_count=len(context),
+                    detail=json.dumps(admission, ensure_ascii=False)))
         self._remember_unit_state(graph_state)
         config = None
         if getattr(self.unit_graph, "checkpointer", None) not in (None, False):
@@ -668,6 +675,8 @@ class ReviewUnitExecutor:
             )
         elif action.action == AgentActionName.finish_report:
             action = AgentAction(action=AgentActionName.task_done, reason=action.reason)
+        if action.action == AgentActionName.task_done and state["context"] and not state["issue_round_completed"]:
+            action = AgentAction(action=AgentActionName.report_issue, reason="新增证据尚未诊断，先完成当前工作集检查")
         if action.action not in UNIT_ALLOWED_ACTIONS:
             action = AgentAction(action=AgentActionName.task_done, reason="Unit 动作不在只读白名单")
         return action, budget, legacy_review, model_usages, None
@@ -877,37 +886,30 @@ class ReviewUnitExecutor:
             else:
                 raise ValueError(f"unsupported Unit read action: {tool_name}")
 
-            existing = {
-                (item.get("file"), item.get("start_line"), item.get("end_line"), item.get("source"))
-                for item in state["context"]
-            }
-            new_items = [
-                item for item in snippets
-                if (item.get("file"), item.get("start_line"), item.get("end_line"), item.get("source"))
-                not in existing
-            ]
-            new_items = self._fit_context_budget(
-                state["context"], new_items, state["scope"].max_context_chars
-            )
+            new_items, admission = self._admit_retrieved_context(state, snippets, budget)
             result_count = len(matches) if action.action == AgentActionName.file_find else len(new_items)
             events.append(ReviewUnitToolEvent(
                 review_unit_id=state["unit"].id,
                 tool=tool_name,
-                status="completed",
+                status=admission["status"],
                 result_count=result_count,
+                detail=json.dumps(admission, ensure_ascii=False),
             ))
             history_item: dict[str, Any] = {
                 "plan": fingerprint,
                 "result_count": result_count,
                 "new_snippet_count": len(new_items),
-                "status": "completed",
+                "status": admission["status"],
+                "context_admission": admission,
             }
             if matches:
                 history_item["matches"] = matches
             return {
-                "next_action": None,
+                "next_action": self._retrieval_next_action(state, budget, admission),
                 "budget": budget,
                 "context": [*state["context"], *new_items],
+                "input_coverage": self._retrieval_input_coverage(state, admission),
+                "issue_round_completed": False if new_items else state.get("issue_round_completed", False),
                 "retrieval_history": [*history, history_item],
                 "retrieval_no_new_rounds": (
                     0 if result_count else state["retrieval_no_new_rounds"] + 1
@@ -954,22 +956,13 @@ class ReviewUnitExecutor:
                 scope=state["scope"],
                 repository_graph=state["parent_state"].get("repository_graph") or {},
             )
-            existing = {
-                (item.get("file"), item.get("start_line"), item.get("end_line"))
-                for item in state["context"]
-            }
-            new_items = [
-                item for item in snippets
-                if (item.get("file"), item.get("start_line"), item.get("end_line")) not in existing
-            ]
-            new_items = self._fit_context_budget(
-                state["context"], new_items, state["scope"].max_context_chars
-            )
+            new_items, admission = self._admit_retrieved_context(state, snippets, budget)
             events.append(ReviewUnitToolEvent(
                 review_unit_id=state["unit"].id,
                 tool="code_search",
-                status="completed",
+                status=admission["status"],
                 result_count=len(new_items),
+                detail=json.dumps(admission, ensure_ascii=False),
             ))
             history.append({
                 "plan": fingerprint,
@@ -979,12 +972,15 @@ class ReviewUnitExecutor:
                     1 for item in snippets
                     if item.get("content", "").endswith("...(truncated)")
                 ),
-                "status": "completed",
+                "status": admission["status"],
+                "context_admission": admission,
             })
             return {
-                "next_action": None,
+                "next_action": self._retrieval_next_action(state, budget, admission),
                 "budget": budget,
                 "context": [*state["context"], *new_items],
+                "input_coverage": self._retrieval_input_coverage(state, admission),
+                "issue_round_completed": False if new_items else state.get("issue_round_completed", False),
                 "retrieval_history": history,
                 "retrieval_no_new_rounds": (
                     0 if new_items else state["retrieval_no_new_rounds"] + 1
@@ -1050,9 +1046,11 @@ class ReviewUnitExecutor:
                     *(input_coverage.omitted_targets if input_coverage else []),
                 ]))
                 input_coverage = UnitInputCoverage(
-                    evidence_coverage="complete", reason=DIAGNOSIS_BACKGROUND_DEGRADED,
+                    evidence_coverage="partial" if input_coverage and input_coverage.omitted_context else "complete",
+                    reason=(input_coverage.reason if input_coverage and input_coverage.omitted_context else DIAGNOSIS_BACKGROUND_DEGRADED),
                     omitted_components=degradation["omitted"], omitted_targets=omitted_targets,
                     omitted_plan=state.get("unit_plan") or (input_coverage.omitted_plan if input_coverage else None),
+                    omitted_context=input_coverage.omitted_context if input_coverage else [],
                 )
                 self._remember_unit_state({"input_coverage": input_coverage})
             record_input = args[-1]
@@ -1101,11 +1099,11 @@ class ReviewUnitExecutor:
             state.get("review_summary") or state.get("last_valid_review_summary") or UnitReviewSummary(),
             summary, response.review_record,
         )
-        if degradation and summary.status == "reported":
+        if input_coverage and input_coverage.target_coverage != "complete" and summary.status == "reported":
             # 核心证据诊断可产生候选，但省略的检查目标/工作记忆不能被宣称为完整覆盖。
             summary = summary.model_copy(update={"status": "unknown", "record": None,
-                "latest_attempt_status": "unknown", "latest_attempt_reason": "diagnosis_background_budget_degraded",
-                "reason": "diagnosis_background_budget_degraded"})
+                "latest_attempt_status": "unknown", "latest_attempt_reason": input_coverage.reason,
+                "reason": input_coverage.reason})
             latest_attempt = {"status": "unknown", "reason": summary.reason}
             input_coverage = input_coverage.model_copy(update={"target_coverage": "partial"})
         usage = annotate_usage(
@@ -1201,7 +1199,10 @@ class ReviewUnitExecutor:
         if summary and summary.last_valid_record and summary.last_valid_snapshot:
             from app.services.review_input_context import input_snapshot
 
-            if summary.last_valid_snapshot == input_snapshot(self._diagnosis_args(state)[-1]):
+            current_input = self._diagnosis_args(state)[-1]
+            if summary.last_valid_snapshot == input_snapshot(current_input) and (
+                {item["id"] for item in current_input["evidence"]} <= {item.id for item in summary.evidence}
+            ):
                 return None
         from app.agents.providers import LLMProviderError
 
@@ -1416,6 +1417,120 @@ class ReviewUnitExecutor:
             "retrieval_history": [],
             "execution_budget": budget.model_dump(),
         }
+
+    @staticmethod
+    def _retrieval_next_action(state, budget, admission):
+        if not admission["omitted"] and (admission.get("after") or {}).get("input_mode") != "core":
+            return None
+        completed = state.get("issue_round_completed") and not admission["accepted_chunks"]
+        action = (AgentActionName.task_done if completed and not budget.can_consume(
+            diagnosis_attempts=1, model_calls=1) else AgentActionName.report_issue)
+        return AgentAction(action=action, reason="检索工作集达到诊断预算边界，保留省略范围并收敛审查")
+
+    def _probe_diagnosis_admission(self, state):
+        """不消费额度；与最终诊断共用完整请求、降级选择和模型计数路径。"""
+        from app.agents.providers import LLMProviderError
+
+        budget = state["budget"]
+        capacity = {"remaining_tokens": max(0, budget.max_token_usage - budget.token_usage),
+                    "remaining_calls": max(0, budget.max_model_calls - budget.model_calls),
+                    "remaining_diagnosis_attempts": max(0, budget.max_diagnosis_attempts - budget.diagnosis_attempts)}
+        if not budget.can_consume(diagnosis_attempts=1, model_calls=1):
+            return {**capacity, "admitted": False, "reason": "unit_diagnosis_budget_exhausted"}
+        try:
+            args, degradation = self._select_diagnosis_input(state)
+            estimate = self._diagnosis_estimate(args)
+        except LLMProviderError as exc:
+            reason, _, metadata = str(exc).partition(":")
+            if reason not in {"model_context_window_exceeded", "model_input_limit_exceeded",
+                              "model_output_limit_exceeded", "required_input_too_large"}:
+                raise
+            try:
+                estimate = json.loads(metadata)
+            except (ValueError, TypeError):
+                estimate = {}
+            return {**estimate, **capacity, "admitted": False, "reason": reason}
+        admitted = budget.can_consume(model_calls=1, token_usage=estimate["reserved_tokens"])
+        return {**estimate, **capacity, "admitted": admitted,
+                "input_mode": "core" if degradation else "full",
+                "reason": None if admitted else "unit_request_budget_exhausted"}
+
+    def _admit_retrieved_context(self, state, candidates, budget):
+        """稳定选择完整 canonical 证据块；最后复核去重后的实际诊断工作集。"""
+        parent = state["parent_state"] if candidates else {}
+        head, base = str(parent.get("head_sha") or ""), str(parent.get("base_sha") or "")
+        _, current_evidence = build_context_evidence(state["context"], head, base)
+        seen = {item["id"] for item in current_evidence}
+        chunks, omitted = [], []
+        for candidate in candidates:
+            try:
+                if candidate.get("start_line") is not None and int(candidate["start_line"]) < 1:
+                    raise ValueError("context_source_line_must_be_positive")
+                pieces, _ = build_context_evidence([candidate], head, base)
+                chunks.extend(pieces)
+            except ValueError as exc:
+                coordinates = {}
+                for name in ("start_line", "end_line"):
+                    try:
+                        coordinates[name] = int(candidate.get(name) or 0)
+                    except (ValueError, TypeError):
+                        coordinates[name] = 0
+                omitted.append(UnitContextOmission(file_path=str(candidate.get("file") or ""),
+                    **coordinates,
+                    content_hash=hashlib.sha256(str(candidate.get("content") or "").encode("utf-8")).hexdigest(),
+                    reason="invalid_context:" + str(exc)).model_dump(mode="json"))
+        trial = {**state, "budget": budget}
+        before = self._probe_diagnosis_admission(trial) if chunks or omitted else None
+        accepted, duplicates = [], 0
+        remaining = state["scope"].max_context_chars - sum(len(item.get("content") or "") for item in state["context"])
+        for chunk in chunks:
+            if chunk["evidence_id"] in seen:
+                duplicates += 1
+                continue
+            seen.add(chunk["evidence_id"])
+            if len(chunk["content"]) > remaining:
+                estimate = {"admitted": False, "reason": "unit_context_char_budget_exhausted"}
+            else:
+                estimate = self._probe_diagnosis_admission({**trial, "context": [*state["context"], *accepted, chunk]})
+            if estimate["admitted"]:
+                accepted.append(chunk)
+                remaining -= len(chunk["content"])
+            else:
+                omitted.append(UnitContextOmission(file_path=chunk["file"], start_line=chunk["start_line"],
+                    end_line=chunk["end_line"], content_hash=chunk["content_hash"],
+                    reason=estimate["reason"], diagnosis_admission=estimate).model_dump(mode="json"))
+        after = self._probe_diagnosis_admission({**trial, "context": [*state["context"], *accepted]}) if chunks or omitted else None
+        if accepted and not after["admitted"]:
+            for chunk in accepted:
+                omitted.append(UnitContextOmission(file_path=chunk["file"], start_line=chunk["start_line"],
+                    end_line=chunk["end_line"], content_hash=chunk["content_hash"],
+                    reason=after["reason"], diagnosis_admission=after).model_dump(mode="json"))
+            accepted = []
+            after = self._probe_diagnosis_admission(trial)
+        rejected_status = ("budget_rejected" if any(not item["reason"].startswith("invalid_context:")
+                           for item in omitted) else "rejected")
+        metadata = {"status": "partial" if accepted and omitted else rejected_status if omitted else "completed",
+                    "source_snippets": len(candidates), "accepted_chunks": len(accepted),
+                    "duplicate_chunks": duplicates, "omitted": omitted, "before": before, "after": after}
+        return accepted, metadata
+
+    @staticmethod
+    def _retrieval_input_coverage(state, admission):
+        previous = state.get("input_coverage")
+        if not admission["omitted"]:
+            return previous
+        omissions = [*(previous.omitted_context if previous else []),
+                     *(UnitContextOmission.model_validate(item) for item in admission["omitted"])]
+        by_scope = {(item.file_path, item.start_line, item.end_line, item.content_hash): item for item in omissions}
+        targets = [*(previous.omitted_targets if previous else []),
+                   *(f"读取并检查 {item.file_path}:{item.start_line}-{item.end_line}（{item.reason}）" for item in by_scope.values())]
+        coverage = (previous or UnitInputCoverage()).model_copy(update={
+            "evidence_coverage": "partial", "target_coverage": "unknown",
+            "reason": "retrieval_context_not_admitted", "omitted_context": list(by_scope.values()),
+            "omitted_targets": list(dict.fromkeys(targets)),
+        })
+        ReviewUnitExecutor._remember_unit_state({"input_coverage": coverage})
+        return coverage
 
     @staticmethod
     def _fit_context_budget(
