@@ -407,6 +407,7 @@ class FileFindRequest(BaseModel):
 
     query: str = Field(min_length=1, max_length=120)
     max_results: int = Field(default=12, ge=1, le=20)
+    cursor: str | None = Field(default=None, min_length=1, max_length=200)
 
     @field_validator("query")
     @classmethod

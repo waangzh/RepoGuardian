@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
+import json
 from pathlib import Path
+import secrets
 from typing import Any
 
 from app.models.review import ChangedFile, ReviewToolScope
+from app.services.fingerprints import stable_hash
+from app.services.review_input_context import build_scope_projection
 from app.review.tool_scope import (
     ReviewPathPolicyError,
     is_sensitive_repository_path,
@@ -16,6 +21,20 @@ from app.review.tool_scope import (
 )
 
 _MAX_CONTENT_CHARS = 20_000
+_MAX_FIND_PAGE_CHARS = 6_000
+_FILE_FIND_CURSORS: OrderedDict[str, tuple[str, str, str, int]] = OrderedDict()
+
+
+def _file_find_cursor(binding: tuple[str, str, str, int]) -> str:
+    for token, saved in list(_FILE_FIND_CURSORS.items()):
+        if saved == binding:
+            _FILE_FIND_CURSORS.move_to_end(token)
+            return token
+    token = secrets.token_urlsafe(24)
+    _FILE_FIND_CURSORS[token] = binding
+    if len(_FILE_FIND_CURSORS) > 1024:
+        _FILE_FIND_CURSORS.popitem(last=False)
+    return token
 
 
 class ScopedContextToolError(ValueError):
@@ -67,35 +86,63 @@ class ScopedContextTool:
         query: str,
         max_results: int | None = None,
     ) -> list[str]:
+        """保留旧的首屏列表接口；Agent 使用带分页元数据的 file_find_page。"""
+        return (await self.file_find_page(scope=scope, query=query, max_results=max_results))["files"]
+
+    async def file_find_page(
+        self, *, scope: ReviewToolScope, query: str, max_results: int | None = None,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
         normalized = query.strip().casefold()
         if not normalized or len(normalized) > 120 or any(ord(char) < 32 for char in normalized):
             raise ScopedContextToolError("file_find query must be a short literal")
         if "\\" in normalized or normalized.startswith(("/", "~")) or ".." in normalized.split("/"):
             raise ScopedContextToolError("file_find query must not contain path traversal")
-        limit = min(max_results or scope.max_search_results, scope.max_search_results)
+        limit = min(max_results or scope.max_search_results, scope.max_search_results, 20)
+        if limit < 1:
+            raise ScopedContextToolError("file_find max_results must be positive")
         candidates = scope.readable_files if scope.repository_discovery_enabled else scope.seed_files
         matched = [
             path for path in sorted(candidates)
             if normalized in path.casefold() and not is_sensitive_repository_path(path)
         ]
-        if not scope.repository_root:
-            return matched[:limit]
-        tracked = await asyncio.to_thread(list_git_tracked_files, scope.repository_root)
+        tracked = (await asyncio.to_thread(list_git_tracked_files, scope.repository_root)
+                   if scope.repository_root else None)
+        scope_id = build_scope_projection(scope)["id"]
+        version = stable_hash([matched, sorted(tracked) if tracked is not None else None])
+        offset = 0
+        if cursor is not None:
+            saved = _FILE_FIND_CURSORS.get(cursor)
+            if saved is None or saved[:3] != (scope_id, normalized, version):
+                raise ScopedContextToolError("file_find_cursor_invalid_or_expired: restart the query without a cursor")
+            _FILE_FIND_CURSORS.move_to_end(cursor)
+            offset = saved[3]
         safe: list[str] = []
-        for path in matched:
-            try:
-                await asyncio.to_thread(
-                    validate_repository_file,
-                    scope.repository_root,
-                    path,
-                    tracked_files=tracked,
-                )
-            except (OSError, ReviewPathPolicyError):
-                continue
-            safe.append(path)
-            if len(safe) == limit:
+        # 预留最大计数与 24-byte cursor 的 JSON 包装，约束整个返回对象而非仅路径正文。
+        page = {"files": safe, "scope_id": scope_id, "matched_candidates": len(matched),
+                "scanned_candidates": 100, "omitted_for_safety": 100, "next_cursor": "x" * 32}
+        path_budget = _MAX_FIND_PAGE_CHARS - (len(json.dumps(page, ensure_ascii=False)) - 2)
+        index, scanned, omitted, size = offset, 0, 0, 2
+        while index < len(matched) and len(safe) < limit and scanned < 100:
+            path = matched[index]
+            path_size = len(json.dumps(path, ensure_ascii=False)) + (2 if safe else 0)
+            if size + path_size > path_budget:
+                if not safe:
+                    raise ScopedContextToolError("file_find_path_exceeds_page_budget")
                 break
-        return safe
+            index += 1
+            scanned += 1
+            if scope.repository_root:
+                try:
+                    await asyncio.to_thread(validate_repository_file, scope.repository_root, path, tracked_files=tracked)
+                except (OSError, ReviewPathPolicyError):
+                    omitted += 1
+                    continue
+            safe.append(path)
+            size += path_size
+        page.update(scanned_candidates=scanned, omitted_for_safety=omitted,
+            next_cursor=_file_find_cursor((scope_id, normalized, version, index)) if index < len(matched) else None)
+        return page
 
     async def file_read_diff(
         self,

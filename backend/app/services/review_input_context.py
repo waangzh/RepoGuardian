@@ -10,6 +10,26 @@ from app.services.fingerprints import stable_hash
 
 EVIDENCE_INPUT_VERSION = "unit-evidence-chunks-v3"
 PR_INTENT_VERSION = "pr-author-intent-v1"
+SCOPE_PROJECTION_VERSION = "unit-scope-navigation-v1"
+
+
+def build_scope_projection(scope: Any) -> dict[str, Any]:
+    """有界导航视图；服务端仍持有完整权限集合，视图不授予任何权限。"""
+    raw = scope.model_dump(mode="python") if hasattr(scope, "model_dump") else (scope or {})
+    commentable = sorted(set(raw.get("commentable_files") or []))
+    seeds = sorted(set(raw.get("seed_files") or commentable))
+    readable = sorted(set(raw.get("readable_files") or []))
+    limits = {key: raw.get(key) for key in ("max_lines_per_read", "max_search_results", "max_context_chars")}
+    projection = {
+        "schema_version": SCOPE_PROJECTION_VERSION, "review_unit_id": raw.get("review_unit_id"),
+        "commentable_files": commentable, "seed_files": seeds,
+        "commentable_files_count": len(commentable), "seed_files_count": len(seeds),
+        "readable_files_count": len(readable), "readable_files_hash": stable_hash(readable),
+        "repository_discovery_enabled": bool(raw.get("repository_discovery_enabled", False)),
+        "limits": limits, "navigation_is_exhaustive": False,
+    }
+    projection["id"] = "scope-" + stable_hash([projection, raw.get("repository_root")])[:24]
+    return projection
 
 
 def question_identity(question: Any) -> str:
