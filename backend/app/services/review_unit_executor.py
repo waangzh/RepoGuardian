@@ -814,7 +814,10 @@ class ReviewUnitExecutor:
             ensure_ascii=False,
             sort_keys=True,
         )
-        if any(item.get("plan") == fingerprint for item in history):
+        restart_find = (action.action == AgentActionName.file_find and not request_payload.get("cursor")
+            and history and history[-1].get("cursor_error")
+            and history[-1].get("query") == request_payload.get("query"))
+        if any(item.get("plan") == fingerprint for item in history) and not restart_find:
             events.append(ReviewUnitToolEvent(
                 review_unit_id=state["unit"].id,
                 tool=tool_name,
@@ -837,6 +840,7 @@ class ReviewUnitExecutor:
         context_tool = ScopedContextTool()
         snippets: list[dict[str, Any]] = []
         matches: list[str] = []
+        page: dict[str, Any] | None = None
         try:
             if action.action == AgentActionName.file_read:
                 request = FileReadRequest.model_validate(request_payload)
@@ -848,9 +852,9 @@ class ReviewUnitExecutor:
                 )]
             elif action.action == AgentActionName.file_find:
                 request = FileFindRequest.model_validate(request_payload)
-                matches = await context_tool.file_find(
-                    scope=state["scope"], query=request.query, max_results=request.max_results
-                )
+                page = await context_tool.file_find_page(scope=state["scope"], query=request.query,
+                    max_results=request.max_results, cursor=request.cursor)
+                matches = page["files"]
             elif action.action == AgentActionName.code_search:
                 request = CodeSearchRequest.model_validate(request_payload)
                 relation = request.relation
@@ -893,7 +897,7 @@ class ReviewUnitExecutor:
                 tool=tool_name,
                 status=admission["status"],
                 result_count=result_count,
-                detail=json.dumps(admission, ensure_ascii=False),
+                detail=json.dumps(page if page is not None else admission, ensure_ascii=False),
             ))
             history_item: dict[str, Any] = {
                 "plan": fingerprint,
@@ -904,6 +908,8 @@ class ReviewUnitExecutor:
             }
             if matches:
                 history_item["matches"] = matches
+            if page is not None:
+                history_item["page"] = {key: value for key, value in page.items() if key != "files"}
             return {
                 "next_action": self._retrieval_next_action(state, budget, admission),
                 "budget": budget,
@@ -931,6 +937,8 @@ class ReviewUnitExecutor:
                     "result_count": 0,
                     "new_snippet_count": 0,
                     "status": "rejected",
+                    **({"cursor_error": True, "query": request_payload.get("query")}
+                       if str(exc).startswith("file_find_cursor_invalid_or_expired") else {}),
                 }],
                 "retrieval_no_new_rounds": state["retrieval_no_new_rounds"] + 1,
                 "tool_events": events,
