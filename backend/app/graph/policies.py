@@ -30,8 +30,10 @@ UNIT_ACTION_REGISTRY: tuple[UnitActionRegistration, ...] = (
         route="execute_read_tool",
         prompt_instruction=(
             "Find a literal path fragment across the safe Git-tracked repository. tool_args must be exactly "
-            "{\"request\": {\"query\": \"literal\", \"max_results\": 12}}. Regex and traversal "
-            "are not supported."
+            "{\"request\": {\"query\": \"literal\", \"max_results\": 12, \"cursor\": null}}. "
+            "Results are a bounded page, not the full directory. For another page, reuse next_cursor "
+            "unchanged with the same query. Cursors do not grant file permissions. Regex and traversal "
+            "are not supported. Prefer targeted queries to enumerating the whole repository."
         ),
     ),
     UnitActionRegistration(
