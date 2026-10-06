@@ -2010,6 +2010,18 @@ class CrossUnitCoordinationProposal(CrossUnitCoordinationPlan):
         return self
 
 
+class UnitInputCoverage(BaseModel):
+    """诊断输入展示范围与目标范围；不表示代码正确性或候选验证状态。"""
+
+    model_config = ConfigDict(extra="forbid")
+    evidence_coverage: Literal["complete", "partial", "unknown"] = "unknown"
+    target_coverage: Literal["complete", "partial", "unknown"] = "unknown"
+    reason: str | None = None
+    omitted_components: list[str] = Field(default_factory=list)
+    omitted_targets: list[str] = Field(default_factory=list)
+    omitted_plan: UnitReviewPlan | None = None
+
+
 class ReviewUnitResult(BaseModel):
     review_unit_id: str
     input_fingerprint: str | None = None
@@ -2020,6 +2032,7 @@ class ReviewUnitResult(BaseModel):
     plan_status: UnitPlanStatus | None = None
     plan_skip_reason: str | None = None
     plan_error: str | None = None
+    input_coverage: UnitInputCoverage | None = None
     review_summary: UnitReviewSummary = Field(default_factory=UnitReviewSummary)
     issues: list[ReviewIssue] = Field(default_factory=list)
     context_snippets: list[ContextSnippet] = Field(default_factory=list)
@@ -2050,6 +2063,7 @@ class ReviewFileCoverage(BaseModel):
     status: ReviewFileStatus
     review_unit_ids: list[str] = Field(default_factory=list)
     reason: str | None = None
+    omitted_targets: list[str] = Field(default_factory=list)
 
 
 class ReviewUnitCoverage(BaseModel):
@@ -2060,6 +2074,7 @@ class ReviewUnitCoverage(BaseModel):
     status: ReviewUnitStatus
     terminal_reason: ReviewUnitTerminalReason | None = None
     failure_reason: str | None = None
+    input_coverage: UnitInputCoverage | None = None
     model_calls: int = Field(default=0, ge=0)
     tokens: int = Field(default=0, ge=0)
     duration_ms: int = Field(default=0, ge=0)

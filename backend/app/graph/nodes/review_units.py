@@ -16,6 +16,8 @@ from app.services.review_repository import ReviewRepository
 from app.review.unit_completion import (
     is_reusable_review_unit_result,
     is_review_unit_complete,
+    is_review_unit_execution_complete,
+    review_unit_coverage_warning,
 )
 
 
@@ -132,8 +134,11 @@ async def review_units_node(state: ReviewState) -> ReviewState:
     }
     results = [by_id[unit.id] for unit in plan.review_units if unit.id in by_id]
     successful = [item for item in results if is_review_unit_complete(item)]
+    executed_results = [item for item in results if is_review_unit_execution_complete(item)]
     needs_human = [item for item in results if item.status == ReviewUnitStatus.needs_human]
     incomplete = [item for item in results if not is_review_unit_complete(item)]
+    warnings = list(dict.fromkeys([*(state.get("warnings") or []),
+        *(warning for item in results if (warning := review_unit_coverage_warning(item)))]))
     if needs_human:
         human_request = needs_human[0].human_request or HumanReviewRequest(
             missing_information=["Review Unit 需要人工提供业务规则。"],
@@ -151,20 +156,20 @@ async def review_units_node(state: ReviewState) -> ReviewState:
             next_action=action.model_dump(mode="json"),
             review_unit_results=[item.model_dump(mode="json") for item in results],
             review_issues=[
-                issue.model_dump(mode="json") for item in successful for issue in item.issues
+                issue.model_dump(mode="json") for item in executed_results for issue in item.issues
             ],
             context_snippets=[
                 snippet.model_dump(mode="json")
-                for item in successful for snippet in item.context_snippets
+                for item in executed_results for snippet in item.context_snippets
             ],
+            warnings=warnings,
             step_progress=append_step(
                 state, "review_units", "completed", "Review Unit 已暂停等待人工输入"
             ),
         )
-    issues = [issue for item in successful for issue in item.issues]
-    snippets = [snippet for item in successful for snippet in item.context_snippets]
+    issues = [issue for item in executed_results for issue in item.issues]
+    snippets = [snippet for item in executed_results for snippet in item.context_snippets]
     events = [event for item in results for event in item.messages]
-    warnings = list(state.get("warnings") or [])
     legacy_units = [item for item in results if item.review_summary.input_protocol == "legacy"]
     if legacy_units:
         warnings.append(f"{len(legacy_units)} 个 Unit 使用显式 legacy Provider：缺少 canonical 输入保证，检查记录未知且不缓存")
