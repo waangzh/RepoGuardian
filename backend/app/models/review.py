@@ -1784,6 +1784,7 @@ class UnitContractDependency(BaseModel):
 
 class UnitUnresolvedQuestion(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    id: str | None = Field(default=None, min_length=1, max_length=100)
     question: str = Field(min_length=1, max_length=1_000)
     affected_files: list[str] = Field(default_factory=list, max_length=12)
     evidence_ids: list[str] = Field(default_factory=list, max_length=12)
@@ -1792,6 +1793,23 @@ class UnitUnresolvedQuestion(BaseModel):
     @classmethod
     def validate_paths(cls, values: list[str]) -> list[str]:
         return list(dict.fromkeys(_validate_repo_relative_path(value) for value in values))
+
+
+class UnitQuestionUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    question_id: str = Field(min_length=1, max_length=100)
+    status: Literal["resolved", "superseded"]
+    reason: str = Field(min_length=1, max_length=1_000)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=12)
+    replacement_id: str | None = Field(default=None, min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def valid_transition(self) -> "UnitQuestionUpdate":
+        if self.status == "resolved" and (not self.evidence_ids or self.replacement_id):
+            raise ValueError("resolved question requires evidence and no replacement")
+        if self.status == "superseded" and (not self.replacement_id or self.replacement_id == self.question_id):
+            raise ValueError("superseded question requires a distinct replacement")
+        return self
 
 
 class UnitReviewRecord(BaseModel):
@@ -1804,12 +1822,14 @@ class UnitReviewRecord(BaseModel):
     hypothesis_checks: list[UnitHypothesisCheck] = Field(default_factory=list, max_length=12)
     contract_dependencies: list[UnitContractDependency] = Field(default_factory=list, max_length=60)
     unresolved_questions: list[UnitUnresolvedQuestion] = Field(default_factory=list, max_length=60)
+    question_updates: list[UnitQuestionUpdate] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="after")
     def unique_checks(self) -> "UnitReviewRecord":
         for identifiers in (
             [item.target for item in self.target_checks],
             [item.hypothesis_id for item in self.hypothesis_checks],
+            [item.question_id for item in self.question_updates],
         ):
             if len(identifiers) != len(set(identifiers)):
                 raise ValueError("review record contains duplicate checks")

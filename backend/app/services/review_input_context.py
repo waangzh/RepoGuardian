@@ -12,6 +12,44 @@ EVIDENCE_INPUT_VERSION = "unit-evidence-chunks-v3"
 PR_INTENT_VERSION = "pr-author-intent-v1"
 
 
+def question_identity(question: Any) -> str:
+    raw = question.model_dump(mode="json") if hasattr(question, "model_dump") else question
+    return raw.get("id") or "question-" + stable_hash([
+        raw["question"], sorted(set(raw.get("affected_files") or []))])[:24]
+
+
+def build_retrieval_catalog(state: dict) -> dict:
+    """按当前目标/已检索文件排序导航目录；目录只提供发现线索。"""
+    unit, plan = state.get("review_unit") or {}, state.get("unit_plan") or {}
+    primary = set(unit.get("primary_files") or [])
+    primary.update(item.get("file_path") for item in state.get("changed_files") or [])
+    relevant = set(unit.get("related_files") or [])
+    relevant.update(item.get("file") for item in state.get("context_snippets") or [])
+    symbols = set(unit.get("changed_symbols") or [])
+    symbols.update(item.get("symbol") for item in state.get("context_snippets") or [] if item.get("symbol"))
+    for hypothesis in plan.get("risk_hypotheses") or []:
+        relevant.update(hypothesis.get("affected_files") or [])
+        symbols.update(hypothesis.get("affected_symbols") or [])
+    for history in (state.get("retrieval_history") or [])[-2:]:
+        retrieval = history.get("plan") or {}
+        if not isinstance(retrieval, dict):
+            # 低层只读动作保存的是请求 fingerprint；并非 ContextRetrievalPlan。
+            continue
+        relevant.update(retrieval.get("target_files") or [])
+        symbols.update(retrieval.get("target_symbols") or [])
+
+    def rank(path):
+        return 0 if path in relevant else 1 if path in primary else 2
+
+    files = sorted({item["path"] for item in state.get("file_index") or [] if item.get("path")},
+                   key=lambda path: (rank(path), path))
+    entries = [{key: item.get(key) for key in ("file", "symbol", "type")}
+               for item in state.get("symbol_index") or []]
+    entries.sort(key=lambda item: (0 if item["symbol"] in symbols else 1,
+                                  rank(item["file"]), str(item["file"]), str(item["symbol"])))
+    return {"files": files, "symbols": entries}
+
+
 def build_pr_intent(pr: Any) -> dict[str, Any]:
     raw = pr.model_dump(mode="json") if hasattr(pr, "model_dump") else (pr or {})
     title = str(raw.get("title") or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -112,7 +150,7 @@ def build_working_memory(summary: UnitReviewSummary | None, record_input: dict,
         missing.update(identity for key in ("target_checks", "hypothesis_checks", "contract_dependencies", "unresolved_questions")
                        for check in getattr(stale_record, key) for identity in check.evidence_ids)
     payload = {
-        "schema_version": "unit-working-memory-v1", "unit_id": unit_id,
+        "schema_version": "unit-working-memory-v2", "unit_id": unit_id,
         "snapshot": record_input.get("snapshot") or {},
         "revision": stable_hash(record.model_dump(mode="json") if record else None),
         "trust": "prior_checks_not_correctness_proof",
@@ -126,6 +164,8 @@ def build_working_memory(summary: UnitReviewSummary | None, record_input: dict,
             items = []
             for check in getattr(record, key):
                 item = check.model_dump(mode="json")
+                if key == "unresolved_questions":
+                    item["id"] = question_identity(item)
                 unavailable = [identity for identity in item["evidence_ids"] if identity not in current
                                or trusted.get(identity) != {
                                    k: v for k, v in current[identity].items() if k != "content"}]
@@ -136,12 +176,22 @@ def build_working_memory(summary: UnitReviewSummary | None, record_input: dict,
                         item["status"] = "unresolved"
                         item["reason" if "reason" in item else "assumption"] = "历史证据不能在当前快照恢复"
                 items.append(item)
-            items.sort(key=lambda item: {"conflicting": 0, "refuted": 1, "unresolved": 2,
-                                         "not_checked": 3}.get(item.get("status"), 4))
             payload[key] = items
     payload["missing_evidence_ids"] = sorted(missing)
     required = {"schema_version", "unit_id", "snapshot", "revision", "trust", "latest_attempt", "memory_invalidated"}
-    memory = json.loads(assemble_context(payload, required, 8_000))
+    def rank(label, item):
+        if not isinstance(item, dict):
+            return (6, 0, 0)
+        status = item.get("status", "unresolved")
+        tier = {"conflicting": 0, "refuted": 1, "supported": 2, "verified": 2,
+                "unresolved": 3, "not_checked": 4, "checked": 5}.get(status, 3)
+        goal = (item.get("target") in record_input.get("targets", [])
+                or item.get("hypothesis_id") in {h["id"] for h in record_input.get("hypotheses", [])})
+        cost = len(json.dumps(item, ensure_ascii=False)) + sum(
+            len(current[identity].get("content", "")) for identity in item.get("evidence_ids", []))
+        return (tier, -int(goal), cost)
+
+    memory = json.loads(assemble_context(payload, required, 8_000, item_priority=rank))
     references = set()
     for key in ("unresolved_questions", "hypothesis_checks", "contract_dependencies", "target_checks"):
         for item in memory.get(key, []):

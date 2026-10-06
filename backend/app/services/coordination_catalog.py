@@ -7,10 +7,19 @@ from app.models.review import CrossUnitCatalogBatch
 from app.services.fingerprints import stable_hash
 
 CATALOG_CHAR_LIMIT = 48_000
-CATALOG_BATCH_VERSION = "coordination-catalog-batches-v1"
+CATALOG_BATCH_VERSION = "coordination-catalog-batches-v2-evidence-closure-local-index"
 _PRIORITY = {"changed_contract": 0, "conflicting_contract": 0,
              "unresolved_dependency": 1, "dependency_coverage_gap": 1,
              "unresolved_cross_unit_question": 2}
+
+
+def summary_evidence_ids(summary: dict) -> set[str]:
+    identities = set(summary.get("evidence_ids") or [])
+    record = summary.get("record") or summary.get("last_valid_record") or {}
+    for key in ("target_checks", "hypothesis_checks", "contract_dependencies",
+                "unresolved_questions", "question_updates"):
+        identities.update(identity for item in record.get(key) or [] for identity in item.get("evidence_ids") or [])
+    return identities
 
 
 def catalog_batches(catalog: dict[str, Any],
@@ -21,8 +30,17 @@ def catalog_batches(catalog: dict[str, Any],
     relations = {item["id"]: item for item in risk["relationships"]}
     reasons = {"risk-" + stable_hash(item)[:24]: item for item in risk["reasons"]}
     index = [[key, summaries.get(key, {}).get("status", "unknown")] for key in sorted(units)]
+    index_hash = stable_hash(index)
 
     def check(payload):
+        available = {item["id"] for item in payload["evidence"]}
+        relation_ids = {item["id"] for item in payload["risk"]["relationships"]}
+        referenced = {identity for item in payload["summaries"]
+                      for identity in summary_evidence_ids(item["summary"])}
+        if referenced - available:
+            raise ValueError("coordination_catalog_missing_summary_evidence")
+        if any(set(reason.get("evidence_ids") or []) - available - relation_ids for reason in payload["risk"]["reasons"]):
+            raise ValueError("coordination_catalog_missing_risk_evidence")
         if len(json.dumps(payload, ensure_ascii=False)) > CATALOG_CHAR_LIMIT:
             raise ValueError("coordination_catalog_exceeds_48000_chars")
         edges = payload["risk"]["relationships"]
@@ -63,9 +81,9 @@ def catalog_batches(catalog: dict[str, Any],
 
     atoms = []
     for key, reason in reasons.items():
-        ids = set(reason["unit_ids"]) & units.keys()
+        ids = set(reason.get("unit_ids") or []) & units.keys()
         linked = {identity for identity, relation in relations.items()
-                  if identity in reason["evidence_ids"]}
+                  if identity in (reason.get("evidence_ids") or [])}
         ids.update(endpoint for identity in linked for endpoint in (
             relations[identity]["source_unit_id"], relations[identity]["target_unit_id"]) if endpoint in units)
         atoms.append((_PRIORITY.get(reason["code"], 3), ids, linked, {key}))
@@ -85,12 +103,14 @@ def catalog_batches(catalog: dict[str, Any],
     def project(ids, relation_ids, reason_ids):
         selected = [units[key] for key in sorted(ids)]
         selected_summaries = [summaries[key] for key in sorted(ids) if key in summaries]
-        paths = {path for item in selected for path in [*item["primary_files"], *item["related_files"]]}
-        evidence_ids = {key for item in selected_summaries for key in item["summary"]["evidence_ids"]}
-        evidence_ids.update(key for identity in reason_ids for key in reasons[identity]["evidence_ids"])
-        return {"coverage_index": index, "units": selected, "summaries": selected_summaries,
+        evidence_ids = {key for item in selected_summaries for key in summary_evidence_ids(item["summary"])}
+        evidence_ids.update(key for identity in reason_ids for key in reasons[identity].get("evidence_ids") or [])
+        return {"coverage_index": [[key, summaries.get(key, {}).get("status", "unknown")] for key in sorted(ids)],
+            "coverage_manifest": {"scope": "batch_local", "total_units": len(units),
+                                  "omitted_units": len(units) - len(ids), "global_index_hash": index_hash},
+            "units": selected, "summaries": selected_summaries,
             "evidence": [item for item in catalog["evidence"]
-                         if item["id"] in evidence_ids and item["file_path"] in paths],
+                         if item["id"] in evidence_ids],
             "risk": {**risk, "relationships": [relations[key] for key in sorted(relation_ids)],
                      "reasons": [reasons[key] for key in sorted(reason_ids)]},
             "batch_scope": {"version": CATALOG_BATCH_VERSION, "unit_ids": sorted(ids),

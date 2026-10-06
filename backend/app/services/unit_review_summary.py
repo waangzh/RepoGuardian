@@ -7,7 +7,7 @@ from app.models.review import (
     ChangedFile, UnitEvidenceReference, UnitHypothesisCheck, UnitReviewRecord,
     UnitReviewSummary, UnitTargetCheck,
 )
-from app.services.review_input_context import build_context_evidence, make_evidence, EVIDENCE_INPUT_VERSION, input_snapshot
+from app.services.review_input_context import build_context_evidence, make_evidence, EVIDENCE_INPUT_VERSION, input_snapshot, question_identity
 from app.review.input_protocol import CANONICAL_UNIT_INPUT_PROTOCOL
 
 
@@ -69,7 +69,7 @@ def validate_record(
         if any(item.hypothesis_id not in allowed_hypotheses for item in record.hypothesis_checks):
             raise ValueError("unknown risk hypothesis")
         items = [*record.target_checks, *record.hypothesis_checks,
-                 *record.contract_dependencies, *record.unresolved_questions]
+                 *record.contract_dependencies, *record.unresolved_questions, *record.question_updates]
         for item in items:
             if any(identity not in by_id for identity in item.evidence_ids):
                 raise ValueError("unknown or stale evidence reference")
@@ -83,9 +83,39 @@ def validate_record(
         for question in record.unresolved_questions:
             if set(question.affected_files) - readable_files:
                 raise ValueError("question outside readable scope")
+        known_questions = {question_identity(item): item for item in
+                           (record_input.get("working_memory") or {}).get("unresolved_questions", [])}
+        questions, aliases = [], {}
+        for question in record.unresolved_questions:
+            if question.id in known_questions:
+                previous_question = known_questions[question.id]
+                if (question.question != previous_question["question"]
+                        or set(question.affected_files) != set(previous_question.get("affected_files") or [])):
+                    raise ValueError("prior question identity cannot name a different question; use superseded")
+            identity = question.id if question.id in known_questions else question_identity(
+                question.model_dump(exclude={"id"}))
+            if question.id:
+                if question.id in aliases:
+                    raise ValueError("duplicate question alias")
+                aliases[question.id] = identity
+            questions.append(question.model_copy(update={"id": identity}))
+        if len({item.id for item in questions}) != len(questions):
+            raise ValueError("duplicate question identity")
+        retiring = {item.question_id for item in record.question_updates}
+        replacements = (set(known_questions) | {item.id for item in questions}) - retiring
+        question_updates = []
+        for update in record.question_updates:
+            if update.question_id not in known_questions:
+                raise ValueError("question update requires a visible prior question")
+            replacement = aliases.get(update.replacement_id, update.replacement_id)
+            if update.status == "superseded" and replacement not in replacements:
+                raise ValueError("superseded question requires an active replacement")
+            question_updates.append(update.model_copy(update={"replacement_id": replacement}))
         targets = {item.target: item for item in record.target_checks}
         hypotheses = {item.hypothesis_id: item for item in record.hypothesis_checks}
         normalized = record.model_copy(update={
+            "unresolved_questions": [item for item in questions if item.id not in retiring],
+            "question_updates": question_updates,
             "target_checks": [targets.get(target) or UnitTargetCheck(
                 target=target, status="not_checked", reason="模型未提供该目标的检查记录",
             ) for target in record_input["targets"]],
@@ -134,9 +164,11 @@ def merge_review_summaries(
         dependencies = {(item.file_path, item.symbol, item.assumption): item for item in [
             *old.contract_dependencies, *current.record.contract_dependencies,
         ]}
-        questions = {(item.question, tuple(item.affected_files)): item for item in [
+        questions = {question_identity(item): item.model_copy(update={"id": question_identity(item)}) for item in [
             *old.unresolved_questions, *current.record.unresolved_questions,
         ]}
+        for update in current.record.question_updates:
+            questions.pop(update.question_id, None)
         updates["record"] = current.record.model_copy(update={
             "target_checks": [old_targets.get(item.target, item) if item.target not in explicit_targets else item
                               for item in current.record.target_checks],

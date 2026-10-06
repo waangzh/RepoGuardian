@@ -3,14 +3,17 @@
 from copy import deepcopy
 import hashlib
 import json
-from typing import Any
+from typing import Any, Callable
 
 
 class RequiredInputTooLarge(ValueError):
     pass
 
 
-def assemble_context(payload: dict[str, Any], required: set[str], limit: int) -> str:
+def assemble_context(payload: dict[str, Any], required: set[str], limit: int, *,
+                     priorities: dict[str, int] | None = None,
+                     field_limits: dict[str, int] | None = None,
+                     item_priority: Callable[[str, Any], tuple] | None = None) -> str:
     result = {key: deepcopy(value) for key, value in payload.items() if key in required}
     optional: list[tuple[tuple[str, ...], Any]] = []
 
@@ -41,6 +44,51 @@ def assemble_context(payload: dict[str, Any], required: set[str], limit: int) ->
         raise RequiredInputTooLarge(
             f"required_input_too_large: limit_chars={limit}, required_chars={len(dump())}"
         )
+    if priorities is not None or field_limits is not None or item_priority is not None:
+        # 全部类型的完整对象共同排序；目录不能靠字段顺序抢走行动证据。
+        candidates = []
+        for order, (path, value) in enumerate(optional):
+            label = ".".join(path)
+            priority = (priorities or {}).get(label, (priorities or {}).get(path[0], 5))
+            values = list(enumerate(value)) if isinstance(value, list) else [(None, value)]
+            for index, item in values:
+                rank = item_priority(label, item) if item_priority else (priority,)
+                candidates.append((rank, order, index, path, item))
+        candidates.sort(key=lambda candidate: (candidate[0], candidate[1], candidate[2] or 0))
+        for _, _, index, path, item in candidates:
+            parent = result
+            for key in path[:-1]:
+                parent = parent.setdefault(key, {})
+            label = ".".join(path)
+            if index is not None:
+                parent.setdefault(path[-1], []).append(deepcopy(item))
+            else:
+                parent[path[-1]] = deepcopy(item)
+            omitted[label] -= 1
+            fits = len(dump()) <= limit
+            for field, field_limit in (field_limits or {}).items():
+                node = result
+                for key in field.split("."):
+                    node = node.get(key, {}) if isinstance(node, dict) else {}
+                fits = fits and len(json.dumps(node, ensure_ascii=False, separators=(",", ":"))) <= field_limit
+            if fits:
+                continue
+            omitted[label] += 1
+            if index is not None:
+                parent[path[-1]].pop()
+                if not parent[path[-1]]:
+                    parent.pop(path[-1])
+            else:
+                parent.pop(path[-1], None)
+            for depth in range(len(path) - 1, 0, -1):
+                ancestor = result
+                for key in path[:depth - 1]:
+                    ancestor = ancestor[key]
+                if ancestor.get(path[depth - 1]) == {}:
+                    ancestor.pop(path[depth - 1])
+                else:
+                    break
+        return dump()
     for path, value in optional:
         parent = result
         for key in path[:-1]:

@@ -20,7 +20,7 @@ from app.graph.policies import (
 from app.services.model_pricing import calculate_cost_microusd
 from app.services.model_usage import model_request_budget_hook
 from app.services.context_assembler import assemble_context, RequiredInputTooLarge
-from app.services.review_input_context import build_pr_intent, build_context_evidence, make_evidence
+from app.services.review_input_context import build_pr_intent, build_context_evidence, make_evidence, build_retrieval_catalog
 from app.review.input_protocol import CANONICAL_UNIT_INPUT_PROTOCOL, legacy_unit_input_allowed
 from app.services.model_request_budgeter import (
     ModelRequestProfile, PreparedModelRequest, RequestAdmissionError, request_budget_reserver,
@@ -343,14 +343,20 @@ class OpenAICompatibleProvider(LLMProvider):
             '"hypothesis_checks":[{"hypothesis_id":"输入中的ID","status":"supported|refuted|unresolved",'
             '"evidence_ids":[],"reason":"核验理由"}],"contract_dependencies":[{"file_path":"仓库路径",'
             '"symbol":null,"assumption":"依赖的条件","status":"verified|unresolved|conflicting",'
-            '"evidence_ids":[]}],"unresolved_questions":[{"question":"未决问题",'
-            '"affected_files":[],"evidence_ids":[]}]}\n'
+            '"evidence_ids":[]}],"unresolved_questions":[{"id":null,"question":"未决问题",'
+            '"affected_files":[],"evidence_ids":[]}],"question_updates":[{"question_id":"记忆中的问题ID",'
+            '"status":"resolved|superseded","reason":"更新依据","evidence_ids":[],"replacement_id":null}]}\n'
             "checked, supported, refuted, verified and conflicting require evidence IDs. "
             "For a verified/conflicting dependency include evidence from that dependency file.\n"
             "At every level use only the fields listed above. Put dependency explanations in assumption; "
             "the legacy contract_dependencies.reason alias is preserved as explanation in assumption. "
             "unresolved_questions has no reason or status field; "
-            "put its explanation in question. Do not copy input evidence objects into the record.\n"
+            "put its explanation in question. Copy prior question IDs from working_memory to update them; "
+            "new questions use id=null or a unique response-local alias, which the server replaces with a stable ID. "
+            "Omission does not resolve a prior question. Explicit question_updates may retire only visible prior "
+            "questions: resolved requires current evidence IDs; superseded requires replacement_id of an active "
+            "prior question or a new question alias from this response. Never guess a prior ID. "
+            "Do not copy input evidence objects into the record.\n"
             "For canonical evidence, each full diff body is supplied once; removed_lines is its "
             "base-side part. Its hash binds body together with removed_lines. Context evidence "
             "refers to a complete chunk in readonly_context, never an unbound source prefix. "
@@ -631,7 +637,8 @@ class OpenAICompatibleProvider(LLMProvider):
             "范围、问题、反证目标、停止条件完全相同的请求只提出一次。"
             "每项必须明确 question、counterevidence_goal、stop_condition，不能直接确认或删除 Issue。"
             "只有证据充分且全部疑点已排除才返回 skip。返回 JSON，中文理由。"
-            "coverage_index 仅用于定位全部 Unit，不表示它们已被本批检查；"
+            "coverage_index 只描述本批 Unit；coverage_manifest 的全局数量和哈希仅供账本核对，"
+            "不会提供批外引用权限，也不表示省略的 Unit 已被检查；"
             "只引用本批 units/risk/evidence 中的完整条目，不推断省略组已完成。"
             '格式：{"decision":"required|uncertain|skip","reason":"理由",'
             '"relationship_ids":[],"evidence_ids":[],"followups":[{"id":"f1",'
@@ -1206,17 +1213,7 @@ class OpenAICompatibleProvider(LLMProvider):
             "language_context": state.get("language_context") or {},
             "unit_diff": state.get("unit_diff") or "",
             "changed_files": state.get("changed_files") or [],
-            "retrieval_catalog": {
-                "files": [item.get("path") for item in state.get("file_index") or []],
-                "symbols": [
-                    {
-                        "file": item.get("file"),
-                        "symbol": item.get("symbol"),
-                        "type": item.get("type"),
-                    }
-                    for item in state.get("symbol_index") or []
-                ],
-            },
+            "retrieval_catalog": build_retrieval_catalog(state),
             "scope": {
                 "commentable_files": scope.get("commentable_files", []),
                 "readable_files": scope.get("readable_files", []),
@@ -1246,7 +1243,7 @@ class OpenAICompatibleProvider(LLMProvider):
             '["需要确认的证据"],"retrieval_suggestions":[],"completion_criteria":"完成条件"}],'
             '"coverage_targets":["覆盖目标"],"initial_action":{"action":"report_issue",'
             '"reason":"中文理由","target_issue_ids":[],"tool_args":{},"human_request":null}}\n\n'
-            f"Bounded Unit input JSON:\n{_assemble_unit_context(payload, {'review_unit', 'unit_diff', 'changed_files', 'scope', 'pr_intent'}, 80_000)}"
+            f"Bounded Unit input JSON:\n{_assemble_unit_context(payload, {'review_unit', 'unit_diff', 'changed_files', 'scope', 'pr_intent'}, 80_000, priorities={'retrieval_catalog': 10}, field_limits={'retrieval_catalog': 8_000})}"
         )
 
     @staticmethod
@@ -1275,13 +1272,7 @@ class OpenAICompatibleProvider(LLMProvider):
             "project": state.get("project_meta") or {},
             "language_context": state.get("language_context") or {},
             "changed_files": [item.get("file_path") for item in state.get("changed_files") or []],
-            "retrieval_catalog": {
-                "files": [item.get("path") for item in state.get("file_index") or []],
-                "symbols": [
-                    {"file": item.get("file"), "symbol": item.get("symbol"), "type": item.get("type")}
-                    for item in state.get("symbol_index") or []
-                ],
-            },
+            "retrieval_catalog": build_retrieval_catalog(state),
             "observed_context": {
                 "files": sorted({snippet.get("file") for snippet in context_snippets if snippet.get("file")}),
                 "symbols": sorted({snippet.get("symbol") for snippet in context_snippets if snippet.get("symbol")}),
@@ -1406,7 +1397,7 @@ class OpenAICompatibleProvider(LLMProvider):
             "\"tool_args\":{},\"human_request\":{\"missing_information\":[\"缺失信息\"],"
             "\"known_evidence\":[\"已知证据\"],\"questions\":[\"待确认问题\"],"
             "\"prohibited_operations\":[\"确认前禁止执行的操作\"]}}\n\n"
-            f"Current state JSON:\n{_assemble_unit_context(compact, {'phase', 'execution_budget', 'changed_files', 'repair_feedback'} | ({'review_unit', 'unit_diff', 'unit_plan', 'pr_intent', 'working_memory', 'memory_evidence', 'evidence_catalog'} if unit_agent else set()), 50_000)}"
+            f"Current state JSON:\n{_assemble_unit_context(compact, {'phase', 'execution_budget', 'changed_files', 'repair_feedback'} | ({'review_unit', 'unit_diff', 'unit_plan', 'pr_intent', 'working_memory', 'memory_evidence', 'evidence_catalog'} if unit_agent else set()), 50_000, priorities={'observed_context.snippets': 0, 'observed_context.previous_plan': 1, 'observed_context.previous_result': 1, 'retrieval_catalog': 10}, field_limits={'retrieval_catalog': 6_000})}"
         )
 
     @staticmethod
@@ -1516,11 +1507,11 @@ def build_provider(
     )
 
 
-def _assemble_unit_context(payload, required, limit, stage=None):
+def _assemble_unit_context(payload, required, limit, stage=None, **selection):
     if stage:
         payload = {"input_stage": stage, **payload}
         required = {*required, "input_stage"}
     try:
-        return assemble_context(payload, required, limit)
+        return assemble_context(payload, required, limit, **selection)
     except RequiredInputTooLarge as exc:
         raise LLMProviderError(str(exc)) from exc

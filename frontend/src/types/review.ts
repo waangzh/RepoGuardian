@@ -501,6 +501,7 @@ export interface UnitContractDependency {
 }
 
 export interface UnitUnresolvedQuestion {
+  id?: string | null;
   question: string;
   affected_files: string[];
   evidence_ids: string[];
@@ -513,6 +514,13 @@ export interface UnitReviewRecord {
   hypothesis_checks: UnitHypothesisCheck[];
   contract_dependencies: UnitContractDependency[];
   unresolved_questions: UnitUnresolvedQuestion[];
+  question_updates?: Array<{
+    question_id: string;
+    status: "resolved" | "superseded";
+    reason: string;
+    evidence_ids: string[];
+    replacement_id?: string | null;
+  }>;
 }
 
 export interface UnitReviewSummary {

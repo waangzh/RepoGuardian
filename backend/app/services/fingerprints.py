@@ -7,7 +7,7 @@ import json
 import re
 from typing import Any, Iterable
 
-DIAGNOSIS_INPUT_VERSION = "provider-memory-v5-unit-context-v3-request-admission-v1-canonical-evidence-v2"
+DIAGNOSIS_INPUT_VERSION = "provider-memory-v6-ranked-context-question-updates-v1-canonical-evidence-v2"
 
 
 def stable_hash(value: Any) -> str:
