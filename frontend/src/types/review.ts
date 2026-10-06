@@ -656,6 +656,14 @@ export interface UnitInputCoverage {
   omitted_components: string[];
   omitted_targets: string[];
   omitted_plan?: UnitReviewPlan | null;
+  omitted_context?: Array<{
+    file_path: string;
+    start_line: number;
+    end_line: number;
+    content_hash: string;
+    reason: string;
+    diagnosis_admission: Record<string, unknown>;
+  }>;
 }
 
 export interface ReviewUnitResult {
