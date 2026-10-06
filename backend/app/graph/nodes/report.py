@@ -11,6 +11,8 @@ from app.services.review_rebuild import rebuild_task_from_state
 from app.services.report_service import ReportService
 from app.services.model_usage import append_usage, unpack_model_call
 from app.services.review_manifest import build_review_manifest, coordination_coverage
+from app.models.review import ReviewUnitResult
+from app.review.unit_completion import review_unit_coverage_warning
 
 logger = logging.getLogger("RepoGuardian.Node")
 
@@ -67,6 +69,7 @@ async def report_node(state: ReviewState) -> ReviewState:
         **manifest_state,
         "review_coverage": manifest.coverage.model_dump(mode="json"),
         "run_manifest": manifest.model_dump(mode="json"),
+        "warnings": manifest.warnings,
     })
     task = rebuild_task_from_state(report_state)
     markdown = ReportService().generate(task, purpose_summary=purpose_summary)
@@ -79,6 +82,7 @@ async def report_node(state: ReviewState) -> ReviewState:
         model_usages=model_usages,
         review_coverage=manifest.coverage.model_dump(mode="json"),
         run_manifest=manifest.model_dump(mode="json"),
+        warnings=manifest.warnings,
         step_progress=append_step(state, "report", "completed", "报告已生成"),
     )
 
@@ -99,4 +103,6 @@ def _final_status(state: ReviewState) -> str:
         return "failed"
     coordination_status, _ = coordination_coverage(state)
     incomplete_coordination = coordination_status in {"not_run", "failed", "cancelled", "unresolved"}
-    return "completed_with_warnings" if state.get("warnings") or incomplete_coordination else "completed"
+    incomplete_inputs = any(review_unit_coverage_warning(ReviewUnitResult.model_validate(raw))
+                            for raw in state.get("review_unit_results") or [])
+    return "completed_with_warnings" if state.get("warnings") or incomplete_coordination or incomplete_inputs else "completed"

@@ -70,6 +70,12 @@ export function unitFindingLabel(result: ReviewUnitResult | undefined, count: nu
   if (count > 0) return `${count} 条问题记录`;
   if (!result) return "等待审查";
   if (result.status !== "completed") return "检查未完成";
+  if ((result.input_coverage && result.input_coverage.target_coverage !== "complete")
+      || result.plan_skip_reason === "diagnosis_background_budget_degraded"
+      || result.review_summary?.reason === "diagnosis_background_budget_degraded"
+      || result.review_summary?.latest_attempt_reason === "diagnosis_background_budget_degraded") {
+    return "目标覆盖未完整，未报告问题";
+  }
   return "未报告问题";
 }
 
