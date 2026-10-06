@@ -669,6 +669,20 @@ class OpenAICompatibleProvider(LLMProvider):
             "You are a bounded read-only cross-unit coordinator. Return valid JSON only.", 4096)
         return request.estimate(self._model_profiles.get(request.model, self._request_profile))
 
+    def unit_diagnosis_admission(self, pr, files, diff_text, model, record_input) -> dict:
+        """复用诊断的最终提示、消息和输出上限，仅估算，不创建模型或发起请求。"""
+        legacy = legacy_unit_input_allowed.get()
+        prompt = (self._build_prompt(pr, files, diff_text) if legacy else
+                  self._build_unit_review_prompt(pr, files, diff_text, record_input))
+        system = ("You are a strict code review agent. Report only issues with "
+                  "clear evidence. Return valid json only. Do not use Markdown." if legacy else
+                  "Review one bounded Unit. Return structured JSON issues and review_record only.")
+        request = self._prepare_json_request(prompt, model, "diagnosis", system, 4096)
+        try:
+            return request.estimate(self._model_profiles.get(request.model, self._request_profile))
+        except RequestAdmissionError as exc:
+            raise LLMProviderError(str(exc)) from exc
+
     def _prepare_json_request(self, prompt, model, operation, system, max_tokens):
         return PreparedModelRequest(
             model=model or self._default_model, operation=operation, system=system, prompt=prompt,

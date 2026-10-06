@@ -363,7 +363,7 @@ class ReviewUnitExecutor:
                 else ReviewUnitStatus.failed
             ),
             terminal_reason=terminal_reason,
-            plan_skipped=skip_plan,
+            plan_skipped=result.get("plan_status") == UnitPlanStatus.skipped,
             plan=result.get("unit_plan"),
             plan_status=result.get("plan_status"),
             plan_skip_reason=result.get("plan_skip_reason"),
@@ -442,6 +442,7 @@ class ReviewUnitExecutor:
                 budget, planning_state, 2_400,
                 lambda: self.provider.plan_review_unit(
                     planning_state, state["parent_state"].get("model")),
+                holdback=self._diagnosis_holdback(state),
             )
             plan, usage = unpack_model_call(raw_result)
             self._validate_unit_plan_scope(
@@ -462,9 +463,11 @@ class ReviewUnitExecutor:
             detail = f"{type(exc).__name__}: {exc}"
             return {
                 "budget": budget,
-                "plan_status": (UnitPlanStatus.skipped if "unit_request_budget_exhausted" in str(exc)
+                "plan_status": (UnitPlanStatus.skipped if getattr(exc, "unit_budget_rejection", None)
+                                or "unit_request_budget_exhausted" in str(exc)
                                 else UnitPlanStatus.failed),
-                "plan_skip_reason": ("budget_insufficient" if "unit_request_budget_exhausted" in str(exc)
+                "plan_skip_reason": ("diagnosis_budget_protected" if getattr(exc, "unit_budget_rejection", None)
+                                     else "budget_insufficient" if "unit_request_budget_exhausted" in str(exc)
                                      else "planning_failed"),
                 "plan_error": detail,
                 "model_usages": append_usage(state.get("model_usages") or [], usage),
@@ -549,6 +552,13 @@ class ReviewUnitExecutor:
                 action=AgentActionName.task_done,
                 reason="模型决策请求失败，终止当前 Review Unit",
             )
+            if getattr(exc, "unit_budget_rejection", None) is not None:
+                completed = bool(state.get("issue_round_completed"))
+                action = AgentAction(action=AgentActionName.task_done if completed else AgentActionName.report_issue,
+                    reason="决策额度不足；保留已完成的诊断" if completed else "保护最终诊断预算，跳过可选决策并直接诊断")
+                return {"next_action": action, "budget": budget,
+                    "model_usages": append_usage(state.get("model_usages") or [], usage),
+                    "messages": [*state["messages"], self._event(state["unit"].id, action, "selected", detail)]}
             return {
                 "next_action": action,
                 "budget": budget,
@@ -603,11 +613,11 @@ class ReviewUnitExecutor:
                     terminal_reason,
                 )
             return (
-                AgentAction(action="task_done", reason="Unit 模型调用预算已耗尽"),
+                AgentAction(action="report_issue", reason="模型调用额度不足，进入明确的诊断准入路径"),
                 budget,
                 False,
                 list(state.get("model_usages") or []),
-                ReviewUnitTerminalReason.model_budget_exhausted,
+                None,
             )
         decision_state = self._unit_state(
             state["parent_state"], state["unit"], state["scope"],
@@ -629,6 +639,7 @@ class ReviewUnitExecutor:
         raw_result, budget = await self._call_unit_model(
             budget, decision_state, 1_200,
             lambda: self.provider.decide(decision_state, state["parent_state"].get("model")),
+            holdback=self._diagnosis_holdback(state),
         )
         action, usage = unpack_model_call(raw_result)
         usage = annotate_usage(
@@ -654,12 +665,12 @@ class ReviewUnitExecutor:
             action = AgentAction(action=AgentActionName.task_done, reason="Unit 动作不在只读白名单")
         return action, budget, legacy_review, model_usages, None
 
-    async def _call_unit_model(self, budget, payload, output_tokens, invoke):
+    async def _call_unit_model(self, budget, payload, output_tokens, invoke, *, holdback=None):
         from app.agents.providers import LLMProviderError
         from app.services.model_request_budgeter import UnitRequestLedger
         from app.services.model_usage import unpack_model_call
 
-        ledger = UnitRequestLedger(budget)
+        ledger = UnitRequestLedger(budget, holdback=holdback)
         legacy_token = legacy_unit_input_allowed.set(self.input_mode == "legacy")
         try:
             self._check_provider_protocol()
@@ -683,6 +694,10 @@ class ReviewUnitExecutor:
                 usage.accounted_tokens_estimate = ledger.reserved_tokens
             error = exc if isinstance(exc, LLMProviderError) else LLMProviderError(str(exc))
             error.execution_budget = ledger.budget
+            capacity_error = str(exc).startswith(("model_context_window_exceeded", "model_input_limit_exceeded",
+                                                 "model_output_limit_exceeded", "required_input_too_large"))
+            error.unit_budget_rejection = ledger.rejection or ({"reason": str(exc), "holdback": holdback}
+                if not ledger.reserved_tokens and capacity_error else None)
             raise error from exc if error is not exc else None
         finally:
             legacy_unit_input_allowed.reset(legacy_token)
@@ -1000,27 +1015,11 @@ class ReviewUnitExecutor:
                 "pending_issues": [],
                 "next_action": None,
                 "terminal_reason": ReviewUnitTerminalReason.diagnosis_budget_exhausted,
+                "error": "unit_diagnosis_budget_exhausted: no diagnosis attempt or model call available",
             }
         budget = budget.consume(diagnosis_attempts=1)
-        pr = PullRequestInfo.model_validate(state["parent_state"].get("pr_info") or {})
+        self._remember_unit_state({"budget": budget})
         from app.services.model_usage import annotate_usage, append_usage, unpack_model_call
-
-        record_input = build_record_input(
-            state["unit_files"], state["context"], state.get("unit_plan"),
-            str(state["parent_state"].get("head_sha") or ""),
-            str(state["parent_state"].get("base_sha") or ""),
-        )
-        record_input["pr_intent"] = build_pr_intent(pr)
-        record_input["input_protocol"] = CANONICAL_UNIT_INPUT_PROTOCOL if self.input_mode == "canonical" else "legacy"
-        record_input["working_memory"], _ = build_working_memory(
-            state.get("last_valid_review_summary") or state.get("review_summary"),
-            record_input, state["unit"].id, state.get("latest_review_attempt"),
-        )
-        record_input["review_guidance"] = render_language_rule_context(build_language_context(
-            (item.file_path for item in state["unit_files"]),
-            state["parent_state"].get("file_index") or [],
-            state["parent_state"].get("project_meta") or {},
-        ))
         from app.review.issue_audit import issue_audit_unit
 
         from app.agents.providers import LLMProviderError
@@ -1029,22 +1028,14 @@ class ReviewUnitExecutor:
         observer = unit_budget_snapshot.get()
         if observer is not None:
             observer["diagnosis_pending"] = True
+        args = self._diagnosis_args(state)
+        record_input = args[-1]
         try:
+            args, degradation = self._select_diagnosis_input(state, args=args)
+            record_input = args[-1]
             with issue_audit_unit(state["unit"].id):
                 raw_result, budget = await self._call_unit_model(
-                    budget, record_input, 4_096, lambda: self.provider.review_unit(
-                        pr,
-                        state["unit_files"],
-                        self._enhanced_diff(
-                            state["unit_diff"], state["context"], state.get("unit_plan"),
-                            build_language_context(
-                                (item.file_path for item in state["unit_files"]),
-                                state["parent_state"].get("file_index") or [],
-                                state["parent_state"].get("project_meta") or {},
-                            ),
-                        ),
-                        state["parent_state"].get("model"), record_input,
-                    ),
+                    budget, record_input, 4_096, lambda: self.provider.review_unit(*args),
                 )
         except LLMProviderError as exc:
             usage = annotate_usage(
@@ -1086,6 +1077,12 @@ class ReviewUnitExecutor:
             state.get("review_summary") or state.get("last_valid_review_summary") or UnitReviewSummary(),
             summary, response.review_record,
         )
+        if degradation and summary.status == "reported":
+            # 核心证据诊断可产生候选，但省略的检查目标/工作记忆不能被宣称为完整覆盖。
+            summary = summary.model_copy(update={"status": "unknown", "record": None,
+                "latest_attempt_status": "unknown", "latest_attempt_reason": "diagnosis_background_budget_degraded",
+                "reason": "diagnosis_background_budget_degraded"})
+            latest_attempt = {"status": "unknown", "reason": summary.reason}
         usage = annotate_usage(
             usage,
             accounted_tokens_estimate=usage.accounted_tokens_estimate if usage else None,
@@ -1093,11 +1090,17 @@ class ReviewUnitExecutor:
             unit_complexity=state["unit"].complexity,
         )
         self._remember_unit_state({"review_summary": summary,
+            **({"unit_plan": None, "plan_status": UnitPlanStatus.skipped} if degradation else {}),
             "model_usages": append_usage(state.get("model_usages") or [], usage)})
         if observer is not None:
             observer["diagnosis_pending"] = False
         return {
             "pending_issues": response.issues,
+            **({"unit_plan": None, "plan_status": UnitPlanStatus.skipped,
+                "plan_skip_reason": "diagnosis_background_budget_degraded",
+                "messages": [*state.get("messages", []), AgentEvent(action="report_issue", status="selected",
+                    review_unit_id=state["unit"].id, reason="诊断预算降级：保留完整证据，移除可选规划与工作记忆",
+                    message=json.dumps(degradation, ensure_ascii=False))]} if degradation else {}),
             "review_summary": summary,
             "last_valid_review_summary": (summary if latest_attempt["status"] == "reported"
                                           else state.get("last_valid_review_summary")),
@@ -1105,6 +1108,86 @@ class ReviewUnitExecutor:
             "budget": budget,
             "model_usages": append_usage(state.get("model_usages") or [], usage),
         }
+
+    def _diagnosis_args(self, state, *, core=False):
+        pr = PullRequestInfo.model_validate(state["parent_state"].get("pr_info") or {})
+        plan = None if core else state.get("unit_plan")
+        record_input = build_record_input(state["unit_files"], state["context"], plan,
+            str(state["parent_state"].get("head_sha") or ""), str(state["parent_state"].get("base_sha") or ""))
+        record_input["pr_intent"] = build_pr_intent(pr)
+        record_input["input_protocol"] = CANONICAL_UNIT_INPUT_PROTOCOL if self.input_mode == "canonical" else "legacy"
+        record_input["working_memory"] = {} if core else build_working_memory(
+            state.get("last_valid_review_summary") or state.get("review_summary"), record_input,
+            state["unit"].id, state.get("latest_review_attempt"))[0]
+        language = build_language_context((item.file_path for item in state["unit_files"]),
+            state["parent_state"].get("file_index") or [], state["parent_state"].get("project_meta") or {})
+        record_input["review_guidance"] = render_language_rule_context(language)
+        if core:
+            record_input["input_degradation"] = {"reason": "diagnosis_background_budget_degraded",
+                "omitted": ["unit_plan", "working_memory"], "evidence_coverage": "complete"}
+        return (pr, state["unit_files"], self._enhanced_diff(state["unit_diff"], state["context"], plan, language),
+                state["parent_state"].get("model"), record_input)
+
+    def _diagnosis_estimate(self, args):
+        estimator = getattr(self.provider, "unit_diagnosis_admission", None)
+        if callable(estimator):
+            token = legacy_unit_input_allowed.set(self.input_mode == "legacy")
+            try:
+                return estimator(*args)
+            finally:
+                legacy_unit_input_allowed.reset(token)
+        chars = len(json.dumps(args[-1], ensure_ascii=False, default=str))
+        return {"reserved_tokens": (chars + 3) // 4 + 4096, "count_method": "serialized_unit_arguments"}
+
+    def _select_diagnosis_input(self, state, *, args=None):
+        from app.agents.providers import LLMProviderError
+
+        args = args or self._diagnosis_args(state)
+        try:
+            estimate = self._diagnosis_estimate(args)
+            if state["budget"].can_consume(model_calls=1, token_usage=estimate["reserved_tokens"]):
+                return args, None
+        except LLMProviderError as exc:
+            if not str(exc).startswith(("model_context_window_exceeded", "model_input_limit_exceeded",
+                                        "model_output_limit_exceeded", "required_input_too_large")):
+                raise
+        # 仅降级可选背景。完整 Diff、检索正文、证据 ID/哈希和作者背景始终保留。
+        if not state["parent_state"].get("cross_unit_followup") and (
+            state.get("unit_plan") or args[-1].get("working_memory")
+        ):
+            core = self._diagnosis_args(state, core=True)
+            try:
+                estimate = self._diagnosis_estimate(core)
+                if state["budget"].can_consume(model_calls=1, token_usage=estimate["reserved_tokens"]):
+                    return core, core[-1]["input_degradation"]
+            except LLMProviderError as exc:
+                if not str(exc).startswith(("model_context_window_exceeded", "model_input_limit_exceeded",
+                                            "model_output_limit_exceeded", "required_input_too_large")):
+                    raise
+        return args, None
+
+    def _diagnosis_holdback(self, state):
+        if state.get("issue_round_completed"):
+            return None
+        # 恢复中的一次后续失败不能抹掉此前已完成的同快照诊断，也不能预留已无必要的额外调用。
+        summary = state.get("last_valid_review_summary") or state.get("review_summary")
+        if summary and summary.last_valid_record and summary.last_valid_snapshot:
+            from app.services.review_input_context import input_snapshot
+
+            if summary.last_valid_snapshot == input_snapshot(self._diagnosis_args(state)[-1]):
+                return None
+        from app.agents.providers import LLMProviderError
+
+        try:
+            args, _ = self._select_diagnosis_input(state)
+            estimate = self._diagnosis_estimate(args)
+        except LLMProviderError as exc:
+            if str(exc).startswith(("model_context_window_exceeded", "model_input_limit_exceeded",
+                                    "model_output_limit_exceeded", "required_input_too_large")):
+                exc.unit_budget_rejection = {"reason": "diagnosis_capacity_rejected", "operation": "diagnosis"}
+            raise
+        return {"operation": "diagnosis", "model_calls": 1,
+            "token_usage": estimate["reserved_tokens"], "count_method": estimate["count_method"]}
 
     @staticmethod
     def _remember_unit_state(state):
