@@ -55,7 +55,10 @@ from app.services.review_unit_executor import ReviewUnitExecutor
 from app.review.unit_completion import (
     is_review_unit_budget_exhausted,
     is_review_unit_complete,
+    is_review_unit_execution_complete,
+    review_unit_coverage_warning,
 )
+from app.services.review_manifest import build_review_manifest
 from app.services.review_repository import ReviewRepository
 from app.services.task_queue import ClaimedJob, DatabaseTaskQueue, ReviewWorker
 from app.services.patch_presentation import build_patch_presentation
@@ -871,7 +874,7 @@ class ReviewService:
                 aggregated_issues = list(task.issues)
                 retry_metrics = task.issue_metrics
                 lifecycle_warnings: list[str] = []
-                if is_review_unit_complete(result):
+                if is_review_unit_execution_complete(result):
                     lifecycle_state: ReviewState = {
                         **state,
                         "base_sha": pr.base.sha,
@@ -974,10 +977,13 @@ class ReviewService:
             completed = len(task.review_unit_results) - len(incomplete)
             task.warnings = [
                 warning for warning in task.warnings if "Review Unit" not in warning
+                and not warning.startswith(f"Unit {unit_id} 目标覆盖 ")
             ]
-            task.warnings = list(dict.fromkeys([*task.warnings, *lifecycle_warnings]))
+            task.warnings = list(dict.fromkeys([*task.warnings, *lifecycle_warnings,
+                *(warning for item in task.review_unit_results if (warning := review_unit_coverage_warning(item)))]))
             if incomplete and (
                 completed
+                or any(is_review_unit_execution_complete(item) for item in incomplete)
                 or any(is_review_unit_budget_exhausted(item) for item in incomplete)
             ):
                 task.status = TaskStatus.completed_with_warnings
@@ -1005,6 +1011,22 @@ class ReviewService:
             task.phase = (
                 ReviewPhase.failed if task.status == TaskStatus.failed else ReviewPhase.completed
             )
+            excluded = {item.file_path: item.reason for item in task.excluded_files}
+            task.run_manifest = build_review_manifest({
+                **state, "created_at": task.created_at, "base_sha": pr.base.sha, "head_sha": pr.head.sha,
+                "review_plan": {"planner_version": task.run_manifest.planner_version if task.run_manifest else None,
+                    "changed_files": [{"file_path": item.file_path, "change_type": item.change_type,
+                        "additions": item.additions, "deletions": item.deletions,
+                        "included": item.file_path not in excluded,
+                        "excluded_reason": excluded.get(item.file_path)} for item in task.changed_files]},
+                "review_units": [item.model_dump(mode="json") for item in task.review_units],
+                "review_unit_results": [item.model_dump(mode="json") for item in task.review_unit_results],
+                "review_issues": [item.model_dump(mode="json") for item in task.issues],
+                "model_usages": [item.model_dump(mode="json") for item in task.model_usages],
+                "warnings": task.warnings,
+            }, datetime.now(timezone.utc))
+            task.coverage = task.run_manifest.coverage
+            task.warnings = task.run_manifest.warnings
             task.report_markdown = self._report_service.generate(task)
             self._touch(task)
             self._persist(task)

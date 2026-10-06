@@ -126,6 +126,16 @@ def _append_coverage(lines: list[str], task: ReviewTask) -> None:
                 f"| `{item.file_path}` | {item.status.value} | {_table_cell(item.reason or '-')} |"
             )
         lines.append("")
+    for unit in coverage.units:
+        gap = unit.input_coverage
+        if gap is None or gap.target_coverage == "complete":
+            continue
+        lines.append(f"- Unit {_inline_text(unit.review_unit_id)}：执行状态 {unit.status.value}；"
+                     f"证据输入展示 {gap.evidence_coverage}；目标覆盖 {gap.target_coverage}；"
+                     f"原因 {_inline_text(gap.reason or '未记录')}")
+        for target in gap.omitted_targets:
+            lines.append(f"  - 省略目标：{_inline_text(target)}")
+    lines.append("")
 
 
 def _append_pr_summary(lines: list[str], task: ReviewTask) -> None:

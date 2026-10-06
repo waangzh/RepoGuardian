@@ -12,6 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from app.agents.providers import LLMProvider
 from app.services.review_input_context import build_pr_intent, build_working_memory, complete_line_prefix
 from app.review.input_protocol import CANONICAL_UNIT_INPUT_PROTOCOL, legacy_unit_input_allowed
+from app.review.unit_completion import DIAGNOSIS_BACKGROUND_DEGRADED, review_unit_input_coverage
 from app.services.fingerprints import unit_execution_fingerprint
 from app.models.review import (
     AgentAction,
@@ -40,6 +41,7 @@ from app.models.review import (
     UnitReviewPlan,
     UnitReviewSummary,
     UnitRiskHypothesis,
+    UnitInputCoverage,
 )
 from app.services.review_planner import DeterministicReviewPlanner
 from app.services.unit_review_summary import build_record_input, merge_review_summaries, validate_record
@@ -88,6 +90,7 @@ class _ReviewUnitGraphState(TypedDict, total=False):
     review_summary: UnitReviewSummary
     last_valid_review_summary: UnitReviewSummary | None
     latest_review_attempt: dict[str, Any]
+    input_coverage: UnitInputCoverage | None
 
 
 class ReviewUnitExecutor:
@@ -181,6 +184,7 @@ class ReviewUnitExecutor:
                 context_snippets=snapshot.get("context") or [],
                 plan=snapshot.get("unit_plan"),
                 plan_status=snapshot.get("plan_status") or UnitPlanStatus.skipped,
+                input_coverage=snapshot.get("input_coverage"),
                 model_usages=snapshot.get("model_usages") or [],
             )
         except asyncio.CancelledError:
@@ -212,6 +216,7 @@ class ReviewUnitExecutor:
                 context_snippets=snapshot.get("context") or [],
                 plan=snapshot.get("unit_plan"),
                 plan_status=snapshot.get("plan_status") or UnitPlanStatus.skipped,
+                input_coverage=snapshot.get("input_coverage"),
             )
         finally:
             unit_budget_snapshot.reset(snapshot_token)
@@ -333,6 +338,7 @@ class ReviewUnitExecutor:
                 plan_skip_reason="restored_plan" if restored_plan else graph_state["plan_skip_reason"],
                 review_summary=recovered, last_valid_review_summary=recovered if recovered.last_valid_record else None,
                 latest_review_attempt={"status": recovered.latest_attempt_status or recovered.status, "reason": recovered.reason},
+                input_coverage=review_unit_input_coverage(prior),
                 model_usages=[item.model_dump(mode="json") for item in prior.model_usages])
         self._remember_unit_state(graph_state)
         config = None
@@ -368,6 +374,7 @@ class ReviewUnitExecutor:
             plan_status=result.get("plan_status"),
             plan_skip_reason=result.get("plan_skip_reason"),
             plan_error=result.get("plan_error"),
+            input_coverage=result.get("input_coverage"),
             review_summary=result.get("review_summary") or UnitReviewSummary(),
             issues=result.get("issues") or [],
             context_snippets=[
@@ -1030,8 +1037,24 @@ class ReviewUnitExecutor:
             observer["diagnosis_pending"] = True
         args = self._diagnosis_args(state)
         record_input = args[-1]
+        input_coverage = state.get("input_coverage")
         try:
             args, degradation = self._select_diagnosis_input(state, args=args)
+            if degradation:
+                memory = record_input.get("working_memory") or {}
+                omitted_targets = list(dict.fromkeys([
+                    *(target for target in record_input["targets"] if target not in args[-1]["targets"]),
+                    *(item["description"] for item in record_input["hypotheses"]),
+                    *(item["target"] for item in memory.get("target_checks", [])),
+                    *(item["question"] for item in memory.get("unresolved_questions", [])),
+                    *(input_coverage.omitted_targets if input_coverage else []),
+                ]))
+                input_coverage = UnitInputCoverage(
+                    evidence_coverage="complete", reason=DIAGNOSIS_BACKGROUND_DEGRADED,
+                    omitted_components=degradation["omitted"], omitted_targets=omitted_targets,
+                    omitted_plan=state.get("unit_plan") or (input_coverage.omitted_plan if input_coverage else None),
+                )
+                self._remember_unit_state({"input_coverage": input_coverage})
             record_input = args[-1]
             with issue_audit_unit(state["unit"].id):
                 raw_result, budget = await self._call_unit_model(
@@ -1057,6 +1080,7 @@ class ReviewUnitExecutor:
                                     else ReviewUnitTerminalReason.provider_error),
                 "model_usages": append_usage(state.get("model_usages") or [], usage),
                 "latest_review_attempt": {"status": "failed", "reason": str(exc)},
+                "input_coverage": input_coverage,
             }
         response, usage = unpack_model_call(raw_result)
         if self.input_mode == "legacy":
@@ -1083,6 +1107,7 @@ class ReviewUnitExecutor:
                 "latest_attempt_status": "unknown", "latest_attempt_reason": "diagnosis_background_budget_degraded",
                 "reason": "diagnosis_background_budget_degraded"})
             latest_attempt = {"status": "unknown", "reason": summary.reason}
+            input_coverage = input_coverage.model_copy(update={"target_coverage": "partial"})
         usage = annotate_usage(
             usage,
             accounted_tokens_estimate=usage.accounted_tokens_estimate if usage else None,
@@ -1090,12 +1115,14 @@ class ReviewUnitExecutor:
             unit_complexity=state["unit"].complexity,
         )
         self._remember_unit_state({"review_summary": summary,
+            "input_coverage": input_coverage,
             **({"unit_plan": None, "plan_status": UnitPlanStatus.skipped} if degradation else {}),
             "model_usages": append_usage(state.get("model_usages") or [], usage)})
         if observer is not None:
             observer["diagnosis_pending"] = False
         return {
             "pending_issues": response.issues,
+            "input_coverage": input_coverage,
             **({"unit_plan": None, "plan_status": UnitPlanStatus.skipped,
                 "plan_skip_reason": "diagnosis_background_budget_degraded",
                 "messages": [*state.get("messages", []), AgentEvent(action="report_issue", status="selected",
@@ -1195,7 +1222,7 @@ class ReviewUnitExecutor:
 
         observer = unit_budget_snapshot.get()
         if observer is not None:
-            observer.update({key: state[key] for key in ("review_summary", "context", "unit_plan", "plan_status", "model_usages", "budget") if key in state})
+            observer.update({key: state[key] for key in ("review_summary", "context", "unit_plan", "plan_status", "model_usages", "budget", "input_coverage") if key in state})
 
     @staticmethod
     def _failure_summary(snapshot, reason):

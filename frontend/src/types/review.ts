@@ -649,6 +649,15 @@ export interface CrossUnitRuntimeMetrics {
   confirmed_count: number;
 }
 
+export interface UnitInputCoverage {
+  evidence_coverage: "complete" | "partial" | "unknown";
+  target_coverage: "complete" | "partial" | "unknown";
+  reason?: string | null;
+  omitted_components: string[];
+  omitted_targets: string[];
+  omitted_plan?: UnitReviewPlan | null;
+}
+
 export interface ReviewUnitResult {
   review_unit_id: string;
   input_fingerprint?: string | null;
@@ -659,6 +668,7 @@ export interface ReviewUnitResult {
   plan_status?: "planned" | "skipped" | "failed" | null;
   plan_skip_reason?: string | null;
   plan_error?: string | null;
+  input_coverage?: UnitInputCoverage | null;
   review_summary: UnitReviewSummary;
   issues: ReviewIssue[];
   issue_metrics: IssueMetrics;
@@ -709,6 +719,7 @@ export interface ReviewCoverage {
     eligible: boolean;
     status: ReviewFileStatus;
     review_unit_ids: string[];
+    omitted_targets?: string[];
     reason?: string | null;
   }>;
   units: Array<{
@@ -717,6 +728,7 @@ export interface ReviewCoverage {
     status: ReviewUnitStatus;
     terminal_reason?: ReviewUnitTerminalReason | null;
     failure_reason?: string | null;
+    input_coverage?: UnitInputCoverage | null;
     model_calls: number;
     tokens: number;
     duration_ms: number;

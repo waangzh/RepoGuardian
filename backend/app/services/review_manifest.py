@@ -23,6 +23,9 @@ from app.models.review import (
 from app.review.unit_completion import (
     is_review_unit_budget_exhausted,
     is_review_unit_complete,
+    is_review_unit_execution_complete,
+    review_unit_input_coverage,
+    review_unit_coverage_warning,
 )
 
 
@@ -65,7 +68,7 @@ def build_review_manifest(state: dict[str, Any], completed_at: datetime) -> Revi
             and all(is_review_unit_complete(result) for result in unit_results)
         ):
             status, reason = ReviewFileStatus.reviewed, None
-        elif any(is_review_unit_complete(result) for result in unit_results):
+        elif any(is_review_unit_execution_complete(result) for result in unit_results):
             status, reason = ReviewFileStatus.partial, _result_summary(
                 unit_results, missing_units=len(unit_ids) - len(unit_results)
             )
@@ -91,6 +94,8 @@ def build_review_manifest(state: dict[str, Any], completed_at: datetime) -> Revi
             status=status,
             review_unit_ids=unit_ids,
             reason=reason,
+            omitted_targets=list(dict.fromkeys(target for result in unit_results
+                if (gap := review_unit_input_coverage(result)) for target in gap.omitted_targets)),
         ))
 
     unit_coverage: list[ReviewUnitCoverage] = []
@@ -103,6 +108,7 @@ def build_review_manifest(state: dict[str, Any], completed_at: datetime) -> Revi
             status=result.status if result else ReviewUnitStatus.pending,
             terminal_reason=result.terminal_reason if result else None,
             failure_reason=result.error if result else "unit_not_executed",
+            input_coverage=review_unit_input_coverage(result) if result else None,
             model_calls=len(usages),
             tokens=sum(usage.actual_total_tokens or usage.accounted_tokens_estimate or 0 for usage in usages),
             duration_ms=sum(usage.latency_ms for usage in usages),
@@ -175,7 +181,8 @@ def build_review_manifest(state: dict[str, Any], completed_at: datetime) -> Revi
         coverage=coverage,
         coordination_metrics=coordination.runtime_metrics if coordination else None,
         coordination_fingerprint=coordination.runtime_fingerprint if coordination else None,
-        warnings=list(state.get("warnings") or []),
+        warnings=list(dict.fromkeys([*(state.get("warnings") or []),
+            *(warning for result in results.values() if (warning := review_unit_coverage_warning(result)))])),
     )
 
 
@@ -209,7 +216,8 @@ def _result_summary(
     results: list[ReviewUnitResult], *, missing_units: int = 0
 ) -> str:
     reasons = [
-        result.error or (result.terminal_reason.value if result.terminal_reason else result.status.value)
+        result.error or review_unit_coverage_warning(result)
+        or (result.terminal_reason.value if result.terminal_reason else result.status.value)
         for result in results
     ]
     if missing_units:

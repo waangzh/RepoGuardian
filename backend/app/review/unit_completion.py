@@ -5,6 +5,7 @@ from app.models.review import (
     ReviewUnitResult,
     ReviewUnitStatus,
     ReviewUnitTerminalReason,
+    UnitInputCoverage,
 )
 
 
@@ -25,12 +26,44 @@ def is_review_unit_budget_exhausted(result: ReviewUnitResult) -> bool:
     return result.terminal_reason in BUDGET_EXHAUSTED_TERMINAL_REASONS
 
 
-def is_review_unit_complete(result: ReviewUnitResult) -> bool:
-    """兼容旧 snapshot；未知或非成功终止原因默认不视为完整完成。"""
+DIAGNOSIS_BACKGROUND_DEGRADED = "diagnosis_background_budget_degraded"
+
+
+def review_unit_input_coverage(result: ReviewUnitResult) -> UnitInputCoverage | None:
+    """仅识别明确的降级标记；旧记录和显式 legacy 的 unknown 不等于降级。"""
+    if result.input_coverage is not None:
+        return result.input_coverage
+    if DIAGNOSIS_BACKGROUND_DEGRADED in (
+        result.plan_skip_reason, result.review_summary.reason,
+        result.review_summary.latest_attempt_reason,
+    ):
+        return UnitInputCoverage(reason=DIAGNOSIS_BACKGROUND_DEGRADED,
+            omitted_components=["unit_plan", "working_memory"])
+    return None
+
+
+def is_review_unit_execution_complete(result: ReviewUnitResult) -> bool:
+    """执行完成允许收集候选；覆盖缺口不能把这些候选丢弃。"""
     return (
         result.status == ReviewUnitStatus.completed
         and result.terminal_reason in _COMPLETE_TERMINAL_REASONS
     )
+
+
+def is_review_unit_complete(result: ReviewUnitResult) -> bool:
+    coverage = review_unit_input_coverage(result)
+    return is_review_unit_execution_complete(result) and (
+        coverage is None or coverage.target_coverage == "complete"
+    )
+
+
+def review_unit_coverage_warning(result: ReviewUnitResult) -> str | None:
+    coverage = review_unit_input_coverage(result)
+    if coverage is None or coverage.target_coverage == "complete":
+        return None
+    targets = "；".join(coverage.omitted_targets) or "未记录具体省略目标"
+    return (f"Unit {result.review_unit_id} 目标覆盖 {coverage.target_coverage}："
+            f"{coverage.reason or 'diagnosis_input_incomplete'}；省略目标：{targets}")
 
 
 def is_reusable_review_unit_result(result: ReviewUnitResult) -> bool:
