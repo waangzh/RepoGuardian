@@ -13,6 +13,7 @@ from app.models.review import (
     IssueVerification, ModelCallResult, ModelUsage, UnitReviewResponse,
 )
 from app.services.fingerprints import stable_hash
+from app.services.coordination_catalog import CATALOG_BATCH_VERSION
 from app.services.model_usage import unpack_model_call, model_request_budget_hook
 from app.services.model_request_budgeter import request_budget_reserver
 
@@ -67,7 +68,7 @@ def coordination_fingerprint(state: dict) -> str:
         "request_profile": settings.repoguardian_model_request_profile.model_dump(mode="json"),
         "model_profiles": {key: value.model_dump(mode="json") for key, value in
                            settings.repoguardian_model_request_profiles.items()},
-        "catalog_version": "coordination-reference-catalog-batches-v3",
+        "catalog_version": CATALOG_BATCH_VERSION,
         "request_contract_version": "coordination-canonical-evidence-allocation-v3",
         "repository": (state.get("pr_info") or {}).get("clone_url"),
         "base_sha": state.get("base_sha"), "head_sha": state.get("head_sha"),

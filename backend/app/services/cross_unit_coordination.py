@@ -83,6 +83,7 @@ class CrossUnitCoordinationService:
                    for raw in state.get("changed_files") or []}
         evidence: dict[str, dict] = {}
         summaries = []
+        repository_files = {item["path"] for item in state.get("file_index") or [] if item.get("path")}
         for unit in units:
             result = results.get(unit.id)
             if result is None:
@@ -98,11 +99,15 @@ class CrossUnitCoordinationService:
                 str(state.get("base_sha") or ""),
             )
             trusted = {item.id: item.model_dump(mode="json") for item in result.review_summary.evidence}
+            readable = repository_files | set(unit.primary_files) | set(unit.related_files)
+            restored_ids = []
             for item in records["evidence"]:
                 reference = {key: value for key, value in item.items() if key != "content"}
-                if trusted.get(item["id"]) == reference:
+                if (trusted.get(item["id"]) == reference and item["file_path"] in readable
+                        and not is_sensitive_repository_change(item["file_path"])):
                     # 协调只规划补查，不以重复的仓库全文直接确认 Issue。
                     evidence[item["id"]] = reference
+                    restored_ids.append(item["id"])
             summaries.append({"unit_id": unit.id, "status": result.status.value,
                               "summary": {
                                   "status": result.review_summary.status,
@@ -114,7 +119,7 @@ class CrossUnitCoordinationService:
                                   "latest_attempt_status": result.review_summary.latest_attempt_status,
                                   "latest_attempt_reason": result.review_summary.latest_attempt_reason,
                                   "reason": result.review_summary.reason,
-                                  "evidence_ids": [key for key in trusted if key in evidence],
+                                  "evidence_ids": restored_ids,
                               }})
         return {
             "risk": state["cross_unit_risk"],
@@ -156,6 +161,11 @@ class CrossUnitCoordinationService:
             selected = [units[key] for key in request.unit_ids]
             primary = {path for unit in selected for path in unit.primary_files}
             readable = primary | {path for unit in selected for path in unit.related_files}
+            # 动态发现的依赖以所选 Unit 实际恢复的证据关联为准；规划文件列表不是证据权限。
+            scoped_ids = {identity for item in payload.get("summaries", [])
+                          if item["unit_id"] in request.unit_ids
+                          for identity in item["summary"].get("evidence_ids", [])}
+            readable.update(evidence[key]["file_path"] for key in scoped_ids if key in evidence)
             if set(request.primary_files) - primary:
                 raise ValueError("followup primary files exceed selected Units")
             if any(is_sensitive_repository_change(path) for path in readable):
