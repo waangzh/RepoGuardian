@@ -98,6 +98,19 @@ class CrossUnitCoordinationService:
                 None, str(state.get("head_sha") or ""),
                 str(state.get("base_sha") or ""),
             )
+            if result.diff_batches:
+                from app.services.unit_worksets import restore_unit_workset_files
+
+                for batch in result.diff_batches:
+                    if batch.result is None:
+                        continue
+                    try:
+                        batch_files = restore_unit_workset_files(unit, files, batch)
+                        batch_records = build_record_input(batch_files, [], None,
+                            str(state.get("head_sha") or ""), str(state.get("base_sha") or ""))
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    records["evidence"].extend(batch_records["evidence"])
             trusted = {item.id: item.model_dump(mode="json") for item in result.review_summary.evidence}
             readable = repository_files | set(unit.primary_files) | set(unit.related_files)
             restored_ids = []
