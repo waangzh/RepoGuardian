@@ -713,6 +713,13 @@ export interface ReviewUnitResult {
   coverage_ledger?: UnitCoverageLedger | null;
   active_evidence_set?: { batch_id: string; manifest_hash: string; hunks: Array<{ manifest_id: string;
     start_offset: number; end_offset: number; evidence_id?: string | null; content_hash: string; source_hunk_hash: string }>; supporting_evidence_ids: string[] } | null;
+  evidence_store?: { version: "unit-evidence-store-v1"; review_unit_id: string; snapshot: Record<string, string>;
+    revision: number; entries: Record<string, { reference: UnitEvidenceReference; snippet: ContextSnippet;
+      discovered_order: number; request_fingerprints: string[] }>; request_groups: Record<string, string[]>;
+    validation_warnings: string[] } | null;
+  context_selection?: { revision: number; stored_count: number; active_evidence_ids: string[];
+    admitted_evidence_ids: string[]; evicted_evidence_ids: string[]; reactivated_evidence_ids: string[];
+    pinned_evidence_ids: string[]; priorities: Record<string, string> } | null;
   review_summary: UnitReviewSummary;
   diff_batches?: Array<{
     id: string;

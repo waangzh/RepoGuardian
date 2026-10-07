@@ -69,7 +69,7 @@ def coordination_fingerprint(state: dict) -> str:
         "model_profiles": {key: value.model_dump(mode="json") for key, value in
                            settings.repoguardian_model_request_profiles.items()},
         "catalog_version": CATALOG_BATCH_VERSION,
-        "request_contract_version": "coordination-canonical-evidence-allocation-v6-bounded-scope-navigation",
+        "request_contract_version": "coordination-canonical-evidence-allocation-v7-active-evidence-store",
         "repository": (state.get("pr_info") or {}).get("clone_url"),
         "base_sha": state.get("base_sha"), "head_sha": state.get("head_sha"),
         "model": state.get("model") or settings.repoguardian_model,
@@ -79,10 +79,19 @@ def coordination_fingerprint(state: dict) -> str:
                      settings.repoguardian_config_version, settings.openai_base_url,
                      (state.get("review_plan") or {}).get("planner_version")],
         "units": state.get("review_units") or [],
-        "results": [{key: item for key, item in result.items() if key not in {"model_usages", "messages", "tool_events"}}
-                    for result in state.get("review_unit_results") or []],
+        "results": [_review_result_identity(result) for result in state.get("review_unit_results") or []],
         "risk": risk,
     })
+
+
+def _review_result_identity(result):
+    """协调只依赖当前记录与活动证据；归档正文及选择操作不进入其输入身份。"""
+    identity = {key: item for key, item in result.items() if key not in {
+        "model_usages", "messages", "tool_events", "evidence_store", "context_selection"}}
+    if "diff_batches" in identity:
+        identity["diff_batches"] = [{**batch, "result": _review_result_identity(batch["result"])
+            if batch.get("result") else None} for batch in identity["diff_batches"]]
+    return identity
 
 
 class CoordinationRuntime:
