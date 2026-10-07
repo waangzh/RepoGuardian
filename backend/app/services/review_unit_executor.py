@@ -46,7 +46,12 @@ from app.models.review import (
     UnitContextOmission,
     UnitDiffBatch,
     UnitReviewRecord,
+    UnitDiffManifest,
+    UnitCoverageLedger,
+    UnitActiveEvidenceSet,
 )
+from app.services.unit_coverage import (build_diff_manifest, new_coverage_ledger, active_evidence_set,
+    update_coverage, rebuild_coverage, coverage_gaps, active_body_chars, MAX_ACTIVE_HUNKS, MAX_ACTIVE_DIFF_CHARS)
 from app.services.review_planner import DeterministicReviewPlanner
 from app.services.unit_review_summary import build_record_input, merge_review_summaries, validate_record
 from app.tools.code_search import CodeSearchTool
@@ -96,6 +101,9 @@ class _ReviewUnitGraphState(TypedDict, total=False):
     latest_review_attempt: dict[str, Any]
     input_coverage: UnitInputCoverage | None
     batch_decision_disabled: bool
+    diff_manifest: UnitDiffManifest
+    coverage_ledger: UnitCoverageLedger
+    active_evidence_set: UnitActiveEvidenceSet
 
 
 class ReviewUnitExecutor:
@@ -179,7 +187,7 @@ class ReviewUnitExecutor:
         except TimeoutError:
             if snapshot.get("diff_batches"):
                 return self._aggregate_diff_batches(unit, snapshot["diff_batches"], snapshot["budget"],
-                    snapshot["input_fingerprint"], reason="review_unit_timed_out")
+                    snapshot["input_fingerprint"], reason="review_unit_timed_out", manifest=snapshot.get("diff_manifest"))
             return ReviewUnitResult(
                 review_unit_id=unit.id,
                 input_fingerprint=snapshot["input_fingerprint"],
@@ -194,6 +202,8 @@ class ReviewUnitExecutor:
                 plan_status=snapshot.get("plan_status") or UnitPlanStatus.skipped,
                 input_coverage=snapshot.get("input_coverage"),
                 model_usages=snapshot.get("model_usages") or [],
+                diff_manifest=snapshot.get("diff_manifest"), coverage_ledger=snapshot.get("coverage_ledger"),
+                active_evidence_set=snapshot.get("active_evidence_set"),
             )
         except asyncio.CancelledError:
             raise
@@ -203,7 +213,7 @@ class ReviewUnitExecutor:
 
             if snapshot.get("diff_batches"):
                 return self._aggregate_diff_batches(unit, snapshot["diff_batches"], snapshot["budget"],
-                    snapshot["input_fingerprint"], reason=f"review_unit_failed:{type(exc).__name__}")
+                    snapshot["input_fingerprint"], reason=f"review_unit_failed:{type(exc).__name__}", manifest=snapshot.get("diff_manifest"))
             usage = exc.usage if isinstance(exc, LLMProviderError) else None
             usage = annotate_usage(
                 usage,
@@ -228,6 +238,8 @@ class ReviewUnitExecutor:
                 plan=snapshot.get("unit_plan"),
                 plan_status=snapshot.get("plan_status") or UnitPlanStatus.skipped,
                 input_coverage=snapshot.get("input_coverage"),
+                diff_manifest=snapshot.get("diff_manifest"), coverage_ledger=snapshot.get("coverage_ledger"),
+                active_evidence_set=snapshot.get("active_evidence_set"),
             )
         finally:
             unit_budget_snapshot.reset(snapshot_token)
@@ -267,9 +279,16 @@ class ReviewUnitExecutor:
         budget = self._budget_for(unit)
         skip_plan = self.planner.should_skip_plan(unit, all_changed)
         batch = state.get("_unit_diff_batch")
+        if self.input_mode == "canonical":
+            manifest = (UnitDiffManifest.model_validate(state["diff_manifest"]) if batch else
+                        build_diff_manifest(unit, unit_files, str(state.get("head_sha") or ""), str(state.get("base_sha") or "")))
+            ledger = (UnitCoverageLedger.model_validate(state["coverage_ledger"]) if batch else new_coverage_ledger(manifest))
+            state = {**state, "diff_manifest": manifest.model_dump(mode="json"),
+                     "coverage_ledger": ledger.model_dump(mode="json"),
+                     "unit_metadata": state.get("unit_metadata") or unit.model_dump(mode="json")}
         if batch:
             budget = batch["budget"]
-            skip_plan = True
+            skip_plan = batch.get("skip_plan", True)
         elif self.input_mode == "canonical" and not state.get("cross_unit_followup"):
             admission = self._workset_admission(unit, unit_files, state, budget)
             minimum = ([unit_files[0].model_copy(update={"hunks": []})]
@@ -277,9 +296,10 @@ class ReviewUnitExecutor:
             minimum_unit = unit.model_copy(update={"primary_files": [unit.primary_files[0]],
                 "diff_hunk_ids": [], "related_files": unit.related_files[:12], "changed_symbols": [],
                 "context_provenance": [], "grouping_reason": "bounded_diff_workset"})
-            if (admission.get("reason") in {"required_input_too_large", "model_context_window_exceeded",
+            if (admission.get("reason") in {"required_input_too_large", "active_hunk_set_exceeded", "model_context_window_exceeded",
                     "model_input_limit_exceeded"} and minimum is not None
-                    and self._workset_admission(minimum_unit, minimum, state, budget)["admitted"]):
+                    and self._workset_admission(minimum_unit, minimum, {key: value for key, value in state.items()
+                        if key not in {"diff_manifest", "coverage_ledger", "unit_metadata"}}, budget)["admitted"]):
                 return await self._execute_diff_batches(unit, unit_files, state, budget)
         followup = state.get("cross_unit_followup")
         followup_plan = None
@@ -315,7 +335,7 @@ class ReviewUnitExecutor:
             "unit_diff": self._unit_diff(unit, by_path),
             "budget": budget,
             "skip_plan": skip_plan,
-            "unit_plan": followup_plan,
+            "unit_plan": followup_plan or (batch.get("plan") if batch else None),
             "plan_status": UnitPlanStatus.skipped if skip_plan else UnitPlanStatus.failed,
             "plan_skip_reason": "small_low_risk_unit" if skip_plan else None,
             "plan_error": None,
@@ -341,6 +361,12 @@ class ReviewUnitExecutor:
             graph_state["batch_decision_disabled"] = batch.get("skip_decision", False)
             graph_state["next_action"] = AgentAction(action=AgentActionName.report_issue,
                 reason="优先诊断当前完整 Diff 工作集，保留其他批次的诊断预算")
+            if not skip_plan:
+                graph_state["next_action"] = None
+        if self.input_mode == "canonical":
+            graph_state.update(diff_manifest=manifest, coverage_ledger=ledger,
+                active_evidence_set=active_evidence_set(manifest, unit_files, unit.id,
+                    (state.get("unit_diff_batch") or {}).get("ranges")))
         from app.services.model_request_budgeter import unit_budget_snapshot
 
         observer = unit_budget_snapshot.get()
@@ -355,6 +381,8 @@ class ReviewUnitExecutor:
             request = build_record_input(unit_files, restored_context, restored_plan,
                 str(state.get("head_sha") or ""), str(state.get("base_sha") or ""))
             request["pr_intent"] = build_pr_intent(state.get("pr_info"))
+            if self.input_mode == "canonical":
+                request["diff_manifest"] = manifest.model_dump(mode="json")
             recovered = merge_review_summaries(prior.review_summary, validate_record(None, request, scope.readable_files), None)
             if recovered.last_valid_record:
                 recovered = recovered.model_copy(update={"record": prior.review_summary.record,
@@ -365,9 +393,16 @@ class ReviewUnitExecutor:
                 plan_status=prior.plan_status if restored_plan else graph_state["plan_status"],
                 plan_skip_reason="restored_plan" if restored_plan else graph_state["plan_skip_reason"],
                 review_summary=recovered, last_valid_review_summary=recovered if recovered.last_valid_record else None,
+                issue_round_completed=bool(recovered.record and recovered.status == "reported"),
                 latest_review_attempt={"status": recovered.latest_attempt_status or recovered.status, "reason": recovered.reason},
                 input_coverage=review_unit_input_coverage(prior),
                 model_usages=[item.model_dump(mode="json") for item in prior.model_usages])
+            if self.input_mode == "canonical":
+                graph_state["coverage_ledger"] = update_coverage(ledger, manifest,
+                    graph_state["active_evidence_set"], recovered, restored_plan)
+        if batch and state.get("batch_supporting_context"):
+            context, admission = self._admit_retrieved_context(graph_state, state["batch_supporting_context"], graph_state["budget"])
+            graph_state.update(context=context, input_coverage=self._retrieval_input_coverage(graph_state, admission))
         if followup and not prior:
             seeds = [item for item in state.get("cross_unit_followup_context") or [] if item.get("file") in scope.readable_files]
             context, admission = self._admit_retrieved_context(graph_state, seeds, graph_state["budget"])
@@ -422,6 +457,8 @@ class ReviewUnitExecutor:
             model_usages=result.get("model_usages") or [],
             error=result.get("error"),
             human_request=result.get("human_request"),
+            diff_manifest=result.get("diff_manifest"), coverage_ledger=result.get("coverage_ledger"),
+            active_evidence_set=result.get("active_evidence_set"),
         )
 
     def _workset_admission(self, unit, files, state, budget, metadata=None):
@@ -429,14 +466,23 @@ class ReviewUnitExecutor:
         from app.agents.providers import LLMProviderError, OpenAICompatibleProvider
         from app.services.context_assembler import RequiredInputTooLarge
 
+        if sum(max(1, len(file.hunks)) for file in files) > MAX_ACTIVE_HUNKS or active_body_chars(files) > MAX_ACTIVE_DIFF_CHARS:
+            return {"admitted": False, "reason": "active_hunk_set_exceeded"}
+
         scope = self.planner.build_scope(unit, state.get("repo_path"), repository_files={
             item["path"] for item in state.get("file_index") or [] if item.get("path")})
         by_path = {file.file_path: file for file in files}
-        parent = {**state, "unit_diff_batch": metadata}
+        parent = {**state, "unit_diff_batch": {key: value for key, value in metadata.items()
+                  if key not in {"admission", "reason"}} if metadata else None}
         trial = {"parent_state": parent, "unit": unit, "scope": scope, "unit_files": files,
-                 "unit_diff": self._unit_diff(unit, by_path), "context": [], "budget": budget}
+                 "unit_diff": self._unit_diff(unit, by_path), "context": [], "budget": budget,
+                 "unit_plan": state.get("batch_plan")}
+        if state.get("diff_manifest"):
+            trial.update(diff_manifest=UnitDiffManifest.model_validate(state["diff_manifest"]),
+                         coverage_ledger=UnitCoverageLedger.model_validate(state["coverage_ledger"]))
         try:
-            decision = self._unit_state(parent, unit, scope, files, budget, [], unit_diff=trial["unit_diff"])
+            decision = self._unit_state(parent, unit, scope, files, budget, [], unit_diff=trial["unit_diff"],
+                                        unit_plan=trial["unit_plan"])
             decision.update(unit_agent=True, issue_round_completed=False, reported_issue_count=0,
                             retrieval_no_new_rounds=0)
             OpenAICompatibleProvider._build_decision_prompt(decision)
@@ -467,6 +513,8 @@ class ReviewUnitExecutor:
         from app.services.model_request_budgeter import unit_budget_snapshot
         from app.review.unit_completion import is_review_unit_complete, is_reusable_review_unit_result
 
+        manifest = UnitDiffManifest.model_validate(state["diff_manifest"])
+
         worksets = build_unit_worksets(unit, files,
             lambda child, selected, metadata: self._workset_admission(child, selected, state, budget, metadata))
         entries = [UnitDiffBatch(**metadata) for _, _, metadata in worksets]
@@ -489,6 +537,14 @@ class ReviewUnitExecutor:
                     [snippet.model_dump(mode="json") for snippet in cached.result.context_snippets],
                     cached.result.plan, str(state.get("head_sha") or ""), str(state.get("base_sha") or ""))
                 request["pr_intent"] = build_pr_intent(state.get("pr_info"))
+                request["diff_manifest"] = state["diff_manifest"]
+                expected_active = active_evidence_set(manifest, selected, child.id, entry.ranges,
+                    [snippet.model_dump(mode="json") for snippet in cached.result.context_snippets])
+                if cached.result.diff_manifest != manifest or cached.result.active_evidence_set != expected_active:
+                    continue
+                restored_memory = self._batch_memory(entries[:index], rebuild_coverage(manifest, entries[:index]))
+                if restored_memory:
+                    request["working_memory"] = build_working_memory(restored_memory, request, child.id)[0]
                 scope = self.planner.build_scope(child, state.get("repo_path"), repository_files={
                     item["path"] for item in state.get("file_index") or [] if item.get("path")})
                 validated = validate_record(cached.result.review_summary.record, request, scope.readable_files)
@@ -501,6 +557,7 @@ class ReviewUnitExecutor:
                     entry.result, entry.status, entry.reason = cached.result, "completed", "restored_valid_batch"
         if observer is not None:
             observer["diff_batches"] = entries
+            observer["diff_manifest"] = manifest
         for index, (child, selected, metadata) in enumerate(worksets):
             entry = entries[index]
             if entry.status == "completed":
@@ -510,7 +567,19 @@ class ReviewUnitExecutor:
                 entry.reason = entry.reason or entry.admission["reason"]
                 continue
             future = [item for item in entries[index + 1:] if item.admission["admitted"] and item.status != "completed"]
-            reserved = sum(item.admission["reserved_tokens"] for item in future)
+            ledger = rebuild_coverage(manifest, entries)
+            shared_plan = next((item.result.plan for item in entries if item.result and item.result.plan), None)
+            forecast = {**state, "coverage_ledger": ledger.model_dump(mode="json"), "batch_plan": shared_plan,
+                        "batch_memory_summary": self._batch_memory(entries[:index], ledger)}
+            current_admission = self._workset_admission(child, selected, forecast, budget, metadata)
+            if not current_admission["admitted"]:
+                entry.status, entry.reason = "skipped", current_admission["reason"]
+                entry.admission = current_admission
+                continue
+            # 公共清单/账本/规划增量只计数一次，避免逐批重渲染整个剩余队列。
+            growth = max(0, current_admission["reserved_tokens"] - entry.admission["reserved_tokens"])
+            entry.admission = current_admission
+            reserved = sum(item.admission["reserved_tokens"] + growth for item in future)
             local = budget.model_copy(update={
                 "max_model_calls": max(budget.model_calls, budget.max_model_calls - len(future)),
                 "max_diagnosis_attempts": max(budget.diagnosis_attempts, budget.max_diagnosis_attempts - len(future)),
@@ -523,7 +592,14 @@ class ReviewUnitExecutor:
             batch_state = {**state, "changed_files": [file.model_dump(mode="json") for file in selected],
                 "review_unit_results": [], "unit_diff_batch": {key: value for key, value in metadata.items()
                     if key not in {"admission", "reason"}}, "_unit_diff_batch": {
-                        "budget": local, "skip_decision": not entry.admission.get("decision_admitted", True)}}
+                        "budget": local, "skip_decision": not entry.admission.get("decision_admitted", True),
+                        "skip_plan": index != 0, "plan": shared_plan}}
+            batch_state["coverage_ledger"] = ledger.model_dump(mode="json")
+            memory = self._batch_memory(entries[:index], ledger)
+            if memory:
+                batch_state["batch_memory_summary"] = memory
+            batch_state["batch_supporting_context"] = [snippet.model_dump(mode="json") for item in entries[:index]
+                if item.result and item.result.review_summary.status == "reported" for snippet in item.result.context_snippets]
             child_snapshot = {"budget": local, "input_fingerprint": unit_execution_fingerprint(
                 child.fingerprint, batch_state, self.provider, self.input_mode)}
             token = unit_budget_snapshot.set(child_snapshot)
@@ -555,16 +631,31 @@ class ReviewUnitExecutor:
                 unit_budget_snapshot.reset(token)
                 if observer is not None:
                     observer.update(budget=budget, diff_batches=entries)
-        return self._aggregate_diff_batches(unit, entries, budget, binding)
+        return self._aggregate_diff_batches(unit, entries, budget, binding, manifest=manifest)
 
     @staticmethod
-    def _aggregate_diff_batches(unit, entries, budget, binding, reason=None):
+    def _batch_memory(entries, ledger):
+        from app.models.review import UnitUnresolvedQuestion
+        memory = next((item.result.review_summary for item in reversed(entries)
+                       if item.result and item.result.review_summary.last_valid_record), None)
+        if memory:
+            return memory.model_copy(update={"last_valid_record": memory.last_valid_record.model_copy(update={
+                "unresolved_questions": [UnitUnresolvedQuestion(id=key, question=item.question,
+                    affected_files=item.affected_files, evidence_ids=item.evidence_ids)
+                    for key, item in ledger.questions.items() if item.status == "pending"]}), "record": None})
+        return None
+
+    @staticmethod
+    def _aggregate_diff_batches(unit, entries, budget, binding, reason=None, manifest=None):
         """只聚合已验证记录；任何未执行批次或记录缺口保留 partial。"""
         results = [entry.result for entry in entries if entry.result is not None]
         batches_complete = all(entry.status == "completed" for entry in entries)
         complete = batches_complete and not reason
+        ledger = rebuild_coverage(manifest, entries) if manifest else None
+        if manifest and coverage_gaps(manifest, ledger):
+            complete, reason = False, reason or "unit_coverage_gate_incomplete"
         records = [result.review_summary.record for result in results if result.review_summary.record]
-        if complete and any(record.unresolved_questions or any(check.status == "unresolved"
+        if complete and not ledger and any(record.unresolved_questions or any(check.status == "unresolved"
                 for check in record.contract_dependencies) for record in records):
             complete, reason = False, "unit_batch_dependencies_unresolved"
         evidence = {item.id: item for result in results for item in result.review_summary.evidence}
@@ -578,8 +669,10 @@ class ReviewUnitExecutor:
                         for entry in entries for check in entry.result.review_summary.record.target_checks],
                     hypothesis_checks=[check.model_copy(update={"hypothesis_id": f"{entry.id}: {check.hypothesis_id}"})
                         for entry in entries for check in entry.result.review_summary.record.hypothesis_checks],
-                    contract_dependencies=[check for record in records for check in record.contract_dependencies],
-                    unresolved_questions=[check for record in records for check in record.unresolved_questions])
+                    contract_dependencies=list({(check.file_path, check.symbol, check.assumption): check
+                        for record in records for check in record.contract_dependencies}.values()),
+                    unresolved_questions=list({check.id: check for record in records for check in record.unresolved_questions
+                        if not ledger or ledger.questions[check.id].status == "pending"}.values()))
                 from app.services.review_input_context import input_snapshot
 
                 previous = results[0].review_summary.latest_attempt_snapshot
@@ -598,7 +691,8 @@ class ReviewUnitExecutor:
         coverage = UnitInputCoverage(evidence_coverage="complete" if evidence_complete else "partial",
             target_coverage="complete" if complete else "partial", reason=reason or (
                 "unit_diff_batches_complete" if complete else "unit_diff_batches_incomplete"),
-            omitted_targets=[entry.id for entry in entries if entry.status != "completed"],
+            omitted_targets=list(dict.fromkeys([*[entry.id for entry in entries if entry.status != "completed"],
+                *(coverage_gaps(manifest, ledger) if manifest else [])])),
             omitted_context=[item for result in results if result.input_coverage
                              for item in result.input_coverage.omitted_context])
         has_progress = any(result.status == ReviewUnitStatus.completed for result in results)
@@ -611,6 +705,8 @@ class ReviewUnitExecutor:
             error=None if has_progress else reason or "unit_diff_batches_not_executed",
             plan_skipped=True, plan_status=UnitPlanStatus.skipped, plan_skip_reason="bounded_diff_worksets",
             input_coverage=coverage, diff_batches=entries, review_summary=summary, execution_budget=budget,
+            diff_manifest=manifest, coverage_ledger=ledger,
+            plan=next((item.plan for item in results if item.plan), None),
             issues=[issue.model_copy(update={"review_unit_id": unit.id}) for result in results for issue in result.issues],
             context_snippets=[item for result in results for item in result.context_snippets],
             messages=[event.model_copy(update={"review_unit_id": unit.id}) for result in results for event in result.messages],
@@ -643,7 +739,8 @@ class ReviewUnitExecutor:
         graph.add_edge("execute_read_tool", "agent_decide")
         graph.add_edge("report_issue", "collect_issue")
         graph.add_edge("collect_issue", "agent_decide")
-        graph.add_edge("finish_unit", END)
+        graph.add_conditional_edges("finish_unit", lambda state: END if state.get("done") or state.get("needs_human") else "agent_decide",
+                                    {END: END, "agent_decide": "agent_decide"})
         return graph
 
     async def _prepare_unit_node(
@@ -866,6 +963,7 @@ class ReviewUnitExecutor:
             unit_plan=state.get("unit_plan"),
             review_summary=state.get("last_valid_review_summary") or state.get("review_summary"),
             latest_attempt=state.get("latest_review_attempt"),
+            coverage_ledger=state.get("coverage_ledger"),
         )
         decision_state.update({
             "unit_agent": True,
@@ -1352,7 +1450,15 @@ class ReviewUnitExecutor:
             "model_usages": append_usage(state.get("model_usages") or [], usage)})
         if observer is not None:
             observer["diagnosis_pending"] = False
+        hierarchy_update = {}
+        if state.get("diff_manifest"):
+            active = active_evidence_set(state["diff_manifest"], state["unit_files"], state["unit"].id,
+                (state["parent_state"].get("unit_diff_batch") or {}).get("ranges"), state["context"])
+            hierarchy_update = {"active_evidence_set": active, "coverage_ledger": update_coverage(
+                state["coverage_ledger"], state["diff_manifest"], active, summary, state.get("unit_plan"))}
+            self._remember_unit_state(hierarchy_update)
         return {
+            **hierarchy_update,
             "pending_issues": response.issues,
             "input_coverage": input_coverage,
             **({"unit_plan": None, "plan_status": UnitPlanStatus.skipped,
@@ -1374,11 +1480,17 @@ class ReviewUnitExecutor:
         record_input = build_record_input(state["unit_files"], state["context"], plan,
             str(state["parent_state"].get("head_sha") or ""), str(state["parent_state"].get("base_sha") or ""))
         record_input["pr_intent"] = build_pr_intent(pr)
+        if state.get("diff_manifest"):
+            record_input.update(diff_manifest=state["diff_manifest"].model_dump(mode="json"),
+                coverage_ledger=state["coverage_ledger"].model_dump(mode="json"),
+                unit_metadata=state["parent_state"]["unit_metadata"],
+                active_evidence_set=active_evidence_set(state["diff_manifest"], state["unit_files"], state["unit"].id,
+                    (state["parent_state"].get("unit_diff_batch") or {}).get("ranges"), state["context"]).model_dump(mode="json"))
         if state["parent_state"].get("unit_diff_batch"):
             record_input["diff_workset"] = state["parent_state"]["unit_diff_batch"]
         record_input["input_protocol"] = CANONICAL_UNIT_INPUT_PROTOCOL if self.input_mode == "canonical" else "legacy"
         record_input["working_memory"] = {} if core else build_working_memory(
-            state.get("last_valid_review_summary") or state.get("review_summary"), record_input,
+            state.get("last_valid_review_summary") or state["parent_state"].get("batch_memory_summary") or state.get("review_summary"), record_input,
             state["unit"].id, state.get("latest_review_attempt"))[0]
         language = build_language_context((item.file_path for item in state["unit_files"]),
             state["parent_state"].get("file_index") or [], state["parent_state"].get("project_meta") or {})
@@ -1459,7 +1571,7 @@ class ReviewUnitExecutor:
 
         observer = unit_budget_snapshot.get()
         if observer is not None:
-            observer.update({key: state[key] for key in ("review_summary", "context", "unit_plan", "plan_status", "model_usages", "budget", "input_coverage") if key in state})
+            observer.update({key: state[key] for key in ("review_summary", "context", "unit_plan", "plan_status", "model_usages", "budget", "input_coverage", "diff_manifest", "coverage_ledger", "active_evidence_set") if key in state})
 
     @staticmethod
     def _failure_summary(snapshot, reason):
@@ -1526,6 +1638,30 @@ class ReviewUnitExecutor:
                     review_unit_id=state["unit"].id,
                 )],
             }
+        if state.get("diff_manifest"):
+            active = active_evidence_set(state["diff_manifest"], state["unit_files"], state["unit"].id,
+                (state["parent_state"].get("unit_diff_batch") or {}).get("ranges"), state["context"])
+            ledger = state["coverage_ledger"]
+            gaps = coverage_gaps(state["diff_manifest"], ledger,
+                active if state["diff_manifest"].review_unit_id != state["unit"].id else None, state.get("unit_plan"))
+            update = {"coverage_ledger": ledger, "active_evidence_set": active}
+            self._remember_unit_state(update)
+            if gaps:
+                if not state["issue_round_completed"] and state["budget"].can_consume(model_calls=1, diagnosis_attempts=1):
+                    return {**update, "done": False, "next_action": AgentAction(action="report_issue",
+                        reason="覆盖门拒绝提前结束，先检查当前活动证据")}
+                previous = state.get("input_coverage")
+                coverage = (previous or UnitInputCoverage()).model_copy(update={"target_coverage":
+                    "unknown" if previous and previous.target_coverage == "unknown" else "partial",
+                    "reason": previous.reason if previous and previous.reason else "unit_coverage_gate_incomplete", "omitted_targets": list(dict.fromkeys([
+                        *(previous.omitted_targets if previous else []), *gaps]))})
+                return {**update, "done": True, "input_coverage": coverage,
+                    "terminal_reason": state.get("terminal_reason") or (ReviewUnitTerminalReason.completed if state["issues"] else ReviewUnitTerminalReason.no_issue),
+                    "messages": [*state["messages"], AgentEvent(action="task_done", reason=action.reason,
+                        status="failed", message="覆盖门未通过；保留未覆盖项与当前有效记录", review_unit_id=state["unit"].id)]}
+            return {**update, "done": True, "terminal_reason": state.get("terminal_reason") or (ReviewUnitTerminalReason.completed if state["issues"] else ReviewUnitTerminalReason.no_issue),
+                "messages": [*state["messages"], AgentEvent(action="task_done", reason=action.reason, status="completed",
+                    message="活动范围覆盖门通过；检查记录不表示正确性证明", review_unit_id=state["unit"].id)]}
         return {
             "done": True,
             "terminal_reason": (
@@ -1610,6 +1746,7 @@ class ReviewUnitExecutor:
         unit_plan: UnitReviewPlan | None = None,
         review_summary: UnitReviewSummary | None = None,
         latest_attempt: dict[str, Any] | None = None,
+        coverage_ledger: UnitCoverageLedger | None = None,
     ) -> dict[str, Any]:
         readable = scope.readable_files
         language_context = build_language_context(
@@ -1621,9 +1758,20 @@ class ReviewUnitExecutor:
         record_input = build_record_input(changed_files, context, unit_plan,
             str(state.get("head_sha") or ""), str(state.get("base_sha") or ""))
         record_input["pr_intent"] = build_pr_intent(state.get("pr_info"))
-        memory, restored = build_working_memory(review_summary, record_input, unit.id, latest_attempt)
+        hierarchy = {}
+        if state.get("diff_manifest"):
+            manifest = UnitDiffManifest.model_validate(state["diff_manifest"])
+            record_input["diff_manifest"] = state["diff_manifest"]
+            hierarchy = {"diff_manifest": state["diff_manifest"],
+                "coverage_ledger": coverage_ledger.model_dump(mode="json") if coverage_ledger else state["coverage_ledger"],
+                "unit_metadata": state["unit_metadata"],
+                "active_evidence_set": active_evidence_set(manifest, changed_files, unit.id,
+                    (state.get("unit_diff_batch") or {}).get("ranges"), context).model_dump(mode="json")}
+        prior = review_summary if review_summary and review_summary.last_valid_record else state.get("batch_memory_summary") or review_summary
+        memory, restored = build_working_memory(prior, record_input, unit.id, latest_attempt)
         restored_ids = {item["id"] for item in restored}
         return {
+            **hierarchy,
             "task_id": state.get("task_id"),
             "review_unit_id": unit.id,
             "review_unit": unit.model_dump(mode="json"),

@@ -4,6 +4,7 @@ import type { ReviewTask, ReviewUnit, ReviewUnitResult } from "../../types/revie
 import EmptyState from "../common/EmptyState.vue";
 import PanelHeader from "../common/PanelHeader.vue";
 import StatusBadge from "../common/StatusBadge.vue";
+import { unitCoverageComplete } from "../../utils/unitCoverage";
 
 const props = defineProps<{
   units: ReviewUnit[];
@@ -14,7 +15,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{ retry: [unitId: string] }>();
 const resultMap = computed(() => new Map(props.results.map((item) => [item.review_unit_id, item])));
-const completed = computed(() => props.results.filter((item) => item.status === "completed").length);
+const completed = computed(() => props.results.filter(unitCoverageComplete).length);
 const progress = computed(() => props.units.length ? Math.round((completed.value / props.units.length) * 100) : 0);
 const terminal = computed(() => ["completed", "completed_with_warnings", "failed", "cancelled"].includes(props.taskStatus || ""));
 const planStatusLabel: Record<string, string> = {
@@ -66,7 +67,8 @@ const skipReasonLabel: Record<string, string> = {
           </details>
         </div>
         <div class="unit-item__status">
-          <StatusBadge :status="resultMap.get(unit.id)?.status || 'pending'" />
+          <StatusBadge :status="resultMap.get(unit.id)?.status === 'completed' && !unitCoverageComplete(resultMap.get(unit.id)!) ? 'warning' : resultMap.get(unit.id)?.status || 'pending'"
+            :label="resultMap.get(unit.id)?.status === 'completed' && !unitCoverageComplete(resultMap.get(unit.id)!) ? '覆盖未完成' : undefined" />
           <small>{{ resultMap.get(unit.id)?.issues.length || 0 }} Issues</small>
           <button
             v-if="terminal && ['failed', 'timed_out'].includes(resultMap.get(unit.id)?.status || '')"

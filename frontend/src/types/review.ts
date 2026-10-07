@@ -666,6 +666,38 @@ export interface UnitInputCoverage {
   }>;
 }
 
+export interface UnitDiffManifest {
+  version: "unit-diff-manifest-v1";
+  review_unit_id: string;
+  snapshot: Record<string, string>;
+  input_hash: string;
+  files: Array<{ file_path: string; change_type: string; hunk_ids: string[] }>;
+  hunks: Array<{ id: string; file_path: string; hunk_id: string; old_start: number; old_length: number;
+    new_start: number; new_length: number; line_count: number; content_hash: string; evidence_id?: string | null }>;
+}
+
+export interface UnitCoverageCheck {
+  status: "pending" | "checked" | "unresolved" | "supported" | "refuted" | "verified" | "conflicting";
+  required: boolean;
+  evidence_ids: string[];
+  reason?: string | null;
+}
+
+export interface UnitCoverageLedger {
+  version: "unit-coverage-ledger-v1";
+  review_unit_id: string;
+  manifest_hash: string;
+  snapshot: Record<string, string>;
+  diff_hunks: Record<string, { status: "pending" | "reviewed" | "needs_followup"; batch_ids: string[];
+    reviewed_ranges: number[][]; evidence_ids: string[]; reason?: string | null }>;
+  targets: Record<string, UnitCoverageCheck>;
+  hypotheses: Record<string, UnitCoverageCheck>;
+  questions: Record<string, { question: string; affected_files: string[]; evidence_ids: string[];
+    status: "pending" | "resolved" | "superseded" }>;
+  dependencies: Record<string, UnitCoverageCheck>;
+  supporting_evidence: Record<string, UnitEvidenceReference>;
+}
+
 export interface ReviewUnitResult {
   review_unit_id: string;
   input_fingerprint?: string | null;
@@ -677,6 +709,10 @@ export interface ReviewUnitResult {
   plan_skip_reason?: string | null;
   plan_error?: string | null;
   input_coverage?: UnitInputCoverage | null;
+  diff_manifest?: UnitDiffManifest | null;
+  coverage_ledger?: UnitCoverageLedger | null;
+  active_evidence_set?: { batch_id: string; manifest_hash: string; hunks: Array<{ manifest_id: string;
+    start_offset: number; end_offset: number; evidence_id?: string | null; content_hash: string; source_hunk_hash: string }>; supporting_evidence_ids: string[] } | null;
   review_summary: UnitReviewSummary;
   diff_batches?: Array<{
     id: string;
