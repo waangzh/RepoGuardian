@@ -2036,6 +2036,21 @@ class UnitInputCoverage(BaseModel):
     omitted_context: list[UnitContextOmission] = Field(default_factory=list)
 
 
+class UnitDiffBatch(BaseModel):
+    """父 Unit 内部工作集；不是额外的顶层 Unit。"""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    parent_unit_id: str
+    input_hash: str
+    version: str
+    ranges: list[dict[str, Any]]
+    admission: dict[str, Any]
+    status: Literal["pending", "completed", "partial", "skipped", "failed"] = "pending"
+    reason: str | None = None
+    result: ReviewUnitResult | None = None
+
+
 class ReviewUnitResult(BaseModel):
     review_unit_id: str
     input_fingerprint: str | None = None
@@ -2047,6 +2062,7 @@ class ReviewUnitResult(BaseModel):
     plan_skip_reason: str | None = None
     plan_error: str | None = None
     input_coverage: UnitInputCoverage | None = None
+    diff_batches: list[UnitDiffBatch] = Field(default_factory=list)
     review_summary: UnitReviewSummary = Field(default_factory=UnitReviewSummary)
     issues: list[ReviewIssue] = Field(default_factory=list)
     context_snippets: list[ContextSnippet] = Field(default_factory=list)

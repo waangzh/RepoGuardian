@@ -678,6 +678,17 @@ export interface ReviewUnitResult {
   plan_error?: string | null;
   input_coverage?: UnitInputCoverage | null;
   review_summary: UnitReviewSummary;
+  diff_batches?: Array<{
+    id: string;
+    parent_unit_id: string;
+    input_hash: string;
+    version: string;
+    ranges: Array<{file_path: string; hunk_id: string; start_offset: number; end_offset: number; content_hash: string}>;
+    admission: Record<string, unknown>;
+    status: "pending" | "completed" | "partial" | "skipped" | "failed";
+    reason?: string | null;
+    result?: ReviewUnitResult | null;
+  }>;
   issues: ReviewIssue[];
   issue_metrics: IssueMetrics;
   context_snippets: ContextSnippet[];

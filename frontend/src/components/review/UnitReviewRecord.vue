@@ -24,6 +24,15 @@ function tone(status: string): string {
   <article class="unit-record">
     <header><div><h3>实际检查记录</h3><p>已检查表示执行过检查，不等于代码正确或问题已确认。</p></div><StatusBadge :status="presentation.tone" :label="presentation.label" /></header>
     <p v-if="retained" class="muted">以下为最近有效检查记录，不表示本轮已完成核验。{{ summary?.latest_attempt_reason }}</p>
+    <section v-if="result?.diff_batches?.length"><h4>分批审查 · {{ result.diff_batches.length }} 个工作集</h4>
+      <p class="muted">每批仅检查其展示范围；未执行或失败的批次不计入完整覆盖。</p>
+      <details v-for="(batch, index) in result.diff_batches" :key="batch.id" class="record-history">
+        <summary>第 {{ index + 1 }} 批 · {{ batch.status === 'completed' ? '已检查' : '覆盖未完成' }}</summary>
+        <p v-for="(range, rangeIndex) in batch.ranges" :key="rangeIndex">{{ range.file_path }} · Diff 行偏移 {{ range.start_offset }}–{{ range.end_offset }}</p>
+        <p>{{ batch.reason }}</p>
+        <p v-if="batch.result?.review_summary.record">{{ batch.result.review_summary.record.change_summary }}</p>
+      </details>
+    </section>
     <EmptyState v-if="!record" icon="help" title="尚无可用的结构化检查记录" description="可能尚未执行诊断，或旧任务、兼容模型未返回有效记录；不能据此判断无风险。" />
     <template v-else>
       <p class="record-summary">{{ record.change_summary }}</p>
