@@ -1633,6 +1633,7 @@ class ReviewUnitExecutor:
             "pr_intent": record_input["pr_intent"],
             "working_memory": memory,
             "memory_evidence": restored,
+            "evidence_snapshot": record_input["snapshot"],
             "evidence_catalog": [{key: value for key, value in item.items() if key != "content"}
                                  for item in record_input["evidence"]],
             "project_meta": state.get("project_meta") or {},
