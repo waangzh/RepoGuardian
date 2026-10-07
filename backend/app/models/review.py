@@ -2119,6 +2119,38 @@ class UnitActiveEvidenceSet(BaseModel):
     supporting_evidence_ids: list[str] = Field(default_factory=list)
 
 
+class UnitStoredEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reference: UnitEvidenceReference
+    snippet: ContextSnippet
+    discovered_order: int = Field(ge=0)
+    request_fingerprints: list[str] = Field(default_factory=list)
+
+
+class UnitEvidenceStore(BaseModel):
+    """窗口外的 supporting evidence；归档条目不自动成为当前可引用证据。"""
+    model_config = ConfigDict(extra="forbid")
+    version: Literal["unit-evidence-store-v1"] = "unit-evidence-store-v1"
+    review_unit_id: str
+    snapshot: dict[str, str]
+    revision: int = Field(default=0, ge=0)
+    entries: dict[str, UnitStoredEvidence] = Field(default_factory=dict)
+    request_groups: dict[str, list[str]] = Field(default_factory=dict)
+    validation_warnings: list[str] = Field(default_factory=list)
+
+
+class UnitContextSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: int = Field(ge=0)
+    stored_count: int = Field(ge=0)
+    active_evidence_ids: list[str]
+    admitted_evidence_ids: list[str] = Field(default_factory=list)
+    evicted_evidence_ids: list[str] = Field(default_factory=list)
+    reactivated_evidence_ids: list[str] = Field(default_factory=list)
+    pinned_evidence_ids: list[str] = Field(default_factory=list)
+    priorities: dict[str, str] = Field(default_factory=dict)
+
+
 class UnitDiffBatch(BaseModel):
     """父 Unit 内部工作集；不是额外的顶层 Unit。"""
 
@@ -2149,6 +2181,8 @@ class ReviewUnitResult(BaseModel):
     diff_manifest: UnitDiffManifest | None = None
     coverage_ledger: UnitCoverageLedger | None = None
     active_evidence_set: UnitActiveEvidenceSet | None = None
+    evidence_store: UnitEvidenceStore | None = None
+    context_selection: UnitContextSelection | None = None
     review_summary: UnitReviewSummary = Field(default_factory=UnitReviewSummary)
     issues: list[ReviewIssue] = Field(default_factory=list)
     context_snippets: list[ContextSnippet] = Field(default_factory=list)

@@ -26,6 +26,12 @@ function tone(status: string): string {
   <article class="unit-record">
     <header><div><h3>实际检查记录</h3><p>已检查表示执行过检查，不等于代码正确或问题已确认。</p></div><StatusBadge :status="presentation.tone" :label="presentation.label" /></header>
     <p v-if="retained" class="muted">以下为最近有效检查记录，不表示本轮已完成核验。{{ summary?.latest_attempt_reason }}</p>
+    <section v-if="result?.evidence_store"><h4>证据工作集</h4>
+      <p class="muted">已保存 {{ Object.keys(result.evidence_store.entries).length }} 块证据 · 当前活动 {{ result.context_selection?.active_evidence_ids.length || 0 }} 块。</p>
+      <p class="muted">移出工作集的正文仍保存在证据库中；归档 ID 需重新激活后才能作为当前证据引用。</p>
+      <p v-if="result.context_selection?.evicted_evidence_ids.length" class="muted">本轮移出 {{ result.context_selection.evicted_evidence_ids.length }} 块，重新激活 {{ result.context_selection.reactivated_evidence_ids.length }} 块。</p>
+      <p v-if="result.evidence_store.validation_warnings.length" class="muted">{{ result.evidence_store.validation_warnings.length }} 项存储绑定或权限异常，相关条目未恢复。</p>
+    </section>
     <section v-if="result?.diff_manifest && ledger"><h4>Hunk 覆盖 · {{ reviewedHunks }} / {{ result.diff_manifest.hunks.length }}</h4>
       <p class="muted">清单展示完整变更；模型每轮只检查当前活动范围。已检查不等于正确性证明。</p>
       <details class="record-history"><summary>查看完整变更清单与覆盖状态</summary>
