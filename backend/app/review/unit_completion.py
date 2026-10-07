@@ -52,6 +52,13 @@ def is_review_unit_execution_complete(result: ReviewUnitResult) -> bool:
 
 def is_review_unit_complete(result: ReviewUnitResult) -> bool:
     coverage = review_unit_input_coverage(result)
+    if result.diff_batches and not all(
+        batch.status == "completed" and batch.parent_unit_id == result.review_unit_id
+        and batch.result is not None and batch.result.review_unit_id == batch.id
+        and is_review_unit_complete(batch.result) and batch.result.review_summary.status == "reported"
+        for batch in result.diff_batches
+    ):
+        return False
     return is_review_unit_execution_complete(result) and (
         coverage is None or coverage.target_coverage == "complete"
     )

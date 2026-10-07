@@ -56,6 +56,15 @@ def _append_unit_review_records(lines: list[str], task: ReviewTask) -> None:
         questions = "；".join(item.question for item in record.unresolved_questions) if record else "未知"
         lines.append(f"| {_table_cell(result.review_unit_id)} | {checked} | {_table_cell(missing or '-')} | {_table_cell(questions or '-')} |")
     lines.append("")
+    for result in task.review_unit_results:
+        if result.diff_batches:
+            lines.extend([f"### {_inline_text(result.review_unit_id)} 分批覆盖", "",
+                "| 批次 | 状态 | Diff 范围 | 原因 |", "|---|---|---|---|"])
+            for batch in result.diff_batches:
+                ranges = "；".join(f"{item['file_path']}:{item['start_offset']}–{item['end_offset']}"
+                                  for item in batch.ranges)
+                lines.append(f"| {_table_cell(batch.id)} | {batch.status} | {_table_cell(ranges)} | {_table_cell(batch.reason or '-')} |")
+            lines.append("")
 
 
 def _append_cross_unit_risk(lines: list[str], task: ReviewTask) -> None:
