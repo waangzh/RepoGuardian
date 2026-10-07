@@ -57,6 +57,15 @@ def _append_unit_review_records(lines: list[str], task: ReviewTask) -> None:
         lines.append(f"| {_table_cell(result.review_unit_id)} | {checked} | {_table_cell(missing or '-')} | {_table_cell(questions or '-')} |")
     lines.append("")
     for result in task.review_unit_results:
+        if result.diff_manifest and result.coverage_ledger:
+            ledger = result.coverage_ledger
+            reviewed = sum(item.status == "reviewed" for item in ledger.diff_hunks.values())
+            pending = [item.hunk_id for item in result.diff_manifest.hunks
+                       if ledger.diff_hunks.get(item.id) is None or ledger.diff_hunks[item.id].status != "reviewed"]
+            lines.extend([f"### {_inline_text(result.review_unit_id)} Hunk 覆盖账本", "",
+                f"已检查 {reviewed}/{len(result.diff_manifest.hunks)} 个 Hunk；检查状态不表示正确性证明。",
+                "未完成范围：" + _inline_text("；".join(pending) or "无"), "",
+                f"待解决问题：{sum(item.status == 'pending' for item in ledger.questions.values())}", ""])
         if result.diff_batches:
             lines.extend([f"### {_inline_text(result.review_unit_id)} 分批覆盖", "",
                 "| 批次 | 状态 | Diff 范围 | 原因 |", "|---|---|---|---|"])
