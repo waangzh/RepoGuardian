@@ -161,6 +161,13 @@ def build_working_memory(summary: UnitReviewSummary | None, record_input: dict,
         summary.record_history[-1] if summary.record_history and not summary.latest_attempt_snapshot else None
     )) if summary else None
     invalidated = bool(summary and summary.last_valid_snapshot and summary.last_valid_snapshot != input_snapshot(record_input))
+    if invalidated and record_input.get("diff_manifest"):
+        current_snapshot = input_snapshot(record_input)
+        prior = summary.last_valid_snapshot
+        # 同一完整 Manifest 内允许活动范围切换；未展示的旧证据仍按下方逻辑失效。
+        invalidated = not (prior.get("diff_manifest_hash") == current_snapshot.get("diff_manifest_hash")
+            and all(prior.get(key) == current_snapshot.get(key) for key in (
+                "head_sha", "base_sha", "input_version", "pr_intent_hash", "provider_input_protocol")))
     stale_record = record if invalidated else None
     if invalidated:
         record = None
@@ -225,4 +232,6 @@ def input_snapshot(record_input: dict) -> dict[str, str]:
     snapshot["pr_intent_hash"] = str((record_input.get("pr_intent") or {}).get("intent_hash") or "")
     snapshot["provider_input_protocol"] = str(record_input.get("input_protocol") or "canonical-evidence-v3")
     snapshot["review_scope_hash"] = stable_hash([record_input.get("targets") or [], record_input.get("hypotheses") or []])
+    if record_input.get("diff_manifest"):
+        snapshot["diff_manifest_hash"] = str(record_input["diff_manifest"]["input_hash"])
     return snapshot

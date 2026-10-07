@@ -12,6 +12,8 @@ const presentation = computed(() => unitRecordPresentation(summary.value));
 const record = computed(() => presentation.value.record);
 const retained = computed(() => presentation.value.retained);
 const evidence = computed(() => summary.value?.evidence || []);
+const ledger = computed(() => props.result?.coverage_ledger);
+const reviewedHunks = computed(() => Object.values(ledger.value?.diff_hunks || {}).filter((item) => item.status === "reviewed").length);
 function hypothesis(id: string): string {
   return props.result?.plan?.risk_hypotheses.find((item) => item.id === id)?.description || `假设 ${id}`;
 }
@@ -24,6 +26,13 @@ function tone(status: string): string {
   <article class="unit-record">
     <header><div><h3>实际检查记录</h3><p>已检查表示执行过检查，不等于代码正确或问题已确认。</p></div><StatusBadge :status="presentation.tone" :label="presentation.label" /></header>
     <p v-if="retained" class="muted">以下为最近有效检查记录，不表示本轮已完成核验。{{ summary?.latest_attempt_reason }}</p>
+    <section v-if="result?.diff_manifest && ledger"><h4>Hunk 覆盖 · {{ reviewedHunks }} / {{ result.diff_manifest.hunks.length }}</h4>
+      <p class="muted">清单展示完整变更；模型每轮只检查当前活动范围。已检查不等于正确性证明。</p>
+      <details class="record-history"><summary>查看完整变更清单与覆盖状态</summary>
+        <p v-for="hunk in result.diff_manifest.hunks" :key="hunk.id">{{ hunk.file_path }} · {{ hunk.hunk_id }} · {{ ledger.diff_hunks[hunk.id]?.status || 'pending' }}</p>
+      </details>
+      <p class="muted">待解决问题 {{ Object.values(ledger.questions).filter((item) => item.status === 'pending').length }} 个</p>
+    </section>
     <section v-if="result?.diff_batches?.length"><h4>分批审查 · {{ result.diff_batches.length }} 个工作集</h4>
       <p class="muted">每批仅检查其展示范围；未执行或失败的批次不计入完整覆盖。</p>
       <details v-for="(batch, index) in result.diff_batches" :key="batch.id" class="record-history">

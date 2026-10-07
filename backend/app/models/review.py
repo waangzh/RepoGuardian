@@ -2036,6 +2036,89 @@ class UnitInputCoverage(BaseModel):
     omitted_context: list[UnitContextOmission] = Field(default_factory=list)
 
 
+class DiffManifestHunk(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    file_path: str
+    hunk_id: str
+    old_start: int = 0
+    old_length: int = 0
+    new_start: int = 0
+    new_length: int = 0
+    line_count: int = Field(ge=0)
+    content_hash: str
+    evidence_id: str | None = None
+
+
+class UnitDiffManifest(BaseModel):
+    """不可引用的完整变更清单；正文仅存在于活动证据中。"""
+    model_config = ConfigDict(extra="forbid")
+    version: Literal["unit-diff-manifest-v1"] = "unit-diff-manifest-v1"
+    review_unit_id: str
+    snapshot: dict[str, str]
+    input_hash: str
+    files: list[dict[str, Any]]
+    hunks: list[DiffManifestHunk]
+
+
+class UnitHunkCoverage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["pending", "reviewed", "needs_followup"] = "pending"
+    batch_ids: list[str] = Field(default_factory=list)
+    reviewed_ranges: list[list[int]] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    reason: str | None = None
+
+
+class UnitCoverageCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["pending", "checked", "unresolved", "supported", "refuted", "verified", "conflicting"] = "pending"
+    required: bool = True
+    evidence_ids: list[str] = Field(default_factory=list)
+    reason: str | None = None
+
+
+class UnitQuestionCoverage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    question: str
+    affected_files: list[str]
+    evidence_ids: list[str]
+    status: Literal["pending", "resolved", "superseded"] = "pending"
+
+
+class UnitCoverageLedger(BaseModel):
+    """服务端推导的覆盖状态，checked/reviewed 不表示正确性证明。"""
+    model_config = ConfigDict(extra="forbid")
+    version: Literal["unit-coverage-ledger-v1"] = "unit-coverage-ledger-v1"
+    review_unit_id: str
+    manifest_hash: str
+    snapshot: dict[str, str]
+    diff_hunks: dict[str, UnitHunkCoverage]
+    targets: dict[str, UnitCoverageCheck] = Field(default_factory=dict)
+    hypotheses: dict[str, UnitCoverageCheck] = Field(default_factory=dict)
+    questions: dict[str, UnitQuestionCoverage] = Field(default_factory=dict)
+    dependencies: dict[str, UnitCoverageCheck] = Field(default_factory=dict)
+    supporting_evidence: dict[str, UnitEvidenceReference] = Field(default_factory=dict)
+
+
+class UnitActiveHunk(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    manifest_id: str
+    start_offset: int = Field(ge=0)
+    end_offset: int = Field(ge=0)
+    evidence_id: str | None = None
+    content_hash: str
+    source_hunk_hash: str
+
+
+class UnitActiveEvidenceSet(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    batch_id: str
+    manifest_hash: str
+    hunks: list[UnitActiveHunk]
+    supporting_evidence_ids: list[str] = Field(default_factory=list)
+
+
 class UnitDiffBatch(BaseModel):
     """父 Unit 内部工作集；不是额外的顶层 Unit。"""
 
@@ -2063,6 +2146,9 @@ class ReviewUnitResult(BaseModel):
     plan_error: str | None = None
     input_coverage: UnitInputCoverage | None = None
     diff_batches: list[UnitDiffBatch] = Field(default_factory=list)
+    diff_manifest: UnitDiffManifest | None = None
+    coverage_ledger: UnitCoverageLedger | None = None
+    active_evidence_set: UnitActiveEvidenceSet | None = None
     review_summary: UnitReviewSummary = Field(default_factory=UnitReviewSummary)
     issues: list[ReviewIssue] = Field(default_factory=list)
     context_snippets: list[ContextSnippet] = Field(default_factory=list)

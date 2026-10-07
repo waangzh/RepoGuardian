@@ -51,6 +51,11 @@ def is_review_unit_execution_complete(result: ReviewUnitResult) -> bool:
 
 
 def is_review_unit_complete(result: ReviewUnitResult) -> bool:
+    if result.diff_manifest is not None or result.coverage_ledger is not None:
+        from app.services.unit_coverage import coverage_gaps
+        active = result.active_evidence_set if result.diff_manifest and result.diff_manifest.review_unit_id != result.review_unit_id else None
+        if coverage_gaps(result.diff_manifest, result.coverage_ledger, active, result.plan):
+            return False
     coverage = review_unit_input_coverage(result)
     if result.diff_batches and not all(
         batch.status == "completed" and batch.parent_unit_id == result.review_unit_id
