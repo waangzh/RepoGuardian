@@ -6,8 +6,9 @@ import hashlib
 import json
 import re
 from typing import Any, Iterable
+from app.services.model_request_budgeter import CONTEXT_BUDGET_VERSION
 
-DIAGNOSIS_INPUT_VERSION = "provider-memory-v14-evidence-store-v1-active-context-v1-diff-manifest-v1-coverage-ledger-v1-unit-diff-worksets-v1-canonical-evidence-v3"
+DIAGNOSIS_INPUT_VERSION = "provider-memory-v15-model-context-budget-v1-evidence-store-v1-active-context-v1-diff-manifest-v1-coverage-ledger-v1-unit-diff-worksets-v1-canonical-evidence-v3"
 
 
 def stable_hash(value: Any) -> str:
@@ -53,8 +54,9 @@ def unit_fingerprint(
         "rule_version": rule_version,
         "prompt_version": prompt_version,
         "diagnosis_input_version": DIAGNOSIS_INPUT_VERSION,
-        "request_profile": settings.repoguardian_model_request_profiles.get(
-            model, settings.repoguardian_model_request_profile).model_dump(mode="json"),
+        "request_profile": settings.resolve_model_profile(model, provider).profile.model_dump(mode="json"),
+        "model_profile_source": settings.resolve_model_profile(model, provider).source,
+        "context_budget_version": CONTEXT_BUDGET_VERSION,
         "tool_schema_version": tool_schema_version,
         "planner_version": planner_version,
         "review_policy_version": review_policy_version,
@@ -85,6 +87,10 @@ def unit_execution_fingerprint(unit_fp: str, state: dict, provider: Any, input_m
     model = state.get("model") or getattr(provider, "_default_model", settings.repoguardian_model)
     profiles = getattr(provider, "_model_profiles", settings.repoguardian_model_request_profiles)
     profile = profiles.get(model, getattr(provider, "_request_profile", settings.repoguardian_model_request_profile))
+    resolver = getattr(provider, "resolve_request_profile", None)
+    resolved = resolver(model) if callable(resolver) else settings.resolve_model_profile(model)
+    if callable(resolver):
+        profile = resolved.profile
     return stable_hash({
         "unit_fp": unit_fp, "input_version": DIAGNOSIS_INPUT_VERSION, "input_mode": input_mode,
         "head_sha": state.get("head_sha"), "base_sha": state.get("diff_base_sha") or state.get("base_sha"),
@@ -93,6 +99,7 @@ def unit_execution_fingerprint(unit_fp: str, state: dict, provider: Any, input_m
         "provider_type": f"{type(provider).__module__}.{type(provider).__qualname__}",
         "endpoint": getattr(provider, "_base_url", settings.openai_base_url),
         "profile": profile.model_dump(mode="json"), "prompt": settings.repoguardian_prompt_version,
+        "context_budget_version": CONTEXT_BUDGET_VERSION, "model_profile_source": resolved.source,
         "rules": settings.repoguardian_rule_version, "tools": settings.repoguardian_tool_schema_version,
         "policy": settings.repoguardian_review_policy_version,
     })

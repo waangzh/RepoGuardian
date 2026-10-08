@@ -516,15 +516,16 @@ class ReviewUnitExecutor:
                                         unit_plan=trial["unit_plan"])
             decision.update(unit_agent=True, issue_round_completed=False, reported_issue_count=0,
                             retrieval_no_new_rounds=0)
-            OpenAICompatibleProvider._build_decision_prompt(decision)
+            estimator = getattr(self.provider, "unit_decision_admission", None)
+            if not callable(estimator):
+                OpenAICompatibleProvider._build_decision_prompt(decision)
             estimate = self._diagnosis_estimate(self._diagnosis_args(trial))
             estimate["decision_admitted"] = True
-            estimator = getattr(self.provider, "unit_decision_admission", None)
             if callable(estimator):
                 try:
                     estimator(decision, state.get("model"))
                 except LLMProviderError as exc:
-                    if str(exc).partition(":")[0] not in {"model_context_window_exceeded",
+                    if str(exc).partition(":")[0] not in {"required_input_too_large", "model_context_window_exceeded",
                             "model_input_limit_exceeded", "model_output_limit_exceeded"}:
                         raise
                     estimate["decision_admitted"] = False
