@@ -2,89 +2,25 @@
 
 > 基于证据、理解仓库上下文、严格只读的 AI Pull Request 代码审查 Agent。
 
-RepoGuardian 将 PR 拆分为边界明确的 Review Unit，独立探索上下文、记录实际检查范围，再通过跨 Unit 风险筛查与受限协调发现需要定向补查的契约问题。所有新增候选仍经过证据解析、策略检查和独立验证，最终输出 Issue、Coverage、协作记录和 Run Manifest。
+输入 GitHub PR URL，先预览审查范围，再由 Agent 探索仓库上下文、核验候选问题，输出带代码证据、检查覆盖情况和协作记录的审查报告。
 
-**RepoGuardian Server 永远不执行目标仓库代码。** 测试、构建和运行时验证通过显式配置的 GitHub Project CI 或外部 User Runner 发起，与审查生命周期异步解耦；默认不启用动态验证。
+**RepoGuardian Server 永远不执行目标仓库代码。** 默认进行只读静态审查；测试与构建需另行配置 GitHub Project CI 或外部 User Runner。
 
-[快速开始](#快速开始) · [工作流程](#工作流程) · [安全边界](#安全边界) · [反馈问题](https://github.com/waangzh/RepoGuardian/issues)
+[快速开始](#快速开始) · [如何使用](#如何使用) · [开发与验证](#开发与验证) · [反馈问题](https://github.com/waangzh/RepoGuardian/issues)
 
-> [!IMPORTANT]
-> 项目仍处于早期开发阶段。只读分析可识别 Python、TypeScript/JavaScript、Java、Go、Rust；Python 与 TS/JS 使用 Tree-sitter，其他语言按置信度降级到启发式索引。项目不提供本地 Sandbox，也尚未声明开源许可证。
+## 项目特点
 
-## 核心能力
+- **先预览，再审查**：Preview 展示变更文件、审查单元（Review Unit）、风险标签和预计模型调用数，预览阶段不调用模型。
+- **结合仓库上下文**：Agent 使用只读搜索与文件读取理解关联代码；PR 标题和正文提供背景，但不能替代代码证据。
+- **分工审查与跨组补查**：将变更拆分为独立 Unit，记录检查目标；对契约依赖、结论冲突或覆盖缺口进行受限补查。
+- **证据可追溯**：候选问题经过证据解析、策略检查和独立验证，结果展示代码位置、依据与处理状态。
+- **过程可观察、任务可恢复**：查看检查范围、未决问题、模型用量和耗时；持久化任务与检查记录，恢复时复用兼容的已完成结果。
 
-- **真正的 Unit Plan**：确定性拆分 Review Unit 后，模型输出结构化变更摘要、审查目标和风险假设；Plan 失败会降级为普通审查，不阻断任务。
-- **结构化检查记录**：记录实际检查目标、假设核验、契约依赖、未决问题和证据引用；缺记录或非法引用保留为未知，未报告问题不等于代码正确。
-- **完整上下文与工作记忆**：按完整对象组装输入，保留必需变更和证据；PR 作者意图进入规划、决策和诊断，历史有效检查记录回灌后续决策。
-- **证据化 Issue**：不直接信任模型行号，服务端解析 primary/supporting evidence、位置、来源、resolution status 和简洁审计摘要；Issue 只能锚定当前 PR 的可评论变更文件，不保存或展示隐藏 Chain-of-Thought。
-- **Repository-aware 探索**：`file_find` / `code_search` 可发现整个安全的 Git-tracked repository；`file_read` 仍受敏感路径、realpath/symlink、大小、行数和 Unit 预算限制。
-- **最小只读工具面**：Unit Agent 只使用 `file_find`、`code_search`、`file_read`、`file_read_diff`、`report_issue` 和 `task_done`；只有需要业务语义或安全决策时才使用结构化 `request_human` 控制动作。
-- **分级多语言分析**：语言适配器统一产出符号、导入和调用引用；解析失败自动从 L2 降级到 L1/L0，Review Unit 仍可安全使用文件读取、路径查找和 diff 读取。
-- **Selective Verifier**：确定性 evidence checks 优先，只对高风险、模糊、跨模块或低置信度问题追加模型验证；Verifier 不得提升 severity。
-- **跨 Unit 定向补查**：确定性筛查输出 `required / uncertain / skip`，大目录按风险关系分批规划并记录覆盖；服务端校验范围、引用、重复任务和预算，补查候选独立验证后参与全局汇总。
-- **可审计、失败隔离**：Coverage / Run Manifest 分别报告 File Coverage 与 Unit Coverage，并记录 partial、终止原因、模型用量、耗时和确认问题；单个 Unit 或 Verifier 失败不会抹掉其他有效结果。
-- **持久协调账本**：保存调用预留、计划、补查和验证批次，恢复时复用已完成结果；失败与传输重试计入共享预算，结果未知的调用不会自动重发。
-- **独立 Project CI**：只发送服务端注册的 profile、request ID 和 SHA 绑定信息，不发送模型生成的 shell command；Fork PR 默认不 dispatch。
-
-## 工作流程
-
-![RepoGuardian 架构图](https://github.com/user-attachments/assets/e405f29f-0587-43b1-aac8-1f2a20ab1066)
-
-当前主审查流程由 LangGraph 编排：接收 PR → 准备仓库、解析 diff、索引与项目检测 → 拆分 Review Units 并独立执行 → 解析证据、应用 Issue Policy、选择性验证 → 跨 Unit 风险筛查与受限协调 → 全局去重 → 生成报告。Unit 内部根据工具反馈探索上下文，主图负责调度、边界控制与结果聚合；协调模型负责提出需要跨组核验的问题。
-
-Plan 是待验证的审查指导，不是已确认 Issue，也不是固定步骤队列。后续 Agent 可以根据工具反馈调整动作，并发现 Plan 之外的明确缺陷。
-
-一个文件可能因大型 symbol/hunk 拆分而属于多个 Unit。只有所有 owning Units 都完整完成时，该文件才计为 `reviewed`；部分完成会标记为 `partial`。Unit 的状态和终止原因分开记录：模型、检索或诊断预算耗尽即使保留兼容状态 `completed`，也会被视为未完整完成，触发 warning 和 `completed_with_warnings`，并且不会进入 Evidence Pipeline、同任务 resume 成功集或跨任务复用缓存。
-
-Preview 不调用模型、不运行目标代码，会显示文件和 Unit 范围、风险标签以及原始 Units 的三种调用口径：Plan 调用数、典型预计调用数和预算上限。跨 Unit 协调在审查后触发，可能产生额外调用，不包含在这份 Unit 预估中。
-
-Project CI 是独立异步状态机：Review 可以先完成，Validation 随后处于 Pending、Running 或终态。RepoGuardian 会校验 repository、request ID、head SHA、patch SHA、workflow/run identity 和结构化结果。
-
-### 上下文与模型预算
-
-Plan、Decision、Verifier、去重和 Patch 输入先按完整对象组装，再序列化为 JSON；可选目录项的省略写入输入清单，必需内容超限时返回 `required_input_too_large`，不会通过截断 JSON 发送半份核心输入。诊断使用 canonical evidence：展示的源码正文与可引用证据身份对应，证据绑定仓库快照、文件、来源、实际行范围和内容哈希；上下文按完整行截取，截断状态保存在独立元数据中。
-
-PR 标题与受限正文作为 `source=pr_author`、`trust=unverified` 的业务背景进入 Plan、Decision 和 Diagnosis。作者声明不能替代代码证据或扩大工具权限；完整标题和正文的意图哈希参与复用指纹，即使变化发生在未展示的正文中间部分，也会使旧结果失效。
-
-上下文字符额度、单次模型请求窗口与累计执行预算分别控制。内置 Provider 在发送前检查包含 System/Human、JSON mode 和输出额度的完整请求，并预留调用预算；失败、重试和 usage 缺失不退还预留，实际用量超额时补记。有匹配 tokenizer 时按本地 tokenizer 估算，未知模型使用保守 UTF-8 字节估计；这些计数不等同于供应商的精确计费或能力发现。
-
-默认本地模型窗口为 **16,384 token**，安全余量 **512 token**，部署时应按实际模型能力设置 request profile。窗口超限返回 `model_context_window_exceeded` 等明确拒绝原因；累计预算不足也会阻止后续请求，不能把这类未完成状态解释为没有问题。
-
-生产 Unit 默认要求 Provider 声明 `canonical-evidence-v3` 并实现对应接口。不支持该协议的 Provider 在调用前被拒绝；仅显式配置 `legacy` 才能使用旧 Provider，检查记录保持未知且结果不复用。此处的输入协议模式与下文 Review 工作模式分别配置。
-
-### 跨 Unit 协作
-
-当前默认自动执行风险筛查，并在需要时协调补查、合并验证结果，行为等同于 `auto`；当前版本没有 `off / shadow / auto` 模式选择或对应环境配置。
-
-| 筛查结果 | 含义与后续处理 |
-| --- | --- |
-| `required` | 存在需要核验的契约、依赖或跨组覆盖疑点，生成受限补查计划；协调模型不能将其降级为跳过 |
-| `uncertain` | 关系、索引或检查记录不足，进入受限关系判别；缺证据时保留未决 |
-| `skip` | 当前规则允许跳过跨组协调，不代表整个 PR 已被证明安全 |
-
-筛查结合当前变更、静态关联、Unit 声明的依赖和检查覆盖缺口；静态调用关系本身不等于本次变更存在契约风险，即使原始 Unit 没有报告 Issue，也可能需要补查。
-
-目录超过单批容量时，优先处理契约变化、冲突和依赖缺口，尽量将关联关系放在同批；过大组按完整关系拆分，保留关系两端的 Unit 和摘要。每批提供全 Unit 精简索引，但模型只能引用本批实际加载的条目。单批同时受 **48,000 字符**、模型窗口及输出引用上限约束；规划失败、输入超限和预算不足都会记录批次范围与原因。
-
-分批 proposal 按完整补查任务身份去重，以稳定 ID 合并，最终最多执行 **3 项补查**。每项明确关联 Units、主文件、检查问题、反证目标和停止条件；因数量或预算限制未执行的补查保留为未决。服务端校验当前证据与关系引用、允许范围、重复任务和预算后执行，补查不能扩张到计划之外的读取范围。新增候选单独经过 Evidence → Issue Policy → Independent Verifier，随后进入全局去重；协调模型不能直接确认或删除问题。
-
-协调、所有补查和补查 Verifier 共用任务级预算，默认上限为 **16 次模型调用、120,000 估算 token**，包含传输重试。失败、重启和恢复不返还已消耗预算；实际用量高于估算时补记。补查结果独立保存，不增加原始 Unit 覆盖率分母；零候选不构成反证，反证需要已完成的目标检查和相关 Unit 的证据。
-
-部分批次完成规划不代表整体审查完成。有未覆盖批次、未执行补查或未决问题时，协调保持 `unresolved` 或 `failed`，整体任务可显示 `completed_with_warnings`；目录批次的 `validated` 只表示规划输入与输出通过校验，不表示代码行为已验证。
-
-### 检查记录与恢复
-
-任务 API 返回结构化 JSON：`review_unit_results[].review_summary` 保存各 Unit 的检查记录与证据元数据，`cross_unit_risk` 保存筛查依据，`coordination_plan` 保存计划、预算和运行指标，`coordination_plan.catalog_batches` 保存目录批次的输入哈希、范围与规划状态，`followup_results` 保存补查结果与批次验证状态。Markdown 报告用于阅读，结构化 JSON 用于程序处理；证据引用绑定 base/head SHA、文件、行范围、来源和内容哈希。
-
-有效检查记录投影为 Unit 工作记忆，进入下一轮 Decision 和 Diagnosis，并恢复相关证据正文。后续诊断记录缺失或无效时，`record/status` 保留本轮未知语义，`last_valid_record` 保留此前有效记录；`latest_attempt_status` 与快照单独记录本轮尝试。历史有效记录用于工作记忆、审计和展示，不能代替当前有效诊断参与风险判断；SHA、范围、协议或 PR 意图不兼容时不沿用旧记录。
-
-前端 **检查与协作** 页分别展示实际检查范围、风险理由、关联路径、目录批次覆盖、补查问题、反证目标、候选处理状态和资源消耗，可以从补查发现跳转到代码证据或关联的原始 Unit。筛查判定、协调执行状态和 Issue 状态分别展示；`checked` 只表示检查过，模型置信度未经校准。历史记录保留时会明确显示本轮未知，缺失记录不会显示为已完成或无风险。
-
-生产任务使用 SQLite 任务队列与 LangGraph checkpoint，协调调用、目录 proposal 和补查批次另有持久账本。恢复时复用已确认的目录批次与已完成结果，不重复调用、扣费或累加候选和指标；已发出但结果未知的协调调用保留未决，不自动重发。复用指纹绑定仓库快照、模型、协议版本和审查输入；Unit 复用还校验 PR 意图与执行配置。页面区分本轮观测与任务累计预算；实际 usage 或成本缺失时保持未知。
+可识别 Python、TypeScript/JavaScript、Java、Go 和 Rust。Python 与 TS/JS 使用 Tree-sitter，其他语言目前采用启发式索引，分析深度有所不同。
 
 ## 快速开始
 
-环境要求：Git、uv、Python 3.12+、Node.js 18.x、20.x 或 22+（与锁定的 Vite 6 兼容）、npm，以及一个 OpenAI 或 OpenAI 兼容服务的 API Key。以下命令使用 PowerShell。
+准备 Git、[uv](https://docs.astral.sh/uv/getting-started/installation/)、Python 3.12+、Node.js（推荐 22+）和 npm，以及一个 OpenAI 或 OpenAI 兼容服务的 API Key。以下命令使用 PowerShell。
 
 ### 1. 启动后端
 
@@ -110,7 +46,7 @@ uv run alembic upgrade head
 uv run uvicorn app.main:app --reload
 ```
 
-API 默认运行在 <http://127.0.0.1:8000>，完整接口见 [Swagger UI](http://127.0.0.1:8000/docs)。
+API 默认运行在 <http://127.0.0.1:8000>。访问 [健康检查](http://127.0.0.1:8000/health)，应返回 `{"status":"ok"}`；接口文档见 [Swagger UI](http://127.0.0.1:8000/docs)。
 
 ### 2. 启动前端
 
@@ -124,64 +60,69 @@ npm run dev
 
 打开 Vite 输出的地址（默认 <http://localhost:5173>）。前端开发服务器会将 `/api` 和 `/health` 请求代理到本机的 `8000` 端口，后端需保持运行。
 
-### 3. 完成第一次审查
+## 如何使用
 
-1. 输入可访问的 GitHub PR URL，先运行 **Preview**，检查文件范围、Review Units 和预计模型调用数。此步骤不调用模型，但需要访问 GitHub 并准备仓库。
-2. 确认范围后启动审查，查看任务进度、Unit 状态与问题证据。
-3. 在结果中结合 Evidence 和 Coverage 复核问题，打开 **检查与协作** 查看原始检查记录、跨组筛查与补查结论，再查看 Markdown 报告。出现 `completed_with_warnings` 时检查未完整完成的 Unit 和未决补查，不要把部分覆盖视为全部审查完成。
+1. 输入可访问的 GitHub PR URL，点击 **Preview**，检查文件范围、Review Units 和预计模型调用数。预览需要访问 GitHub 并准备仓库。
+2. 确认范围后启动审查，查看任务进度，并在 **审查** 中结合代码证据复核问题。
+3. 打开 **检查与协作**，查看实际检查目标、跨组风险、补查结果和未决问题；在 **文件** 中检查覆盖范围。
+4. 查看或复制原始 Markdown 报告，也可从历史记录重新打开任务。
 
-### 可选配置
+解读结果时注意：
+
+- **覆盖情况**：文件可能由多个 Unit 共同审查；只有相关 Unit 均完整完成，文件才计为已审查。`partial` 或 `completed_with_warnings` 表示仍有未完整完成的检查。
+- **问题与检查状态**：`checked` 仅表示检查过，零 Issue 不代表代码正确；缺失证据、未执行补查和未知结果需要人工复核。
+- **调用与成本**：Preview 的 Unit 调用预估不包含审查后的跨组协调。成本未配置或实际用量缺失时保持未知，预估不能视为最终账单。
+
+## 配置
 
 配置写入 `backend/.env`，修改后重启后端；完整变量说明见 [`.env.example`](.env.example)。
 
-| 场景 | 配置入口 | 默认行为 |
-| --- | --- | --- |
-| GitHub API 认证 | `GITHUB_TOKEN` | 未配置 Token |
-| 兼容模型服务 | `OPENAI_BASE_URL`、`REPOGUARDIAN_PROVIDER`、`REPOGUARDIAN_MODEL` | OpenAI / `gpt-4.1-mini` |
-| Unit 并发与超时 | `REPOGUARDIAN_REVIEW_UNIT_CONCURRENCY`、`REPOGUARDIAN_REVIEW_UNIT_TIMEOUT_SECONDS` | 并发 4，单 Unit 180 秒 |
-| 模型请求窗口 | `REPOGUARDIAN_MODEL_REQUEST_PROFILE`、`REPOGUARDIAN_MODEL_REQUEST_PROFILES` | 本地窗口 16,384 token，安全余量 512；支持按实际模型名覆写 |
-| Unit 输入协议 | `REPOGUARDIAN_UNIT_INPUT_MODE` | `canonical`；显式 `legacy` 的检查记录未知且结果不复用 |
-| 模型用量成本 | `REPOGUARDIAN_MODEL_PRICING_JSON` | 未配置价格时成本未知；按 provider/model 设置每百万 token 的美元价格 |
-| 外部动态验证 | `REPOGUARDIAN_DEFAULT_VALIDATION_BACKEND` 及对应 CI / Runner 配置 | `none`；需额外配置执行端 |
-| LangSmith 追踪 | `REPOGUARDIAN_LANGSMITH_TRACING` | 关闭；启用后默认仍不上传审查正文 |
+```env
+GITHUB_TOKEN="" # 可选：GitHub API 认证，按所需权限配置，注意 API 限流
+OPENAI_API_KEY=your-api-key # 模型服务 API Key，不要提交真实密钥
+OPENAI_BASE_URL=https://api.openai.com/v1 # 自定义服务时修改；DeepSeek 示例见 .env.example
+REPOGUARDIAN_PROVIDER=openai # 自定义服务时与 API Key、Base URL、模型名一并设置
+REPOGUARDIAN_MODEL=gpt-4.1-mini # 实际请求的模型名
 
-Request profile 使用 JSON，可配置 `context_window`、`max_input_tokens`、`max_output_tokens`、`safety_margin_tokens` 与 `input_output_shared`。`REPOGUARDIAN_MODEL_REQUEST_PROFILES` 是“实际模型名 → profile”的 JSON 映射；未匹配模型使用通用 profile。确认供应商的输入、输出限制与是否共享窗口后再调整这些值，不能仅因请求被拒绝就扩大上限。
+REPOGUARDIAN_REVIEW_UNIT_CONCURRENCY=4 # Unit 并发数
+REPOGUARDIAN_REVIEW_UNIT_TIMEOUT_SECONDS=180 # 单 Unit 超时，单位秒
 
-## 工作模式
+REPOGUARDIAN_MODEL_REQUEST_PROFILES={} # JSON：实际模型名到窗口配置的映射，优先于通用配置
+# REPOGUARDIAN_MODEL_REQUEST_PROFILE={"context_window":16384,"safety_margin_tokens":512,"input_output_shared":true} # 可选通用覆盖，启用后优先于内置注册表；按供应商实际限制设置
+REPOGUARDIAN_MODEL_PRICING_JSON={} # 按 provider:model 配置每百万 token 的美元价格；未配置或用量缺失时成本未知
 
-| 模式 | 主 Review lifecycle | 目标代码执行 |
-| --- | --- | --- |
-| `review` | 严格只读静态审查 | 不执行 |
-| `review_and_suggest` | 旧 API 兼容值；按只读审查执行并给出迁移警告 | 不执行 |
-| `review_suggest_and_validate` | 旧 API 兼容值；按只读审查执行并给出迁移警告 | 不执行 |
+REPOGUARDIAN_DEFAULT_VALIDATION_BACKEND=none # 可选 project_ci / user_runner，需另行配置执行端
+REPOGUARDIAN_LANGSMITH_TRACING=false # 默认关闭追踪；启用后默认仍不上传审查正文
+```
 
-动态验证通过独立的 `project_ci` 或外部 `user_runner` 边界发起，不属于上述 Review critical path。`gvisor` 仅为已废弃、不可执行的旧请求占位；任何后端不可用时都不会回退到宿主机执行。
+## 工作流程
+
+![RepoGuardian 架构图](https://github.com/user-attachments/assets/e405f29f-0587-43b1-aac8-1f2a20ab1066)
+
+准备 PR 与仓库 → 解析变更、建立索引 → 拆分 Review Units 并独立审查 → 解析证据、检查策略并验证候选 → 跨 Unit 风险筛查与定向补查 → 去重并生成报告。
+
+动态验证独立于审查流程，Review 完成时 CI 仍可能运行中。新请求使用 `review`；旧 API 模式值仅作兼容，仍按只读审查处理。
 
 ## 安全边界
 
-- 模型没有 shell、terminal、package manager、build 或 test 工具，也不能向 Project CI 提交命令文本。
-- Repository discovery 可以覆盖安全的 Git-tracked 文件；内容读取仍经过 containment、realpath/symlink、tracked、sensitive-path 与预算校验。
-- Sensitive-path policy 同时检查变更的新旧路径；例如将 `.env` 重命名为普通源码路径时，整个 diff 仍会在 Planner、Unit Executor 和 `file_read_diff` 三层被拒绝，不会发送给模型。
-- Unchanged 文件可以成为 supporting evidence，但 Issue primary location 必须属于当前 Unit 的 changed/commentable files。
-- 跨 Unit 补查使用关联 Units 的受限文件集合，计划引用必须匹配当前证据或索引关系，不能通过协调绕过敏感路径和读取预算限制。
-- Git 命令使用参数化 argv，并隔离 host Git config、credential prompt 和 external diff。
-- RepoGuardian 不 commit、push、创建 PR 或写回 GitHub 评论。
-- 外部动态验证前应确认 Project CI / UserRunner 的执行环境与凭据边界。
-- SQLite 和本地 artifact 提供恢复能力，但不构成多租户或生产级安全隔离。
+- 模型只能使用受限的只读工具，文件读取经过路径、符号链接、敏感文件与预算校验；补查不能绕过这些边界。
+- RepoGuardian 不执行目标仓库的安装、测试或构建，不自动 commit、push、创建 PR 或写回 GitHub 评论。
+- 动态验证只通过显式配置的 Project CI / User Runner 发起，不接受模型生成的 shell 命令；执行端不可用时不会回退到宿主机。Fork PR 默认不触发 Project CI。
+- 审查所需的代码内容会发送给配置的模型服务。使用前确认模型服务、外部执行端与凭据的数据边界。
+- 本地 SQLite 与运行产物用于持久化和恢复，不构成多租户或生产级安全隔离。
 
 ## 当前限制
 
-- 只接收 GitHub Pull Request URL；不同语言的索引深度仍有差异。
-- 不写回 GitHub Review、Check Run、suggestion 或 Draft PR。
-- 不提供 Local Sandbox、Docker/gVisor/Firecracker 或通用命令执行能力。
-- Metadata-only semantic grouping 和公开 review benchmark 尚未实现；当前 planner 仍以确定性分组和安全 fallback 为主。
-- 超大必需输入仍可能被拒绝：协调可按关系分批，但单个不可拆分组、全 Unit 精简索引或完整 Unit 必需输入自身超限时保留未覆盖；Verifier、去重和 Patch 尚不自动分批。
-- 尚未完成真实样本上的协作效果对照与人工核验；不能据此声称跨模块召回提升、误报下降或成本收益。
-- 模型结论仍需工程师结合 Evidence 和 Coverage 复核。
+- 只支持 GitHub PR 输入，暂不写回 GitHub Review、Check Run 或修复 PR。
+- 不提供本地 Sandbox 或通用命令执行能力。
+- 超大变更可能因输入、时间或模型预算限制而部分完成，需要结合覆盖范围复核。
+- 尚未完成真实样本上的协作效果对照与人工核验，不承诺召回、误报或成本收益。
 
 ## 开发与验证
 
-从仓库根目录执行：
+后端使用 Python、FastAPI 与 LangGraph，前端使用 Vue 3、TypeScript 与 Vite。先按快速开始安装依赖；本地开发分别运行后端与前端，代码修改后会自动重载。
+
+提交变更前，从仓库根目录执行对应检查：
 
 ```powershell
 cd backend
@@ -191,31 +132,18 @@ uv run ruff check .
 cd ..\frontend
 npm test
 npm run build
+
+cd ..
+git diff --check
 ```
 
-配置项及默认值见 [`.env.example`](.env.example)。修改后端响应模型时同步前端类型与调用方，并验证结构化输入、拒绝路径和旧数据兼容性。
+- 后端逻辑变更运行 pytest 与 Ruff；前端变更运行测试、类型检查与构建。
+- 修改配置时同步 `.env.example`；修改 API 响应时同步前端类型与调用方，覆盖输入校验、拒绝路径和旧数据兼容性。
+- 开发测试可执行本项目代码，RepoGuardian Server 仍不得执行被审查的目标仓库代码。
+- 不提交 `.env`、API Key、Token、数据库或任务运行产物。
 
-阅读实现时可从以下入口开始：
-
-| 入口 | 职责 |
-| --- | --- |
-| [`backend/app/graph/review_graph.py`](backend/app/graph/review_graph.py) | 主审查图与 Review Unit 阶段编排 |
-| [`backend/app/services/review_service.py`](backend/app/services/review_service.py) | 任务创建、执行调度与恢复编排 |
-| [`backend/app/services/review_unit_executor.py`](backend/app/services/review_unit_executor.py) | Unit 内的模型与只读工具反馈循环 |
-| [`backend/app/services/context_assembler.py`](backend/app/services/context_assembler.py) | 完整对象组装、可选内容省略清单与必需输入拒绝 |
-| [`backend/app/services/model_request_budgeter.py`](backend/app/services/model_request_budgeter.py) | 完整模型请求计数、窗口准入与 Unit 预算预留 |
-| [`backend/app/services/review_input_context.py`](backend/app/services/review_input_context.py) | PR 作者背景、完整证据块与 Unit 工作记忆投影 |
-| [`backend/app/services/unit_review_summary.py`](backend/app/services/unit_review_summary.py) | 检查记录校验、历史有效记忆与当前尝试状态 |
-| [`backend/app/services/cross_unit_risk.py`](backend/app/services/cross_unit_risk.py) | 确定性跨 Unit 风险筛查与关联依据 |
-| [`backend/app/services/cross_unit_coordination.py`](backend/app/services/cross_unit_coordination.py) | 受限关系判别、计划校验、定向补查与批次验证 |
-| [`backend/app/services/coordination_catalog.py`](backend/app/services/coordination_catalog.py) | 风险关系分批、完整目录投影与未覆盖范围 |
-| [`backend/app/services/coordination_runtime.py`](backend/app/services/coordination_runtime.py) | 协调运行账本、共享预算与调用恢复 |
-| [`backend/app/api/reviews.py`](backend/app/api/reviews.py) | Preview、任务查询、Unit 重试和进度接口 |
-| [`frontend/src/App.vue`](frontend/src/App.vue) | 审查、历史记录、验证后端与设置页面入口 |
-| [`frontend/src/components/review/ReviewViewer.vue`](frontend/src/components/review/ReviewViewer.vue) | 问题证据、覆盖导航与检查协作视图 |
-
-遇到问题可提交 [GitHub Issue](https://github.com/waangzh/RepoGuardian/issues)，附上复现步骤、预期与实际结果，以及脱敏后的错误信息。提交代码变更前运行对应的后端检查或前端构建；不要提交 `.env`、密钥或任务运行产物。
+欢迎通过 Issue 或 Pull Request 反馈问题、改进文档与代码。提交 [GitHub Issue](https://github.com/waangzh/RepoGuardian/issues) 时附上复现步骤、预期与实际结果，以及脱敏后的错误信息。
 
 ## 许可证
 
-当前仓库尚未包含 `LICENSE` 文件。在添加许可证前，请勿将代码视为已获得开源使用、修改或再分发授权。
+MIT
