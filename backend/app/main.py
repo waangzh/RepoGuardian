@@ -18,6 +18,13 @@ from app.validation.project_ci import get_project_ci_service
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    from app.core.config import settings
+
+    resolved = settings.resolve_model_profile()
+    log = logging.getLogger("RepoGuardian.LLM")
+    (log.warning if resolved.source == "generic_fallback" else log.info)(
+        "启动模型窗口配置：model=%s model_profile_source=%s profile=%s",
+        settings.repoguardian_model, resolved.source, resolved.profile.model_dump(mode="json"))
     service = get_review_service()
     maintenance = MaintenanceService(
         service._repository,

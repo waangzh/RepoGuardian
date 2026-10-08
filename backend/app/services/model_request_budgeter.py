@@ -2,10 +2,12 @@
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import lru_cache
 import hashlib
 import json
 from typing import Any
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -32,6 +34,66 @@ class ModelRequestProfile(BaseModel):
 
 
 @dataclass(frozen=True)
+class ResolvedModelProfile:
+    profile: ModelRequestProfile
+    source: str
+
+
+# Exact names and official endpoint only; compatible proxies may impose different limits.
+# https://developers.openai.com/api/docs/models/gpt-4.1-mini
+KNOWN_MODEL_PROFILES = {
+    "gpt-4.1-mini": ModelRequestProfile(context_window=1_047_576, max_output_tokens=32_768),
+    "gpt-4.1-mini-2025-04-14": ModelRequestProfile(context_window=1_047_576, max_output_tokens=32_768),
+}
+# https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
+# The docs specify 1M without an exact integer; use 1,000,000 conservatively.
+# Chat Completions defines 384K output as 393216, shared with the input window.
+DEEPSEEK_MODEL_PROFILES = {
+    model: ModelRequestProfile(context_window=1_000_000, max_output_tokens=393_216)
+    for model in ("deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp")
+}
+CONTEXT_BUDGET_VERSION = "model-context-budget-v1"
+SERIALIZATION_CHAR_LIMIT = 2_000_000
+
+
+def resolve_model_profile(model: str, provider: str, base_url: str,
+                          default: ModelRequestProfile | None = None,
+                          overrides: dict[str, ModelRequestProfile] | None = None) -> ResolvedModelProfile:
+    if model in (overrides or {}):
+        return ResolvedModelProfile(overrides[model], "user_model_override")
+    if default is not None:
+        return ResolvedModelProfile(default, "user_default_override")
+    endpoint = urlsplit(base_url)
+    if endpoint.scheme == "https" and not endpoint.query and not endpoint.fragment:
+        registry = {}
+        if (provider in {"openai", "openai-compatible"} and endpoint.netloc == "api.openai.com"
+                and endpoint.path.rstrip("/") == "/v1"):
+            registry = KNOWN_MODEL_PROFILES
+        elif (provider in {"openai", "deepseek", "openai-compatible"} and endpoint.netloc == "api.deepseek.com"
+              and endpoint.path.rstrip("/") in {"", "/v1"}):
+            registry = DEEPSEEK_MODEL_PROFILES
+        if model in registry:
+            return ResolvedModelProfile(registry[model], "known_model_registry")
+    return ResolvedModelProfile(ModelRequestProfile(), "generic_fallback")
+
+
+@lru_cache(maxsize=128)
+def _encoding(model: str):
+    try:
+        import tiktoken
+        return tiktoken.encoding_for_model(model)
+    except (KeyError, ImportError, OSError):
+        return None
+
+
+def estimate_tokens(text: str, model: str) -> tuple[int, str]:
+    encoding = _encoding(model)
+    if encoding is not None:
+        return len(encoding.encode(text, disallowed_special=())), f"tiktoken:{encoding.name}:request-envelope"
+    return len(text.encode("utf-8")), "conservative_utf8_bytes:request-envelope"
+
+
+@dataclass(frozen=True)
 class PreparedModelRequest:
     model: str
     operation: str
@@ -39,29 +101,28 @@ class PreparedModelRequest:
     prompt: str
     output_tokens: int
     extra_body_json: str = "{}"
+    profile_source: str | None = None
 
-    def estimate(self, profile: ModelRequestProfile) -> dict[str, Any]:
-        envelope = json.dumps({
+    def envelope(self) -> str:
+        return json.dumps({
             "model": self.model, "messages": [
                 {"role": "system", "content": self.system},
                 {"role": "user", "content": self.prompt}],
             "response_format": {"type": "json_object"}, "temperature": 0.1,
             "max_tokens": self.output_tokens, "extra_body": json.loads(self.extra_body_json),
         }, ensure_ascii=False, separators=(",", ":"))
-        try:
-            import tiktoken
-            encoding = tiktoken.encoding_for_model(self.model)
-            count = len(encoding.encode(envelope, disallowed_special=()))
-            method = f"tiktoken:{encoding.name}:request-envelope"
-        except (KeyError, ImportError, OSError):
-            count = len(envelope.encode("utf-8"))
-            method = "conservative_utf8_bytes:request-envelope"
+
+    def estimate(self, profile: ModelRequestProfile) -> dict[str, Any]:
+        envelope = self.envelope()
+        count, method = estimate_tokens(envelope, self.model)
         metadata = {
             "estimated_input_tokens": count, "count_method": method,
             "count_is_exact": False, "profile": profile.model_dump(mode="json"),
             "request_hash": hashlib.sha256(envelope.encode("utf-8")).hexdigest(),
             "prompt_chars": len(self.prompt),
             "reserved_tokens": count + self.output_tokens,
+            "model_profile_source": self.profile_source,
+            "context_budget_version": CONTEXT_BUDGET_VERSION,
         }
         reason = None
         if profile.max_input_tokens is not None and count > profile.max_input_tokens:
@@ -74,6 +135,37 @@ class PreparedModelRequest:
         if reason:
             raise RequestAdmissionError(reason + ": " + json.dumps(metadata))
         return metadata
+
+
+@dataclass(frozen=True)
+class ModelContextBudget:
+    """Select complete objects against the same envelope used by final admission."""
+    request: PreparedModelRequest
+    profile: ModelRequestProfile
+
+    @property
+    def input_limit(self) -> int:
+        window = self.profile.context_window - self.profile.safety_margin_tokens
+        if self.profile.input_output_shared:
+            window -= self.request.output_tokens
+        return min(window, self.profile.max_input_tokens or window)
+
+    def with_prefix(self, prefix: str) -> "ModelContextBudget":
+        return replace(self, request=replace(self.request, prompt=prefix))
+
+    def describe(self) -> dict[str, Any]:
+        fixed, method = estimate_tokens(self.request.envelope(), self.request.model)
+        return {"version": CONTEXT_BUDGET_VERSION, "input_limit_tokens": self.input_limit,
+                "fixed_request_tokens": fixed, "available_input_tokens": max(0, self.input_limit - fixed),
+                "reserved_output_tokens": self.request.output_tokens, "count_method": method,
+                "model_profile_source": self.request.profile_source}
+
+    def fits(self, serialized: str) -> bool:
+        if (self.profile.max_output_tokens is not None
+                and self.request.output_tokens > self.profile.max_output_tokens):
+            return False
+        envelope = replace(self.request, prompt=self.request.prompt + serialized).envelope()
+        return estimate_tokens(envelope, self.request.model)[0] <= self.input_limit
 
 
 request_budget_reserver: ContextVar[Any] = ContextVar("request_budget_reserver", default=None)

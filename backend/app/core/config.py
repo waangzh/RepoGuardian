@@ -27,11 +27,20 @@ class Settings(BaseSettings):
     # JSON: {"provider:model":{"input":0.40,"output":1.60,"cached_input":0.10}}
     # Rates are USD per one million tokens. Missing entries keep observed cost unknown.
     repoguardian_model_pricing_json: str = "{}"
-    # 本地保守准入上限；部署时按供应商实际能力设置，模型覆写可单独配置。
+    # 显式通用配置优先于内置注册表；未配置时仅官方 endpoint 使用已知模型窗口。
     repoguardian_model_request_profile: ModelRequestProfile = Field(
         default_factory=ModelRequestProfile)
     repoguardian_model_request_profiles: dict[str, ModelRequestProfile] = Field(
         default_factory=dict)
+
+    def resolve_model_profile(self, model: str | None = None, provider: str | None = None):
+        from app.services.model_request_budgeter import resolve_model_profile
+
+        return resolve_model_profile(model or self.repoguardian_model,
+            provider or self.repoguardian_provider, self.openai_base_url,
+            self.repoguardian_model_request_profile
+            if "repoguardian_model_request_profile" in self.model_fields_set else None,
+            self.repoguardian_model_request_profiles)
 
     # ---- LangSmith 可观测性（默认不追踪，也不上传审查内容）----
     repoguardian_langsmith_tracing: bool = False

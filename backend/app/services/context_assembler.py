@@ -5,6 +5,8 @@ import hashlib
 import json
 from typing import Any, Callable
 
+from app.services.model_request_budgeter import ModelContextBudget
+
 
 class RequiredInputTooLarge(ValueError):
     pass
@@ -13,7 +15,8 @@ class RequiredInputTooLarge(ValueError):
 def assemble_context(payload: dict[str, Any], required: set[str], limit: int, *,
                      priorities: dict[str, int] | None = None,
                      field_limits: dict[str, int] | None = None,
-                     item_priority: Callable[[str, Any], tuple] | None = None) -> str:
+                     item_priority: Callable[[str, Any], tuple] | None = None,
+                     context_budget: ModelContextBudget | None = None) -> str:
     result = {key: deepcopy(value) for key, value in payload.items() if key in required}
     optional: list[tuple[tuple[str, ...], Any]] = []
 
@@ -36,13 +39,20 @@ def assemble_context(payload: dict[str, Any], required: set[str], limit: int, *,
         "unit_diff_sha256": hashlib.sha256(diff.encode("utf-8")).hexdigest(),
         "omitted": omitted,
     }
+    if context_budget is not None:
+        result["input_manifest"]["context_budget"] = context_budget.describe()
 
     def dump() -> str:
         return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
-    if len(dump()) > limit:
+    def fits() -> bool:
+        serialized = dump()
+        return len(serialized) <= limit and (context_budget is None or context_budget.fits(serialized))
+
+    if not fits():
         raise RequiredInputTooLarge(
-            f"required_input_too_large: limit_chars={limit}, required_chars={len(dump())}"
+            f"required_input_too_large: limit_chars={limit}, required_chars={len(dump())}, "
+            f"context_budget={context_budget.describe() if context_budget else None}"
         )
     if priorities is not None or field_limits is not None or item_priority is not None:
         # 全部类型的完整对象共同排序；目录不能靠字段顺序抢走行动证据。
@@ -65,13 +75,13 @@ def assemble_context(payload: dict[str, Any], required: set[str], limit: int, *,
             else:
                 parent[path[-1]] = deepcopy(item)
             omitted[label] -= 1
-            fits = len(dump()) <= limit
+            within_fields = True
             for field, field_limit in (field_limits or {}).items():
                 node = result
                 for key in field.split("."):
                     node = node.get(key, {}) if isinstance(node, dict) else {}
-                fits = fits and len(json.dumps(node, ensure_ascii=False, separators=(",", ":"))) <= field_limit
-            if fits:
+                within_fields = within_fields and len(json.dumps(node, ensure_ascii=False, separators=(",", ":"))) <= field_limit
+            if within_fields and fits():
                 continue
             omitted[label] += 1
             if index is not None:
@@ -97,7 +107,7 @@ def assemble_context(payload: dict[str, Any], required: set[str], limit: int, *,
         total = omitted[label]
         parent[path[-1]] = deepcopy(value)
         omitted[label] = 0
-        if len(dump()) <= limit:
+        if fits():
             continue
         if isinstance(value, list):
             low, high = 0, len(value)
@@ -105,7 +115,7 @@ def assemble_context(payload: dict[str, Any], required: set[str], limit: int, *,
                 middle = (low + high + 1) // 2
                 parent[path[-1]] = value[:middle]
                 omitted[label] = total - middle
-                if len(dump()) <= limit:
+                if fits():
                     low = middle
                 else:
                     high = middle - 1
@@ -115,7 +125,7 @@ def assemble_context(payload: dict[str, Any], required: set[str], limit: int, *,
             del parent[path[-1]]
             omitted[label] = total
         # Even an empty optional collection has serialization overhead.
-        if len(dump()) > limit:
+        if not fits():
             parent.pop(path[-1], None)
         # Remove newly-created empty containers too, so optional metadata cannot
         # make a fitting required object fail admission at the exact boundary.
@@ -128,6 +138,6 @@ def assemble_context(payload: dict[str, Any], required: set[str], limit: int, *,
             else:
                 break
     serialized = dump()
-    if len(serialized) > limit:
+    if not fits():
         raise RequiredInputTooLarge("required_input_too_large: optional_metadata_overflow")
     return serialized

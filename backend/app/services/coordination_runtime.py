@@ -60,12 +60,15 @@ def budget_rejection(budget: ExecutionBudget, name: str, estimate: int,
 
 
 def coordination_fingerprint(state: dict) -> str:
+    from app.services.model_request_budgeter import CONTEXT_BUDGET_VERSION
+    resolved = settings.resolve_model_profile(state.get("model"))
     risk = {key: item for key, item in (state.get("cross_unit_risk") or {}).items()
             if key not in {"execution_status", "non_execution_reason"}}
     return stable_hash({
         "purpose": "cross-unit-runtime-v1-request-admission-v1", "task_id": state.get("task_id"),
         "unit_input_mode": settings.repoguardian_unit_input_mode,
-        "request_profile": settings.repoguardian_model_request_profile.model_dump(mode="json"),
+        "request_profile": resolved.profile.model_dump(mode="json"),
+        "model_profile_source": resolved.source, "context_budget_version": CONTEXT_BUDGET_VERSION,
         "model_profiles": {key: value.model_dump(mode="json") for key, value in
                            settings.repoguardian_model_request_profiles.items()},
         "catalog_version": CATALOG_BATCH_VERSION,
@@ -167,9 +170,17 @@ class CoordinationRuntime:
 
     async def call(self, provider: Any, name: str, args: tuple, output_tokens: int,
                    *, holdback: dict | None = None) -> Any:
+        from app.services.model_request_budgeter import CONTEXT_BUDGET_VERSION
+
         held = holdback or {}
         payload = normalize(args)
-        key = stable_hash({"operation": name, "input": payload,
+        resolver = getattr(provider, "resolve_request_profile", None)
+        model = args[3] if name == "review_unit" else args[1]
+        resolved = resolver(model) if callable(resolver) else None
+        key = stable_hash({"operation": name, "input": payload, "output_tokens": output_tokens,
+                           "context_budget_version": CONTEXT_BUDGET_VERSION,
+                           "profile": resolved.profile.model_dump(mode="json") if resolved else None,
+                           "model_profile_source": resolved.source if resolved else None,
                            "allocation": held.get("followup_id"), "phase": held.get("phase")})
         types = {"coordinate_cross_units": CrossUnitCoordinationPlan, "decide": AgentAction,
                  "review_unit": UnitReviewResponse, "verify_issue": IssueVerification}
