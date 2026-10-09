@@ -55,7 +55,8 @@ from app.models.review import (
 from app.services.evidence_store import (ContextAdmission, evidence_snapshot, restore_store, put_chunks,
     store_chunks, evidence_priorities, archived_request_chunks, merge_stores, store_catalog)
 from app.services.unit_coverage import (build_diff_manifest, new_coverage_ledger, active_evidence_set,
-    update_coverage, rebuild_coverage, coverage_gaps, active_body_chars, MAX_ACTIVE_HUNKS, MAX_ACTIVE_DIFF_CHARS)
+    update_coverage, rebuild_coverage, coverage_gaps, active_body_chars, MAX_ACTIVE_HUNKS, MAX_ACTIVE_DIFF_CHARS,
+    unsupported_hunk_ids, NO_HUNK_CHANGE_REASON)
 from app.services.review_planner import DeterministicReviewPlanner
 from app.services.unit_review_summary import build_record_input, merge_review_summaries, validate_record
 from app.tools.code_search import CodeSearchTool
@@ -274,6 +275,15 @@ class ReviewUnitExecutor:
             )
         by_path = {item.file_path: item for item in all_changed}
         unit_files = self._unit_changed_files(unit, by_path)
+        if self.input_mode == "canonical":
+            from app.services.file_change_evidence import bind_file_change_evidence
+            from app.tools.git_tool import GitTool
+
+            unit_files = await asyncio.to_thread(bind_file_change_evidence, unit_files,
+                state.get("repo_path"), str(state.get("head_sha") or ""), str(state.get("base_sha") or ""),
+                state.get("_git_tool") or GitTool())
+            by_path.update({file.file_path: file for file in unit_files})
+            state = {**state, "changed_files": [by_path[file.file_path].model_dump(mode="json") for file in all_changed]}
         repository_files = {
             str(item["path"])
             for item in state.get("file_index") or []
@@ -297,7 +307,7 @@ class ReviewUnitExecutor:
         if batch:
             budget = batch["budget"]
             skip_plan = batch.get("skip_plan", True)
-        elif self.input_mode == "canonical" and not state.get("cross_unit_followup"):
+        elif self.input_mode == "canonical" and not state.get("cross_unit_followup") and any(file.hunks or file.file_change_evidence for file in unit_files):
             admission = self._workset_admission(unit, unit_files, state, budget)
             minimum = ([unit_files[0].model_copy(update={"hunks": []})]
                        if not admission["admitted"] else None)
@@ -442,6 +452,23 @@ class ReviewUnitExecutor:
                     tool="followup_context", status=admission["status"], result_count=len(context),
                     detail=json.dumps(admission, ensure_ascii=False)))
         self._remember_unit_state(graph_state)
+        if self.input_mode == "canonical" and unit_files and not any(file.hunks or file.file_change_evidence for file in unit_files):
+            coverage = UnitInputCoverage(evidence_coverage="partial", target_coverage="partial",
+                reason=NO_HUNK_CHANGE_REASON, omitted_components=["diff_evidence"],
+                omitted_targets=unsupported_hunk_ids(manifest, graph_state["active_evidence_set"]))
+            summary = graph_state["review_summary"].model_copy(update={"status": "unknown", "record": None,
+                "reason": NO_HUNK_CHANGE_REASON, "latest_attempt_status": "not_executed",
+                "latest_attempt_reason": NO_HUNK_CHANGE_REASON})
+            self._remember_unit_state({**graph_state, "input_coverage": coverage, "review_summary": summary})
+            return ReviewUnitResult(review_unit_id=unit.id, input_fingerprint=binding,
+                status=ReviewUnitStatus.failed, terminal_reason=ReviewUnitTerminalReason.unsupported_change,
+                error="文件变更没有可审查的文本 Hunk，当前证据协议不支持仅凭文件元数据完成检查；需人工复核。",
+                plan_skipped=True, plan_status=UnitPlanStatus.skipped, plan_skip_reason=NO_HUNK_CHANGE_REASON,
+                input_coverage=coverage, review_summary=summary, execution_budget=graph_state["budget"],
+                model_usages=graph_state.get("model_usages") or [],
+                context_snippets=graph_state["context"], evidence_store=graph_state.get("evidence_store"),
+                context_selection=graph_state.get("context_selection"), diff_manifest=manifest,
+                coverage_ledger=graph_state["coverage_ledger"], active_evidence_set=graph_state["active_evidence_set"])
         config = None
         if getattr(self.unit_graph, "checkpointer", None) not in (None, False):
             config = unit_thread_config(str(state.get("task_id") or "unknown"), unit.id)
@@ -574,6 +601,8 @@ class ReviewUnitExecutor:
                 request = build_record_input(selected,
                     [snippet.model_dump(mode="json") for snippet in cached.result.context_snippets],
                     cached.result.plan, str(state.get("head_sha") or ""), str(state.get("base_sha") or ""))
+                from app.services.file_change_evidence import set_file_change_impact_scope
+                set_file_change_impact_scope(request, child.related_files)
                 request["pr_intent"] = build_pr_intent(state.get("pr_info"))
                 request["diff_manifest"] = state["diff_manifest"]
                 expected_active = active_evidence_set(manifest, selected, child.id, entry.ranges,
@@ -711,6 +740,9 @@ class ReviewUnitExecutor:
         batches_complete = all(entry.status == "completed" for entry in entries)
         complete = batches_complete and not reason
         ledger = rebuild_coverage(manifest, entries) if manifest else None
+        if manifest and unsupported_hunk_ids(manifest):
+            reason = reason or NO_HUNK_CHANGE_REASON
+            complete = False
         if manifest and coverage_gaps(manifest, ledger):
             complete, reason = False, reason or "unit_coverage_gate_incomplete"
         records = [result.review_summary.record for result in results if result.review_summary.record]
@@ -730,6 +762,8 @@ class ReviewUnitExecutor:
                         for entry in entries for check in entry.result.review_summary.record.hypothesis_checks],
                     contract_dependencies=list({(check.file_path, check.symbol, check.assumption): check
                         for record in records for check in record.contract_dependencies}.values()),
+                    file_change_checks=list({check.evidence_id: check
+                        for record in records for check in record.file_change_checks}.values()),
                     unresolved_questions=list({check.id: check for record in records for check in record.unresolved_questions
                         if not ledger or ledger.questions[check.id].status == "pending"}.values()))
                 from app.services.review_input_context import input_snapshot
@@ -1560,6 +1594,8 @@ class ReviewUnitExecutor:
         plan = None if core else state.get("unit_plan")
         record_input = build_record_input(state["unit_files"], state["context"], plan,
             str(state["parent_state"].get("head_sha") or ""), str(state["parent_state"].get("base_sha") or ""))
+        from app.services.file_change_evidence import set_file_change_impact_scope
+        set_file_change_impact_scope(record_input, getattr(state["unit"], "related_files", []))
         record_input["pr_intent"] = build_pr_intent(pr)
         if state.get("diff_manifest"):
             record_input.update(diff_manifest=state["diff_manifest"].model_dump(mode="json"),
@@ -1728,7 +1764,10 @@ class ReviewUnitExecutor:
             update = {"coverage_ledger": ledger, "active_evidence_set": active}
             self._remember_unit_state(update)
             if gaps:
-                if not state["issue_round_completed"] and state["budget"].can_consume(model_calls=1, diagnosis_attempts=1):
+                unsupported = set(unsupported_hunk_ids(state["diff_manifest"], active))
+                unchecked_text = any(item.evidence_id and item.manifest_id in gaps for item in active.hunks)
+                if (not state["issue_round_completed"] and (not unsupported or unchecked_text)
+                        and state["budget"].can_consume(model_calls=1, diagnosis_attempts=1)):
                     return {**update, "done": False, "next_action": AgentAction(action="report_issue",
                         reason="覆盖门拒绝提前结束，先检查当前活动证据")}
                 previous = state.get("input_coverage")
@@ -1736,6 +1775,9 @@ class ReviewUnitExecutor:
                     "unknown" if previous and previous.target_coverage == "unknown" else "partial",
                     "reason": previous.reason if previous and previous.reason else "unit_coverage_gate_incomplete", "omitted_targets": list(dict.fromkeys([
                         *(previous.omitted_targets if previous else []), *gaps]))})
+                if unsupported:
+                    coverage = coverage.model_copy(update={"reason": NO_HUNK_CHANGE_REASON,
+                        "evidence_coverage": "partial"})
                 return {**update, "done": True, "input_coverage": coverage,
                     "terminal_reason": state.get("terminal_reason") or (ReviewUnitTerminalReason.completed if state["issues"] else ReviewUnitTerminalReason.no_issue),
                     "messages": [*state["messages"], AgentEvent(action="task_done", reason=action.reason,
@@ -1844,6 +1886,8 @@ class ReviewUnitExecutor:
 
         record_input = build_record_input(changed_files, context, unit_plan,
             str(state.get("head_sha") or ""), str(state.get("base_sha") or ""))
+        from app.services.file_change_evidence import set_file_change_impact_scope
+        set_file_change_impact_scope(record_input, unit.related_files)
         record_input["pr_intent"] = build_pr_intent(state.get("pr_info"))
         hierarchy = {}
         if state.get("diff_manifest"):

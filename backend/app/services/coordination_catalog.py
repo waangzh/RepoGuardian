@@ -17,8 +17,9 @@ def summary_evidence_ids(summary: dict) -> set[str]:
     identities = set(summary.get("evidence_ids") or [])
     record = summary.get("record") or summary.get("last_valid_record") or {}
     for key in ("target_checks", "hypothesis_checks", "contract_dependencies",
-                "unresolved_questions", "question_updates"):
+                "unresolved_questions", "question_updates", "file_change_checks"):
         identities.update(identity for item in record.get(key) or [] for identity in item.get("evidence_ids") or [])
+    identities.update(item["evidence_id"] for item in record.get("file_change_checks") or [])
     return identities
 
 

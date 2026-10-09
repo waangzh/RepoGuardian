@@ -14,7 +14,11 @@ const references = computed(() => [...new Set(props.ids)].map((id) => ({ id, ref
       <li v-for="item in references" :key="item.id">
         <template v-if="item.reference">
           <code>{{ item.reference.file_path }}<template v-if="item.reference.start_line > 0">:{{ item.reference.start_line }}<template v-if="item.reference.end_line !== item.reference.start_line">–{{ item.reference.end_line }}</template></template></code>
-          <span>{{ item.reference.source === 'diff' ? '变更片段' : item.reference.source === 'context' ? '上下文' : '来源未记录' }} · {{ item.reference.start_line > 0 ? '已记录行范围' : '行号未记录' }}</span>
+          <span>{{ item.reference.source === 'diff' ? '变更片段' : item.reference.source === 'context' ? '上下文' : item.reference.source === 'file_change' ? '文件变更元数据' : '来源未记录' }} · {{ item.reference.source === 'file_change' ? '文件级证据，无行锚点' : item.reference.start_line > 0 ? '已记录行范围' : '行号未记录' }}</span>
+          <template v-if="item.reference.file_change">
+            <small>Base {{ item.reference.file_change.base.path }} · blob {{ item.reference.file_change.base.blob_id || '不存在' }} · mode {{ item.reference.file_change.base.mode || '不存在' }} · {{ item.reference.file_change.base.size ?? '未知' }} 字节</small>
+            <small>Head {{ item.reference.file_change.head.path }} · blob {{ item.reference.file_change.head.blob_id || '不存在' }} · mode {{ item.reference.file_change.head.mode || '不存在' }} · {{ item.reference.file_change.head.size ?? '未知' }} 字节</small>
+          </template>
           <strong v-if="evidenceSnapshotState(item.reference, baseSha, headSha) === 'stale'" class="text-danger">引用属于其他 Base / Head 快照</strong>
           <strong v-else-if="evidenceSnapshotState(item.reference, baseSha, headSha) === 'unknown'">快照绑定未完整保存</strong>
           <small>Head {{ item.reference.head_sha?.slice(0, 12) || '未记录' }} · Base {{ item.reference.base_sha?.slice(0, 12) || '未记录' }}</small>

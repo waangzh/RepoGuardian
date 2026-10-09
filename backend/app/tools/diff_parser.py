@@ -1,6 +1,7 @@
 """Diff 解析器 —— 将 unified diff 文本解析为结构化 ChangedFile 列表。"""
 
 import hashlib
+import re
 from io import StringIO
 
 from unidiff import PatchSet
@@ -120,6 +121,10 @@ class DiffParser:
                     additions=additions,
                     deletions=deletions,
                     is_binary=bool(getattr(patched_file, "is_binary_file", False)),
+                    old_mode=(match.group(1) if (match := re.search(r"(?m)^old mode ([0-7]{6})$",
+                        str(patched_file.patch_info))) else None),
+                    new_mode=(match.group(1) if (match := re.search(r"(?m)^new mode ([0-7]{6})$",
+                        str(patched_file.patch_info))) else None),
                     hunks=hunks,
                 )
             )

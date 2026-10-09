@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from typing import Any
 
 from app.graph.nodes._events import append_step
@@ -14,6 +15,12 @@ async def diff_parse_node(state: ReviewState) -> ReviewState:
     diff_text = state.get("diff_text") or ""
     logger.info("📄 [解析] 开始解析 diff（长度: %d 字符）...", len(diff_text))
     changed_files = parser.parse(diff_text)
+    from app.services.file_change_evidence import bind_file_change_evidence
+    from app.tools.git_tool import GitTool
+
+    changed_files = await asyncio.to_thread(bind_file_change_evidence, changed_files,
+        state.get("repo_path"), state.get("head_sha") or "", str(state.get("base_sha") or ""),
+        state.get("_git_tool") or GitTool())
     changed_files_dicts = [file.model_dump(mode="json") for file in changed_files]
     logger.info("📄 [解析] 解析完成: %d 个变更文件", len(changed_files))
     return ReviewState(

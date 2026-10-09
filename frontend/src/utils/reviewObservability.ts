@@ -4,6 +4,7 @@ export const decisionLabels = { required: "需要跨组检查", uncertain: "关�
 export const checkLabels: Record<string, string> = {
   checked: "已检查", not_checked: "未检查", unresolved: "未决", supported: "假设得到支持",
   refuted: "找到反证", verified: "依赖已核验", conflicting: "契约冲突",
+  pending: "待检查", reviewed: "已检查", needs_followup: "需补查", unsupported: "需人工复核",
 };
 
 export function unitRecordPresentation(summary?: UnitReviewSummary) {
@@ -16,7 +17,8 @@ export function unitRecordPresentation(summary?: UnitReviewSummary) {
   const checked = record?.target_checks.filter((item) => item.status === "checked").length || 0;
   const latestLabel = labels[latest] || labels.unknown;
   return { record, retained, latestLabel, tone: retained || !record ? "inconclusive" : "neutral",
-    label: retained ? `${latestLabel}；保留上次有效记录` : record ? `${checked} / ${record.target_checks.length} 个目标已检查` : "记录未知" };
+    label: retained ? `${latestLabel}；保留上次有效记录` : record ? `${checked} / ${record.target_checks.length} 个目标已检查`
+      : summary?.reason === "file_change_without_text_hunks" ? "不支持自动审查，需人工复核" : "记录未知" };
 }
 export const reasonLabels: Record<string, string> = {
   changed_contract: "变更影响契约", unresolved_dependency: "依赖尚未核验", conflicting_contract: "契约结论冲突",
@@ -69,6 +71,11 @@ export function crossUnitPresentation(task: Pick<ReviewTask, "status" | "cross_u
 export function unitFindingLabel(result: ReviewUnitResult | undefined, count: number): string {
   if (count > 0) return `${count} 条问题记录`;
   if (!result) return "等待审查";
+  if (result.terminal_reason === "unsupported_change"
+      || result.input_coverage?.reason === "file_change_without_text_hunks"
+      || Object.values(result.coverage_ledger?.diff_hunks || {}).some((item) => item.status === "unsupported")) {
+    return "存在未覆盖变更，需人工复核";
+  }
   if (result.status !== "completed") return "检查未完成";
   if ((result.input_coverage && result.input_coverage.target_coverage !== "complete")
       || result.plan_skip_reason === "diagnosis_background_budget_degraded"

@@ -14,6 +14,7 @@ const retained = computed(() => presentation.value.retained);
 const evidence = computed(() => summary.value?.evidence || []);
 const ledger = computed(() => props.result?.coverage_ledger);
 const reviewedHunks = computed(() => Object.values(ledger.value?.diff_hunks || {}).filter((item) => item.status === "reviewed").length);
+const unsupportedHunks = computed(() => Object.values(ledger.value?.diff_hunks || {}).filter((item) => item.status === "unsupported").length);
 function hypothesis(id: string): string {
   return props.result?.plan?.risk_hypotheses.find((item) => item.id === id)?.description || `假设 ${id}`;
 }
@@ -34,10 +35,16 @@ function tone(status: string): string {
     </section>
     <section v-if="result?.diff_manifest && ledger"><h4>Hunk 覆盖 · {{ reviewedHunks }} / {{ result.diff_manifest.hunks.length }}</h4>
       <p class="muted">清单展示完整变更；模型每轮只检查当前活动范围。已检查不等于正确性证明。</p>
+      <p v-if="unsupportedHunks" class="muted">其中 {{ unsupportedHunks }} 项变更没有可审查的文本差异，自动审查未覆盖，需要人工复核。</p>
       <details class="record-history"><summary>查看完整变更清单与覆盖状态</summary>
-        <p v-for="hunk in result.diff_manifest.hunks" :key="hunk.id">{{ hunk.file_path }} · {{ hunk.hunk_id }} · {{ ledger.diff_hunks[hunk.id]?.status || 'pending' }}</p>
+        <p v-for="hunk in result.diff_manifest.hunks" :key="hunk.id">{{ hunk.file_path }} · {{ hunk.hunk_id }} · {{ checkLabels[ledger.diff_hunks[hunk.id]?.status || 'pending'] }}</p>
       </details>
       <p class="muted">待解决问题 {{ Object.values(ledger.questions).filter((item) => item.status === 'pending').length }} 个</p>
+      <article v-for="(check, identity) in ledger.file_changes" :key="identity" class="check-row">
+        <p>元数据{{ check.metadata_verified ? '已核验' : '未核验' }} · 影响检查{{ checkLabels[check.impact_status] }}</p>
+        <p>{{ check.reason || '尚未提供影响检查记录' }}</p>
+        <EvidenceReferences :ids="[String(identity), ...check.evidence_ids]" :catalog="evidence" :head-sha="headSha" :base-sha="baseSha" />
+      </article>
     </section>
     <section v-if="result?.diff_batches?.length"><h4>分批审查 · {{ result.diff_batches.length }} 个工作集</h4>
       <p class="muted">每批仅检查其展示范围；未执行或失败的批次不计入完整覆盖。</p>
@@ -81,7 +88,7 @@ function tone(status: string): string {
         <p>上方展示累计记录；不同轮次的检查范围可能不同。</p>
       </details>
     </template>
-    <details v-if="summary?.reason || result?.terminal_reason" class="record-history"><summary>记录与执行元数据</summary><p>记录状态：{{ summary?.status || '未保存' }}</p><code>{{ summary?.reason }}</code><p>执行结束原因：{{ result?.terminal_reason || '尚未结束或未记录' }}</p></details>
+    <details v-if="summary?.reason || result?.terminal_reason" class="record-history"><summary>记录与执行元数据</summary><p>记录状态：{{ summary?.status || '未保存' }}</p><code>{{ summary?.reason }}</code><p>执行结束原因：{{ result?.terminal_reason === 'unsupported_change' ? '不支持自动审查，需人工复核' : result?.terminal_reason || '尚未结束或未记录' }}</p></details>
   </article>
 </template>
 
