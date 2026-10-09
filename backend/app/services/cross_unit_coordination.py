@@ -547,13 +547,22 @@ class CrossUnitCoordinationService:
                 self.runtime.data["followups"][request.id] = followup.model_dump(mode="json")
                 await self.runtime.persist()
                 continue
+            # persist 会规范化并替换嵌套字典，重新取得本次账本中的引用。
+            allocation = self.runtime.data["allocations"][request.id]
+            if "verification_capacity" not in allocation:
+                # 诊断已结束：本份额未用的探索调用可交给独立验证，但不借用后续补查。
+                # 保存一次，恢复时仍使用相同的 remaining_calls 与模型请求身份。
+                allocation["verification_capacity"] = max(0, self.provider.budget.max_model_calls
+                    - self.provider.budget.model_calls - allocation["future_calls"])
+                await self.runtime.persist()
             # 只处理新增批次，不重验或重新计数原有候选，不写入普通 Unit 结果。
             batch = {**state, "review_units": [unit.model_dump(mode="json")],
                      "review_unit_results": [], "review_issues": [item.model_dump(mode="json") for item in issues],
                      "model_usages": [], "issue_metrics": {}, "step_progress": [],
                      "context_snippets": [item.model_dump(mode="json") for item in result.context_snippets],
                      "_issue_verifier_service": IssueVerifierService(
-                         self.provider, enabled=True, fail_mode="unresolved", max_calls_per_unit=2,
+                         self.provider, enabled=True, fail_mode="unresolved",
+                         max_calls_per_unit=allocation["verification_capacity"],
                      )}
             self.provider.holdback = {
                 "followup_id": request.id, "phase": "verification",

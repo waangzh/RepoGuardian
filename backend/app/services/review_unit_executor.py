@@ -543,7 +543,10 @@ class ReviewUnitExecutor:
             estimate["decision_admitted"] = True
             if callable(estimator):
                 try:
-                    estimator(decision, state.get("model"))
+                    decision_estimate = estimator(decision, state.get("model"))
+                    estimate["decision_reserved_tokens"] = decision_estimate["reserved_tokens"]
+                    estimate["decision_admitted"] = budget.can_consume(model_calls=2,
+                        token_usage=estimate["reserved_tokens"] + decision_estimate["reserved_tokens"])
                 except LLMProviderError as exc:
                     if str(exc).partition(":")[0] not in {"required_input_too_large", "model_context_window_exceeded",
                             "model_input_limit_exceeded", "model_output_limit_exceeded"}:
@@ -650,11 +653,15 @@ class ReviewUnitExecutor:
                                     token_usage=entry.admission["reserved_tokens"]):
                 entry.status, entry.reason = "skipped", "unit_workset_budget_exhausted"
                 continue
+            # 未来诊断预留扣除后，再检查本批可选决策与诊断能否同时执行。
+            if "decision_reserved_tokens" in entry.admission:
+                entry.admission["decision_admitted"] = entry.admission["decision_admitted"] and local.can_consume(
+                    model_calls=2, token_usage=entry.admission["reserved_tokens"] + entry.admission["decision_reserved_tokens"])
             batch_state = {**state, "changed_files": [file.model_dump(mode="json") for file in selected],
                 "review_unit_results": [], "unit_diff_batch": {key: value for key, value in metadata.items()
                     if key not in {"admission", "reason"}}, "_unit_diff_batch": {
                         "budget": local, "skip_decision": not entry.admission.get("decision_admitted", True),
-                        "skip_plan": index != 0, "plan": shared_plan}}
+                        "skip_plan": index != 0 or not entry.admission.get("decision_admitted", True), "plan": shared_plan}}
             batch_state["coverage_ledger"] = ledger.model_dump(mode="json")
             memory = self._batch_memory(entries[:index], ledger)
             if memory:
@@ -1017,8 +1024,12 @@ class ReviewUnitExecutor:
         ReviewUnitTerminalReason | None,
     ]:
         budget = state["budget"]
-        if not budget.can_consume(model_calls=1):
+        if not budget.can_consume(model_calls=1, diagnosis_attempts=1):
             issue_round_completed = bool(state.get("issue_round_completed"))
+            summary = state.get("last_valid_review_summary") or state.get("review_summary")
+            if not issue_round_completed and summary and summary.last_valid_record and summary.last_valid_snapshot:
+                # 恢复中的未知尝试不抹掉同快照的已完成诊断；未决覆盖仍由完成门保留。
+                issue_round_completed = self._diagnosis_holdback(state) is None
             if issue_round_completed:
                 terminal_reason = (
                     ReviewUnitTerminalReason.completed
@@ -1028,7 +1039,7 @@ class ReviewUnitExecutor:
                 return (
                     AgentAction(
                         action="task_done",
-                        reason="已完成至少一轮结构化审查，在模型预算边界确定性结束 Unit",
+                        reason="剩余额度不能支持新的诊断，按当前检查记录结束 Unit",
                     ),
                     budget,
                     False,

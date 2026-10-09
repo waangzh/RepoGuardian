@@ -54,7 +54,7 @@ DEEPSEEK_MODEL_PROFILES = {
     model: ModelRequestProfile(context_window=1_000_000, max_output_tokens=393_216)
     for model in ("deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp")
 }
-CONTEXT_BUDGET_VERSION = "model-context-budget-v2-deepseek-tokenizer"
+CONTEXT_BUDGET_VERSION = "model-context-budget-v3-settled-usage"
 SERIALIZATION_CHAR_LIMIT = 2_000_000
 
 
@@ -230,7 +230,8 @@ class UnitRequestLedger:
             return
         self.settled.add(usage.id)
         if usage.actual_total_tokens is not None:
-            correction = max(0, usage.actual_total_tokens - self.last_reservation)
+            # 仅结算本次有实测 usage 的尝试；未知的前次重试仍保留完整预留。
+            correction = usage.actual_total_tokens - self.last_reservation
             self.budget = self.budget.model_copy(update={
                 "token_usage": self.budget.token_usage + correction})
             if self.budget.token_usage > self.budget.max_token_usage:
