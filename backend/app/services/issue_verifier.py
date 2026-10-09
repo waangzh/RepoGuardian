@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -115,9 +116,10 @@ class IssueVerifierService:
                 if usage is not None:
                     model_usages.append(usage)
                 verification = IssueVerification.model_validate(verification)
-                self._validate_decision(issue, unit, verification)
+                self._validate_decision(issue, unit, verification, request)
                 if verification.decision == IssueVerificationDecision.keep and (
-                    verification.contradicting_evidence or not request.evidence_complete
+                    verification.contradicting_evidence or verification.contradicting_existing_paths
+                    or not request.evidence_complete
                 ):
                     verification = verification.model_copy(update={
                         "decision": IssueVerificationDecision.unresolved,
@@ -194,6 +196,9 @@ class IssueVerifierService:
         }
         for raw in state.get("context_snippets") or []:
             snippet = ContextSnippet.model_validate(raw)
+            # 双侧渲染的 diff 由 unit_diff 的 canonical hunks 提供，不能标成 Head 正文。
+            if snippet.source == "file_read_diff":
+                continue
             if snippet.review_unit_id not in {None, unit.id} or snippet.file not in readable:
                 continue
             remaining = context_budget - consumed
@@ -204,7 +209,10 @@ class IssueVerifierService:
             context.append(snippet)
             consumed += len(snippet.content)
 
-        unit_diff = self._unit_diff(unit, state)
+        # 只提供候选涉及的文件差分，保留该文件的完整 Unit hunks 与循环体/早退。
+        # 其他文件的路径存在事实不提供正文，也不会扩张读取权限。
+        focused_unit = unit.model_copy(update={"primary_files": [path for path in unit.primary_files if path in readable]})
+        unit_diff = self._unit_diff(focused_unit, state)
         cited_text = issue.model_dump_json() + unit_diff
         known_paths = sorted({raw["path"] for raw in state.get("file_index") or []
             if isinstance(raw.get("path"), str) and raw["path"] in cited_text})[:50]
@@ -258,16 +266,55 @@ class IssueVerifierService:
         issue: ReviewIssue,
         unit: ReviewUnit,
         verification: IssueVerification,
+        request: IssueVerificationRequest,
     ) -> None:
         if verification.issue_id != issue.id:
             raise ValueError("verifier_issue_id_mismatch")
         del unit
-        readable = {
-            issue.primary_evidence.file_path,
-            *(anchor.file_path for anchor in issue.supporting_evidence),
-        }
+        if set(verification.contradicting_existing_paths) - set(request.known_existing_paths):
+            raise ValueError("verifier_path_fact_not_provided")
+        sources = IssueVerifierService._code_sources(request)
+        readable = {path for path, _ in sources}
         if any(anchor.file_path not in readable for anchor in verification.contradicting_evidence):
             raise ValueError("verifier_evidence_out_of_scope")
+        for anchor in verification.contradicting_evidence:
+            side = anchor.expected_side or "head"
+            sides = ("head", "base") if side == "either" else (side,)
+            if not anchor.existing_code.strip() or not any(
+                anchor.existing_code in text for candidate_side in sides
+                for text in sources.get((anchor.file_path, candidate_side), [])
+            ):
+                raise ValueError("verifier_counterevidence_not_displayed")
+
+    @staticmethod
+    def _code_sources(request: IssueVerificationRequest) -> dict[tuple[str, str], list[str]]:
+        """代码反证只能引用已显示的可信正文；路径库存不能成为正文来源。"""
+        sources = {}
+        def add(path, side, content):
+            sources.setdefault((path, side), []).append(content)
+        for anchor in [request.primary_evidence, *request.supporting_evidence]:
+            if anchor.resolution_method != EvidenceResolutionMethod.unresolved:
+                add(anchor.file_path, anchor.resolved_side or "head", anchor.existing_code)
+        for snippet in request.readonly_context:
+            if snippet.source != "file_read_diff":
+                add(snippet.file, "head", snippet.content)
+        try:
+            diff = json.loads(request.unit_diff)
+        except (ValueError, TypeError):
+            diff = []
+        for file in diff if isinstance(diff, list) else []:
+            if not isinstance(file, dict) or not isinstance(file.get("file_path"), str):
+                continue
+            for hunk in file.get("hunks", []):
+                for side, omitted, fallback in (("head", "deleted", "added_lines"), ("base", "added", "removed_lines")):
+                    lines = hunk.get("lines") or []
+                    if lines:
+                        add(file["file_path"], side, "\n".join(line["content"] for line in lines if line["kind"] != omitted))
+                    else:
+                        # 旧输入没有上下文行时，不把不连续的新增/删除行拼成虚构片段。
+                        for line in hunk.get(fallback, []):
+                            add(file["file_path"], side, line["content"])
+        return sources
 
     @staticmethod
     def _sanitize_contradictions(
