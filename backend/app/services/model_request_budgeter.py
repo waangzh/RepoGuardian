@@ -6,6 +6,8 @@ from dataclasses import dataclass, replace
 from functools import lru_cache
 import hashlib
 import json
+import logging
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -52,7 +54,7 @@ DEEPSEEK_MODEL_PROFILES = {
     model: ModelRequestProfile(context_window=1_000_000, max_output_tokens=393_216)
     for model in ("deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp")
 }
-CONTEXT_BUDGET_VERSION = "model-context-budget-v1"
+CONTEXT_BUDGET_VERSION = "model-context-budget-v2-deepseek-tokenizer"
 SERIALIZATION_CHAR_LIMIT = 2_000_000
 
 
@@ -86,7 +88,30 @@ def _encoding(model: str):
         return None
 
 
+@lru_cache(maxsize=1)
+def _deepseek_encoding():
+    # 仅加载用户提供的静态词表，不执行模型目录中的 Python，也不联网下载。
+    try:
+        from tokenizers import Tokenizer
+        path = Path(__file__).resolve().parents[1] / "tools/deepseek_v4_tokenizer/tokenizer.json"
+        tokenizer = Tokenizer.from_file(str(path))
+        tokenizer.no_truncation()
+        tokenizer.no_padding()
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        return tokenizer, digest
+    except Exception as exc:
+        # tokenizers 对损坏的 JSON 使用原生 Exception，加载失败仍显式保守回退。
+        logging.getLogger("RepoGuardian.LLM").warning("DeepSeek tokenizer 不可用：%s", type(exc).__name__)
+        return None
+
+
 def estimate_tokens(text: str, model: str) -> tuple[int, str]:
+    if model in DEEPSEEK_MODEL_PROFILES:
+        local = _deepseek_encoding()
+        if local is not None:
+            tokenizer, digest = local
+            count = len(tokenizer.encode(text, add_special_tokens=False).ids)
+            return count, f"deepseek_v4:{digest}:request-envelope"
     encoding = _encoding(model)
     if encoding is not None:
         return len(encoding.encode(text, disallowed_special=())), f"tiktoken:{encoding.name}:request-envelope"
@@ -208,6 +233,13 @@ class UnitRequestLedger:
             correction = max(0, usage.actual_total_tokens - self.last_reservation)
             self.budget = self.budget.model_copy(update={
                 "token_usage": self.budget.token_usage + correction})
+            if self.budget.token_usage > self.budget.max_token_usage:
+                self.rejection = {"reason": "unit_request_budget_overrun",
+                    "actual_accounted_tokens": self.budget.token_usage,
+                    "max_token_usage": self.budget.max_token_usage}
+                error = RequestAdmissionError("unit_request_budget_overrun: " + json.dumps(self.rejection))
+                error.usage = usage
+                raise error
 
     @contextmanager
     def activate(self):
