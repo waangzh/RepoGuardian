@@ -265,7 +265,7 @@ class CrossUnitCoordinationService:
                         item["outcome"] in {"candidate_found", "refuted"}
                         for item in result["followup_results"]
                     ) and not plan.unresolved_questions
-                ) and not any(issue["status"] in {"candidate", "evidence_resolved", "needs_human"}
+                ) and not any(issue["status"] in {"candidate", "evidence_resolved", "unresolved", "needs_human"}
                               for issue in result.get("review_issues") or []
                               if issue["review_unit_id"].startswith("followup-"))) else "unresolved"
                 plan = plan.model_copy(update={"status": status})
@@ -553,7 +553,7 @@ class CrossUnitCoordinationService:
                      "model_usages": [], "issue_metrics": {}, "step_progress": [],
                      "context_snippets": [item.model_dump(mode="json") for item in result.context_snippets],
                      "_issue_verifier_service": IssueVerifierService(
-                         self.provider, enabled=True, fail_mode="needs_human", max_calls_per_unit=2,
+                         self.provider, enabled=True, fail_mode="unresolved", max_calls_per_unit=2,
                      )}
             self.provider.holdback = {
                 "followup_id": request.id, "phase": "verification",

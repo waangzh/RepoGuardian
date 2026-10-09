@@ -39,7 +39,6 @@ from app.models.persistence import (
     ValidationDetail,
 )
 from app.models.review import (
-    HumanReviewRequest,
     IssueStatus,
     ReviewIssue,
     ReviewTask,
@@ -417,56 +416,6 @@ class ReviewRepository:
                     row.final_status = IssueStatus.dismissed.value
                 row.updated_at = utcnow()
 
-    def create_human_request(
-        self,
-        *,
-        task_id: str,
-        request: HumanReviewRequest,
-        reason: str,
-        checkpoint_id: str | None = None,
-        request_id: str | None = None,
-    ) -> HumanRequestDetail:
-        request_id = request_id or uuid4().hex
-        now = utcnow()
-        options = [
-            HumanRequestOption(id="provide_information", label="提供信息"),
-            HumanRequestOption(id="cancel_review", label="取消任务"),
-        ]
-        with self._session_factory.begin() as session:
-            task = session.get(ReviewTaskOrm, task_id)
-            if task is None:
-                raise KeyError(task_id)
-            existing = session.scalar(
-                select(HumanRequestOrm).where(HumanRequestOrm.request_id == request_id)
-            )
-            if existing:
-                return self._human_detail(existing)
-            row = HumanRequestOrm(
-                request_id=request_id,
-                task_id=task_id,
-                reason=reason,
-                question=request.questions[0],
-                options=[item.model_dump(mode="json") for item in options],
-                context={
-                    "questions": request.questions,
-                    "missing_information": request.missing_information,
-                    "known_evidence": request.known_evidence,
-                    "prohibited_operations": request.prohibited_operations,
-                },
-                status=HumanRequestStatus.pending.value,
-                deadline=now + timedelta(seconds=settings.repoguardian_human_timeout_seconds),
-                thread_id=task.thread_id,
-                checkpoint_ns=task.checkpoint_ns,
-                checkpoint_id=checkpoint_id,
-                created_at=now,
-                updated_at=now,
-            )
-            session.add(row)
-            task.status = TaskStatus.waiting_for_human.value
-            task.updated_at = now
-            session.flush()
-            return self._human_detail(row)
-
     def get_human_request(self, task_id: str, request_id: str) -> HumanRequestDetail | None:
         with self._session_factory() as session:
             row = session.scalar(select(HumanRequestOrm).where(
@@ -483,77 +432,6 @@ class ReviewRepository:
                 .order_by(HumanRequestOrm.created_at)
             ).all()
             return [self._human_detail(row) for row in rows]
-
-    def answer_human_request(
-        self,
-        *,
-        task_id: str,
-        request_id: str,
-        answer: HumanRequestAnswer,
-        answered_by: str,
-    ) -> tuple[HumanRequestDetail, bool]:
-        now = utcnow()
-        with self._session_factory.begin() as session:
-            task = session.get(ReviewTaskOrm, task_id)
-            row = session.scalar(select(HumanRequestOrm).where(
-                HumanRequestOrm.task_id == task_id,
-                HumanRequestOrm.request_id == request_id,
-            ))
-            if task is None or row is None:
-                raise KeyError(request_id)
-            if task.status == TaskStatus.cancelled.value:
-                raise ValueError("cancelled task cannot be resumed")
-            if row.status == HumanRequestStatus.answered.value:
-                same = (
-                    row.answer_option_id == answer.option_id
-                    and (row.answer_text or None) == ((answer.text or "").strip() or None)
-                )
-                if not same:
-                    raise ValueError("human request was already answered differently")
-                return self._human_detail(row), True
-            if row.status != HumanRequestStatus.pending.value:
-                raise ValueError(f"human request is {row.status}")
-            if _as_utc(row.deadline) <= now:
-                row.status = HumanRequestStatus.expired.value
-                raise ValueError("human request deadline has passed")
-            option_ids = {str(item["id"]) for item in row.options}
-            if answer.option_id and answer.option_id not in option_ids:
-                raise ValueError("unknown human request option")
-            row.answer_option_id = answer.option_id
-            row.answer_text = (answer.text or "").strip() or None
-            row.answered_by = answered_by
-            row.answered_at = now
-            row.updated_at = now
-            row.status = HumanRequestStatus.answered.value
-            task.status = TaskStatus.queued.value
-            task.updated_at = now
-            session.flush()
-            return self._human_detail(row), False
-
-    def expire_human_requests(self, *, now: datetime | None = None) -> int:
-        now = now or utcnow()
-        with self._session_factory.begin() as session:
-            rows = session.scalars(select(HumanRequestOrm).where(
-                HumanRequestOrm.status == HumanRequestStatus.pending.value,
-                HumanRequestOrm.deadline <= now,
-            )).all()
-            for row in rows:
-                row.status = HumanRequestStatus.expired.value
-                row.updated_at = now
-                task = session.get(ReviewTaskOrm, row.task_id)
-                if task and task.status != TaskStatus.cancelled.value:
-                    task.status = (
-                        TaskStatus.cancelled.value
-                        if settings.repoguardian_human_timeout_policy == "cancel"
-                        else TaskStatus.failed.value
-                    )
-                    task.error_summary = "human request timed out"
-                    task.completed_at = task.completed_at or now
-                    task.retention_until = task.completed_at + timedelta(
-                        days=settings.repoguardian_retention_days
-                    )
-                    task.updated_at = now
-            return len(rows)
 
     def cancel_task(self, task_id: str) -> bool:
         now = utcnow()
@@ -955,6 +833,12 @@ class ReviewRepository:
             },
         })
         payload["review"] = review
+        if row.status == TaskStatus.waiting_for_human.value:
+            # 仅转换读取视图；保留历史快照和审计记录，不伪造完成或人工回答。
+            payload.update(status=TaskStatus.failed.value, phase="failed",
+                           error="历史审查因人工请求停止；该流程已移除，请新建审查")
+            review.update(status=TaskStatus.failed.value, completed=False)
+            payload["warnings"].append("历史人工暂停任务未完成后续验证，不能作为完整审查结论")
         if row.status == TaskStatus.cancelled.value:
             if payload.get("coordination_plan"):
                 payload["coordination_plan"]["status"] = "cancelled"

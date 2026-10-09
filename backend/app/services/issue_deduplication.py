@@ -57,7 +57,7 @@ class IssueDeduplicationService:
     ) -> IssueDeduplicationResult:
         publishable = [
             issue for issue in issues
-            if issue.status in {IssueStatus.confirmed, IssueStatus.needs_human}
+            if issue.status in {IssueStatus.confirmed, IssueStatus.unresolved, IssueStatus.candidate}
         ]
         by_id = {issue.id: issue for issue in publishable}
         removed: set[str] = set()
@@ -112,7 +112,8 @@ class IssueDeduplicationService:
         updated_metrics = metrics.model_copy(update={
             "duplicate_count": len(removed),
             "confirmed_count": sum(issue.status == IssueStatus.confirmed for issue in final),
-            "needs_human_count": sum(issue.status == IssueStatus.needs_human for issue in final),
+            "needs_human_count": 0,
+            "unresolved_count": sum(issue.status in {IssueStatus.unresolved, IssueStatus.candidate} for issue in final),
         })
         return IssueDeduplicationResult(final, decisions, updated_metrics, model_usages)
 

@@ -28,7 +28,7 @@ export const reasonLabels: Record<string, string> = {
 };
 
 export function isTerminal(status: string): boolean {
-  return ["completed", "completed_with_warnings", "failed", "cancelled"].includes(status);
+  return ["completed", "completed_with_warnings", "failed", "cancelled", "waiting_for_human"].includes(status);
 }
 
 export function coverageCompletionLabel(coverage: Pick<ReviewCoverage, "review_complete">): string {
@@ -102,13 +102,13 @@ export function followupPresentation(result: CrossUnitFollowupResult | undefined
 
 export function publishedFollowupIssues(result: CrossUnitFollowupResult | undefined, issues: ReviewIssue[]): ReviewIssue[] {
   const ids = new Set(result?.unit_result?.issues.map((issue) => issue.id) || []);
-  return issues.filter((issue) => ["confirmed", "needs_human", "published"].includes(issue.status)
+  return issues.filter((issue) => ["confirmed", "unresolved", "candidate", "needs_human", "published"].includes(issue.status)
     && (ids.has(issue.id) || issue.source_issue_ids?.some((id) => ids.has(id))));
 }
 
 export function issueStatusBreakdown(result: CrossUnitFollowupResult | undefined) {
   const issues = result?.unit_result?.issues || [];
-  const labels: Record<string, string> = { candidate: "候选待核验", evidence_resolved: "证据已定位", confirmed: "已确认", published: "已发布", needs_human: "待人工", dismissed: "已过滤" };
+  const labels: Record<string, string> = { candidate: "候选待核验", evidence_resolved: "证据已定位", confirmed: "已确认", published: "已发布", unresolved: "未确认", needs_human: "未确认（历史）", dismissed: "已过滤" };
   const counts = Object.entries(labels).map(([status, label]) => ({ label, count: issues.filter((issue) => issue.status === status).length })).filter((item) => item.count > 0);
   const unknown = issues.length - counts.reduce((sum, item) => sum + item.count, 0);
   return unknown > 0 ? [...counts, { label: "状态未记录", count: unknown }] : counts;

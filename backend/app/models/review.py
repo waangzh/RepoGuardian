@@ -179,8 +179,12 @@ class IssueStatus(str, Enum):
     evidence_resolved = "evidence_resolved"
     confirmed = "confirmed"
     dismissed = "dismissed"
-    needs_human = "needs_human"
+    unresolved = "unresolved"
     published = "published"
+
+    @classmethod
+    def _missing_(cls, value):
+        return cls.unresolved if value == "needs_human" else None
 
 
 class IssueVerificationDecision(str, Enum):
@@ -188,7 +192,11 @@ class IssueVerificationDecision(str, Enum):
 
     keep = "keep"
     drop = "drop"
-    needs_human = "needs_human"
+    unresolved = "unresolved"
+
+    @classmethod
+    def _missing_(cls, value):
+        return cls.unresolved if value == "needs_human" else None
 
 
 class EvidenceResolutionMethod(str, Enum):
@@ -217,7 +225,11 @@ class CommentPlacement(str, Enum):
     inline = "inline"
     summary = "summary"
     suppressed = "suppressed"
-    needs_human = "needs_human"
+    unresolved = "unresolved"
+
+    @classmethod
+    def _missing_(cls, value):
+        return cls.unresolved if value == "needs_human" else None
 
 
 class AgentActionName(str, Enum):
@@ -1216,6 +1228,7 @@ class IssueMetrics(BaseModel):
     deterministic_drop_count: int = Field(default=0, ge=0)
     verifier_drop_count: int = Field(default=0, ge=0)
     needs_human_count: int = Field(default=0, ge=0)
+    unresolved_count: int = Field(default=0, ge=0)
     duplicate_count: int = Field(default=0, ge=0)
     confirmed_count: int = Field(default=0, ge=0)
     severity_adjustment_count: int = Field(default=0, ge=0)
