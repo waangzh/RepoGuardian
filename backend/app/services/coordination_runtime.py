@@ -72,7 +72,7 @@ def coordination_fingerprint(state: dict) -> str:
         "model_profiles": {key: value.model_dump(mode="json") for key, value in
                            settings.repoguardian_model_request_profiles.items()},
         "catalog_version": CATALOG_BATCH_VERSION,
-        "request_contract_version": "coordination-canonical-evidence-allocation-v8-shared-unit-budget",
+        "request_contract_version": "coordination-canonical-evidence-allocation-v10-verification-rollover",
         "repository": (state.get("pr_info") or {}).get("clone_url"),
         "base_sha": state.get("base_sha"), "head_sha": state.get("head_sha"),
         "model": state.get("model") or settings.repoguardian_model,
@@ -168,6 +168,21 @@ class CoordinationRuntime:
         return {"coordination_plan": plan.model_dump(mode="json"),
                 "followup_results": list(self.data["followups"].values())}
 
+    def _settle_usage(self, key: str, usage: ModelUsage | None, estimate: int) -> None:
+        if usage is None or usage.actual_total_tokens is None:
+            return
+        call = self.data["calls"][key]
+        settled = call.setdefault("settled_usage_ids", [])
+        if usage.id in settled:
+            return
+        settled.append(usage.id)
+        delta = usage.actual_total_tokens - estimate
+        call["correction_tokens"] = max(0, delta)
+        call["released_tokens"] = max(0, -delta)
+        self.data["budget"] = self.budget.model_copy(update={
+            "token_usage": self.budget.token_usage + delta,
+        }).model_dump(mode="json")
+
     async def call(self, provider: Any, name: str, args: tuple, output_tokens: int,
                    *, holdback: dict | None = None) -> Any:
         from app.services.model_request_budgeter import CONTEXT_BUDGET_VERSION
@@ -260,13 +275,7 @@ class CoordinationRuntime:
                 value = types[name].model_validate(value)
                 self.data["calls"][key].update(status="completed", value=value.model_dump(mode="json"),
                     usage=usage.model_dump(mode="json") if usage else None)
-                if usage and usage.actual_total_tokens is not None:
-                    # 不退还已预留的失败/重试预算；实际用量高于估算时补记并阻止后续超额调用。
-                    correction = max(0, usage.actual_total_tokens - estimate)
-                    self.data["calls"][key]["correction_tokens"] = correction
-                    self.data["budget"] = self.budget.model_copy(update={
-                        "token_usage": self.budget.token_usage + correction,
-                    }).model_dump(mode="json")
+                self._settle_usage(key, usage, estimate)
             except asyncio.CancelledError:
                 self.data["calls"][key].update(status="unknown", error="cancelled_call_outcome_unknown")
                 raise
@@ -274,12 +283,7 @@ class CoordinationRuntime:
                 usage = getattr(exc, "usage", None) or usage
                 self.data["calls"][key].update(status="failed", error=f"{type(exc).__name__}: {exc}",
                     usage=usage.model_dump(mode="json") if usage else None)
-                if usage and usage.actual_total_tokens is not None:
-                    correction = max(0, usage.actual_total_tokens - estimate)
-                    self.data["calls"][key]["correction_tokens"] = correction
-                    self.data["budget"] = self.budget.model_copy(update={
-                        "token_usage": self.budget.token_usage + correction,
-                    }).model_dump(mode="json")
+                self._settle_usage(key, usage, estimate)
                 self.data["calls"][key]["latency_ms"] = int((time.monotonic() - started) * 1000)
                 await self.persist()
                 raise

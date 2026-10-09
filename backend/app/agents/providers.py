@@ -1640,6 +1640,8 @@ class OpenAICompatibleProvider(LLMProvider):
             "context. Trace the complete failure path, including guards, early exits and error handling "
             "in the surrounding diff; explain why those guards do not prevent the claimed failure. "
             "known_existing_paths are positive Head inventory facts, not file contents or read permission. "
+            "unit_diff contains only candidate evidence files and their Unit hunks, not the whole Unit "
+            "or repository. Keep unavailable dependency behavior unresolved. "
             "If evidence_complete is false, return unresolved rather than keep. "
             "Never infer that a referenced file is absent from an incomplete context. For shell loops, "
             "check shell options, unmatched glob behavior and existence checks inside the loop. "
@@ -1654,11 +1656,15 @@ class OpenAICompatibleProvider(LLMProvider):
             "existing_code copied from supplied evidence. Example: "
             '{"file_path":"app.py","existing_code":"return value","expected_side":"head"}. '
             "Allowed optional fields: symbol, expected_hunk_id, context_before, context_after. "
+            "A Head path-existence counterexample belongs in contradicting_existing_paths, using an "
+            "exact path from known_existing_paths. Do not fabricate a code anchor for an unread file. "
+            "This field proves only existence, not contents, executability or runtime behavior. "
+            "Code counterevidence must quote an actual displayed diff/context body on the stated side. "
             "If you cannot identify the supplied file, put the uncertainty in reason, return "
             "unresolved and contradicting_evidence: [].\n"
             "Return exactly this JSON shape and no Markdown:\n"
             '{"issue_id":"id","decision":"keep|drop|unresolved","reason":"reason",'
-            '"contradicting_evidence":[],"adjusted_severity":null}\n\n'
+            '"contradicting_evidence":[],"contradicting_existing_paths":[],"adjusted_severity":null}\n\n'
             "Bounded verifier input JSON:\n"
         )
         return prefix + _assemble_unit_context(payload, set(payload), 60_000, 'verifier', context_budget=(context_budget.with_prefix(prefix) if context_budget else None))

@@ -1206,6 +1206,7 @@ class IssueVerification(BaseModel):
     decision: IssueVerificationDecision
     reason: str = Field(min_length=1, max_length=2_000)
     contradicting_evidence: list[EvidenceAnchor] = Field(default_factory=list, max_length=12)
+    contradicting_existing_paths: list[str] = Field(default_factory=list, max_length=12)
     adjusted_severity: Severity | None = None
 
 
