@@ -550,6 +550,12 @@ class ReviewUnitExecutor:
         worksets = build_unit_worksets(unit, files,
             lambda child, selected, metadata: self._workset_admission(child, selected, state, budget, metadata))
         entries = [UnitDiffBatch(**metadata) for _, _, metadata in worksets]
+        # Allocate one base diagnosis per executable workset, once for the whole parent.
+        # Keep the Unit's token/retrieval limits and a fixed shared optional/retry allowance.
+        allocated = self._budget_for(unit, workset_count=max(1, sum(
+            bool(entry.admission["admitted"]) for entry in entries)))
+        budget = budget.model_copy(update={name: getattr(allocated, name) for name in (
+            "max_model_calls", "max_diagnosis_attempts")})
         observer = unit_budget_snapshot.get()
         binding = observer["input_fingerprint"] if observer else unit_execution_fingerprint(
             unit.fingerprint, state, self.provider, self.input_mode)
@@ -590,6 +596,7 @@ class ReviewUnitExecutor:
         if observer is not None:
             observer["diff_batches"] = entries
             observer["diff_manifest"] = manifest
+            observer["budget"] = budget
         for index, (child, selected, metadata) in enumerate(worksets):
             entry = entries[index]
             if entry.status == "completed":
@@ -610,12 +617,12 @@ class ReviewUnitExecutor:
                 continue
             # 公共清单/账本/规划增量只计数一次，避免逐批重渲染整个剩余队列。
             growth = max(0, current_admission["reserved_tokens"] - entry.admission["reserved_tokens"])
-            entry.admission = current_admission
-            reserved = sum(item.admission["reserved_tokens"] + growth for item in future)
+            held = self._workset_holdback(budget, future, current_admission["reserved_tokens"], growth)
+            entry.admission = {**current_admission, "future_holdback": held}
             local = budget.model_copy(update={
-                "max_model_calls": max(budget.model_calls, budget.max_model_calls - len(future)),
-                "max_diagnosis_attempts": max(budget.diagnosis_attempts, budget.max_diagnosis_attempts - len(future)),
-                "max_token_usage": max(budget.token_usage, budget.max_token_usage - reserved),
+                "max_model_calls": budget.max_model_calls - held["model_calls"],
+                "max_diagnosis_attempts": budget.max_diagnosis_attempts - held["diagnosis_attempts"],
+                "max_token_usage": budget.max_token_usage - held["token_usage"],
             })
             if not local.can_consume(model_calls=1, diagnosis_attempts=1,
                                     token_usage=entry.admission["reserved_tokens"]):
@@ -669,6 +676,21 @@ class ReviewUnitExecutor:
                         observer.get("evidence_store"), child_snapshot.get("evidence_store"), entry.result.evidence_store if entry.result else None]))
         return self._aggregate_diff_batches(unit, entries, budget, binding, manifest=manifest,
             evidence_store=observer.get("evidence_store") if observer else None)
+
+    @staticmethod
+    def _workset_holdback(budget, future, current_tokens, growth):
+        """Protect affordable future diagnoses after admitting the current batch first."""
+        held = {"model_calls": 0, "diagnosis_attempts": 0, "token_usage": 0, "workset_ids": []}
+        for entry in future:
+            tokens = entry.admission["reserved_tokens"] + growth
+            if budget.can_consume(model_calls=2 + held["model_calls"],
+                                  diagnosis_attempts=2 + held["diagnosis_attempts"],
+                                  token_usage=current_tokens + tokens + held["token_usage"]):
+                held["model_calls"] += 1
+                held["diagnosis_attempts"] += 1
+                held["token_usage"] += tokens
+                held["workset_ids"].append(entry.id)
+        return held
 
     @staticmethod
     def _batch_memory(entries, ledger):
@@ -1741,28 +1763,33 @@ class ReviewUnitExecutor:
         }
 
     @staticmethod
-    def _budget_for(unit: ReviewUnit) -> ExecutionBudget:
+    def _budget_for(unit: ReviewUnit, *, workset_count: int = 1) -> ExecutionBudget:
+        from app.services.unit_worksets import MAX_UNIT_WORKSETS
+
+        if not 1 <= workset_count <= MAX_UNIT_WORKSETS:
+            raise ValueError("invalid_unit_workset_count")
+        additional_diagnoses = workset_count - 1
         if unit.complexity == ReviewUnitComplexity.small:
             return ExecutionBudget(
                 max_context_retrievals=4,
-                max_diagnosis_attempts=1,
+                max_diagnosis_attempts=1 + additional_diagnoses,
                 max_patch_attempts=0,
-                max_model_calls=3,
+                max_model_calls=3 + additional_diagnoses,
                 max_token_usage=max(12_000, unit.estimated_tokens + 8_192),
             )
         if unit.complexity == ReviewUnitComplexity.medium:
             return ExecutionBudget(
                 max_context_retrievals=8,
-                max_diagnosis_attempts=2,
+                max_diagnosis_attempts=2 + additional_diagnoses,
                 max_patch_attempts=0,
-                max_model_calls=5,
+                max_model_calls=5 + additional_diagnoses,
                 max_token_usage=max(24_000, unit.estimated_tokens + 12_000),
             )
         return ExecutionBudget(
             max_context_retrievals=12,
-            max_diagnosis_attempts=3,
+            max_diagnosis_attempts=3 + additional_diagnoses,
             max_patch_attempts=0,
-            max_model_calls=7,
+            max_model_calls=7 + additional_diagnoses,
             max_token_usage=max(48_000, unit.estimated_tokens + 20_000),
         )
 
