@@ -122,6 +122,32 @@ class GitTool:
         """列出仓库索引中的文件，供 RepoIndexer 和只读工具共享。"""
         return list_git_tracked_files(repo_path, self._git)
 
+    def get_tree_entries(self, repo_path: str | Path, revision: str, paths: list[str]) -> dict:
+        """只读固定 tree：literal pathspec、NUL 分隔、完整 object ID，不访问工作树文件。"""
+        from app.models.review import FileChangeSide
+        from app.review.tool_scope import is_sensitive_repository_change
+
+        if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", revision):
+            raise ValueError("tree evidence requires an immutable revision")
+        repo_dir = self._validate_worktree(repo_path)
+        selected = sorted({FileChangeSide(path=path).path for path in paths})
+        if any(is_sensitive_repository_change(path) for path in selected):
+            raise ValueError("sensitive tree evidence path")
+        entries = {}
+        for offset in range(0, len(selected), 32):
+            batch = selected[offset:offset + 32]
+            raw = self._run([self._git, "--literal-pathspecs", "-C", str(repo_dir), "ls-tree",
+                "--full-tree", "-l", "-z", revision, "--", *batch])
+            for entry in raw.split("\0"):
+                if not entry:
+                    continue
+                fields, path = entry.split("\t", 1)
+                mode, kind, identity, size = fields.split()
+                if path in batch and kind in {"blob", "commit"}:
+                    entries[path] = {"blob_id": identity, "mode": mode,
+                        "size": int(size) if size != "-" else None}
+        return entries
+
     def get_file_content_at_revision(
         self, repo_path: str | Path, revision: str, file_path: str
     ) -> str | None:

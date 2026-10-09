@@ -374,6 +374,14 @@ class OpenAICompatibleProvider(LLMProvider):
             '"evidence_ids":[]}],"unresolved_questions":[{"id":null,"question":"未决问题",'
             '"affected_files":[],"evidence_ids":[]}],"question_updates":[{"question_id":"记忆中的问题ID",'
             '"status":"resolved|superseded","reason":"更新依据","evidence_ids":[],"replacement_id":null}]}\n'
+            "Also return file_change_checks for displayed file_change evidence: "
+            '[{"evidence_id":"file-change ID","impact_status":"checked|unresolved|not_checked",'
+            '"evidence_ids":["current diff/context ID"],"reason":"影响检查依据或缺口"}]. '
+            "FileChangeEvidence is non-line evidence bound to Base/Head paths, blob IDs, modes and sizes. "
+            "The server verifies metadata; separately examine rename/import/resource/build/config "
+            "and executable/empty-file impacts. checked requires current code evidence; metadata alone, "
+            "equal blobs or zero size do not prove no impact. Retrieve dependencies when necessary; "
+            "otherwise report unresolved. Never use metadata as a line anchor or invent code findings. "
             "checked, supported, refuted, verified and conflicting require evidence IDs. "
             "For a verified/conflicting dependency include evidence from that dependency file.\n"
             "At every level use only the fields listed above. Put dependency explanations in assumption; "
@@ -417,6 +425,10 @@ class OpenAICompatibleProvider(LLMProvider):
         seen_context = set()
         hunks = iter((file.file_path, hunk) for file in changed_files for hunk in file.hunks)
         evidence = []
+        from app.services.file_change_evidence import file_change_reference
+        expected_changes = {reference["id"]: reference for file in changed_files
+            if (reference := file_change_reference(file, head, base)) is not None}
+        seen_changes = set()
         for original in record_input["evidence"]:
             item = {key: value for key, value in original.items() if key != "content"}
             if original["source"] == "diff":
@@ -431,6 +443,10 @@ class OpenAICompatibleProvider(LLMProvider):
                     raise ValueError("diagnosis_evidence_hunk_mismatch")
                 item["body"] = json.loads(content)
                 item["removed_lines"] = item["body"].pop("removed_lines")
+            elif original["source"] == "file_change":
+                if expected_changes.get(original["id"]) != original or original["id"] in seen_changes:
+                    raise ValueError("diagnosis_file_change_evidence_mismatch")
+                seen_changes.add(original["id"])
             else:
                 if expected_context.get(original["id"]) != original or original["id"] in seen_context:
                     raise ValueError("diagnosis_evidence_context_mismatch")
@@ -443,6 +459,8 @@ class OpenAICompatibleProvider(LLMProvider):
             raise ValueError("diagnosis_evidence_hunk_mismatch")
         if seen_context != set(expected_context):
             raise ValueError("diagnosis_evidence_context_mismatch")
+        if seen_changes != set(expected_changes):
+            raise ValueError("diagnosis_file_change_evidence_mismatch")
         payload["readonly_context"] = contexts
         payload["evidence"] = evidence
         from app.services.unit_coverage import hierarchy_payload
@@ -1269,7 +1287,7 @@ class OpenAICompatibleProvider(LLMProvider):
             if not raw_files:
                 raise LLMProviderError(f"{stage}_diff_files_required")
             files = [ChangedFile.model_validate(item) for item in raw_files]
-            catalog = [item for item in state.get("evidence_catalog") or [] if item.get("source") == "diff"]
+            catalog = [item for item in state.get("evidence_catalog") or [] if item.get("source") in {"diff", "file_change"}]
             first = next(iter(catalog), {})
             snapshot = state.get("evidence_snapshot") or {}
             record_input = build_record_input(files, [], None,
@@ -1282,7 +1300,7 @@ class OpenAICompatibleProvider(LLMProvider):
             if snapshot and snapshot != record_input["snapshot"]:
                 raise LLMProviderError(f"{stage}_evidence_snapshot_mismatch")
             rendered = cls._unit_evidence_payload(files, record_input)["evidence"]
-            references = iter(rendered)
+            references = iter(item for item in rendered if item["source"] == "diff")
             for file in files:
                 ranges = []
                 for index, hunk in enumerate(file.hunks):
@@ -1293,7 +1311,8 @@ class OpenAICompatibleProvider(LLMProvider):
                 metadata.append({**{key: getattr(file, key) for key in ("file_path", "old_file_path",
                     "change_type", "additions", "deletions", "is_binary")}, "hunk_ranges": ranges})
             diff_evidence = {"format": CANONICAL_UNIT_INPUT_PROTOCOL,
-                "snapshot": record_input["snapshot"], "hunks": rendered}
+                "snapshot": record_input["snapshot"], "hunks": [item for item in rendered if item["source"] == "diff"],
+                "file_changes": [item for item in rendered if item["source"] == "file_change"]}
         else:
             # 仅有文本的历史/自定义调用保留一份完整正文；不冒充 canonical evidence。
             metadata = [{key: item[key] for key in ("file_path", "old_file_path", "change_type",
@@ -1324,7 +1343,7 @@ class OpenAICompatibleProvider(LLMProvider):
         scope = state.get("review_tool_scope") or {}
         metadata, diff_evidence = cls._unit_diff_projection(state, stage="planning")
         from app.services.unit_coverage import hierarchy_payload
-        hierarchy = hierarchy_payload(state, diff_evidence.get("hunks", []))
+        hierarchy = hierarchy_payload(state, [*diff_evidence.get("hunks", []), *diff_evidence.get("file_changes", [])])
         if hierarchy:
             hierarchy = {**hierarchy, "working_memory": state.get("working_memory") or {},
             "active_supporting_evidence": cls._active_supporting_context(state)}
@@ -1352,6 +1371,9 @@ class OpenAICompatibleProvider(LLMProvider):
             "and diff_evidence have displayed current bodies. coverage_ledger is server-owned progress; "
             "never infer inspection of pending hunks from the manifest. Plan the active set using the "
             "full Unit metadata and retain cross-batch assumptions as unresolved. "
+            "diff_evidence.file_changes supplies citable non-line Base/Head path/blob/mode/size evidence. "
+            "Metadata verification and code-impact checks are separate gates; plan reads of related "
+            "callers/configuration. Equal blobs or empty files do not imply no impact. "
             "evidence_store_catalog lists archived metadata, never citable code. Read its exact file/range "
             "to request reactivation; only current active supporting evidence can be cited. "
             "diff_evidence contains the only diff body; changed_files_metadata contains file facts "
@@ -1488,13 +1510,13 @@ class OpenAICompatibleProvider(LLMProvider):
 
             metadata, diff_evidence = cls._unit_diff_projection(state, stage="decision")
             from app.services.unit_coverage import hierarchy_payload
-            compact.update(hierarchy_payload(state, diff_evidence.get("hunks", [])))
+            compact.update(hierarchy_payload(state, [*diff_evidence.get("hunks", []), *diff_evidence.get("file_changes", [])]))
             if "evidence_store_catalog" in state:
                 compact["evidence_store_catalog"] = state["evidence_store_catalog"]
             if "diff_manifest" in compact:
                 compact["active_supporting_evidence"] = cls._active_supporting_context(state)
                 compact["observed_context"].pop("snippets")
-            diff_ids = {item["id"] for item in diff_evidence.get("hunks", [])}
+            diff_ids = {item["id"] for item in [*diff_evidence.get("hunks", []), *diff_evidence.get("file_changes", [])]}
             compact.pop("changed_files")
             compact["review_unit"] = state.get("review_unit") or {}
             compact["diff_evidence"] = diff_evidence

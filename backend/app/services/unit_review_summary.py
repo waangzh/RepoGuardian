@@ -9,6 +9,7 @@ from app.models.review import (
 )
 from app.services.review_input_context import build_context_evidence, make_evidence, EVIDENCE_INPUT_VERSION, input_snapshot, question_identity
 from app.review.input_protocol import CANONICAL_UNIT_INPUT_PROTOCOL
+from app.services.file_change_evidence import file_change_reference, set_file_change_impact_scope
 
 
 def build_record_input(
@@ -28,8 +29,10 @@ def build_record_input(
             evidence.append(make_evidence(item.file_path, "diff", hunk.new_start,
                 hunk.new_start + max(0, hunk.new_length - 1), content, head_sha, base_sha))
     chunks, context_evidence = build_context_evidence(context, head_sha, base_sha)
+    evidence.extend(reference for file in files
+                    if (reference := file_change_reference(file, head_sha, base_sha)) is not None)
     evidence.extend(context_evidence)
-    return {
+    result = {
         "targets": targets,
         "input_protocol": CANONICAL_UNIT_INPUT_PROTOCOL,
         "hypotheses": [item.model_dump(mode="json") for item in plan.risk_hypotheses] if plan else [],
@@ -39,6 +42,8 @@ def build_record_input(
         "context_coverage": {"source_snippets": len(context), "included_chunks": len(chunks),
                              "rendered_diff_snippets": sum(item.get("source") == "file_read_diff" for item in context)},
     }
+    set_file_change_impact_scope(result)
+    return result
 
 
 def validate_record(
@@ -73,6 +78,17 @@ def validate_record(
         for item in items:
             if any(identity not in by_id for identity in item.evidence_ids):
                 raise ValueError("unknown or stale evidence reference")
+        for check in record.file_change_checks:
+            reference = by_id.get(check.evidence_id)
+            if reference is None or reference.source != "file_change":
+                raise ValueError("file change check requires current metadata evidence")
+            if any(identity not in by_id or by_id[identity].source == "file_change"
+                   or by_id[identity].file_path not in readable_files
+                   or by_id[identity].file_path not in record_input.get("file_change_impact_scope", {}).get(check.evidence_id, [])
+                   for identity in check.evidence_ids):
+                raise ValueError("impact check requires current readable code evidence")
+            if check.impact_status == "checked" and not check.evidence_ids:
+                raise ValueError("metadata alone cannot prove impact was checked")
         for dependency in record.contract_dependencies:
             if dependency.file_path not in readable_files:
                 raise ValueError("contract dependency outside readable scope")
@@ -142,6 +158,8 @@ def merge_review_summaries(
     references = {identity for check in [*(old.target_checks if old else []),
         *(old.hypothesis_checks if old else []), *(old.contract_dependencies if old else []),
         *(old.unresolved_questions if old else [])] for identity in check.evidence_ids}
+    references.update(identity for check in (old.file_change_checks if old else [])
+                      for identity in [check.evidence_id, *check.evidence_ids])
     trusted = {item.id: item for item in previous.evidence}
     compatible = (bool(previous.last_valid_snapshot.get("head_sha"))
                   and previous.last_valid_snapshot.get("input_version") == EVIDENCE_INPUT_VERSION
@@ -161,6 +179,7 @@ def merge_review_summaries(
         old_hypotheses = {item.hypothesis_id: item for item in old.hypothesis_checks}
         explicit_targets = {item.target for item in declared.target_checks}
         explicit_hypotheses = {item.hypothesis_id for item in declared.hypothesis_checks}
+        file_changes = {item.evidence_id: item for item in [*old.file_change_checks, *current.record.file_change_checks]}
         dependencies = {(item.file_path, item.symbol, item.assumption): item for item in [
             *old.contract_dependencies, *current.record.contract_dependencies,
         ]}
@@ -177,6 +196,7 @@ def merge_review_summaries(
                                   for item in current.record.hypothesis_checks],
             "contract_dependencies": list(dependencies.values()),
             "unresolved_questions": list(questions.values()),
+            "file_change_checks": list(file_changes.values()),
         })
         # History is also a recoverable projection. Store the validated merged
         # state, so a later missing record cannot hide early checks on reload.

@@ -27,6 +27,7 @@ from app.review.unit_completion import (
     review_unit_input_coverage,
     review_unit_coverage_warning,
 )
+from app.services.unit_coverage import unsupported_hunk_ids, NO_HUNK_CHANGE_REASON
 
 
 def build_review_manifest(state: dict[str, Any], completed_at: datetime) -> ReviewRunManifest:
@@ -62,6 +63,10 @@ def build_review_manifest(state: dict[str, Any], completed_at: datetime) -> Revi
                 else ReviewFileStatus.unsupported
             )
             reason = item.excluded_reason
+        elif any(result.diff_manifest and any(hunk.file_path == item.file_path
+            and hunk.id in unsupported_hunk_ids(result.diff_manifest) for hunk in result.diff_manifest.hunks)
+            for result in unit_results):
+            status, reason = ReviewFileStatus.unsupported, NO_HUNK_CHANGE_REASON
         elif (
             len(unit_results) == len(unit_ids)
             and unit_results
