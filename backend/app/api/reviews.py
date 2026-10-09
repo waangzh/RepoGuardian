@@ -9,10 +9,9 @@
 
 import asyncio
 import json
-import secrets
 from functools import lru_cache
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from sse_starlette.sse import EventSourceResponse
 
 from app.agents.providers import build_provider
@@ -27,9 +26,6 @@ from app.models.review import (
     TaskStatus,
 )
 from app.models.persistence import (
-    HumanRequestAnswer,
-    HumanRequestAnswerResponse,
-    HumanRequestDetail,
     PatchDetail,
     ReviewIssueDetail,
     ReviewTaskListResponse,
@@ -161,52 +157,6 @@ async def get_review_validation(task_id: str, validation_id: str) -> ValidationD
     if detail is None:
         raise HTTPException(status_code=404, detail="Validation not found")
     return detail
-
-
-@router.get("/{task_id}/human-requests", response_model=list[HumanRequestDetail])
-async def list_human_requests(task_id: str) -> list[HumanRequestDetail]:
-    if get_review_service().get_task(task_id) is None:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return get_review_service().list_human_request_details(task_id)
-
-
-@router.get("/{task_id}/human-requests/{request_id}", response_model=HumanRequestDetail)
-async def get_human_request(task_id: str, request_id: str) -> HumanRequestDetail:
-    detail = get_review_service().get_human_request_detail(task_id, request_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="Human request not found")
-    return detail
-
-
-@router.post(
-    "/{task_id}/human-requests/{request_id}/answer",
-    response_model=HumanRequestAnswerResponse,
-)
-async def answer_human_request(
-    task_id: str,
-    request_id: str,
-    answer: HumanRequestAnswer,
-    authorization: str | None = Header(default=None),
-    actor: str | None = Header(default=None, alias="X-RepoGuardian-Actor"),
-) -> HumanRequestAnswerResponse:
-    expected = settings.repoguardian_human_answer_token
-    if not expected:
-        raise HTTPException(status_code=503, detail="Human answer authorization is not configured")
-    scheme, _, credential = (authorization or "").partition(" ")
-    if scheme.lower() != "bearer" or not secrets.compare_digest(credential, expected):
-        raise HTTPException(status_code=403, detail="Not authorized to answer this request")
-    try:
-        detail, replay = get_review_service().answer_human_request(
-            task_id,
-            request_id,
-            answer,
-            answered_by=actor or "authorized-user",
-        )
-    except KeyError:
-        raise HTTPException(status_code=404, detail="Human request not found")
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    return HumanRequestAnswerResponse(request=detail, idempotent_replay=replay)
 
 
 @router.get("/{task_id}", response_model=ReviewTask)

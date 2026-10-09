@@ -65,17 +65,8 @@ UNIT_ACTION_REGISTRY: tuple[UnitActionRegistration, ...] = (
         route="finish_unit",
         prompt_instruction=(
             "Use to finish the Review Unit after issue reporting, or when no clear issue exists. "
-            "Zero reported issues is valid."
-        ),
-    ),
-    UnitActionRegistration(
-        action=AgentActionName.request_human,
-        route="finish_unit",
-        prompt_instruction=(
-            "Use only when business rules are unavailable, multiple behaviors are safe, evidence "
-            "is insufficient, or a security, funds, permission, or data-migration decision needs "
-            "approval. Include human_request with missing_information, known_evidence, questions, "
-            "and prohibited_operations."
+            "Zero reported issues is valid. Record missing business rules and insufficient evidence "
+            "in the review record's unresolved_questions; continue other review targets."
         ),
     ),
 )
@@ -96,13 +87,11 @@ ALLOWED_ACTIONS_BY_PHASE: dict[ReviewPhase, frozenset[AgentActionName]] = {
     ReviewPhase.discovery: frozenset({
         AgentActionName.retrieve_context,
         AgentActionName.review_code,
-        AgentActionName.request_human,
     }),
     ReviewPhase.repair: frozenset({
         AgentActionName.revise_patch,
         AgentActionName.accept_patch,
         AgentActionName.abandon_patch,
-        AgentActionName.request_human,
     }),
 }
 

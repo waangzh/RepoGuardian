@@ -7,7 +7,6 @@ from typing import Any
 from uuid import uuid4
 
 from langchain_core.tracers.langchain import LangChainTracer
-from langgraph.types import Command
 from langsmith import Client, tracing_context
 
 from app.agents.providers import LLMProvider
@@ -23,7 +22,6 @@ from app.graph.nodes.resolve_evidence import resolve_evidence_node
 from app.graph.state import ReviewState
 from app.models.review import (
     ExecutionBudget,
-    HumanReviewRequest,
     IssueMetrics,
     IssueStatus,
     PatchStatus,
@@ -221,15 +219,6 @@ class ReviewService:
     def get_validation_detail(self, task_id: str, validation_id: str):
         return self._repository.get_validation(task_id, validation_id) if self._repository else None
 
-    def list_human_request_details(self, task_id: str):
-        return self._repository.list_human_requests(task_id) if self._repository else []
-
-    def get_human_request_detail(self, task_id: str, request_id: str):
-        return (
-            self._repository.get_human_request(task_id, request_id)
-            if self._repository else None
-        )
-
     def apply_user_runner_result(
         self,
         task_id: str,
@@ -405,7 +394,7 @@ class ReviewService:
 
     async def _handle_job(self, job: ClaimedJob) -> None:
         if job.kind == "review":
-            await self._run_graph(job.task_id, resume=job.payload.get("resume"), job=job)
+            await self._run_graph(job.task_id, job=job)
             return
         if job.kind == "unit_retry":
             await self.retry_unit(job.task_id, str(job.payload["unit_id"]))
@@ -416,7 +405,7 @@ class ReviewService:
         if self._worker is not None and (self._worker_task is None or self._worker_task.done()):
             self._worker_task = asyncio.create_task(self._worker.run_forever())
 
-    async def _run_graph(self, task_id: str, *, resume: dict[str, Any] | None = None,
+    async def _run_graph(self, task_id: str, *,
                          job: ClaimedJob | None = None) -> None:
         """执行 LangGraph 审查流程的核心方法。
 
@@ -473,7 +462,7 @@ class ReviewService:
                 "_repo_prepared_callback",
             ):
                 initial_state.pop(key, None)
-            initial_state["_human_interrupt_enabled"] = True
+            initial_state["_persistence_enabled"] = True
             initial_state["_report_purpose_model_enabled"] = True
 
         result = None
@@ -507,10 +496,14 @@ class ReviewService:
                 run_config["callbacks"] = callbacks
             logger.info("📊 开始流式执行审查图...")
             with tracing:
-                graph_input: Any = Command(resume=resume) if resume is not None else initial_state
-                if self._repository and resume is None:
+                graph_input: Any = initial_state
+                if self._repository:
                     snapshot = await compiled.aget_state(run_config)
-                    if not snapshot.next and snapshot.values.get("status") in {
+                    if "human_required" in snapshot.next or snapshot.values.get("status") == "waiting_for_human":
+                        # 旧人工暂停点无法在新图恢复，按当前 PR 快照重新审查。
+                        await delete_thread_checkpoints(task_id)
+                        initial_state["warnings"].append("旧人工暂停流程已移除，本次重新审查当前 PR 快照")
+                    elif not snapshot.next and snapshot.values.get("status") in {
                         TaskStatus.completed.value, TaskStatus.completed_with_warnings.value,
                     }:
                         result = snapshot.values
@@ -527,30 +520,8 @@ class ReviewService:
                     result = await self._invoke_graph_with_progress(
                         compiled, graph_input, run_config, task
                     )
-            interrupt_payload = _extract_interrupt_payload(result)
-            if interrupt_payload and self._repository:
-                request = HumanReviewRequest.model_validate(interrupt_payload["request"])
-                self._sync_result_to_task(task, result)
-                checkpoint_tuple = await checkpointer.aget_tuple(run_config) if checkpointer else None
-                checkpoint_id = (
-                    checkpoint_tuple.config.get("configurable", {}).get("checkpoint_id")
-                    if checkpoint_tuple else None
-                )
-                detail = self._repository.create_human_request(
-                    task_id=task_id,
-                    request=request,
-                    reason=str(interrupt_payload.get("reason") or "human input required"),
-                    request_id=str(interrupt_payload["request_id"]),
-                    checkpoint_id=checkpoint_id,
-                )
-                task.status = TaskStatus.waiting_for_human
-                task.review.status = task.status
-                task.human_request = request
-                self._touch(task)
-                self._repository.save_task(task, checkpoint_id=checkpoint_id)
-                self._repository.save_issue_lifecycle(task_id, result)
-                logger.info("任务 %s 已暂停，等待人工请求 %s", task_id[:8], detail.request_id)
-                return
+            if result.get("__interrupt__"):
+                raise RuntimeError("只读审查不支持人工中断；未生成完整审查结果")
             logger.info("✅ ainvoke 执行完成，开始同步结果")
             self._sync_result_to_task(task, result)
             self._persist(task)
@@ -587,7 +558,7 @@ class ReviewService:
                 if result and result.get("repo_path")
                 else self._repo_paths.get(task_id)
             )
-            if repo_path is not None and not interrupted and task.status != TaskStatus.waiting_for_human:
+            if repo_path is not None and not interrupted:
                 await _cleanup_repo(repo_path)
             if self._repository and not interrupted and task.status in {
                 TaskStatus.completed,
@@ -906,7 +877,7 @@ class ReviewService:
                         "issues": [
                             issue for issue in verified_result.issues
                             if issue.status in {
-                                IssueStatus.confirmed, IssueStatus.needs_human
+                                IssueStatus.confirmed, IssueStatus.unresolved, IssueStatus.candidate
                             }
                         ],
                     })
@@ -1041,46 +1012,10 @@ class ReviewService:
         else:
             self._tasks[task.id] = task
 
-    def answer_human_request(
-        self,
-        task_id: str,
-        request_id: str,
-        answer: Any,
-        *,
-        answered_by: str,
-    ):
-        if not self._repository or not self._task_queue:
-            raise ValueError("human request persistence is not configured")
-        detail, replay = self._repository.answer_human_request(
-            task_id=task_id,
-            request_id=request_id,
-            answer=answer,
-            answered_by=answered_by,
-        )
-        if not replay:
-            self._task_queue.enqueue(
-                task_id=task_id,
-                payload={"resume": answer.model_dump(mode="json")},
-                idempotency_key=f"review:{task_id}:human:{request_id}",
-            )
-            self._ensure_worker_started()
-        return detail, replay
-
 
 async def _cleanup_repo(repo_path: Path) -> bool:
     """清理克隆的临时仓库目录。"""
     return await asyncio.to_thread(cleanup_workspace, repo_path)
-
-
-def _extract_interrupt_payload(result: Any) -> dict[str, Any] | None:
-    if not isinstance(result, dict):
-        return None
-    interrupts = result.get("__interrupt__") or ()
-    if not interrupts:
-        return None
-    first = interrupts[0]
-    value = getattr(first, "value", first)
-    return value if isinstance(value, dict) else None
 
 
 def _build_langsmith_tracing(

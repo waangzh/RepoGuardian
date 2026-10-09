@@ -59,10 +59,10 @@ async def issue_policy_node(state: ReviewState) -> ReviewState:
             })
         else:
             deterministic_drops += 1
-            preserve_human = issue.status == IssueStatus.needs_human
+            preserve_unresolved = issue.status == IssueStatus.unresolved
             updated = issue.model_copy(update={
-                "status": IssueStatus.needs_human if preserve_human else IssueStatus.dismissed,
-                "requires_human_confirmation": preserve_human,
+                "status": IssueStatus.unresolved if preserve_unresolved else IssueStatus.dismissed,
+                "requires_human_confirmation": False,
                 "auto_fix_eligible": False,
                 "unresolved_reason": issue.unresolved_reason or ";".join(check.reasons),
             })
@@ -158,7 +158,7 @@ async def issue_deduplication_node(state: ReviewState) -> ReviewState:
         audit_issue("deduplication", issue,
                     canonical_id=decision.canonical_issue_id if decision else None,
                     reason=decision.merged_rationale if decision else
-                    "retained" if issue.status in {IssueStatus.confirmed, IssueStatus.needs_human}
+                    "retained" if issue.status in {IssueStatus.confirmed, IssueStatus.unresolved}
                     else "not_publishable")
 
     return ReviewState(

@@ -105,4 +105,6 @@ def _final_status(state: ReviewState) -> str:
     incomplete_coordination = coordination_status in {"not_run", "failed", "cancelled", "unresolved"}
     incomplete_inputs = any(review_unit_coverage_warning(ReviewUnitResult.model_validate(raw))
                             for raw in state.get("review_unit_results") or [])
-    return "completed_with_warnings" if state.get("warnings") or incomplete_coordination or incomplete_inputs else "completed"
+    unconfirmed = any(raw.get("status") in {"candidate", "unresolved", "needs_human"}
+                      for raw in state.get("review_issues") or [])
+    return "completed_with_warnings" if state.get("warnings") or incomplete_coordination or incomplete_inputs or unconfirmed else "completed"
