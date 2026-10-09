@@ -72,7 +72,7 @@ def coordination_fingerprint(state: dict) -> str:
         "model_profiles": {key: value.model_dump(mode="json") for key, value in
                            settings.repoguardian_model_request_profiles.items()},
         "catalog_version": CATALOG_BATCH_VERSION,
-        "request_contract_version": "coordination-canonical-evidence-allocation-v7-active-evidence-store",
+        "request_contract_version": "coordination-canonical-evidence-allocation-v8-shared-unit-budget",
         "repository": (state.get("pr_info") or {}).get("clone_url"),
         "base_sha": state.get("base_sha"), "head_sha": state.get("head_sha"),
         "model": state.get("model") or settings.repoguardian_model,
@@ -284,6 +284,9 @@ class CoordinationRuntime:
                 await self.persist()
                 raise
             finally:
+                if self.budget.token_usage > self.budget.max_token_usage:
+                    self.data["budget_overrun"] = {"actual_accounted_tokens": self.budget.token_usage,
+                        "max_token_usage": self.budget.max_token_usage}
                 if prepared_token is not None:
                     request_budget_reserver.reset(prepared_token)
                 model_request_budget_hook.reset(hook_token)

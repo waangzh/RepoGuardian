@@ -358,6 +358,17 @@ class OpenAICompatibleProvider(LLMProvider):
         record_input = {**record_input, "pr_intent": intent}
         canonical = "readonly_context" in record_input
         catalog = cls._unit_evidence_payload(changed_files, record_input) if canonical else record_input
+        metadata_protocol = (
+            "Return file_change_checks only for displayed source=file_change evidence: "
+            '[{"evidence_id":"an actual file-change ID from this input",'
+            '"impact_status":"checked|unresolved|not_checked","evidence_ids":'
+            '["current diff/context ID"],"reason":"影响检查依据或缺口"}]. '
+            "Metadata alone cannot prove code impact; checked requires current readable code evidence. "
+            "Otherwise report unresolved. Never use metadata as a line anchor. "
+            if any(item.get("source") == "file_change" for item in catalog.get("evidence", [])) else
+            "This input has no source=file_change evidence. Return file_change_checks: []. "
+            "Do not invent a file-change ID or substitute a diff/context ID. "
+        )
         return cls._build_prompt(pr, changed_files, "" if canonical else diff_text,
                                  include_hunks=not canonical) + (
             "\nFor this Unit, return an object with issues AND review_record, even with zero issues. "
@@ -374,14 +385,7 @@ class OpenAICompatibleProvider(LLMProvider):
             '"evidence_ids":[]}],"unresolved_questions":[{"id":null,"question":"未决问题",'
             '"affected_files":[],"evidence_ids":[]}],"question_updates":[{"question_id":"记忆中的问题ID",'
             '"status":"resolved|superseded","reason":"更新依据","evidence_ids":[],"replacement_id":null}]}\n'
-            "Also return file_change_checks for displayed file_change evidence: "
-            '[{"evidence_id":"file-change ID","impact_status":"checked|unresolved|not_checked",'
-            '"evidence_ids":["current diff/context ID"],"reason":"影响检查依据或缺口"}]. '
-            "FileChangeEvidence is non-line evidence bound to Base/Head paths, blob IDs, modes and sizes. "
-            "The server verifies metadata; separately examine rename/import/resource/build/config "
-            "and executable/empty-file impacts. checked requires current code evidence; metadata alone, "
-            "equal blobs or zero size do not prove no impact. Retrieve dependencies when necessary; "
-            "otherwise report unresolved. Never use metadata as a line anchor or invent code findings. "
+            f"{metadata_protocol}"
             "checked, supported, refuted, verified and conflicting require evidence IDs. "
             "For a verified/conflicting dependency include evidence from that dependency file.\n"
             "At every level use only the fields listed above. Put dependency explanations in assumption; "
@@ -660,6 +664,9 @@ class OpenAICompatibleProvider(LLMProvider):
         try:
             raw = self._load_json(response.value)
             # 执行状态和预算是服务端权威字段，模型不得提供。
+            # 仅兼容已观测的 JSON mode 回显；其余额外字段仍由严格 schema 拒绝。
+            if isinstance(raw, dict) and raw.get("type") == "json_object":
+                raw = {key: value for key, value in raw.items() if key != "type"}
             if isinstance(raw, dict) and {
                 "status", "execution_budget", "runtime_fingerprint", "cache_namespace", "runtime_metrics",
             } & raw.keys():
@@ -685,6 +692,7 @@ class OpenAICompatibleProvider(LLMProvider):
             "范围、问题、反证目标、停止条件完全相同的请求只提出一次。"
             "每项必须明确 question、counterevidence_goal、stop_condition，不能直接确认或删除 Issue。"
             "只有证据充分且全部疑点已排除才返回 skip。返回 JSON，中文理由。"
+            "不要回显 API 的 response_format 或 type=json_object；它们不是结果字段。"
             "coverage_index 只描述本批 Unit；coverage_manifest 的全局数量和哈希仅供账本核对，"
             "不会提供批外引用权限，也不表示省略的 Unit 已被检查；"
             "只引用本批 units/risk/evidence 中的完整条目，不推断省略组已完成。"
@@ -760,7 +768,7 @@ class OpenAICompatibleProvider(LLMProvider):
         request = self._prepare_json_request(prompt, model, operation, system, max_tokens)
         profile = self.resolve_request_profile(requested_model).profile
         try:
-            admission = request.estimate(profile)
+            admission = await asyncio.to_thread(request.estimate, profile)
         except RequestAdmissionError as exc:
             raise LLMProviderError(str(exc)) from exc
         chat_model = self._build_chat_model(request.model, request.output_tokens)
@@ -1636,6 +1644,12 @@ class OpenAICompatibleProvider(LLMProvider):
             "Verify exactly one candidate issue from the bounded input below.\n"
             "First look for counterexamples and contradicting evidence. Decide whether the claimed "
             "behavior follows from the supplied evidence. Distinguish a definite defect from missing "
+            "context. Trace the complete failure path, including guards, early exits and error handling "
+            "in the surrounding diff; explain why those guards do not prevent the claimed failure. "
+            "known_existing_paths are positive Head inventory facts, not file contents or read permission. "
+            "If evidence_complete is false, return needs_human rather than keep. "
+            "Never infer that a referenced file is absent from an incomplete context. For shell loops, "
+            "check shell options, unmatched glob behavior and existence checks inside the loop. "
             "context. Use needs_human when the supplied read-only context is insufficient. Do not keep "
             "an issue merely because a risk might exist or sounds severe. Never raise severity without "
             "evidence; adjusted_severity may only lower it. You cannot add an issue, modify primary "

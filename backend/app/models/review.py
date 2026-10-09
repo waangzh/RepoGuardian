@@ -1755,6 +1755,8 @@ class IssueVerificationRequest(BaseModel):
     supporting_evidence: list[EvidenceAnchor] = Field(default_factory=list, max_length=12)
     unit_diff: str = Field(max_length=60_000)
     readonly_context: list[ContextSnippet] = Field(default_factory=list, max_length=20)
+    known_existing_paths: list[str] = Field(default_factory=list, max_length=50)
+    evidence_complete: bool = True
     applicable_rules: list[str] = Field(default_factory=list, max_length=20)
     budget: IssueVerificationBudget
 
