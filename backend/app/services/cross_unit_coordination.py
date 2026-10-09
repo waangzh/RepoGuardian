@@ -269,6 +269,9 @@ class CrossUnitCoordinationService:
                               for issue in result.get("review_issues") or []
                               if issue["review_unit_id"].startswith("followup-"))) else "unresolved"
                 plan = plan.model_copy(update={"status": status})
+                if self.provider.budget.token_usage > self.provider.budget.max_token_usage:
+                    plan = plan.model_copy(update={"status": "unresolved", "reason": "cross_unit_budget_overrun",
+                        "unresolved_questions": [*plan.unresolved_questions, "实际用量超过共享预留预算，需核对账本。"]})
                 result["model_usages"] = [*(state.get("model_usages") or []), *usages,
                                           *result.get("model_usages", [])]
         except asyncio.CancelledError:
@@ -463,19 +466,27 @@ class CrossUnitCoordinationService:
                      ]}
             saved = self.runtime.data["followups"].get(request.id)
             allocations = self.runtime.data.setdefault("allocations", {})
+            budget = self.provider.budget
+            calls = max(0, budget.max_model_calls - budget.model_calls)
+            tokens = max(0, budget.max_token_usage - budget.token_usage)
             if request.id not in allocations:
                 pending = sum(item.id not in self.runtime.data["batches"] for item in plan.followups)
-                budget = self.provider.budget
-                calls = max(0, budget.max_model_calls - budget.model_calls)
-                tokens = max(0, budget.max_token_usage - budget.token_usage)
                 share_calls, share_tokens = calls // max(1, pending), tokens // max(1, pending)
                 allocations[request.id] = {
                     "followup_id": request.id, "future_calls": calls - share_calls,
                     "future_tokens": tokens - share_tokens,
                     "verification_calls": min(2, share_calls), "verification_tokens": share_tokens // 3,
+                    "exploration_calls": max(1, share_calls - min(2, share_calls)),
+                    "exploration_tokens": max(1, share_tokens - share_tokens // 3),
                 }
                 await self.runtime.persist()
             allocation = allocations[request.id]
+            # 子图和共享请求账本使用同一额度；不再额外套用固定的 12K 上限。
+            local["_cross_unit_budget"] = ExecutionBudget(
+                max_model_calls=allocation["exploration_calls"],
+                max_token_usage=allocation["exploration_tokens"],
+                max_diagnosis_attempts=1, max_context_retrievals=2, max_patch_attempts=0,
+            ).model_dump(mode="json")
             if saved:
                 self.runtime.data["cache_hits"] += 1
             self.provider.holdback = {

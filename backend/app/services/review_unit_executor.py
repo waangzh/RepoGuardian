@@ -182,8 +182,9 @@ class ReviewUnitExecutor:
         unit: ReviewUnit,
         state: dict[str, Any],
     ) -> ReviewUnitResult:
-        from app.services.model_request_budgeter import unit_budget_snapshot
+        from app.services.model_request_budgeter import unit_budget_snapshot, estimate_tokens
 
+        await asyncio.to_thread(estimate_tokens, "", state.get("model") or getattr(self.provider, "_default_model", ""))
         snapshot = {"budget": self._budget_for(unit), "input_fingerprint": unit_execution_fingerprint(
             unit.fingerprint, state, self.provider, self.input_mode)}
         snapshot_token = unit_budget_snapshot.set(snapshot)
@@ -314,7 +315,7 @@ class ReviewUnitExecutor:
             minimum_unit = unit.model_copy(update={"primary_files": [unit.primary_files[0]],
                 "diff_hunk_ids": [], "related_files": unit.related_files[:12], "changed_symbols": [],
                 "context_provenance": [], "grouping_reason": "bounded_diff_workset"})
-            if (admission.get("reason") in {"required_input_too_large", "active_hunk_set_exceeded", "model_context_window_exceeded",
+            if (admission.get("reason") in {"unit_request_budget_exhausted", "required_input_too_large", "active_hunk_set_exceeded", "model_context_window_exceeded",
                     "model_input_limit_exceeded"} and minimum is not None
                     and self._workset_admission(minimum_unit, minimum, {key: value for key, value in state.items()
                         if key not in {"diff_manifest", "coverage_ledger", "unit_metadata"}}, budget)["admitted"]):
@@ -328,9 +329,9 @@ class ReviewUnitExecutor:
                 "repository_discovery_enabled": False,
                 "max_context_chars": 12_000,
             })
-            budget = ExecutionBudget(max_model_calls=3, max_token_usage=12_000,
-                                     max_diagnosis_attempts=1, max_context_retrievals=2,
-                                     max_patch_attempts=0)
+            budget = ExecutionBudget.model_validate(state["_cross_unit_budget"]) if state.get("_cross_unit_budget") else ExecutionBudget(
+                max_model_calls=3, max_token_usage=12_000, max_diagnosis_attempts=1,
+                max_context_retrievals=2, max_patch_attempts=0)
             skip_plan = True
             followup_plan = UnitReviewPlan(
                 change_summary=followup["question"],

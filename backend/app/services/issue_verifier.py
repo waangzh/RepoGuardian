@@ -66,12 +66,12 @@ class IssueVerifierService:
         metrics: IssueMetrics,
     ) -> IssueVerifierBatchResult:
         if not self.enabled:
-            confirmed = [
-                self._confirm_without_call(issue)
+            pending = [
+                self._on_failure(issue, "verifier_disabled")
                 if issue.status == IssueStatus.evidence_resolved else issue
                 for issue in issues
             ]
-            return IssueVerifierBatchResult(confirmed, [], metrics, [], [])
+            return IssueVerifierBatchResult(pending, [], metrics, [], [])
 
         by_unit = {unit.id: unit for unit in units}
         calls_by_unit: dict[str, int] = {}
@@ -89,14 +89,6 @@ class IssueVerifierService:
                 output.append(issue)
                 continue
             unit = by_unit.get(issue.review_unit_id)
-            if unit is not None and not self._requires_model_verifier(issue, unit):
-                output.append(self._confirm_without_call(issue))
-                decisions.append(IssueVerification(
-                    issue_id=issue.id,
-                    decision=IssueVerificationDecision.keep,
-                    reason="deterministic_evidence_checks_sufficient",
-                ))
-                continue
             used = calls_by_unit.get(issue.review_unit_id, 0)
             if unit is None or used >= self.max_calls_per_unit:
                 reason = "review_unit_not_found" if unit is None else "verifier_budget_exhausted"
@@ -124,6 +116,13 @@ class IssueVerifierService:
                     model_usages.append(usage)
                 verification = IssueVerification.model_validate(verification)
                 self._validate_decision(issue, unit, verification)
+                if verification.decision == IssueVerificationDecision.keep and (
+                    verification.contradicting_evidence or not request.evidence_complete
+                ):
+                    verification = verification.model_copy(update={
+                        "decision": IssueVerificationDecision.needs_human,
+                        "reason": "verifier_counterevidence_or_incomplete_context: " + verification.reason[:940],
+                    })
             except Exception as exc:
                 usage = getattr(exc, "usage", None)
                 usage = annotate_usage(
@@ -188,6 +187,7 @@ class IssueVerifierService:
         context_budget = 12_000
         context: list[ContextSnippet] = []
         consumed = 0
+        complete = True
         readable = {
             issue.primary_evidence.file_path,
             *(anchor.file_path for anchor in issue.supporting_evidence),
@@ -197,19 +197,25 @@ class IssueVerifierService:
             if snippet.review_unit_id not in {None, unit.id} or snippet.file not in readable:
                 continue
             remaining = context_budget - consumed
-            if remaining <= 0:
-                break
-            if len(snippet.content) > remaining:
-                snippet = snippet.model_copy(update={"content": snippet.content[:remaining]})
+            if len(snippet.content) > remaining or len(context) >= 20:
+                complete = False
+                continue
+            complete = complete and not snippet.truncated
             context.append(snippet)
             consumed += len(snippet.content)
 
+        unit_diff = self._unit_diff(unit, state)
+        cited_text = issue.model_dump_json() + unit_diff
+        known_paths = sorted({raw["path"] for raw in state.get("file_index") or []
+            if isinstance(raw.get("path"), str) and raw["path"] in cited_text})[:50]
         return IssueVerificationRequest(
             issue=issue,
             primary_evidence=issue.primary_evidence,
             supporting_evidence=issue.supporting_evidence,
-            unit_diff=self._unit_diff(unit, state),
+            unit_diff=unit_diff[:60_000],
             readonly_context=context,
+            known_existing_paths=known_paths,
+            evidence_complete=complete and len(unit_diff) <= 60_000,
             applicable_rules=unit.rule_ids,
             budget=IssueVerificationBudget(
                 remaining_calls=self.max_calls_per_unit - used_calls,
@@ -229,7 +235,7 @@ class IssueVerifierService:
             ]
             for path, item in by_path.items()
         }
-        return planner.normalized_unit_diff(unit, by_path, hunk_ids)[:60_000]
+        return planner.normalized_unit_diff(unit, by_path, hunk_ids)
 
     def _on_failure(self, issue: ReviewIssue, reason: str) -> ReviewIssue:
         if self.fail_mode == "needs_human":
@@ -241,35 +247,10 @@ class IssueVerifierService:
                 "unresolved_reason": f"verifier_failure:{reason}",
             })
         return issue.model_copy(update={
-            # 确定性 evidence/policy 已通过时，额外 verifier 的基础设施失败
-            # 不能把 Issue 从最终报告中静默删除。
-            "status": IssueStatus.confirmed,
+            "status": IssueStatus.candidate,
             "auto_fix_eligible": False,
             "unresolved_reason": f"verifier_failure:{reason}",
         })
-
-    @staticmethod
-    def _requires_model_verifier(issue: ReviewIssue, unit: ReviewUnit) -> bool:
-        """只把高风险、模糊、跨模块或低置信度 Issue 交给额外模型。"""
-        if issue.severity.value in {"high", "critical"} or issue.confidence < 0.8:
-            return True
-        if issue.primary_evidence.resolution_method != EvidenceResolutionMethod.diff_exact:
-            return True
-        if any(
-            anchor.resolution_method == EvidenceResolutionMethod.unresolved
-            for anchor in issue.supporting_evidence
-        ):
-            return True
-        if "cross_module" in unit.risk_tags or any(
-            anchor.file_path != issue.primary_evidence.file_path
-            for anchor in issue.supporting_evidence
-        ):
-            return True
-        return False
-
-    @staticmethod
-    def _confirm_without_call(issue: ReviewIssue) -> ReviewIssue:
-        return issue.model_copy(update={"status": IssueStatus.confirmed})
 
     @staticmethod
     def _validate_decision(
