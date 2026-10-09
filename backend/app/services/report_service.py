@@ -239,8 +239,10 @@ def _append_issue_summary(lines: list[str], task: ReviewTask) -> None:
     lines.extend(["## 审查结论", ""])
     if task.issues:
         severity_counts = Counter(issue.severity.value for issue in task.issues)
+        confirmed = sum(issue.status.value == "confirmed" for issue in task.issues)
         lines.append(
-            f"本次审查发现 {len(task.issues)} 个问题："
+            f"本次审查汇总 {len(task.issues)} 项发现（已确认 {confirmed} 项，"
+            f"未确认 {len(task.issues) - confirmed} 项），风险等级："
             f"critical {severity_counts['critical']} 个，"
             f"high {severity_counts['high']} 个，"
             f"medium {severity_counts['medium']} 个，"
@@ -252,7 +254,7 @@ def _append_issue_summary(lines: list[str], task: ReviewTask) -> None:
 
 
 def _append_issue_details(lines: list[str], task: ReviewTask) -> None:
-    """仅在存在确认问题时展示详细问题，避免无意义的空章节。"""
+    """展示已确认与未确认发现，并明确证据和验证缺口。"""
     if not task.issues:
         return
     lines.extend(["## 详细问题", ""])
@@ -273,8 +275,8 @@ def _append_issue_details(lines: list[str], task: ReviewTask) -> None:
             f"- 置信度：{issue.confidence:.2f}",
             f"- 评论位置：{issue.placement.value}",
             f"- 问题状态：{issue.status.value}",
-            f"- 可自动修复：{'是' if issue.auto_fix_eligible else '否'}",
-            f"- 需要人工确认：{'是' if issue.requires_human_confirmation else '否'}",
+            f"- 验证结论：{'已确认' if issue.status.value == 'confirmed' else '未确认，请结合证据缺口判断'}",
+            f"- 未确认原因：{issue.unresolved_reason or '无'}",
             "",
             "问题说明：",
             issue.failure_scenario,
@@ -462,7 +464,7 @@ def _append_execution_details(lines: list[str], task: ReviewTask) -> None:
             f"候选 {metrics.candidate_issue_count}，"
             f"确定性过滤 {metrics.deterministic_drop_count}，"
             f"verifier 丢弃 {metrics.verifier_drop_count}，"
-            f"需人工 {metrics.needs_human_count}，"
+            f"未确认 {metrics.unresolved_count + metrics.needs_human_count}，"
             f"重复 {metrics.duplicate_count}，"
             f"确认 {metrics.confirmed_count}。"
         ),

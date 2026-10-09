@@ -21,7 +21,7 @@ import { coverageCompletionLabel, crossUnitPresentation, originalIssueUnit, unit
 
 type ReviewTab = "overview" | "review" | "checks" | "files" | "activity";
 type SeverityFilter = "all" | ReviewIssue["severity"];
-type StatusFilter = "all" | "confirmed" | "needs_human";
+type StatusFilter = "all" | "confirmed" | "unresolved";
 
 interface CodeRow {
   key: string;
@@ -85,7 +85,7 @@ const fileCoveragePercent = computed(() => Math.round(coverage.value.coverage_ra
 const unitCoveragePercent = computed(() => Math.round(coverage.value.unit_coverage_rate * 1000) / 10);
 const confirmedIssues = computed(() => props.task.issues.filter((issue) => issue.status === "confirmed"));
 const confirmedIssueCount = computed(() => confirmedIssues.value.length);
-const needsHumanIssueCount = computed(() => props.task.issues.filter((issue) => issue.status === "needs_human").length);
+const unresolvedIssueCount = computed(() => props.task.issues.filter((issue) => ["candidate", "unresolved", "needs_human"].includes(issue.status)).length);
 const highPriorityCount = computed(() => confirmedIssues.value.filter((issue) => ["critical", "high"].includes(issue.severity)).length);
 const resolvedEvidenceCount = computed(() => props.task.issues.filter((issue) => issue.primary_evidence.resolution_status !== "unresolved").length);
 const severityCounts = computed(() => ({
@@ -196,7 +196,8 @@ const filteredIssues = computed(() => {
     if (selectedUnitId.value && issue.review_unit_id !== selectedUnitId.value && !issue.source_review_unit_ids.includes(selectedUnitId.value)) return false;
     if (severityFilter.value === "high" && !["critical", "high"].includes(issue.severity)) return false;
     if (severityFilter.value !== "all" && severityFilter.value !== "high" && issue.severity !== severityFilter.value) return false;
-    if (statusFilter.value !== "all" && issue.status !== statusFilter.value) return false;
+    if (statusFilter.value === "confirmed" && issue.status !== "confirmed") return false;
+    if (statusFilter.value === "unresolved" && !["candidate", "unresolved", "needs_human"].includes(issue.status)) return false;
     if (categoryFilter.value !== "all" && issue.category !== categoryFilter.value) return false;
     return true;
   });
@@ -397,12 +398,6 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
       </button>
     </nav>
 
-    <section v-if="task.status === 'waiting_for_human'" class="human-waiting-banner" role="status">
-      <StatusBadge status="needs_human" label="等待人工确认" />
-      <strong>{{ task.human_request?.questions?.[0] || "审查需要补充产品或业务语义后才能继续" }}</strong>
-      <span>任务已安全暂停在 checkpoint</span>
-    </section>
-
     <section v-if="activeTab === 'overview'" class="review-tab-panel overview-view">
       <div class="review-overview-metrics">
         <article class="review-metric-card">
@@ -415,7 +410,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
         </article>
         <article class="review-metric-card">
           <span class="review-metric-card__icon is-danger"><AppIcon name="alert" :size="20" /></span>
-          <p>已确认发现</p><strong>{{ confirmedIssueCount }}</strong><small>{{ highPriorityCount }} 高 · {{ confirmedSeverityCounts.medium }} 中 · {{ confirmedSeverityCounts.low }} 低<span v-if="needsHumanIssueCount"> · {{ needsHumanIssueCount }} 待人工</span></small>
+          <p>已确认发现</p><strong>{{ confirmedIssueCount }}</strong><small>{{ highPriorityCount }} 高 · {{ confirmedSeverityCounts.medium }} 中 · {{ confirmedSeverityCounts.low }} 低<span v-if="unresolvedIssueCount"> · {{ unresolvedIssueCount }} 未确认</span></small>
         </article>
         <article class="review-metric-card">
           <span class="review-metric-card__icon is-info"><AppIcon name="server" :size="20" /></span>
@@ -472,7 +467,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
           <button type="button" data-tone="warning" :class="{ 'is-active': severityFilter === 'medium' }" @click="severityFilter = 'medium'">中 {{ severityCounts.medium }}</button>
           <button type="button" data-tone="info" :class="{ 'is-active': severityFilter === 'low' }" @click="severityFilter = 'low'">低 {{ severityCounts.low }}</button>
           <button type="button" :class="{ 'is-active': statusFilter === 'confirmed' }" @click="statusFilter = statusFilter === 'confirmed' ? 'all' : 'confirmed'">已确认</button>
-          <button type="button" data-tone="purple" :class="{ 'is-active': statusFilter === 'needs_human' }" @click="statusFilter = statusFilter === 'needs_human' ? 'all' : 'needs_human'">需人工</button>
+          <button type="button" data-tone="purple" :class="{ 'is-active': statusFilter === 'unresolved' }" @click="statusFilter = statusFilter === 'unresolved' ? 'all' : 'unresolved'">未确认</button>
         </div>
         <label>类别<select v-model="categoryFilter"><option value="all">全部</option><option v-for="category in categories" :key="category" :value="category">{{ category }}</option></select></label>
       </div>
@@ -497,7 +492,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
             </div>
           </div>
           <EmptyState v-else-if="!selectedIssue" icon="check-circle" title="这个变更组没有需报告的问题" description="你仍可以在文件页确认覆盖范围，或切换到其他变更组。" />
-          <EmptyState v-else icon="code" title="代码上下文尚未定位" description="该发现保留在摘要中，等待人工确认或更精确的证据。" />
+          <EmptyState v-else icon="code" title="代码上下文尚未定位" description="该发现保留在摘要中；请结合尚未定位的证据判断。" />
           <div v-if="selectedIssue" class="inline-finding-note"><StatusBadge :status="selectedIssue.severity" label="发现" /><strong>锚定到 {{ selectedIssue.primary_evidence.resolved_start_line ? `第 ${selectedIssue.primary_evidence.resolved_start_line} 行` : '当前证据片段' }}</strong><p>{{ selectedIssue.failure_scenario }}</p></div>
           <div v-if="filteredIssues.length > 1" class="finding-switcher">
             <button v-for="issue in filteredIssues" :key="issue.id" type="button" :class="{ 'is-active': selectedIssue?.id === issue.id }" @click="selectedIssueId = issue.id"><span :data-severity="issue.severity" />{{ issue.title }}</button>
@@ -523,7 +518,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
             <p v-if="selectedIssue.related_tests.length" class="related-tests"><span>相关测试</span><code>{{ selectedIssue.related_tests.join(' · ') }}</code></p>
           </template>
           <template v-else-if="task.human_request">
-            <header><div><h2>人工确认请求</h2><p>自动审查已安全暂停</p></div><StatusBadge status="needs_human" /></header>
+            <header><div><h2>历史未决问题</h2><p>旧审查未完成；可新建审查获取当前结果</p></div><StatusBadge status="unresolved" /></header>
             <h3>{{ task.human_request.questions[0] }}</h3>
             <dl class="evidence-facts"><div><dt>缺失信息</dt><dd>{{ task.human_request.missing_information.join('；') }}</dd></div><div><dt>已知证据</dt><dd>{{ task.human_request.known_evidence.join('；') }}</dd></div></dl>
           </template>

@@ -28,8 +28,6 @@ def route_discovery_action(state: dict[str, Any]) -> str:
         return "review"
     if action.action == AgentActionName.retrieve_context:
         return "context_retrieve"
-    if action.action == AgentActionName.request_human:
-        return "human_required"
     return "review"
 
 
@@ -48,8 +46,6 @@ def route_repair_action(state: dict[str, Any]) -> str:
         return "accept_patch"
     if action.action == AgentActionName.abandon_patch:
         return "abandon_patch"
-    if action.action == AgentActionName.request_human:
-        return "human_required"
     return "repair_exit"
 
 

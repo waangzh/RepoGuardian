@@ -45,7 +45,7 @@ class IssueVerifierService:
         provider: LLMProvider,
         *,
         enabled: bool,
-        fail_mode: Literal["needs_human", "candidate"],
+        fail_mode: Literal["unresolved", "candidate", "needs_human"],
         max_calls_per_unit: int,
         timeout_seconds: int = 60,
     ) -> None:
@@ -120,7 +120,7 @@ class IssueVerifierService:
                     verification.contradicting_evidence or not request.evidence_complete
                 ):
                     verification = verification.model_copy(update={
-                        "decision": IssueVerificationDecision.needs_human,
+                        "decision": IssueVerificationDecision.unresolved,
                         "reason": "verifier_counterevidence_or_incomplete_context: " + verification.reason[:940],
                     })
             except Exception as exc:
@@ -159,11 +159,11 @@ class IssueVerifierService:
                 verifier_drop_count += 1
             else:
                 updated = updated.model_copy(update={
-                    "status": IssueStatus.needs_human,
-                    "requires_human_confirmation": True,
+                    "status": IssueStatus.unresolved,
+                    "requires_human_confirmation": False,
                     "auto_fix_eligible": False,
-                    "placement": CommentPlacement.needs_human,
-                    "unresolved_reason": "verifier_needs_human",
+                    "placement": CommentPlacement.unresolved,
+                    "unresolved_reason": "verifier_unresolved",
                 })
             output.append(updated)
 
@@ -238,16 +238,17 @@ class IssueVerifierService:
         return planner.normalized_unit_diff(unit, by_path, hunk_ids)
 
     def _on_failure(self, issue: ReviewIssue, reason: str) -> ReviewIssue:
-        if self.fail_mode == "needs_human":
+        if self.fail_mode != "candidate":
             return issue.model_copy(update={
-                "status": IssueStatus.needs_human,
-                "requires_human_confirmation": True,
+                "status": IssueStatus.unresolved,
+                "requires_human_confirmation": False,
                 "auto_fix_eligible": False,
-                "placement": CommentPlacement.needs_human,
+                "placement": CommentPlacement.unresolved,
                 "unresolved_reason": f"verifier_failure:{reason}",
             })
         return issue.model_copy(update={
             "status": IssueStatus.candidate,
+            "requires_human_confirmation": False,
             "auto_fix_eligible": False,
             "unresolved_reason": f"verifier_failure:{reason}",
         })

@@ -29,7 +29,8 @@ const severityLabel: Record<string, string> = {
 const placementLabel: Record<string, string> = {
   inline: "已定位",
   summary: "仅摘要",
-  needs_human: "需要人工定位",
+  needs_human: "尚未定位",
+  unresolved: "证据或验证不充分",
   suppressed: "证据无效"
 };
 
@@ -61,7 +62,7 @@ const resolutionLabel: Record<string, string> = {
         <div class="issue__badges"><StatusBadge :status="issue.severity" :label="severityLabel[issue.severity]" /><StatusBadge :status="issue.status" /><span>{{ issue.category }}</span></div>
         <strong>{{ issue.title }}</strong>
         <code>{{ issue.primary_evidence.file_path }}<template v-if="issue.primary_evidence.resolved_start_line">:{{ issue.primary_evidence.resolved_start_line }}</template></code>
-        <small>{{ placementLabel[issue.placement] }} · 置信度 {{ Math.round(issue.confidence * 100) }}% · {{ issue.auto_fix_eligible ? "可生成补丁" : "需人工判断" }}</small>
+        <small>{{ placementLabel[issue.placement] }} · 置信度 {{ Math.round(issue.confidence * 100) }}%</small>
       </summary>
       <div class="issue__details">
         <dl>

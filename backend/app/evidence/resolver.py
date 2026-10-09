@@ -64,7 +64,7 @@ class EvidenceResolver:
         status = {
             CommentPlacement.inline: IssueStatus.evidence_resolved,
             CommentPlacement.summary: IssueStatus.evidence_resolved,
-            CommentPlacement.needs_human: IssueStatus.needs_human,
+            CommentPlacement.unresolved: IssueStatus.unresolved,
             CommentPlacement.suppressed: IssueStatus.dismissed,
         }[placement]
         return issue.model_copy(update={
@@ -95,9 +95,7 @@ class EvidenceResolver:
                 consequence=issue.affected_behavior,
             ),
             "unresolved_reason": reason,
-            "requires_human_confirmation": (
-                issue.requires_human_confirmation or placement == CommentPlacement.needs_human
-            ),
+            "requires_human_confirmation": False,
             "auto_fix_eligible": (
                 issue.auto_fix_eligible
                 and placement in {CommentPlacement.inline, CommentPlacement.summary}
@@ -172,7 +170,7 @@ class EvidenceResolver:
         if anchor.unresolved_reason in {
             "multiple_matches", "side_conflict", "rename_ambiguity", "deletion_ambiguity"
         }:
-            return CommentPlacement.needs_human, anchor.unresolved_reason
+            return CommentPlacement.unresolved, anchor.unresolved_reason
         return CommentPlacement.suppressed, anchor.unresolved_reason
 
     @staticmethod

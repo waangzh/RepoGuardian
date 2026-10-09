@@ -79,7 +79,7 @@ def review_unit_coverage_warning(result: ReviewUnitResult) -> str | None:
 
 
 def is_reusable_review_unit_result(result: ReviewUnitResult) -> bool:
-    """跨任务复用比展示状态更保守，排除任何人工待确认结果。"""
+    """跨任务复用比展示状态更保守，排除任何未确认结果。"""
     return (
         is_review_unit_complete(result)
         and result.review_summary.status == "reported"
@@ -87,5 +87,5 @@ def is_reusable_review_unit_result(result: ReviewUnitResult) -> bool:
         and result.review_summary.input_protocol == "canonical-evidence-v3"
         and result.review_summary.latest_attempt_status in (None, "reported")
         and result.human_request is None
-        and not any(issue.status == IssueStatus.needs_human for issue in result.issues)
+        and not any(issue.status == IssueStatus.unresolved for issue in result.issues)
     )

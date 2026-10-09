@@ -96,7 +96,7 @@ class Settings(BaseSettings):
 
     # ---- Issue 确定性策略与独立验证 ----
     repoguardian_issue_verifier_enabled: bool = True
-    repoguardian_issue_verifier_fail_mode: Literal["needs_human", "candidate"] = "needs_human"
+    repoguardian_issue_verifier_fail_mode: Literal["unresolved", "candidate", "needs_human"] = "unresolved"
     repoguardian_issue_verifier_max_calls_per_unit: int = Field(default=5, ge=0, le=100)
 
     # ---- 阶段 4 候选补丁资格与确定性大小上限 ----
@@ -122,9 +122,6 @@ class Settings(BaseSettings):
     repoguardian_worker_poll_seconds: float = Field(default=0.25, ge=0.05, le=60)
     repoguardian_worker_lease_seconds: int = Field(default=300, ge=5, le=86_400)
     repoguardian_worker_max_attempts: int = Field(default=3, ge=1, le=20)
-    repoguardian_human_timeout_seconds: int = Field(default=86_400, ge=60, le=2_592_000)
-    repoguardian_human_timeout_policy: Literal["fail", "cancel"] = "fail"
-    repoguardian_human_answer_token: str | None = None
     repoguardian_artifact_inline_max_bytes: int = Field(default=64_000, ge=1_024, le=1_000_000)
     repoguardian_artifact_dir: Path = (
         Path(__file__).resolve().parent.parent.parent / ".repoguardian" / "artifacts"

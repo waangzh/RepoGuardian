@@ -16,8 +16,9 @@ const labels: Record<string, string> = {
   verifying_issues: "验证问题",
   generating_patches: "生成补丁",
   validating: "验证中",
-  waiting_for_human: "等待人工",
-  needs_human: "等待人工",
+  waiting_for_human: "历史审查未完成",
+  needs_human: "未确认",
+  unresolved: "未确认",
   completed: "已完成",
   completed_with_warnings: "存在警告",
   failed: "失败",
@@ -54,7 +55,7 @@ const tone = computed(() => {
   if (["completed", "confirmed", "verified", "passed", "low"].includes(props.status)) return "success";
   if (["failed", "validation_failed", "critical", "high"].includes(props.status)) return "danger";
   if (["timed_out", "infrastructure_error", "medium", "warning", "completed_with_warnings"].includes(props.status)) return "warning";
-  if (["inconclusive", "validation_inconclusive"].includes(props.status)) return "purple";
+  if (["inconclusive", "validation_inconclusive", "unresolved", "needs_human"].includes(props.status)) return "purple";
   if (["running", "reviewing", "planning", "validating", "resolving_evidence", "verifying_issues", "generating_patches", "evidence_resolved"].includes(props.status)) return "info";
   return "neutral";
 });

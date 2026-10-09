@@ -1179,12 +1179,12 @@ class OpenAICompatibleProvider(LLMProvider):
         if isinstance(evidence, list) and len(evidence) <= 12 and any(
             isinstance(item, str) for item in evidence
         ):
-            # 缺少路径的文字不能升格为证据；保留合法对象的严格校验，强制人工复核。
+            # 缺少路径的文字不能升格为证据；保留合法对象的严格校验与不确定状态。
             normalized["contradicting_evidence"] = [item for item in evidence if not isinstance(item, str)]
-            normalized["decision"] = "needs_human"
+            normalized["decision"] = "unresolved"
             normalized["adjusted_severity"] = None
             if isinstance(raw.get("reason"), str) and raw["reason"].strip():
-                normalized["reason"] = "verifier_unstructured_counterevidence：反证缺少结构化路径，需人工复核。\n" + raw["reason"]
+                normalized["reason"] = "verifier_unstructured_counterevidence：反证缺少结构化路径，结论未确认。\n" + raw["reason"]
         reason = normalized.get("reason")
         if not isinstance(reason, str) or len(reason) <= 2_000:
             return normalized
@@ -1411,7 +1411,7 @@ class OpenAICompatibleProvider(LLMProvider):
             '"affected_files":["path/to/file"],"affected_symbols":[],"evidence_needed":'
             '["需要确认的证据"],"retrieval_suggestions":[],"completion_criteria":"完成条件"}],'
             '"coverage_targets":["覆盖目标"],"initial_action":{"action":"report_issue",'
-            '"reason":"中文理由","target_issue_ids":[],"tool_args":{},"human_request":null}}\n\n'
+            '"reason":"中文理由","target_issue_ids":[],"tool_args":{}}}\n\n'
             "Bounded Unit input JSON:\n"
         )
         return prefix + _assemble_unit_context(payload, {'review_unit', 'diff_evidence', 'changed_files_metadata', 'scope', 'pr_intent'} | set(hierarchy), 80_000, priorities={'evidence_store_catalog': 2, 'retrieval_catalog': 10}, field_limits={'retrieval_catalog': 8_000, 'evidence_store_catalog': 3_000}, context_budget=(context_budget.with_prefix(prefix) if context_budget else None))
@@ -1571,12 +1571,10 @@ class OpenAICompatibleProvider(LLMProvider):
             if unit_agent else
             "For retrieve_context, tool_args must be exactly {\"plan\": {...}}. "
             "The plan must use only listed files/symbols, literal search_terms, bounded max_results and depth. "
-            "Use request_human only when business rules are unavailable, multiple behaviors are safe, "
-            "evidence is insufficient, or a security/funds/permission/data-migration decision needs approval. "
-            "request_human must include human_request with missing_information, known_evidence, questions, "
-            "and prohibited_operations."
+            "Missing business rules or insufficient evidence must not pause review. Continue diagnosis "
+            "and record uncertainty in assumptions, unresolved_questions, and coverage gaps."
             if phase.value == "discovery" else
-            "For repair choose only revise_patch, accept_patch, abandon_patch, or request_human. "
+            "For repair choose only revise_patch, accept_patch, or abandon_patch. "
             "accept_patch is advisory only: the server independently checks apply success, validation delta, "
             "policy blockers, patch size, issue evidence, and clean Head restoration."
         )
@@ -1587,18 +1585,13 @@ class OpenAICompatibleProvider(LLMProvider):
             "Return exactly this JSON shape:\n"
             f"{{\"action\":\"{'report_issue' if unit_agent else 'review_code'}\","
             "\"reason\":\"中文理由\","
-            "\"target_issue_ids\":[],\"tool_args\":{},\"human_request\":null}\n\n"
+            "\"target_issue_ids\":[],\"tool_args\":{}}\n\n"
             "When choosing retrieve_context, use this exact structure (replace only values):\n"
             "{\"action\":\"retrieve_context\",\"reason\":\"需要补充上下文\",\"target_issue_ids\":[],"
             "\"tool_args\":{\"plan\":{\"reason\":\"查找直接相关实现\",\"target_files\":[],"
             "\"target_symbols\":[],\"search_terms\":[\"字面搜索词\"],\"relevance_types\":[\"direct\"],"
             "\"include_callers\":false,\"include_callees\":false,\"include_tests\":false,"
-            "\"max_results\":12,\"depth\":1}},\"human_request\":null}\n\n"
-            "When choosing request_human, use this exact structure (replace only values):\n"
-            "{\"action\":\"request_human\",\"reason\":\"需要人工确认\",\"target_issue_ids\":[],"
-            "\"tool_args\":{},\"human_request\":{\"missing_information\":[\"缺失信息\"],"
-            "\"known_evidence\":[\"已知证据\"],\"questions\":[\"待确认问题\"],"
-            "\"prohibited_operations\":[\"确认前禁止执行的操作\"]}}\n\n"
+            "\"max_results\":12,\"depth\":1}}}\n\n"
             "Current state JSON:\n"
         )
         return prefix + _assemble_unit_context(compact, {'phase', 'execution_budget', 'repair_feedback'} | ({'review_unit', 'diff_evidence', 'changed_files_metadata', 'unit_plan', 'pr_intent', 'working_memory', 'memory_evidence', 'evidence_catalog', 'scope'} | ({'unit_metadata', 'diff_manifest', 'coverage_ledger', 'active_evidence_set', 'active_supporting_evidence'} & set(compact)) if unit_agent else {'changed_files'}), 50_000, priorities={'observed_context.snippets': 0, 'observed_context.previous_plan': 1, 'observed_context.previous_result': 1, 'evidence_store_catalog': 2, 'retrieval_catalog': 10}, field_limits={'retrieval_catalog': 6_000, 'evidence_store_catalog': 3_000}, context_budget=(context_budget.with_prefix(prefix) if context_budget else None))
@@ -1647,10 +1640,10 @@ class OpenAICompatibleProvider(LLMProvider):
             "context. Trace the complete failure path, including guards, early exits and error handling "
             "in the surrounding diff; explain why those guards do not prevent the claimed failure. "
             "known_existing_paths are positive Head inventory facts, not file contents or read permission. "
-            "If evidence_complete is false, return needs_human rather than keep. "
+            "If evidence_complete is false, return unresolved rather than keep. "
             "Never infer that a referenced file is absent from an incomplete context. For shell loops, "
             "check shell options, unmatched glob behavior and existence checks inside the loop. "
-            "context. Use needs_human when the supplied read-only context is insufficient. Do not keep "
+            "context. Use unresolved when the supplied read-only context is insufficient. Do not keep "
             "an issue merely because a risk might exist or sounds severe. Never raise severity without "
             "evidence; adjusted_severity may only lower it. You cannot add an issue, modify primary "
             "evidence, generate a patch, expand file scope, call tools, execute code, or change unresolved "
@@ -1662,9 +1655,9 @@ class OpenAICompatibleProvider(LLMProvider):
             '{"file_path":"app.py","existing_code":"return value","expected_side":"head"}. '
             "Allowed optional fields: symbol, expected_hunk_id, context_before, context_after. "
             "If you cannot identify the supplied file, put the uncertainty in reason, return "
-            "needs_human and contradicting_evidence: [].\n"
+            "unresolved and contradicting_evidence: [].\n"
             "Return exactly this JSON shape and no Markdown:\n"
-            '{"issue_id":"id","decision":"keep|drop|needs_human","reason":"reason",'
+            '{"issue_id":"id","decision":"keep|drop|unresolved","reason":"reason",'
             '"contradicting_evidence":[],"adjusted_severity":null}\n\n'
             "Bounded verifier input JSON:\n"
         )

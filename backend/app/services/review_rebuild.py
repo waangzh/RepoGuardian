@@ -202,11 +202,11 @@ def rebuild_project_profile(data: dict | None) -> ProjectProfile | None:
 
 
 def rebuild_issues(data: list[dict]) -> list[ReviewIssue]:
-    """API 只公开独立确认或显式需要人工处理的 Issue。"""
+    """公开已确认与未确认候选，保留证据和验证缺口。"""
     issues = [ReviewIssue.model_validate(item) for item in data]
     return [
         issue for issue in issues
-        if issue.status in {IssueStatus.confirmed, IssueStatus.needs_human}
+        if issue.status in {IssueStatus.confirmed, IssueStatus.unresolved, IssueStatus.candidate}
     ]
 
 
@@ -218,7 +218,7 @@ def rebuild_review_unit_results(data: list[dict]) -> list[ReviewUnitResult]:
         results.append(result.model_copy(update={
             "issues": [
                 issue for issue in result.issues
-                if issue.status in {IssueStatus.confirmed, IssueStatus.needs_human}
+                if issue.status in {IssueStatus.confirmed, IssueStatus.unresolved, IssueStatus.candidate}
             ],
         }))
     return results

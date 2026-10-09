@@ -216,8 +216,8 @@ export interface ReviewIssue {
   related_tests: string[];
   requires_human_confirmation: boolean;
   auto_fix_eligible: boolean;
-  status: "candidate" | "evidence_resolved" | "confirmed" | "dismissed" | "needs_human" | "published";
-  placement: "inline" | "summary" | "suppressed" | "needs_human";
+  status: "candidate" | "evidence_resolved" | "confirmed" | "dismissed" | "unresolved" | "needs_human" | "published";
+  placement: "inline" | "summary" | "suppressed" | "unresolved" | "needs_human";
   unresolved_reason?: string | null;
   resolved_location?: {
     file_path: string;
@@ -235,6 +235,7 @@ export interface IssueMetrics {
   deterministic_drop_count: number;
   verifier_drop_count: number;
   needs_human_count: number;
+  unresolved_count?: number;
   duplicate_count: number;
   confirmed_count: number;
   severity_adjustment_count: number;

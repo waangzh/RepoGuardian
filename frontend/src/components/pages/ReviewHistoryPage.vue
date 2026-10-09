@@ -27,7 +27,6 @@ const statusOptions = [
   { value: "pending", label: "等待中" },
   { value: "reviewing", label: "审查中" },
   { value: "validating", label: "验证中" },
-  { value: "waiting_for_human", label: "等待人工" },
   { value: "cancelled", label: "已取消" },
 ];
 
@@ -69,8 +68,8 @@ function taskCoverage(task: ReviewTask) {
   return coverage?.eligible_files ? `${coverage.reviewed_files} / ${coverage.eligible_files}` : "—";
 }
 
-function humanCount(task: ReviewTask) {
-  return task.issues.filter((issue) => issue.status === "needs_human" || issue.requires_human_confirmation).length;
+function unresolvedCount(task: ReviewTask) {
+  return task.issues.filter((issue) => ["candidate", "unresolved", "needs_human"].includes(issue.status)).length;
 }
 
 function validationStatus(task: ReviewTask) {
@@ -131,7 +130,7 @@ onMounted(load);
           <dl class="history-row__metrics">
             <div><dt>覆盖</dt><dd>{{ taskCoverage(task) }}</dd></div>
             <div><dt>发现</dt><dd>{{ task.issues.length }}</dd></div>
-            <div><dt>人工</dt><dd>{{ humanCount(task) }}</dd></div>
+            <div><dt>未确认</dt><dd>{{ unresolvedCount(task) }}</dd></div>
             <div><dt>验证</dt><dd class="history-validation">{{ validationStatus(task) }}</dd></div>
           </dl>
           <div class="history-row__time"><span>{{ formatDate(task.updated_at) }}</span><small>最近更新</small></div>

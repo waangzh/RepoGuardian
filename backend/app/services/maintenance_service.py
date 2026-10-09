@@ -1,4 +1,4 @@
-"""后台维护：人工请求过期、checkpoint GC、任务保留和 workspace 回收。"""
+"""后台维护：checkpoint GC、任务保留和 workspace 回收。"""
 
 from __future__ import annotations
 
@@ -21,13 +21,8 @@ workspace_cleanup_lock = asyncio.Lock()
 
 
 def workspace_ttl_seconds() -> int:
-    """返回兼顾人工等待窗口的 workspace 最小安全保留时间。"""
-    return max(
-        settings.repoguardian_orphan_workspace_ttl_seconds,
-        settings.repoguardian_human_timeout_seconds
-        + settings.repoguardian_maintenance_interval_seconds
-        + settings.repoguardian_worker_lease_seconds,
-    )
+    """返回孤儿 workspace 的安全保留时间。"""
+    return settings.repoguardian_orphan_workspace_ttl_seconds
 
 
 class MaintenanceService:
@@ -42,14 +37,7 @@ class MaintenanceService:
         self._stopped = asyncio.Event()
 
     async def run_once(self) -> None:
-        expired_requests = checkpoint_gc_attempts = expired_tasks = 0
-        try:
-            expired_requests = await asyncio.to_thread(
-                self._repository.expire_human_requests
-            )
-        except Exception:
-            logger.warning("人工请求过期维护失败", exc_info=True)
-
+        checkpoint_gc_attempts = expired_tasks = 0
         try:
             existing_thread_ids = await list_checkpoint_thread_ids()
             thread_ids = await asyncio.to_thread(
@@ -103,7 +91,6 @@ class MaintenanceService:
         failed_workspaces = workspace_result.failed if workspace_result else 0
         if any(
             (
-                expired_requests,
                 checkpoint_gc_attempts,
                 expired_tasks,
                 removed_workspaces,
@@ -112,9 +99,8 @@ class MaintenanceService:
             )
         ):
             logger.info(
-                "维护完成: human_expired=%d checkpoint_threads=%d "
+                "维护完成: checkpoint_threads=%d "
                 "tasks_expired=%d workspaces_removed=%d workspaces_failed=%d compacted=%s",
-                expired_requests,
                 checkpoint_gc_attempts,
                 expired_tasks,
                 removed_workspaces,

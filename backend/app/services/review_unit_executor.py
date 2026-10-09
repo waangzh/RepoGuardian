@@ -27,7 +27,6 @@ from app.models.review import (
     FileFindRequest,
     FileReadDiffRequest,
     FileReadRequest,
-    HumanReviewRequest,
     PullRequestInfo,
     ReviewIssue,
     ReviewPhase,
@@ -98,8 +97,6 @@ class _ReviewUnitGraphState(TypedDict, total=False):
     next_action: AgentAction | None
     done: bool
     error: str | None
-    needs_human: bool
-    human_request: HumanReviewRequest | None
     terminal_reason: ReviewUnitTerminalReason | None
     review_summary: UnitReviewSummary
     last_valid_review_summary: UnitReviewSummary | None
@@ -379,7 +376,7 @@ class ReviewUnitExecutor:
                 evidence_snapshot(str(state.get("head_sha") or ""), str(state.get("base_sha") or "")), scope.readable_files),
         }
         if batch:
-            graph_state.update(needs_human=False, human_request=None, pending_issues=[], error=None)
+            graph_state.update(pending_issues=[], error=None)
             graph_state["batch_decision_disabled"] = batch.get("skip_decision", False)
             graph_state["next_action"] = AgentAction(action=AgentActionName.report_issue,
                 reason="优先诊断当前完整 Diff 工作集，保留其他批次的诊断预算")
@@ -474,9 +471,7 @@ class ReviewUnitExecutor:
         if getattr(self.unit_graph, "checkpointer", None) not in (None, False):
             config = unit_thread_config(str(state.get("task_id") or "unknown"), unit.id)
         result = await self.unit_graph.ainvoke(graph_state, config=config)
-        if result.get("needs_human"):
-            terminal_reason = ReviewUnitTerminalReason.human_required
-        elif result.get("done") and not result.get("error"):
+        if result.get("done") and not result.get("error"):
             terminal_reason = result.get("terminal_reason") or (
                 ReviewUnitTerminalReason.completed
                 if result.get("issues")
@@ -491,9 +486,7 @@ class ReviewUnitExecutor:
             review_unit_id=unit.id,
             input_fingerprint=binding,
             status=(
-                ReviewUnitStatus.needs_human
-                if result.get("needs_human")
-                else ReviewUnitStatus.completed
+                ReviewUnitStatus.completed
                 if result.get("done") and not result.get("error")
                 else ReviewUnitStatus.failed
             ),
@@ -514,7 +507,6 @@ class ReviewUnitExecutor:
             execution_budget=result.get("budget") or budget,
             model_usages=result.get("model_usages") or [],
             error=result.get("error"),
-            human_request=result.get("human_request"),
             diff_manifest=result.get("diff_manifest"), coverage_ledger=result.get("coverage_ledger"),
             active_evidence_set=result.get("active_evidence_set"),
             evidence_store=result.get("evidence_store"), context_selection=result.get("context_selection"),
@@ -680,8 +672,6 @@ class ReviewUnitExecutor:
                     and entry.result.review_summary.status == "reported"
                     and all(check.status == "checked" for check in entry.result.review_summary.record.target_checks)) else "partial"
                 entry.reason = entry.result.error or entry.result.review_summary.reason
-                if entry.result.status == ReviewUnitStatus.needs_human:
-                    break
             except asyncio.CancelledError:
                 raise
             except TimeoutError:
@@ -790,11 +780,10 @@ class ReviewUnitExecutor:
             omitted_context=[item for result in results if result.input_coverage
                              for item in result.input_coverage.omitted_context])
         has_progress = any(result.status == ReviewUnitStatus.completed for result in results)
-        human_request = next((result.human_request for result in results if result.human_request), None)
         return ReviewUnitResult(review_unit_id=unit.id, input_fingerprint=binding,
-            status=(ReviewUnitStatus.needs_human if human_request else ReviewUnitStatus.completed
+            status=(ReviewUnitStatus.completed
                     if has_progress else ReviewUnitStatus.timed_out if reason == "review_unit_timed_out" else ReviewUnitStatus.failed),
-            terminal_reason=(ReviewUnitTerminalReason.human_required if human_request else ReviewUnitTerminalReason.completed
+            terminal_reason=(ReviewUnitTerminalReason.completed
                 if has_progress else ReviewUnitTerminalReason.timed_out if reason == "review_unit_timed_out" else ReviewUnitTerminalReason.provider_error),
             error=None if has_progress else reason or "unit_diff_batches_not_executed",
             plan_skipped=True, plan_status=UnitPlanStatus.skipped, plan_skip_reason="bounded_diff_worksets",
@@ -808,7 +797,7 @@ class ReviewUnitExecutor:
             messages=[event.model_copy(update={"review_unit_id": unit.id}) for result in results for event in result.messages],
             tool_events=[event.model_copy(update={"review_unit_id": unit.id}) for result in results for event in result.tool_events],
             model_usages=[usage.model_copy(update={"review_unit_id": unit.id}) for result in results for usage in result.model_usages],
-            human_request=human_request)
+            )
 
     def _build_unit_graph(self) -> StateGraph:
         """构造每个 Review Unit 独立运行的有界 LangGraph 子图。"""
@@ -835,7 +824,7 @@ class ReviewUnitExecutor:
         graph.add_edge("execute_read_tool", "agent_decide")
         graph.add_edge("report_issue", "collect_issue")
         graph.add_edge("collect_issue", "agent_decide")
-        graph.add_conditional_edges("finish_unit", lambda state: END if state.get("done") or state.get("needs_human") else "agent_decide",
+        graph.add_conditional_edges("finish_unit", lambda state: END if state.get("done") else "agent_decide",
                                     {END: END, "agent_decide": "agent_decide"})
         return graph
 
@@ -1097,10 +1086,11 @@ class ReviewUnitExecutor:
             )
         elif action.action == AgentActionName.finish_report:
             action = AgentAction(action=AgentActionName.task_done, reason=action.reason)
+        if action.action not in UNIT_ALLOWED_ACTIONS:
+            action = AgentAction(action=AgentActionName.task_done if state["issue_round_completed"] else AgentActionName.report_issue,
+                reason="已拒绝 Unit 白名单外动作；继续只读诊断并在报告中保留不确定性")
         if action.action == AgentActionName.task_done and state["context"] and not state["issue_round_completed"]:
             action = AgentAction(action=AgentActionName.report_issue, reason="新增证据尚未诊断，先完成当前工作集检查")
-        if action.action not in UNIT_ALLOWED_ACTIONS:
-            action = AgentAction(action=AgentActionName.task_done, reason="Unit 动作不在只读白名单")
         return action, budget, legacy_review, model_usages, None
 
     async def _call_unit_model(self, budget, payload, output_tokens, invoke, *, holdback=None):
@@ -1733,14 +1723,6 @@ class ReviewUnitExecutor:
         self, state: "_ReviewUnitGraphState"
     ) -> "_ReviewUnitGraphState":
         action = state["next_action"]
-        if action.action == AgentActionName.request_human:
-            return {
-                "done": False,
-                "needs_human": True,
-                "error": "review unit requires human input",
-                "human_request": action.human_request,
-                "terminal_reason": ReviewUnitTerminalReason.human_required,
-            }
         if state.get("error"):
             return {
                 "done": True,

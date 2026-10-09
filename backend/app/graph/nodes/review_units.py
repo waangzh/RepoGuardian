@@ -6,7 +6,7 @@ from app.agents.providers import build_provider
 from app.core.config import settings
 from app.graph.nodes._events import append_step
 from app.graph.state import ReviewState
-from app.models.review import AgentAction, HumanReviewRequest, ReviewPlan, ReviewUnitResult, ReviewUnitStatus
+from app.models.review import ReviewPlan, ReviewUnitResult
 from app.graph.checkpointer import get_checkpointer
 from app.services.review_planner import DeterministicReviewPlanner
 from app.services.review_input_context import build_pr_intent
@@ -73,7 +73,7 @@ async def review_units_node(state: ReviewState) -> ReviewState:
             provider,
             concurrency=settings.repoguardian_review_unit_concurrency,
             timeout_seconds=settings.repoguardian_review_unit_timeout_seconds,
-            checkpointer=(await get_checkpointer()) if state.get("_human_interrupt_enabled") else None,
+            checkpointer=(await get_checkpointer()) if state.get("_persistence_enabled") else None,
         )
     mode = getattr(executor, "input_mode", settings.repoguardian_unit_input_mode)
     provider = getattr(executor, "provider", state.get("_provider"))
@@ -89,7 +89,7 @@ async def review_units_node(state: ReviewState) -> ReviewState:
     }
     pending_units = [unit for unit in plan.review_units if unit.id not in previous]
     reusable: dict[str, ReviewUnitResult] = {}
-    repository = ReviewRepository() if state.get("_human_interrupt_enabled") else None
+    repository = ReviewRepository() if state.get("_persistence_enabled") else None
     if repository:
         still_pending = []
         for unit in pending_units:
@@ -135,38 +135,9 @@ async def review_units_node(state: ReviewState) -> ReviewState:
     results = [by_id[unit.id] for unit in plan.review_units if unit.id in by_id]
     successful = [item for item in results if is_review_unit_complete(item)]
     executed_results = [item for item in results if is_review_unit_execution_complete(item)]
-    needs_human = [item for item in results if item.status == ReviewUnitStatus.needs_human]
     incomplete = [item for item in results if not is_review_unit_complete(item)]
     warnings = list(dict.fromkeys([*(state.get("warnings") or []),
         *(warning for item in results if (warning := review_unit_coverage_warning(item)))]))
-    if needs_human:
-        human_request = needs_human[0].human_request or HumanReviewRequest(
-            missing_information=["Review Unit 需要人工提供业务规则。"],
-            known_evidence=[needs_human[0].error or "Unit 无法安全自动判断。"],
-            questions=["请提供继续审查所需的业务语义或处理选择。"],
-            prohibited_operations=["收到回答前不得生成或应用修复。"],
-        )
-        action = AgentAction(
-            action="request_human",
-            reason=needs_human[0].error or "review unit requires human input",
-            human_request=human_request,
-        )
-        return ReviewState(
-            status="reviewing",
-            next_action=action.model_dump(mode="json"),
-            review_unit_results=[item.model_dump(mode="json") for item in results],
-            review_issues=[
-                issue.model_dump(mode="json") for item in executed_results for issue in item.issues
-            ],
-            context_snippets=[
-                snippet.model_dump(mode="json")
-                for item in executed_results for snippet in item.context_snippets
-            ],
-            warnings=warnings,
-            step_progress=append_step(
-                state, "review_units", "completed", "Review Unit 已暂停等待人工输入"
-            ),
-        )
     issues = [issue for item in executed_results for issue in item.issues]
     snippets = [snippet for item in executed_results for snippet in item.context_snippets]
     events = [event for item in results for event in item.messages]
@@ -184,6 +155,7 @@ async def review_units_node(state: ReviewState) -> ReviewState:
         )
     return ReviewState(
         status="reviewing",
+        next_action=None,
         review_unit_results=[item.model_dump(mode="json") for item in results],
         review_issues=[item.model_dump(mode="json") for item in issues],
         context_snippets=[item.model_dump(mode="json") for item in snippets],
