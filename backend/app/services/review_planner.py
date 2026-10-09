@@ -228,6 +228,9 @@ class DeterministicReviewPlanner:
 
     def should_skip_plan(self, unit: ReviewUnit, changed_files: Iterable[ChangedFile]) -> bool:
         changed_by_path = {item.file_path: item for item in changed_files}
+        selected = [changed_by_path[path] for path in unit.primary_files if path in changed_by_path]
+        if selected and not any(item.hunks for item in selected):
+            return True
         changed_lines = sum(
             changed_by_path[path].additions + changed_by_path[path].deletions
             for path in unit.primary_files if path in changed_by_path
@@ -249,6 +252,10 @@ class DeterministicReviewPlanner:
         self, unit: ReviewUnit, changed_files: Iterable[ChangedFile]
     ) -> int:
         """估算 Plan、一次诊断和必要决策；不把预算上限误报为典型成本。"""
+        changed_files = tuple(changed_files)
+        selected = [file for file in changed_files if file.file_path in unit.primary_files]
+        if selected and not any(file.hunks or file.file_change_evidence for file in selected):
+            return 0
         planning = self.planning_model_calls(unit, changed_files)
         decision_calls = 1 if unit.complexity == ReviewUnitComplexity.small else 2
         diagnosis_calls = 1

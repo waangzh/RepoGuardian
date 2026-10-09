@@ -17,6 +17,7 @@ from typing import Any, Generic, Iterator, Literal, TypeVar
 from uuid import uuid4
 
 from pydantic import (
+    model_serializer,
     BaseModel,
     ConfigDict,
     Field,
@@ -123,6 +124,7 @@ class ReviewUnitTerminalReason(str, Enum):
     provider_error = "provider_error"
     execution_error = "execution_error"
     human_required = "human_required"
+    unsupported_change = "unsupported_change"
 
 
 class ReviewFileStatus(str, Enum):
@@ -787,6 +789,42 @@ class DiffHunk(BaseModel):
     removed_lines: list[ChangedLine] = Field(default_factory=list)
 
 
+class FileChangeSide(BaseModel):
+    """固定 Git tree 中的文件身份；不存在的侧没有 blob/mode/size。"""
+    model_config = ConfigDict(extra="forbid")
+    path: str
+    blob_id: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    mode: Literal["100644", "100755", "120000", "160000"] | None = None
+    size: int | None = Field(default=None, ge=0)
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        return _validate_repo_relative_path(value)
+
+    @model_validator(mode="after")
+    def consistent_presence(self) -> "FileChangeSide":
+        if (self.blob_id is None) != (self.mode is None) or (self.blob_id is None and self.size is not None):
+            raise ValueError("inconsistent Git tree entry")
+        if self.mode in {"100644", "100755", "120000"} and self.size is None:
+            raise ValueError("blob tree entry requires size")
+        return self
+
+
+class FileChangeEvidence(BaseModel):
+    """独立非行证据：由服务端在固定 Base/Head 上读取并核验。"""
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["file-change-evidence-v1"] = "file-change-evidence-v1"
+    id: str
+    file_path: str
+    base_sha: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    head_sha: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    base: FileChangeSide
+    head: FileChangeSide
+    change_kinds: list[Literal["rename", "mode", "empty_added", "empty_deleted"]]
+    content_hash: str
+
+
 class ChangedFile(BaseModel):
     """一个文件的 diff 解析结果。"""
     file_path: str
@@ -795,7 +833,18 @@ class ChangedFile(BaseModel):
     additions: int
     deletions: int
     is_binary: bool = False
+    old_mode: str | None = None
+    new_mode: str | None = None
     hunks: list[DiffHunk] = Field(default_factory=list)
+    file_change_evidence: FileChangeEvidence | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_changed_file(self, handler):
+        result = handler(self)
+        for key in ("file_change_evidence", "old_mode", "new_mode"):
+            if getattr(self, key) is None:
+                result.pop(key, None)
+        return result
 
 
 class PlannedChangedFile(BaseModel):
@@ -1716,12 +1765,20 @@ class UnitEvidenceReference(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str = Field(min_length=1, max_length=100)
     file_path: str
-    source: Literal["diff", "context"]
+    source: Literal["diff", "context", "file_change"]
     start_line: int = Field(ge=0)
     end_line: int = Field(ge=0)
     head_sha: str
     base_sha: str = ""
     content_hash: str
+    file_change: FileChangeEvidence | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_reference(self, handler):
+        result = handler(self)
+        if self.file_change is None:
+            result.pop("file_change", None)
+        return result
 
     @field_validator("file_path")
     @classmethod
@@ -1732,6 +1789,15 @@ class UnitEvidenceReference(BaseModel):
     def ordered_lines(self) -> "UnitEvidenceReference":
         if self.end_line < self.start_line:
             raise ValueError("evidence line range is reversed")
+        if self.source == "file_change":
+            from app.services.file_change_evidence import validate_file_change_evidence
+            if self.file_change is None or self.start_line or self.end_line:
+                raise ValueError("file change evidence has no line anchor")
+            validate_file_change_evidence(self.file_change, self.head_sha, self.base_sha, self.file_path)
+            if self.id != self.file_change.id or self.content_hash != self.file_change.content_hash:
+                raise ValueError("file change evidence reference mismatch")
+        elif self.file_change is not None:
+            raise ValueError("line evidence cannot carry file change metadata")
         return self
 
 
@@ -1813,6 +1879,22 @@ class UnitQuestionUpdate(BaseModel):
         return self
 
 
+class UnitFileChangeCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    evidence_id: str
+    impact_status: Literal["checked", "unresolved", "not_checked"]
+    evidence_ids: list[str] = Field(default_factory=list, max_length=12)
+    reason: str = Field(min_length=1, max_length=1_000)
+
+
+class UnitFileChangeCoverage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    metadata_verified: bool = False
+    impact_status: Literal["pending", "checked", "unresolved", "not_checked"] = "pending"
+    evidence_ids: list[str] = Field(default_factory=list)
+    reason: str | None = None
+
+
 class UnitReviewRecord(BaseModel):
     """模型提供的语义检查记录；引用由执行器核对，checked 不等于正确性证明。"""
 
@@ -1824,6 +1906,7 @@ class UnitReviewRecord(BaseModel):
     contract_dependencies: list[UnitContractDependency] = Field(default_factory=list, max_length=60)
     unresolved_questions: list[UnitUnresolvedQuestion] = Field(default_factory=list, max_length=60)
     question_updates: list[UnitQuestionUpdate] = Field(default_factory=list, max_length=20)
+    file_change_checks: list[UnitFileChangeCheck] = Field(default_factory=list, max_length=40)
 
     @model_validator(mode="after")
     def unique_checks(self) -> "UnitReviewRecord":
@@ -1831,6 +1914,7 @@ class UnitReviewRecord(BaseModel):
             [item.target for item in self.target_checks],
             [item.hypothesis_id for item in self.hypothesis_checks],
             [item.question_id for item in self.question_updates],
+            [item.evidence_id for item in self.file_change_checks],
         ):
             if len(identifiers) != len(set(identifiers)):
                 raise ValueError("review record contains duplicate checks")
@@ -2048,6 +2132,7 @@ class DiffManifestHunk(BaseModel):
     line_count: int = Field(ge=0)
     content_hash: str
     evidence_id: str | None = None
+    evidence_kind: Literal["diff", "file_change"] = "diff"
 
 
 class UnitDiffManifest(BaseModel):
@@ -2063,7 +2148,7 @@ class UnitDiffManifest(BaseModel):
 
 class UnitHunkCoverage(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    status: Literal["pending", "reviewed", "needs_followup"] = "pending"
+    status: Literal["pending", "reviewed", "needs_followup", "unsupported"] = "pending"
     batch_ids: list[str] = Field(default_factory=list)
     reviewed_ranges: list[list[int]] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
@@ -2099,6 +2184,7 @@ class UnitCoverageLedger(BaseModel):
     questions: dict[str, UnitQuestionCoverage] = Field(default_factory=dict)
     dependencies: dict[str, UnitCoverageCheck] = Field(default_factory=dict)
     supporting_evidence: dict[str, UnitEvidenceReference] = Field(default_factory=dict)
+    file_changes: dict[str, UnitFileChangeCoverage] = Field(default_factory=dict)
 
 
 class UnitActiveHunk(BaseModel):
@@ -2117,6 +2203,7 @@ class UnitActiveEvidenceSet(BaseModel):
     manifest_hash: str
     hunks: list[UnitActiveHunk]
     supporting_evidence_ids: list[str] = Field(default_factory=list)
+    file_change_evidence_ids: list[str] = Field(default_factory=list)
 
 
 class UnitStoredEvidence(BaseModel):

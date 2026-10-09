@@ -187,10 +187,12 @@ def build_working_memory(summary: UnitReviewSummary | None, record_input: dict,
                                              if summary else {"status": "not_executed"}),
     }
     if record is not None:
-        for key in ("unresolved_questions", "hypothesis_checks", "contract_dependencies", "target_checks"):
+        for key in ("unresolved_questions", "hypothesis_checks", "contract_dependencies", "target_checks", "file_change_checks"):
             items = []
             for check in getattr(record, key):
                 item = check.model_dump(mode="json")
+                if key == "file_change_checks":
+                    item["evidence_ids"] = list(dict.fromkeys([item["evidence_id"], *item["evidence_ids"]]))
                 if key == "unresolved_questions":
                     item["id"] = question_identity(item)
                 unavailable = [identity for identity in item["evidence_ids"] if identity not in current
@@ -202,6 +204,8 @@ def build_working_memory(summary: UnitReviewSummary | None, record_input: dict,
                     if "status" in item:
                         item["status"] = "unresolved"
                         item["reason" if "reason" in item else "assumption"] = "历史证据不能在当前快照恢复"
+                    if key == "file_change_checks":
+                        item["impact_status"] = "unresolved"
                 items.append(item)
             payload[key] = items
     payload["missing_evidence_ids"] = sorted(missing)
@@ -220,7 +224,7 @@ def build_working_memory(summary: UnitReviewSummary | None, record_input: dict,
 
     memory = json.loads(assemble_context(payload, required, 8_000, item_priority=rank))
     references = set()
-    for key in ("unresolved_questions", "hypothesis_checks", "contract_dependencies", "target_checks"):
+    for key in ("unresolved_questions", "hypothesis_checks", "contract_dependencies", "target_checks", "file_change_checks"):
         for item in memory.get(key, []):
             references.update(item["evidence_ids"])
     restored = [current[identity] for identity in sorted(references)]

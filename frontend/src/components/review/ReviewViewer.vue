@@ -553,7 +553,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
           <button type="button" :class="{ 'is-active': fileGroupFilter === 'all' }" @click="fileGroupFilter = 'all'">全部文件 <b>{{ task.changed_files.length }}</b></button>
           <button v-for="unit in task.review_units" :key="unit.id" type="button" :class="{ 'is-active': fileGroupFilter === unit.id }" @click="fileGroupFilter = unit.id">{{ unitTitle(unit) }} <b>{{ unitFiles(unit).length }}</b></button>
           <hr><span>文件状态</span>
-          <button v-for="state in ([['reviewed', '已审查'], ['partial', '部分完成'], ['excluded_sensitive', '敏感排除'], ['timed_out', '已超时']] as const)" :key="state[0]" type="button" :class="{ 'is-active': fileStatusFilter === state[0] }" @click="fileStatusFilter = fileStatusFilter === state[0] ? 'all' : state[0]">{{ state[1] }} <b>{{ coverage.files.filter(item => item.status === state[0]).length }}</b></button>
+          <button v-for="state in ([['reviewed', '已审查'], ['partial', '部分完成'], ['unsupported', '需人工复核'], ['excluded_sensitive', '敏感排除'], ['timed_out', '已超时']] as const)" :key="state[0]" type="button" :class="{ 'is-active': fileStatusFilter === state[0] }" @click="fileStatusFilter = fileStatusFilter === state[0] ? 'all' : state[0]">{{ state[1] }} <b>{{ coverage.files.filter(item => item.status === state[0]).length }}</b></button>
         </aside>
         <article class="files-table-card">
           <header><div><h2>变更文件</h2><p>覆盖状态、所属变更组与排除原因</p></div><span>{{ fileRows.length }} / {{ task.changed_files.length }}</span></header>

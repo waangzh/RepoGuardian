@@ -467,10 +467,23 @@ export interface UnitReviewPlan {
   initial_action: Record<string, unknown>;
 }
 
+export interface FileChangeEvidence {
+  schema_version: "file-change-evidence-v1";
+  id: string;
+  file_path: string;
+  base_sha: string;
+  head_sha: string;
+  base: { path: string; blob_id: string | null; mode: string | null; size: number | null };
+  head: { path: string; blob_id: string | null; mode: string | null; size: number | null };
+  change_kinds: Array<"rename" | "mode" | "empty_added" | "empty_deleted">;
+  content_hash: string;
+}
+
 export interface UnitEvidenceReference {
   id: string;
   file_path: string;
-  source: "diff" | "context";
+  source: "diff" | "context" | "file_change";
+  file_change?: FileChangeEvidence | null;
   start_line: number;
   end_line: number;
   head_sha: string;
@@ -514,6 +527,8 @@ export interface UnitReviewRecord {
   hypothesis_checks: UnitHypothesisCheck[];
   contract_dependencies: UnitContractDependency[];
   unresolved_questions: UnitUnresolvedQuestion[];
+  file_change_checks?: Array<{ evidence_id: string; impact_status: "checked" | "unresolved" | "not_checked";
+    evidence_ids: string[]; reason: string }>;
   question_updates?: Array<{
     question_id: string;
     status: "resolved" | "superseded";
@@ -671,7 +686,8 @@ export interface UnitDiffManifest {
   review_unit_id: string;
   snapshot: Record<string, string>;
   input_hash: string;
-  files: Array<{ file_path: string; change_type: string; hunk_ids: string[] }>;
+  files: Array<{ file_path: string; change_type: string; hunk_ids: string[];
+    metadata_required?: boolean; file_change_evidence?: FileChangeEvidence | null }>;
   hunks: Array<{ id: string; file_path: string; hunk_id: string; old_start: number; old_length: number;
     new_start: number; new_length: number; line_count: number; content_hash: string; evidence_id?: string | null }>;
 }
@@ -688,7 +704,7 @@ export interface UnitCoverageLedger {
   review_unit_id: string;
   manifest_hash: string;
   snapshot: Record<string, string>;
-  diff_hunks: Record<string, { status: "pending" | "reviewed" | "needs_followup"; batch_ids: string[];
+  diff_hunks: Record<string, { status: "pending" | "reviewed" | "needs_followup" | "unsupported"; batch_ids: string[];
     reviewed_ranges: number[][]; evidence_ids: string[]; reason?: string | null }>;
   targets: Record<string, UnitCoverageCheck>;
   hypotheses: Record<string, UnitCoverageCheck>;
@@ -696,6 +712,8 @@ export interface UnitCoverageLedger {
     status: "pending" | "resolved" | "superseded" }>;
   dependencies: Record<string, UnitCoverageCheck>;
   supporting_evidence: Record<string, UnitEvidenceReference>;
+  file_changes?: Record<string, { metadata_verified: boolean; impact_status: "pending" | "checked" | "unresolved" | "not_checked";
+    evidence_ids: string[]; reason?: string | null }>;
 }
 
 export interface ReviewUnitResult {
@@ -807,7 +825,8 @@ export type ReviewUnitTerminalReason =
   | "timed_out"
   | "provider_error"
   | "execution_error"
-  | "human_required";
+  | "human_required"
+  | "unsupported_change";
 
 export interface ReviewRunManifest {
   schema_version: "review-run-manifest-v1";
