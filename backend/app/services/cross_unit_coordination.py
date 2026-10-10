@@ -20,6 +20,7 @@ from app.services.coordination_runtime import (
 )
 from app.services.fingerprints import stable_hash
 from app.services.coordination_catalog import catalog_batches
+from app.services.review_run_budget import current_run_budget
 
 
 class SharedBudgetProvider:
@@ -39,6 +40,10 @@ class SharedBudgetProvider:
         return getattr(self.provider, name)
 
     async def _call(self, name: str, args: tuple, output_tokens: int) -> Any:
+        # V2 运行账本已成为真实请求的唯一准入权威；旧协调账本只在兼容入口
+        # （没有 active RunBudget）中保留，避免同一次 attempt 重复扣费。
+        if current_run_budget() is not None:
+            return await getattr(self.provider, name)(*args)
         if self.runtime is not None:
             return await self.runtime.call(self.provider, name, args, output_tokens, holdback=self.holdback)
         estimate = estimate_request(self.provider, name, args, output_tokens)["estimate"]

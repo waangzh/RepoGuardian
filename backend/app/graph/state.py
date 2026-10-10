@@ -87,6 +87,7 @@ class ReviewState(TypedDict, total=False):
     active_patch_validation_passed: bool | None
     patch_workspace_clean: bool | None
     execution_budget: dict[str, int] | ExecutionBudget
+    run_budget: dict[str, Any] | None
     repair_enabled: bool
 
     # ---- 测试结果 ----
