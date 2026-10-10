@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -136,6 +136,9 @@ class ReviewRunBudget:
         self.obligations: dict[str, ObligationRecord] = {}
         self.store = store
         self._lock = asyncio.Lock()
+        self._committed = self.snapshot()
+        self._initialized = store is None
+        self._invalidated = False
 
     @property
     def protected_obligations(self) -> int:
@@ -176,8 +179,31 @@ class ReviewRunBudget:
         return copy.deepcopy(self._persist_payload())
 
     async def _persist(self) -> None:
-        if self.store is not None:
-            await asyncio.to_thread(self.store.save, self.run_id, self.snapshot(), self.revision)
+        payload = self.snapshot()
+        try:
+            if self.store is not None:
+                await asyncio.to_thread(self.store.save, self.run_id, payload, self.revision)
+        except BaseException as exc:
+            # Lease failures inherit CancelledError. A cancelled thread can still
+            # commit; invalidate that worker instead of guessing its DB revision.
+            restored = self.restore(self._committed, recover_running=False)
+            for key in self._committed:
+                if hasattr(restored, key) and key not in {"version", "limits"}:
+                    setattr(self, key, getattr(restored, key))
+            if isinstance(exc, asyncio.CancelledError):
+                self._invalidated = True
+            raise
+        self._committed = payload
+        self._initialized = True
+
+    @asynccontextmanager
+    async def _mutation(self):
+        async with self._lock:
+            if self._invalidated:
+                raise RunBudgetError("run_budget_requires_reload")
+            if not self._initialized or self.revision != self._committed["revision"]:
+                await self._persist()
+            yield
 
     async def reserve(self, *, request_id: str, operation: str, estimated_tokens: int,
                       output_tokens: int = 0, task_id: str | None = None,
@@ -185,7 +211,7 @@ class ReviewRunBudget:
                       estimated_cost_microusd: int | None = None) -> AttemptRecord:
         if estimated_tokens < 0 or output_tokens < 0 or (estimated_cost_microusd is not None and estimated_cost_microusd < 0):
             raise ValueError("request reservation must not be negative")
-        async with self._lock:
+        async with self._mutation():
             if not self.enforce:
                 available = self.available(obligation_id=obligation_id)
             else:
@@ -220,7 +246,7 @@ class ReviewRunBudget:
             return copy.deepcopy(record)
 
     async def mark_dispatching(self, attempt_id: str) -> AttemptRecord:
-        async with self._lock:
+        async with self._mutation():
             record = self._get(attempt_id)
             if record.state not in {AttemptState.RESERVED, AttemptState.DISPATCHING}:
                 return copy.deepcopy(record)
@@ -232,7 +258,7 @@ class ReviewRunBudget:
 
     async def settle(self, attempt_id: str, *, actual_tokens: int | None,
                      cost_microusd: int | None = None) -> AttemptRecord:
-        async with self._lock:
+        async with self._mutation():
             record = self._get(attempt_id)
             if record.settled:
                 return copy.deepcopy(record)
@@ -265,7 +291,7 @@ class ReviewRunBudget:
         if not current.settled or current.state != AttemptState.UNKNOWN:
             return await self.settle(attempt_id, actual_tokens=actual_tokens,
                                       cost_microusd=cost_microusd)
-        async with self._lock:
+        async with self._mutation():
             record = self._get(attempt_id)
             if record.state != AttemptState.UNKNOWN:
                 return copy.deepcopy(record)
@@ -285,7 +311,7 @@ class ReviewRunBudget:
             return copy.deepcopy(record)
 
     async def release_unsent(self, attempt_id: str, *, reason: str = "not_sent") -> AttemptRecord:
-        async with self._lock:
+        async with self._mutation():
             record = self._get(attempt_id)
             if record.state == AttemptState.RELEASED:
                 return copy.deepcopy(record)
@@ -306,7 +332,7 @@ class ReviewRunBudget:
                                 reason: str, request_hash: str | None = None) -> ObligationRecord:
         if token_budget < 0:
             raise ValueError("obligation token budget must not be negative")
-        async with self._lock:
+        async with self._mutation():
             if token_budget > self.available()["tokens"]:
                 raise RunBudgetError("run_budget_obligation_rejected", details={
                     "requested_tokens": token_budget, **self.available()})
@@ -318,7 +344,7 @@ class ReviewRunBudget:
             return copy.deepcopy(item)
 
     async def release_obligation(self, obligation_id: str, *, abandoned: bool = False) -> ObligationRecord:
-        async with self._lock:
+        async with self._mutation():
             item = self.obligations.get(obligation_id)
             if item is None:
                 raise RunBudgetError("unknown_obligation", details={"obligation_id": obligation_id})
@@ -331,7 +357,7 @@ class ReviewRunBudget:
     async def convert_obligation(self, obligation_id: str, *, request_id: str, operation: str,
                                  estimated_tokens: int, output_tokens: int = 0,
                                  task_id: str | None = None, request_hash: str | None = None) -> AttemptRecord:
-        async with self._lock:
+        async with self._mutation():
             item = self.obligations.get(obligation_id)
             if item is None or item.state != ObligationState.ACTIVE:
                 raise RunBudgetError("obligation_not_convertible", details={"obligation_id": obligation_id})
@@ -378,8 +404,11 @@ class ReviewRunBudget:
             item = dict(raw)
             item["state"] = ObligationState(item["state"])
             budget.obligations[key] = ObligationRecord(**item)
+        budget._committed = budget.snapshot()
+        budget._initialized = True
         if recover_running:
             # Conservative recovery: a crash at the send boundary is unknown, never free.
+            changed = False
             for item in budget.attempts.values():
                 if item.state in {AttemptState.RESERVED, AttemptState.DISPATCHING} and not item.settled:
                     item.state = AttemptState.UNKNOWN
@@ -387,7 +416,9 @@ class ReviewRunBudget:
                     item.sent = True
                     budget.in_flight_reserved = max(0, budget.in_flight_reserved - item.reserved_tokens)
                     budget.unknown_reserved += item.reserved_tokens
-            budget.revision += 1
+                    changed = True
+            if changed:
+                budget.revision += 1
         return budget
 
     @classmethod
@@ -397,9 +428,14 @@ class ReviewRunBudget:
                              enforce: bool = True, recover_running: bool = False) -> "ReviewRunBudget":
         payload = await asyncio.to_thread(store.load, run_id) if store is not None else None
         if payload:
-            return cls.restore(payload, store=store, recover_running=recover_running)
-        return cls(run_id, max_tokens=max_tokens, max_calls=max_calls,
+            budget = cls.restore(payload, store=store, recover_running=recover_running)
+            if budget.revision != int(payload.get("revision", 0)):
+                await budget._persist()
+            return budget
+        budget = cls(run_id, max_tokens=max_tokens, max_calls=max_calls,
                    max_cost_microusd=max_cost_microusd, store=store, enforce=enforce)
+        await budget._persist()
+        return budget
 
 
 _active_run_budget: ContextVar[ReviewRunBudget | None] = ContextVar("active_review_run_budget", default=None)
