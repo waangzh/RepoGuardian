@@ -583,6 +583,7 @@ class ReviewUnitExecutor:
         from app.review.unit_completion import is_review_unit_complete, is_reusable_review_unit_result
 
         manifest = UnitDiffManifest.model_validate(state["diff_manifest"])
+        initial_token_usage = budget.token_usage
 
         worksets = build_unit_worksets(unit, files,
             lambda child, selected, metadata: self._workset_admission(child, selected, state, budget, metadata))
@@ -642,6 +643,8 @@ class ReviewUnitExecutor:
                 continue
             if not entry.admission["admitted"]:
                 entry.status = "skipped"
+                if entry.admission.get("can_defer"):
+                    entry.admission["deferred_budget"] = True
                 entry.reason = entry.reason or entry.admission["reason"]
                 continue
             future = [item for item in entries[index + 1:] if item.admission["admitted"] and item.status != "completed"]
@@ -651,7 +654,10 @@ class ReviewUnitExecutor:
                         "batch_memory_summary": self._batch_memory(entries[:index], ledger)}
             current_admission = self._workset_admission(child, selected, forecast, budget, metadata)
             if not current_admission["admitted"]:
-                entry.status, entry.reason = "skipped", current_admission["reason"]
+                entry.status = "skipped"
+                if current_admission.get("can_defer"):
+                    current_admission["deferred_budget"] = True
+                entry.reason = current_admission["reason"]
                 entry.admission = current_admission
                 continue
             # 公共清单/账本/规划增量只计数一次，避免逐批重渲染整个剩余队列。
@@ -666,6 +672,7 @@ class ReviewUnitExecutor:
             if not local.can_consume(model_calls=1, diagnosis_attempts=1,
                                     token_usage=entry.admission["reserved_tokens"]):
                 entry.status, entry.reason = "skipped", "unit_workset_budget_exhausted"
+                entry.admission["deferred_budget"] = True
                 continue
             # 未来诊断预留扣除后，再检查本批可选决策与诊断能否同时执行。
             if "decision_reserved_tokens" in entry.admission:
@@ -715,6 +722,18 @@ class ReviewUnitExecutor:
                 if observer is not None:
                     observer.update(budget=budget, diff_batches=entries, evidence_store=merge_stores([
                         observer.get("evidence_store"), child_snapshot.get("evidence_store"), entry.result.evidence_store if entry.result else None]))
+        deferred = [item for item in entries
+                     if not item.admission.get("admitted")
+                     and (item.admission.get("can_defer") or item.admission.get("deferred_budget"))]
+        # 实测用量低于预留时，释放出的额度触发一次确定性 drain。递归调用复用
+        # 已完成批次的 canonical 记录，只重新准入原先因余额不足而跳过的批次。
+        if (deferred and budget.token_usage < initial_token_usage
+                and not state.get("_deferred_drained")):
+            prior = self._aggregate_diff_batches(unit, entries, budget, binding, manifest=manifest,
+                                                 evidence_store=observer.get("evidence_store") if observer else None)
+            return await self._execute_diff_batches(
+                unit, files, {**state, "review_unit_results": [prior.model_dump(mode="json")],
+                              "_deferred_drained": True}, budget)
         return self._aggregate_diff_batches(unit, entries, budget, binding, manifest=manifest,
             evidence_store=observer.get("evidence_store") if observer else None)
 
