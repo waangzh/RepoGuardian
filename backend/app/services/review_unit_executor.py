@@ -1561,7 +1561,8 @@ class ReviewUnitExecutor:
                     if getattr(self.provider, "supports_review_step", False):
                         return await self.provider.review_step(*args)
                     return await self.provider.review_unit(*args)
-                raw_result, budget = await self._call_unit_model(budget, record_input, 4_096, invoke)
+                from app.review.review_policy import REVIEW_STEP_OUTPUT_TOKENS
+                raw_result, budget = await self._call_unit_model(budget, record_input, REVIEW_STEP_OUTPUT_TOKENS, invoke)
         except LLMProviderError as exc:
             usage = annotate_usage(
                 exc.usage,
