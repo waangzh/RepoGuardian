@@ -15,6 +15,7 @@ from app.services.review_input_context import build_pr_intent, build_working_mem
 from app.review.input_protocol import CANONICAL_UNIT_INPUT_PROTOCOL, legacy_unit_input_allowed
 from app.review.unit_completion import DIAGNOSIS_BACKGROUND_DEGRADED, review_unit_input_coverage
 from app.services.fingerprints import unit_execution_fingerprint
+from app.review.diff_base import review_diff_base
 from app.models.review import (
     AgentAction,
     AgentActionName,
@@ -52,7 +53,7 @@ from app.models.review import (
     UnitContextSelection,
 )
 from app.services.evidence_store import (ContextAdmission, evidence_snapshot, restore_store, put_chunks,
-    store_chunks, evidence_priorities, archived_request_chunks, merge_stores, store_catalog)
+    store_chunks, evidence_priorities, archived_request_chunks, merge_stores, store_catalog, tool_result_metadata)
 from app.services.unit_coverage import (build_diff_manifest, new_coverage_ledger, active_evidence_set,
     update_coverage, rebuild_coverage, coverage_gaps, active_body_chars, MAX_ACTIVE_HUNKS, MAX_ACTIVE_DIFF_CHARS,
     unsupported_hunk_ids, NO_HUNK_CHANGE_REASON)
@@ -278,7 +279,7 @@ class ReviewUnitExecutor:
             from app.tools.git_tool import GitTool
 
             unit_files = await asyncio.to_thread(bind_file_change_evidence, unit_files,
-                state.get("repo_path"), str(state.get("head_sha") or ""), str(state.get("base_sha") or ""),
+                state.get("repo_path"), str(state.get("head_sha") or ""), review_diff_base(state),
                 state.get("_git_tool") or GitTool())
             by_path.update({file.file_path: file for file in unit_files})
             state = {**state, "changed_files": [by_path[file.file_path].model_dump(mode="json") for file in all_changed]}
@@ -297,7 +298,7 @@ class ReviewUnitExecutor:
         batch = state.get("_unit_diff_batch")
         if self.input_mode == "canonical":
             manifest = (UnitDiffManifest.model_validate(state["diff_manifest"]) if batch else
-                        build_diff_manifest(unit, unit_files, str(state.get("head_sha") or ""), str(state.get("base_sha") or "")))
+                        build_diff_manifest(unit, unit_files, str(state.get("head_sha") or ""), review_diff_base(state)))
             ledger = (UnitCoverageLedger.model_validate(state["coverage_ledger"]) if batch else new_coverage_ledger(manifest))
             state = {**state, "diff_manifest": manifest.model_dump(mode="json"),
                      "coverage_ledger": ledger.model_dump(mode="json"),
@@ -373,7 +374,7 @@ class ReviewUnitExecutor:
             "latest_review_attempt": {"status": "not_executed"},
             "evidence_store": restore_store(state.get("batch_evidence_store"),
                 manifest.review_unit_id if self.input_mode == "canonical" else unit.id,
-                evidence_snapshot(str(state.get("head_sha") or ""), str(state.get("base_sha") or "")), scope.readable_files),
+                evidence_snapshot(str(state.get("head_sha") or ""), review_diff_base(state)), scope.readable_files),
         }
         if batch:
             graph_state.update(pending_issues=[], error=None)
@@ -395,10 +396,10 @@ class ReviewUnitExecutor:
                       if raw.get("review_unit_id") == unit.id and raw.get("input_fingerprint") == binding), None)
         if prior and self.input_mode == "canonical":
             restored_store = restore_store(prior.evidence_store, manifest.review_unit_id,
-                evidence_snapshot(str(state.get("head_sha") or ""), str(state.get("base_sha") or "")), scope.readable_files)
+                evidence_snapshot(str(state.get("head_sha") or ""), review_diff_base(state)), scope.readable_files)
             previous_chunks, _ = build_context_evidence([item.model_dump(mode="json") for item in prior.context_snippets
                 if item.file in scope.readable_files and not is_sensitive_repository_change(item.file)],
-                str(state.get("head_sha") or ""), str(state.get("base_sha") or ""))
+                str(state.get("head_sha") or ""), review_diff_base(state))
             if prior.evidence_store is None:
                 put_chunks(restored_store, previous_chunks)
             inventory = store_chunks(restored_store)
@@ -410,7 +411,7 @@ class ReviewUnitExecutor:
                     used += len(chunk["content"])
             restored_plan = followup_plan or prior.plan
             request = build_record_input(unit_files, restored_context, restored_plan,
-                str(state.get("head_sha") or ""), str(state.get("base_sha") or ""))
+                str(state.get("head_sha") or ""), review_diff_base(state))
             request["pr_intent"] = build_pr_intent(state.get("pr_info"))
             if self.input_mode == "canonical":
                 request["diff_manifest"] = manifest.model_dump(mode="json")
@@ -516,9 +517,12 @@ class ReviewUnitExecutor:
         """发送前检查完整诊断与 Decision；不消费预算或建立传输。"""
         from app.agents.providers import LLMProviderError, OpenAICompatibleProvider
         from app.services.context_assembler import RequiredInputTooLarge
+        from app.services.review_admission import AdmissionKind, annotate_admission, budget_fit
 
         if sum(max(1, len(file.hunks)) for file in files) > MAX_ACTIVE_HUNKS or active_body_chars(files) > MAX_ACTIVE_DIFF_CHARS:
-            return {"admitted": False, "reason": "active_hunk_set_exceeded"}
+            return annotate_admission({"reason": "active_hunk_set_exceeded"}, admitted=False,
+                                      reason="active_hunk_set_exceeded", kind=AdmissionKind.REQUEST_FIT,
+                                      can_defer=False, can_split=True)
 
         scope = self.planner.build_scope(unit, state.get("repo_path"), repository_files={
             item["path"] for item in state.get("file_index") or [] if item.get("path")})
@@ -557,11 +561,21 @@ class ReviewUnitExecutor:
             if reason not in {"required_input_too_large", "model_context_window_exceeded",
                               "model_input_limit_exceeded", "model_output_limit_exceeded"}:
                 raise
-            return {"admitted": False, "reason": reason}
+            return annotate_admission({}, admitted=False, reason=reason,
+                                      kind=AdmissionKind.REQUEST_FIT, can_defer=False, can_split=True)
         admitted = budget.can_consume(model_calls=1, diagnosis_attempts=1,
                                      token_usage=estimate["reserved_tokens"])
-        return {**estimate, "admitted": admitted,
-                "reason": None if admitted else "unit_request_budget_exhausted"}
+        if admitted:
+            decision_fit = budget_fit(budget, token_usage=estimate["reserved_tokens"], model_calls=1,
+                                      diagnosis_attempts=1)
+            return annotate_admission({**estimate}, admitted=True,
+                                      budget=decision_fit, kind=AdmissionKind.BUDGET,
+                                      can_defer=False, can_split=False)
+        decision_fit = budget_fit(budget, token_usage=estimate["reserved_tokens"], model_calls=1,
+                                  diagnosis_attempts=1)
+        return annotate_admission({**estimate}, admitted=False,
+                                  reason="unit_request_budget_exhausted", budget=decision_fit,
+                                  kind=AdmissionKind.BUDGET, can_defer=True, can_split=False)
 
     async def _execute_diff_batches(self, unit, files, state, budget):
         from app.services.unit_worksets import build_unit_worksets
@@ -596,7 +610,7 @@ class ReviewUnitExecutor:
                     and cached.status == "completed" and is_reusable_review_unit_result(cached.result)):
                 request = build_record_input(selected,
                     [snippet.model_dump(mode="json") for snippet in cached.result.context_snippets],
-                    cached.result.plan, str(state.get("head_sha") or ""), str(state.get("base_sha") or ""))
+                    cached.result.plan, str(state.get("head_sha") or ""), review_diff_base(state))
                 from app.services.file_change_evidence import set_file_change_impact_scope
                 set_file_change_impact_scope(request, child.related_files)
                 request["pr_intent"] = build_pr_intent(state.get("pr_info"))
@@ -1218,9 +1232,15 @@ class ReviewUnitExecutor:
     ) -> "_ReviewUnitGraphState":
         self._remember_unit_state(state)
         tool_name = action.action.value
+        from app.review.run_audit import emit_run_audit
 
+        def observe(status, results=None, reason=None):
+            emit_run_audit("tool", review_unit_id=state["unit"].id, tool=tool_name,
+                           request=action.tool_args, status=status, results=tool_result_metadata(results or []),
+                           reason=reason, scope=state["scope"].model_dump(mode="json"))
 
         if not budget.can_consume(context_retrievals=1):
+            observe("rejected", reason="context retrieval budget exhausted")
             events.append(ReviewUnitToolEvent(
                 review_unit_id=state["unit"].id,
                 tool=tool_name,
@@ -1249,6 +1269,7 @@ class ReviewUnitExecutor:
             fingerprint in item.request_fingerprints and item.snippet.truncated
             for item in store.entries.values()))
         if any(item.get("plan") == fingerprint for item in history) and not restart_find and not cached and not incomplete_read:
+            observe("rejected", reason="duplicate read request")
             events.append(ReviewUnitToolEvent(
                 review_unit_id=state["unit"].id,
                 tool=tool_name,
@@ -1327,6 +1348,7 @@ class ReviewUnitExecutor:
             self._remember_unit_state({"budget": budget})
             admission = dict(admission)
             result_count = len(matches) if action.action == AgentActionName.file_find else len(new_items)
+            observe("completed", results=matches if tool_name == "file_find" else snippets)
             events.append(ReviewUnitToolEvent(
                 review_unit_id=state["unit"].id,
                 tool=tool_name,
@@ -1358,6 +1380,7 @@ class ReviewUnitExecutor:
                 "tool_events": events,
             }
         except ValueError as exc:
+            observe("rejected", reason=str(exc))
             events.append(ReviewUnitToolEvent(
                 review_unit_id=state["unit"].id,
                 tool=tool_name,
@@ -1390,6 +1413,7 @@ class ReviewUnitExecutor:
         *, cached=None,
     ) -> "_ReviewUnitGraphState":
         budget = budget.consume(context_retrievals=1)
+        from app.review.run_audit import emit_run_audit
 
         try:
             snippets = cached or await CodeSearchTool().retrieve_context(
@@ -1406,6 +1430,9 @@ class ReviewUnitExecutor:
             selection_update = self._context_selection_update(state, admission)
             self._remember_unit_state({"budget": budget})
             admission = dict(admission)
+            emit_run_audit("tool", review_unit_id=state["unit"].id, tool="code_search",
+                           request=plan.model_dump(mode="json"), status="completed", results=tool_result_metadata(snippets),
+                           scope=state["scope"].model_dump(mode="json"))
             events.append(ReviewUnitToolEvent(
                 review_unit_id=state["unit"].id,
                 tool="code_search",
@@ -1437,6 +1464,9 @@ class ReviewUnitExecutor:
                 "tool_events": events,
             }
         except ValueError as exc:
+            emit_run_audit("tool", review_unit_id=state["unit"].id, tool="code_search",
+                           request=plan.model_dump(mode="json"), status="rejected", reason=str(exc),
+                           results=[], scope=state["scope"].model_dump(mode="json"))
             events.append(ReviewUnitToolEvent(
                 review_unit_id=state["unit"].id,
                 tool="code_search",
@@ -1595,7 +1625,7 @@ class ReviewUnitExecutor:
         pr = PullRequestInfo.model_validate(state["parent_state"].get("pr_info") or {})
         plan = None if core else state.get("unit_plan")
         record_input = build_record_input(state["unit_files"], state["context"], plan,
-            str(state["parent_state"].get("head_sha") or ""), str(state["parent_state"].get("base_sha") or ""))
+            str(state["parent_state"].get("head_sha") or ""), review_diff_base(state["parent_state"]))
         from app.services.file_change_evidence import set_file_change_impact_scope
         set_file_change_impact_scope(record_input, getattr(state["unit"], "related_files", []))
         record_input["pr_intent"] = build_pr_intent(pr)
@@ -1879,7 +1909,7 @@ class ReviewUnitExecutor:
         )
 
         record_input = build_record_input(changed_files, context, unit_plan,
-            str(state.get("head_sha") or ""), str(state.get("base_sha") or ""))
+            str(state.get("head_sha") or ""), review_diff_base(state))
         from app.services.file_change_evidence import set_file_change_impact_scope
         set_file_change_impact_scope(record_input, unit.related_files)
         record_input["pr_intent"] = build_pr_intent(state.get("pr_info"))
@@ -1942,13 +1972,17 @@ class ReviewUnitExecutor:
     def _probe_diagnosis_admission(self, state):
         """不消费额度；与最终诊断共用完整请求、降级选择和模型计数路径。"""
         from app.agents.providers import LLMProviderError
+        from app.services.review_admission import AdmissionKind, annotate_admission, budget_fit
 
         budget = state["budget"]
         capacity = {"remaining_tokens": max(0, budget.max_token_usage - budget.token_usage),
                     "remaining_calls": max(0, budget.max_model_calls - budget.model_calls),
                     "remaining_diagnosis_attempts": max(0, budget.max_diagnosis_attempts - budget.diagnosis_attempts)}
         if not budget.can_consume(diagnosis_attempts=1, model_calls=1):
-            return {**capacity, "admitted": False, "reason": "unit_diagnosis_budget_exhausted"}
+            fit = budget_fit(budget, model_calls=1, diagnosis_attempts=1)
+            return annotate_admission({**capacity}, admitted=False,
+                                      reason="unit_diagnosis_budget_exhausted", budget=fit,
+                                      kind=AdmissionKind.BUDGET, can_defer=True, can_split=False)
         try:
             args, degradation = self._select_diagnosis_input(state)
             estimate = self._diagnosis_estimate(args)
@@ -1961,16 +1995,26 @@ class ReviewUnitExecutor:
                 estimate = json.loads(metadata)
             except (ValueError, TypeError):
                 estimate = {}
-            return {**estimate, **capacity, "admitted": False, "reason": reason}
+            return annotate_admission({**estimate, **capacity}, admitted=False,
+                                      reason=reason, kind=AdmissionKind.REQUEST_FIT,
+                                      can_defer=False, can_split=True)
         admitted = budget.can_consume(model_calls=1, token_usage=estimate["reserved_tokens"])
-        return {**estimate, **capacity, "admitted": admitted,
-                "input_mode": "core" if degradation else "full",
-                "reason": None if admitted else "unit_request_budget_exhausted"}
+        base = {**estimate, **capacity, "input_mode": "core" if degradation else "full"}
+        if admitted:
+            return annotate_admission(base, admitted=True,
+                                      budget=budget_fit(budget, model_calls=1,
+                                                        token_usage=estimate["reserved_tokens"]),
+                                      kind=AdmissionKind.BUDGET, can_defer=False, can_split=False)
+        return annotate_admission(base, admitted=False,
+                                  reason="unit_request_budget_exhausted",
+                                  budget=budget_fit(budget, model_calls=1,
+                                                    token_usage=estimate["reserved_tokens"]),
+                                  kind=AdmissionKind.BUDGET, can_defer=True, can_split=False)
 
     def _admit_retrieved_context(self, state, candidates, budget, *, request_key=None):
         """归档合法完整块；高价值活动证据可替换低价值块，最终准入失败则回滚可见集。"""
         parent = state["parent_state"]
-        head, base = str(parent.get("head_sha") or ""), str(parent.get("base_sha") or "")
+        head, base = str(parent.get("head_sha") or ""), review_diff_base(parent)
         current, _ = build_context_evidence(state["context"], head, base)
         manifest = state.get("diff_manifest")
         root_id = manifest.review_unit_id if manifest else state["unit"].id
@@ -2083,7 +2127,7 @@ class ReviewUnitExecutor:
         if state.get("evidence_store") is None:
             return []
         parent = state["parent_state"]
-        snapshot = evidence_snapshot(str(parent.get("head_sha") or ""), str(parent.get("base_sha") or ""))
+        snapshot = evidence_snapshot(str(parent.get("head_sha") or ""), review_diff_base(parent))
         manifest = state.get("diff_manifest")
         store = restore_store(state["evidence_store"], manifest.review_unit_id if manifest else state["unit"].id,
                               snapshot, state["scope"].readable_files)
