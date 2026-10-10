@@ -367,9 +367,11 @@ class OpenAICompatibleProvider(LLMProvider):
         prompt += ("\n本次调用是 review_step：同时返回当前检查增量、issues、review_record，"
                     "以及 next_need（无则为 null）。next_need 只能是一个受控 AgentAction，"
                     "不得包含 command 或任意路径；服务端会再次校验范围。")
+        from app.review.review_policy import REVIEW_STEP_OUTPUT_TOKENS, REVIEW_STEP_PROTOCOL_VERSION
+        prompt = f"协议版本：{REVIEW_STEP_PROTOCOL_VERSION}\n" + prompt
         response = await self._request_json_content(
             prompt=prompt, model=model, operation="review_step",
-            system="Review one bounded Unit in one step. Return validated JSON only.", max_tokens=4096)
+            system="Review one bounded Unit in one step. Return validated JSON only.", max_tokens=REVIEW_STEP_OUTPUT_TOKENS)
         try:
             raw = self._load_json(response.value)
             issues = self._parse_issues(response.value, require_array=True)
