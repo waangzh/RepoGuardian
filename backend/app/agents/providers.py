@@ -101,6 +101,12 @@ class LLMProvider(ABC):
         del state, model
         raise LLMProviderError("review unit planning is unavailable")
 
+    async def review_step(
+        self, pr: PullRequestInfo, changed_files: list[ChangedFile], diff_text: str,
+        model: str | None, record_input: dict[str, Any],
+    ) -> ModelCallResult[UnitReviewResponse] | UnitReviewResponse:
+        raise LLMProviderError("review_step is unavailable")
+
     @abstractmethod
     async def decide(
         self, state: dict[str, Any], model: str | None
@@ -157,6 +163,7 @@ class LLMProvider(ABC):
 class OpenAICompatibleProvider(LLMProvider):
     unit_input_protocol = CANONICAL_UNIT_INPUT_PROTOCOL
     supports_request_admission = True
+    supports_review_step = True
     _CONFIDENCE_LABELS = {
         "very_low": 0.15,
         "low": 0.35,
@@ -349,6 +356,41 @@ class OpenAICompatibleProvider(LLMProvider):
             exc.usage = response.usage
             raise
 
+    async def review_step(
+        self, pr: PullRequestInfo, changed_files: list[ChangedFile], diff_text: str,
+        model: str | None, record_input: dict[str, Any],
+    ) -> ModelCallResult[UnitReviewResponse]:
+        """合并 Plan/Decision/Diagnosis 的单步协议；下一步需求由服务端白名单校验。"""
+        if not self._api_key:
+            raise LLMProviderError("OPENAI_API_KEY is required for review_step")
+        prompt = self._build_unit_review_prompt(pr, changed_files, diff_text, record_input)
+        prompt += ("\n本次调用是 review_step：同时返回当前检查增量、issues、review_record，"
+                    "以及 next_need（无则为 null）。next_need 只能是一个受控 AgentAction，"
+                    "不得包含 command 或任意路径；服务端会再次校验范围。")
+        response = await self._request_json_content(
+            prompt=prompt, model=model, operation="review_step",
+            system="Review one bounded Unit in one step. Return validated JSON only.", max_tokens=4096)
+        try:
+            raw = self._load_json(response.value)
+            issues = self._parse_issues(response.value, require_array=True)
+            record = None
+            record_error = None
+            if isinstance(raw, dict) and raw.get("review_record") is not None:
+                try:
+                    record = UnitReviewRecord.model_validate(self._normalize_review_record(raw["review_record"]))
+                except ValidationError as exc:
+                    record_error = f"invalid_review_record: {exc}"
+            next_need = None
+            if isinstance(raw, dict) and raw.get("next_need") is not None:
+                next_need = AgentAction.model_validate(self._normalize_agent_action(raw["next_need"]))
+            return ModelCallResult(UnitReviewResponse(
+                issues=issues, review_record=record, record_error=record_error, next_need=next_need,
+            ), response.usage)
+        except LLMProviderError as exc:
+            exc.usage = response.usage
+            raise
+        except ValidationError as exc:
+            raise LLMProviderError(f"review_step schema validation failed: {exc}", usage=response.usage) from exc
     @classmethod
     def _build_unit_review_prompt(cls, pr, changed_files, diff_text, record_input) -> str:
         intent = build_pr_intent(pr)
