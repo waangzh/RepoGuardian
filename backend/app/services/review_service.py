@@ -50,6 +50,11 @@ from app.services.model_usage import summarize_model_usage
 from app.services.review_rebuild import rebuild_task_from_state
 from app.services.review_planner import DeterministicReviewPlanner
 from app.services.review_unit_executor import ReviewUnitExecutor
+from app.services.review_run_budget import (
+    ReviewRepositoryRunBudgetStore,
+    ReviewRunBudget,
+    activate_run_budget,
+)
 from app.review.unit_completion import (
     is_review_unit_budget_exhausted,
     is_review_unit_complete,
@@ -495,31 +500,45 @@ class ReviewService:
             if callbacks:
                 run_config["callbacks"] = callbacks
             logger.info("📊 开始流式执行审查图...")
-            with tracing:
-                graph_input: Any = initial_state
-                if self._repository:
-                    snapshot = await compiled.aget_state(run_config)
-                    if "human_required" in snapshot.next or snapshot.values.get("status") == "waiting_for_human":
-                        # 旧人工暂停点无法在新图恢复，按当前 PR 快照重新审查。
-                        await delete_thread_checkpoints(task_id)
-                        initial_state["warnings"].append("旧人工暂停流程已移除，本次重新审查当前 PR 快照")
-                    elif not snapshot.next and snapshot.values.get("status") in {
-                        TaskStatus.completed.value, TaskStatus.completed_with_warnings.value,
-                    }:
-                        result = snapshot.values
-                    elif snapshot.next:
-                        existing_path = snapshot.values.get("repo_path")
-                        if not existing_path or await asyncio.to_thread(Path(existing_path).is_dir):
-                            graph_input = None
-                            if existing_path:
-                                self._repo_paths[task_id] = Path(existing_path)
-                        else:
-                            # clone 已消失时重建主图；不能把旧状态合并进新快照。
+            run_budget_store = (
+                ReviewRepositoryRunBudgetStore(
+                    self._repository,
+                    lease=run_config.get("configurable", {}).get("review_job_lease"),
+                ) if self._repository else None
+            )
+            run_budget = await ReviewRunBudget.load_or_create(
+                task_id,
+                max_tokens=ExecutionBudget().max_token_usage,
+                max_calls=ExecutionBudget().max_model_calls,
+                store=run_budget_store,
+                recover_running=True,
+            )
+            with activate_run_budget(run_budget):
+                with tracing:
+                    graph_input: Any = initial_state
+                    if self._repository:
+                        snapshot = await compiled.aget_state(run_config)
+                        if "human_required" in snapshot.next or snapshot.values.get("status") == "waiting_for_human":
                             await delete_thread_checkpoints(task_id)
-                if result is None:
-                    result = await self._invoke_graph_with_progress(
-                        compiled, graph_input, run_config, task
-                    )
+                            initial_state["warnings"].append("旧人工暂停流程已移除，本次重新审查当前 PR 快照")
+                        elif not snapshot.next and snapshot.values.get("status") in {
+                            TaskStatus.completed.value, TaskStatus.completed_with_warnings.value,
+                        }:
+                            result = snapshot.values
+                        elif snapshot.next:
+                            existing_path = snapshot.values.get("repo_path")
+                            if not existing_path or await asyncio.to_thread(Path(existing_path).is_dir):
+                                graph_input = None
+                                if existing_path:
+                                    self._repo_paths[task_id] = Path(existing_path)
+                            else:
+                                await delete_thread_checkpoints(task_id)
+                    if result is None:
+                        result = await self._invoke_graph_with_progress(
+                            compiled, graph_input, run_config, task
+                        )
+                if isinstance(result, dict):
+                    result["run_budget"] = run_budget.snapshot()
             if result.get("__interrupt__"):
                 raise RuntimeError("只读审查不支持人工中断；未生成完整审查结果")
             logger.info("✅ ainvoke 执行完成，开始同步结果")

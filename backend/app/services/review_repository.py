@@ -518,6 +518,43 @@ class ReviewRepository:
             return (dict(row.result) if row and row.result else None,
                     dict(budget.result["budget"]) if budget and budget.result else None)
 
+    def load_run_budget(self, task_id: str) -> dict | None:
+        with self._session_factory() as session:
+            row = session.get(SideEffectOrm, f"run-budget:{task_id}")
+            return dict(row.result) if row and row.result else None
+
+    def save_run_budget(self, task_id: str, payload: dict, expected_revision: int,
+                        lease: dict | None = None) -> None:
+        """以 SideEffect CAS 持久化运行预算；旧 worker 无法覆盖新 revision。"""
+        from app.services.coordination_runtime import CoordinationLeaseLost
+        with self._session_factory.begin() as session:
+            task = session.get(ReviewTaskOrm, task_id)
+            if task is None or task.deleted_at is not None:
+                raise CoordinationLeaseLost("missing review run")
+            if lease:
+                job = session.get(WorkerJobOrm, lease["job_id"])
+                if (job is None or job.status != "leased" or job.lease_owner != lease["owner"]
+                        or job.attempts != lease["attempt"] or job.lease_until is None
+                        or job.lease_until.replace(tzinfo=timezone.utc) <= utcnow()):
+                    raise CoordinationLeaseLost("review run lease lost")
+            key = f"run-budget:{task_id}"
+            row = session.get(SideEffectOrm, key)
+            if row is None:
+                if expected_revision != -1:
+                    raise CoordinationLeaseLost("run budget missing")
+                session.add(SideEffectOrm(
+                    idempotency_key=key, task_id=task_id, effect_type="review-run-budget-v1",
+                    target=task_id, status="active", request_hash=hashlib.sha256(task_id.encode()).hexdigest(),
+                    result=payload,
+                ))
+            else:
+                changed = session.execute(update(SideEffectOrm).where(
+                    SideEffectOrm.idempotency_key == key,
+                    SideEffectOrm.result["revision"].as_integer() == expected_revision,
+                ).values(result=payload, status="active"))
+                if changed.rowcount != 1:
+                    raise CoordinationLeaseLost("run budget revision changed")
+
     def save_coordination_runtime(self, task_id: str, fingerprint: str, payload: dict,
                                   expected_revision: int, expected_budget: dict | None,
                                   lease: dict | None = None) -> None:
