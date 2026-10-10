@@ -2264,7 +2264,7 @@ class UnitDiffBatch(BaseModel):
     version: str
     ranges: list[dict[str, Any]]
     admission: dict[str, Any]
-    status: Literal["pending", "completed", "partial", "skipped", "failed"] = "pending"
+    status: Literal["pending", "completed", "partial", "skipped", "deferred_budget", "failed"] = "pending"
     reason: str | None = None
     result: ReviewUnitResult | None = None
 
