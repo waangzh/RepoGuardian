@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from app.models.review import ExecutionBudget, ModelUsage
@@ -66,3 +68,13 @@ async def test_deferred_queue_keeps_task_when_budget_still_unavailable():
     done = await queue.drain(budget_revision=3, admit=lambda _: {"admitted": False, "reason": "budget_calls_insufficient"},
                              execute=lambda _: pytest.fail("must not execute"))
     assert done == [] and queue.pending()[0].reason == "budget_calls_insufficient"
+
+
+@pytest.mark.asyncio
+async def test_deferred_queue_accepts_structured_budget_fit_without_dict_access_error():
+    queue = DeferredTaskQueue()
+    queue.defer(ReviewTask("t1", "review_step"), reason="budget", budget_revision=1)
+    fit = budget_fit(ExecutionBudget(max_token_usage=100), token_usage=1)
+    done = await queue.drain(budget_revision=2, admit=lambda _: fit,
+                             execute=lambda _: asyncio.sleep(0))
+    assert [item.task_id for item in done] == ["t1"]

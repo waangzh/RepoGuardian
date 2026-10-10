@@ -74,10 +74,12 @@ class DeferredTaskQueue:
             task.last_checked_budget_revision = budget_revision
             task.last_checked_obligation_revision = obligation_revision
             decision = admit(task)
-            if not bool(getattr(decision, "admitted", decision.get("admitted", False)
-                                if isinstance(decision, dict) else False)):
-                task.reason = (decision.get("reason") if isinstance(decision, dict)
-                               else getattr(decision, "reason", None)) or task.reason
+            admitted = (decision.get("admitted", False) if isinstance(decision, dict)
+                        else bool(getattr(decision, "admitted", False)))
+            if not admitted:
+                reason = (decision.get("reason") if isinstance(decision, dict)
+                          else getattr(decision, "reason", None))
+                task.reason = reason or task.reason
                 continue
             task.status = ReviewTaskStatus.RUNNING
             task.attempts += 1
