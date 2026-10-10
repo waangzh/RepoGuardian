@@ -1,6 +1,7 @@
 """证据归档与活动工作集选择；替换只改变模型可见性，不删除正文。"""
 from __future__ import annotations
 
+import hashlib
 
 from app.models.review import ContextSnippet, UnitEvidenceReference, UnitEvidenceStore, UnitStoredEvidence
 from app.review.tool_scope import is_sensitive_repository_change
@@ -140,6 +141,20 @@ def merge_stores(stores):
     return result
 
 
+def tool_result_metadata(results):
+    """正文保存在 evidence store；工具审计仅保留来源、范围和原文哈希。"""
+    output = []
+    for item in results:
+        if not isinstance(item, dict):
+            output.append({"file": str(item)})
+            continue
+        metadata = {key: item[key] for key in ("file", "file_path", "start_line", "end_line", "source", "symbol",
+                    "evidence_id", "content_hash") if key in item}
+        if "content" in item:
+            content = str(item["content"] or "")
+            metadata.update(content_hash=hashlib.sha256(content.encode("utf-8")).hexdigest(), content_chars=len(content))
+        output.append(metadata)
+    return output
 
 
 def store_catalog(store, active_ids):

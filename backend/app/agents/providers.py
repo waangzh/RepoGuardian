@@ -776,13 +776,20 @@ class OpenAICompatibleProvider(LLMProvider):
         messages = [SystemMessage(content=request.system), HumanMessage(content=request.prompt)]
         attempt_errors: list[dict[str, Any]] = []
         response: AIMessage | None = None
+        from app.review.run_audit import emit_run_audit
+        from uuid import uuid4
 
+        audit_id = uuid4().hex
         for attempt in range(1, self._request_attempts + 1):
             reserver = request_budget_reserver.get()
             if reserver is not None:
                 try:
                     await reserver(admission)
                 except RequestAdmissionError as exc:
+                    emit_run_audit("model", request_id=audit_id, attempt=attempt,
+                                   status="admission_rejected", operation=operation,
+                                   model=requested_model, reason=str(exc)[:800],
+                                   admission=admission)
                     usage = (ModelUsage(
                         provider=self._provider_name, model=request.model, operation=operation,
                         estimated_input_tokens=admission["estimated_input_tokens"],
@@ -795,15 +802,25 @@ class OpenAICompatibleProvider(LLMProvider):
                     raise LLMProviderError(str(exc), usage=usage) from exc
             elif attempt > 1 and model_request_budget_hook.get() is not None:
                 await model_request_budget_hook.get()()
+            attempt_started = time.monotonic()
+            emit_run_audit("model", request_id=audit_id, attempt=attempt, status="started",
+                           operation=operation, model=requested_model,
+                           system=system, prompt=prompt, max_output_tokens=max_tokens)
             try:
                 response = await chat_model.ainvoke(messages)
                 break
             except asyncio.CancelledError:
+                emit_run_audit("model", request_id=audit_id, attempt=attempt, status="cancelled",
+                               duration_ms=round((time.monotonic() - attempt_started) * 1000))
                 raise
             except Exception as exc:
                 retryable = self._is_retryable_request_error(exc)
                 detail = self._safe_exception_detail(exc)
                 status_code = self._error_status_code(exc)
+                emit_run_audit("model", request_id=audit_id, attempt=attempt, status="failed",
+                               error_type=type(exc).__name__, status_code=status_code,
+                               retryable=retryable, error_detail=detail,
+                               duration_ms=round((time.monotonic() - attempt_started) * 1000))
                 attempt_errors.append({
                     "attempt": attempt,
                     "error_type": type(exc).__name__,
@@ -870,6 +887,9 @@ class OpenAICompatibleProvider(LLMProvider):
             "request_admission": admission,
             **usage.response_metadata, "request_attempts": attempt, "request_errors": attempt_errors,
         }})
+        emit_run_audit("model", request_id=audit_id, attempt=attempt, status="completed",
+                       usage=usage.model_dump(mode="json"),
+                       duration_ms=round((time.monotonic() - attempt_started) * 1000))
         content = self._extract_message_content(response)
         return ModelCallResult(content, usage)
 

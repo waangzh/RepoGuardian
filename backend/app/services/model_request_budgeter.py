@@ -9,6 +9,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Any
+from collections import deque
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -205,6 +206,9 @@ class UnitRequestLedger:
         self.reserved_tokens = 0
         self.last_reservation = 0
         self.settled: set[str] = set()
+        # 每次真实 attempt 各自持有预留；不能用可变的 last_reservation 结算乱序响应。
+        self._pending_reservations: deque[dict[str, Any]] = deque()
+        self.settlement_events: list[dict[str, Any]] = []
 
     async def reserve(self, metadata: dict[str, Any]) -> None:
         amount = metadata["reserved_tokens"]
@@ -224,16 +228,25 @@ class UnitRequestLedger:
         self.budget = self.budget.consume(model_calls=1, token_usage=amount)
         self.reserved_tokens += amount
         self.last_reservation = amount
+        self._pending_reservations.append({"reserved_tokens": amount, "sent": False})
 
     def settle(self, usage: ModelUsage | None) -> None:
         if usage is None or usage.id in self.settled:
             return
         self.settled.add(usage.id)
+        reservation = self._pending_reservations.popleft() if self._pending_reservations else None
+        reserved = int((reservation or {}).get("reserved_tokens", self.last_reservation))
         if usage.actual_total_tokens is not None:
             # 仅结算本次有实测 usage 的尝试；未知的前次重试仍保留完整预留。
-            correction = usage.actual_total_tokens - self.last_reservation
+            correction = usage.actual_total_tokens - reserved
             self.budget = self.budget.model_copy(update={
                 "token_usage": self.budget.token_usage + correction})
+            self.settlement_events.append({
+                "usage_id": usage.id, "reserved_tokens": reserved,
+                "actual_tokens": usage.actual_total_tokens,
+                "released_tokens": max(0, -correction),
+                "overrun_tokens": max(0, correction), "status": "settled",
+            })
             if self.budget.token_usage > self.budget.max_token_usage:
                 self.rejection = {"reason": "unit_request_budget_overrun",
                     "actual_accounted_tokens": self.budget.token_usage,
@@ -241,6 +254,22 @@ class UnitRequestLedger:
                 error = RequestAdmissionError("unit_request_budget_overrun: " + json.dumps(self.rejection))
                 error.usage = usage
                 raise error
+
+    def release_unsent(self, *, reason: str = "not_sent") -> dict[str, Any]:
+        """仅在调用方已证明未发送时撤销一笔预留。"""
+        if not self._pending_reservations:
+            return {"released_tokens": 0, "released_calls": 0, "reason": reason}
+        reservation = self._pending_reservations.popleft()
+        amount = int(reservation["reserved_tokens"])
+        self.budget = self.budget.model_copy(update={
+            "model_calls": max(0, self.budget.model_calls - 1),
+            "token_usage": max(0, self.budget.token_usage - amount),
+        })
+        self.reserved_tokens = max(0, self.reserved_tokens - amount)
+        event = {"released_tokens": amount, "released_calls": 1, "reason": reason,
+                 "status": "released_unsent"}
+        self.settlement_events.append(event)
+        return event
 
     @contextmanager
     def activate(self):
