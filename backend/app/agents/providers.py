@@ -777,12 +777,15 @@ class OpenAICompatibleProvider(LLMProvider):
         attempt_errors: list[dict[str, Any]] = []
         response: AIMessage | None = None
         from app.review.run_audit import emit_run_audit
+        from app.services.review_run_budget import RunBudgetError, current_run_budget
         from uuid import uuid4
 
         audit_id = uuid4().hex
         for attempt in range(1, self._request_attempts + 1):
             reserver = request_budget_reserver.get()
-            if reserver is not None:
+            run_budget = current_run_budget()
+            run_attempt = None
+            if reserver is not None and run_budget is None:
                 try:
                     await reserver(admission)
                 except RequestAdmissionError as exc:
@@ -800,7 +803,22 @@ class OpenAICompatibleProvider(LLMProvider):
                                            "request_errors": attempt_errors},
                     ) if attempt_errors else None)
                     raise LLMProviderError(str(exc), usage=usage) from exc
-            elif attempt > 1 and model_request_budget_hook.get() is not None:
+            if run_budget is not None:
+                try:
+                    run_attempt = await run_budget.reserve(
+                        request_id=audit_id, operation=operation,
+                        estimated_tokens=admission["reserved_tokens"],
+                        output_tokens=request.output_tokens,
+                        request_hash=admission.get("request_hash"),
+                    )
+                    await run_budget.mark_dispatching(run_attempt.attempt_id)
+                except RunBudgetError as exc:
+                    emit_run_audit("model", request_id=audit_id, attempt=attempt,
+                                   status="admission_rejected", operation=operation,
+                                   model=requested_model, reason=str(exc)[:800],
+                                   admission={**admission, "run_budget": exc.details})
+                    raise LLMProviderError(str(exc)) from exc
+            elif run_budget is None and attempt > 1 and model_request_budget_hook.get() is not None:
                 await model_request_budget_hook.get()()
             attempt_started = time.monotonic()
             emit_run_audit("model", request_id=audit_id, attempt=attempt, status="started",
@@ -810,6 +828,8 @@ class OpenAICompatibleProvider(LLMProvider):
                 response = await chat_model.ainvoke(messages)
                 break
             except asyncio.CancelledError:
+                if run_budget is not None and run_attempt is not None:
+                    await run_budget.settle(run_attempt.attempt_id, actual_tokens=None)
                 emit_run_audit("model", request_id=audit_id, attempt=attempt, status="cancelled",
                                duration_ms=round((time.monotonic() - attempt_started) * 1000))
                 raise
@@ -821,6 +841,9 @@ class OpenAICompatibleProvider(LLMProvider):
                                error_type=type(exc).__name__, status_code=status_code,
                                retryable=retryable, error_detail=detail,
                                duration_ms=round((time.monotonic() - attempt_started) * 1000))
+                if run_budget is not None and run_attempt is not None:
+                    usage_total = getattr(getattr(exc, "usage", None), "actual_total_tokens", None)
+                    await run_budget.settle(run_attempt.attempt_id, actual_tokens=usage_total)
                 attempt_errors.append({
                     "attempt": attempt,
                     "error_type": type(exc).__name__,
@@ -887,6 +910,9 @@ class OpenAICompatibleProvider(LLMProvider):
             "request_admission": admission,
             **usage.response_metadata, "request_attempts": attempt, "request_errors": attempt_errors,
         }})
+        if run_budget is not None and run_attempt is not None:
+            await run_budget.settle(run_attempt.attempt_id, actual_tokens=usage.actual_total_tokens,
+                                    cost_microusd=usage.cost_microusd)
         emit_run_audit("model", request_id=audit_id, attempt=attempt, status="completed",
                        usage=usage.model_dump(mode="json"),
                        duration_ms=round((time.monotonic() - attempt_started) * 1000))
