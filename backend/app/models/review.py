@@ -1944,6 +1944,8 @@ class UnitReviewResponse(BaseModel):
     issues: list[ReviewIssue] = Field(default_factory=list)
     review_record: UnitReviewRecord | None = None
     record_error: str | None = None
+    # 合并循环允许服务端执行至多一个受控的下一步；不携带任意命令或范围。
+    next_need: AgentAction | None = None
 
 
 class UnitReviewSummary(BaseModel):
