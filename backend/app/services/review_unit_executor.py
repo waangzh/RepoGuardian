@@ -852,8 +852,9 @@ class ReviewUnitExecutor:
         graph.add_edge(START, "prepare_unit")
         graph.add_conditional_edges(
             "prepare_unit",
-            lambda state: "agent_decide" if state["skip_plan"] else "plan_unit",
-            {"plan_unit": "plan_unit", "agent_decide": "agent_decide"},
+            lambda state: ("report_issue" if getattr(self.provider, "supports_review_step", False)
+                           else "agent_decide" if state["skip_plan"] else "plan_unit"),
+            {"plan_unit": "plan_unit", "agent_decide": "agent_decide", "report_issue": "report_issue"},
         )
         graph.add_edge("plan_unit", "agent_decide")
         graph.add_conditional_edges(
@@ -968,6 +969,9 @@ class ReviewUnitExecutor:
         pending = state.get("next_action")
         if pending is not None:
             return {"next_action": pending}
+        if getattr(self.provider, "supports_review_step", False) and state.get("issue_round_completed"):
+            return {"next_action": AgentAction(action=AgentActionName.task_done,
+                reason="review_step 已完成当前工作集检查，服务端直接结束本轮")}
         if state.get("batch_decision_disabled") and state.get("issue_round_completed"):
             return {"next_action": AgentAction(action=AgentActionName.task_done,
                 reason="当前批次已诊断，可选决策未通过模型窗口准入")}
@@ -1182,7 +1186,7 @@ class ReviewUnitExecutor:
     def _check_provider_protocol(self):
         from app.agents.providers import LLMProviderError
 
-        method = getattr(self.provider, "review_unit", None)
+        method = getattr(self.provider, "review_step", None) if getattr(self.provider, "supports_review_step", False) else getattr(self.provider, "review_unit", None)
         inherited_fallback = getattr(method, "__func__", method) is LLMProvider.review_unit
         if self.input_mode == "canonical" and (getattr(self.provider, "unit_input_protocol", None) != CANONICAL_UNIT_INPUT_PROTOCOL
                                                or not callable(method) or inherited_fallback):
@@ -1553,9 +1557,11 @@ class ReviewUnitExecutor:
                 self._remember_unit_state({"input_coverage": input_coverage})
             record_input = args[-1]
             with issue_audit_unit(state["unit"].id):
-                raw_result, budget = await self._call_unit_model(
-                    budget, record_input, 4_096, lambda: self.provider.review_unit(*args),
-                )
+                async def invoke():
+                    if getattr(self.provider, "supports_review_step", False):
+                        return await self.provider.review_step(*args)
+                    return await self.provider.review_unit(*args)
+                raw_result, budget = await self._call_unit_model(budget, record_input, 4_096, invoke)
         except LLMProviderError as exc:
             usage = annotate_usage(
                 exc.usage,
@@ -1638,6 +1644,7 @@ class ReviewUnitExecutor:
             "latest_review_attempt": latest_attempt,
             "budget": budget,
             "model_usages": append_usage(state.get("model_usages") or [], usage),
+            "next_action": response.next_need,
         }
 
     def _diagnosis_args(self, state, *, core=False):
