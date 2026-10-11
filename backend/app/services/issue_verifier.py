@@ -27,6 +27,8 @@ from app.models.review import (
 from app.services.issue_policy import SeverityPolicy
 from app.services.model_usage import annotate_usage, unpack_model_call
 from app.services.review_planner import DeterministicReviewPlanner
+from app.services.review_run_budget import current_run_budget, run_budget_attempt_observer
+from app.services.review_runtime import ReviewRuntime, ReviewTask
 
 
 @dataclass(frozen=True)
@@ -76,7 +78,11 @@ class IssueVerifierService:
 
         by_unit = {unit.id: unit for unit in units}
         calls_by_unit: dict[str, int] = {}
-        output: list[ReviewIssue] = []
+        output: dict[int, ReviewIssue] = {}
+        runtime = ReviewRuntime()
+        run_budget = current_run_budget()
+        local_revision = 0
+        pending = list(enumerate(issues))
         decisions: list[IssueVerification] = []
         warnings: list[str] = []
         model_usages: list[ModelUsage] = []
@@ -85,22 +91,40 @@ class IssueVerifierService:
         verifier_drop_count = metrics.verifier_drop_count
         severity_adjustments = metrics.severity_adjustment_count
 
-        for issue in issues:
+        def revision():
+            return (run_budget.revision if run_budget is not None else 0) + local_revision
+
+        async def requeue(task):
+            pending.append(task.payload)
+
+        while pending or runtime.deferred.pending():
+            if not pending:
+                await runtime.deferred.drain(budget_revision=revision(),
+                    admit=lambda _task: {"admitted": True}, execute=requeue)
+                if not pending:
+                    break
+            index, issue = pending.pop(0)
             if issue.status != IssueStatus.evidence_resolved:
-                output.append(issue)
+                output[index] = issue
                 continue
             unit = by_unit.get(issue.review_unit_id)
             used = calls_by_unit.get(issue.review_unit_id, 0)
-            if unit is None or used >= self.max_calls_per_unit:
+            if unit is None or (run_budget is None and used >= self.max_calls_per_unit):
                 reason = "review_unit_not_found" if unit is None else "verifier_budget_exhausted"
-                output.append(self._on_failure(issue, reason))
+                output[index] = self._on_failure(issue, reason)
                 warnings.append(f"Issue {issue.id} 未完成独立验证：{reason}")
                 continue
 
             request = self._build_request(issue, unit, state, used)
-            calls_by_unit[unit.id] = used + 1
-            call_count += 1
-            token_count += self._estimate_tokens(request)
+            observed_attempts = []
+            outer_observer = run_budget_attempt_observer.get()
+            async def observe(record, admission):
+                observed_attempts.append(record.attempt_id)
+                if outer_observer is not None:
+                    await outer_observer(record, admission)
+            observer_token = run_budget_attempt_observer.set(observe) if run_budget is not None else None
+            rejected = False
+            usage = None
             try:
                 async with asyncio.timeout(self.timeout_seconds):
                     raw_result = await self.provider.verify_issue(
@@ -126,6 +150,13 @@ class IssueVerifierService:
                         "reason": "verifier_counterevidence_or_incomplete_context: " + verification.reason[:940],
                     })
             except Exception as exc:
+                rejection = getattr(exc, "admission_rejection", None)
+                if rejection and rejection.get("kind") == "budget":
+                    rejected = not observed_attempts
+                    if rejection.get("can_defer") and not observed_attempts:
+                        runtime.defer(ReviewTask(f"verify:{issue.id}", "verify_issue", priority=(index,),
+                            payload=(index, issue)), reason=rejection["reason"], budget_revision=revision())
+                        continue
                 usage = getattr(exc, "usage", None)
                 usage = annotate_usage(
                     usage,
@@ -136,9 +167,25 @@ class IssueVerifierService:
                 if usage is not None:
                     model_usages.append(usage)
                 reason = f"{type(exc).__name__}:{exc}"
-                output.append(self._on_failure(issue, reason))
+                output[index] = self._on_failure(issue, reason)
                 warnings.append(f"Issue {issue.id} verifier 失败：{reason}")
                 continue
+            finally:
+                if observer_token is not None:
+                    run_budget_attempt_observer.reset(observer_token)
+                if run_budget is not None:
+                    sent = [run_budget.attempts[key] for key in observed_attempts
+                            if run_budget.attempts[key].sent]
+                    call_count += len(sent)
+                    calls_by_unit[unit.id] = used + len(sent)
+                    token_count += sum(item.actual_tokens if item.actual_tokens is not None
+                                       else item.reserved_tokens for item in sent)
+                elif not rejected:
+                    calls_by_unit[unit.id] = used + 1
+                    call_count += 1
+                    token_count += self._estimate_tokens(request)
+                if not rejected:
+                    local_revision += 1
 
             decisions.append(self._sanitize_contradictions(verification, unit))
             updated = issue
@@ -167,7 +214,12 @@ class IssueVerifierService:
                     "placement": CommentPlacement.unresolved,
                     "unresolved_reason": "verifier_unresolved",
                 })
-            output.append(updated)
+            output[index] = updated
+
+        for task in runtime.deferred.pending():
+            index, issue = task.payload
+            output[index] = self._on_failure(issue, "deferred_budget_not_executed:" + (task.reason or "budget"))
+            warnings.append(f"Issue {issue.id} 未完成独立验证：{task.reason}")
 
         updated_metrics = metrics.model_copy(update={
             "verifier_call_count": call_count,
@@ -176,7 +228,7 @@ class IssueVerifierService:
             "severity_adjustment_count": severity_adjustments,
         })
         return IssueVerifierBatchResult(
-            output, decisions, updated_metrics, warnings, model_usages
+            [output[index] for index in range(len(issues))], decisions, updated_metrics, warnings, model_usages
         )
 
     def _build_request(
@@ -226,7 +278,8 @@ class IssueVerifierService:
             evidence_complete=complete and len(unit_diff) <= 60_000,
             applicable_rules=unit.rule_ids,
             budget=IssueVerificationBudget(
-                remaining_calls=self.max_calls_per_unit - used_calls,
+                remaining_calls=(current_run_budget().available()["calls"] if current_run_budget() is not None
+                                 else self.max_calls_per_unit - used_calls),
                 max_context_chars=context_budget,
             ),
         )

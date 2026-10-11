@@ -62,6 +62,9 @@ class SharedBudgetProvider:
     async def review_unit(self, *args: Any) -> Any:
         return await self._call("review_unit", args, 4096)
 
+    async def review_step(self, *args: Any) -> Any:
+        return await self._call("review_step", args, 4096)
+
     async def verify_issue(self, *args: Any) -> Any:
         return await self._call("verify_issue", args, args[0].budget.max_output_tokens)
 

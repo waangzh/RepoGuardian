@@ -11,6 +11,9 @@ from app.services.cross_unit_coordination import SharedBudgetProvider
 from app.services.review_run_budget import ReviewRunBudget, RunBudgetError, activate_run_budget
 from test_phase6a_persistence import persistence as persistence
 from app.services.model_pricing import estimate_cost_microusd
+from app.models.review import ModelUsage
+from app.services.coordination_runtime import CoordinationLeaseLost
+from copy import deepcopy
 
 
 async def test_unknown_amount_protected_until_reconciled():
@@ -45,6 +48,73 @@ def test_invalid_price_is_unknown(value):
     import json
     assert estimate_cost_microusd(json.dumps({"p:m": {"input": value, "output": 1}}),
         provider="p", model="m", input_tokens=10, output_tokens=10) is None
+
+
+async def test_retry_failure_amount_and_coordination_cost_are_projected(monkeypatch):
+    provider = OpenAICompatibleProvider("key", "https://example.test/v1", "fixture",
+                                       request_attempts=2, retry_backoff_seconds=0)
+    import json
+    monkeypatch.setattr(settings, "repoguardian_model_pricing_json", json.dumps({
+        f"{provider._provider_name}:fixture": {"input": 1, "output": 1}}))
+    class APIConnectionError(RuntimeError):
+        usage = ModelUsage(provider="fixture", model="fixture", operation="coordinate_cross_units",
+                           actual_total_tokens=4, cost_microusd=4, latency_ms=0)
+    calls = 0
+    class Chat:
+        async def ainvoke(self, messages):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise APIConnectionError("connection lost after billed response")
+            # A hot update must not change this request's price snapshot.
+            monkeypatch.setattr(settings, "repoguardian_model_pricing_json", "{}")
+            return AIMessage(content='{"decision":"uncertain","reason":"unknown"}',
+                usage_metadata={"input_tokens": 5, "output_tokens": 2, "total_tokens": 7})
+    provider._build_chat_model = lambda *args: Chat()
+    budget = ReviewRunBudget("run", max_tokens=100000, max_calls=3, max_cost_microusd=100000)
+    runtime = CoordinationRuntime("run", "a" * 64, ExecutionBudget())
+    with activate_run_budget(budget):
+        await runtime.call(provider, "coordinate_cross_units", ({}, None), 4096)
+        assert runtime.metrics().cost_microusd == budget.cost_settled_microusd == 11
+        assert runtime.metrics().model_calls == budget.calls_consumed == 2
+    assert budget.cost_reserved_microusd == 0
+    assert all(item.price_snapshot["model"] == "fixture" for item in budget.attempts.values())
+
+
+async def test_coordination_failed_cas_rolls_back_and_requires_reload():
+    class Repository:
+        def save_coordination_runtime(self, *args):
+            raise CoordinationLeaseLost("stale worker")
+    runtime = CoordinationRuntime("run", "a" * 64, ExecutionBudget(), Repository())
+    before = deepcopy(runtime.data)
+    runtime.data["calls"]["new"] = {"status": "running"}
+    with pytest.raises(CoordinationLeaseLost):
+        await runtime.persist()
+    assert runtime.data == before and runtime.expected_budget is None
+    with pytest.raises(CoordinationLeaseLost, match="requires reload"):
+        await runtime.persist()
+
+
+async def test_cross_unit_review_step_uses_recovery_runtime():
+    from app.models.review import UnitReviewResponse
+    class Provider(OpenAICompatibleProvider):
+        async def review_step(self, *args):
+            await self._request_json_content("input", "fixture", "review_step", "s", 10)
+            return UnitReviewResponse()
+    provider = Provider("key", "https://example.test/v1", "fixture", request_attempts=1)
+    class Chat:
+        async def ainvoke(self, messages):
+            return AIMessage(content="{}", usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2})
+    provider._build_chat_model = lambda *args: Chat()
+    budget = ReviewRunBudget("run", max_tokens=10000, max_calls=3)
+    wrapper = SharedBudgetProvider(provider, ExecutionBudget())
+    wrapper.runtime = CoordinationRuntime("run", "a" * 64, ExecutionBudget())
+    with activate_run_budget(budget):
+        await wrapper.review_step({}, [], "", None, {})
+        await wrapper.review_step({}, [], "", None, {})
+    assert budget.calls_consumed == 1
+    assert wrapper.runtime.metrics().model_calls == 1
+    assert wrapper.runtime.data["cache_hits"] == 1
 
 
 @pytest.mark.parametrize("price,limit,allowed", [(None, 1000, False), (3, 1, False), (3, 1000, True)])
