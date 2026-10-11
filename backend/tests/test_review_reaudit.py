@@ -34,7 +34,7 @@ async def test_single_worksets_pass_preflight_then_compete_at_send(release):
                 "evidence_ids": [item["id"] for item in record_input["evidence"]],
             } for target in record_input["targets"]]))
 
-        def unit_diagnosis_admission(self, *args):
+        def unit_review_step_admission(self, *args):
             return {"reserved_tokens": 1000, "estimated_input_tokens": 990}
 
     provider = Provider("key", "https://example.test/v1", "fixture", request_attempts=1,
@@ -87,3 +87,73 @@ def test_old_unit_result_remains_readable_without_budget_rejection():
     raw = {"review_unit_id": "old", "status": "failed", "error": "transport_failure"}
     restored = ReviewUnitResult.model_validate(json.loads(json.dumps(raw)))
     assert restored.budget_rejection is None
+
+
+def canonical_request_args():
+    from app.models.review import PullRequestInfo
+    from app.services.unit_review_summary import build_record_input
+
+    file = large_file(count=1, width=1)
+    return (PullRequestInfo.model_validate(review_state()["pr_info"]), [file], "+return value", None,
+            build_record_input([file], [], None, "head-a"))
+
+
+async def test_review_step_preflight_and_send_share_complete_prepared_request():
+    from app.review.review_policy import REVIEW_STEP_OUTPUT_TOKENS, REVIEW_STEP_PROTOCOL_VERSION
+
+    provider = OpenAICompatibleProvider("key", "https://example.test/v1", "fixture", request_attempts=1,
+        request_profile=ModelRequestProfile(context_window=100000))
+    prepared, sent, output_limits = [], [], []
+    builder = provider.prepare_review_step_request
+    def prepare(*args):
+        request = builder(*args)
+        prepared.append(request)
+        return request
+    provider.prepare_review_step_request = prepare
+    class Chat:
+        async def ainvoke(self, messages):
+            sent.append(messages)
+            return AIMessage(content='{"issues": [], "next_need": null}')
+    def chat(model, output_tokens):
+        output_limits.append(output_tokens)
+        return Chat()
+    provider._build_chat_model = chat
+    executor = ReviewUnitExecutor(provider, concurrency=1, timeout_seconds=10)
+    args = canonical_request_args()
+    admission = executor._diagnosis_estimate(args)
+    assert sent == []
+    response = await provider.review_step(*args)
+    assert prepared[0] == prepared[1]
+    assert response.usage.response_metadata["request_admission"] == admission
+    assert admission["reserved_tokens"] == admission["estimated_input_tokens"] + REVIEW_STEP_OUTPUT_TOKENS
+    assert output_limits == [prepared[0].output_tokens] == [REVIEW_STEP_OUTPUT_TOKENS]
+    assert sent[0][0].content == prepared[0].system
+    assert sent[0][1].content == prepared[0].prompt
+    assert prepared[0].prompt.startswith(f"协议版本：{REVIEW_STEP_PROTOCOL_VERSION}\n")
+    assert "next_need" in prepared[0].prompt
+
+
+async def test_review_step_preflight_rejects_protocol_overhead_before_send():
+    from app.agents.providers import LLMProviderError
+
+    provider = OpenAICompatibleProvider("key", "https://example.test/v1", "fixture", request_attempts=1,
+        request_profile=ModelRequestProfile(context_window=100000))
+    provider._build_unit_review_prompt = lambda *args: "same basic input"
+    args = canonical_request_args()
+    old = provider.unit_diagnosis_admission(*args)
+    new = provider.unit_review_step_admission(*args)
+    assert new["estimated_input_tokens"] > old["estimated_input_tokens"]
+    provider = OpenAICompatibleProvider("key", "https://example.test/v1", "fixture", request_attempts=1,
+        request_profile=ModelRequestProfile(context_window=100000, max_input_tokens=old["estimated_input_tokens"]))
+    provider._build_unit_review_prompt = lambda *args: "same basic input"
+    provider._build_chat_model = lambda *args: pytest.fail("capacity rejection must precede SDK creation")
+    executor = ReviewUnitExecutor(provider, concurrency=1, timeout_seconds=10)
+    assert provider.unit_diagnosis_admission(*args)["request_hash"] == old["request_hash"]
+    with pytest.raises(LLMProviderError, match="model_input_limit_exceeded"):
+        executor._diagnosis_estimate(args)
+    from app.models.review import ExecutionBudget
+    admission = executor._workset_admission(review_unit(), args[1], review_state(), ExecutionBudget())
+    assert not admission["admitted"] and admission["can_split"]
+    assert admission["reason"] == "model_input_limit_exceeded"
+    with pytest.raises(LLMProviderError, match="model_input_limit_exceeded"):
+        await provider.review_step(*args)
