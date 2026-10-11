@@ -90,6 +90,9 @@ REPOGUARDIAN_REVIEW_UNIT_TIMEOUT_SECONDS=180 # 单 Unit 超时，单位秒
 REPOGUARDIAN_MODEL_REQUEST_PROFILES={} # JSON：实际模型名到窗口配置的映射，优先于通用配置
 # REPOGUARDIAN_MODEL_REQUEST_PROFILE={"context_window":16384,"safety_margin_tokens":512,"input_output_shared":true} # 可选通用覆盖，启用后优先于内置注册表；按供应商实际限制设置
 REPOGUARDIAN_MODEL_PRICING_JSON={} # 按 provider:model 配置每百万 token 的美元价格；未配置或用量缺失时成本未知
+REPOGUARDIAN_RUN_MAX_TOKENS=1000000 # 整个运行的 Token 上限，包括所有 Unit、Verifier、协调及传输重试
+REPOGUARDIAN_RUN_MAX_CALLS=200 # 整个运行的真实传输尝试上限
+# REPOGUARDIAN_RUN_MAX_COST_MICROUSD=5000000 # 可选金额硬上限；缺价拒绝发送，未知用量保留金额预留
 
 REPOGUARDIAN_DEFAULT_VALIDATION_BACKEND=none # 可选 project_ci / user_runner，需另行配置执行端
 REPOGUARDIAN_LANGSMITH_TRACING=false # 默认关闭追踪；启用后默认仍不上传审查正文
