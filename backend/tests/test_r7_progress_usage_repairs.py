@@ -37,8 +37,12 @@ async def test_native_repeated_report_or_rejected_read_is_bounded_and_retains_ca
     result = await runner.execute_unit(_unit(path="a.py"), _state())
     assert len(provider.inputs) == 2, result.error
     assert result.issues
-    assert result.review_summary.latest_attempt_reason == "review_step_no_evidence_progress"
-    assert not is_review_unit_complete(result)
+    if action.action.value == "report_issue":
+        assert is_review_unit_complete(result)
+        assert result.review_summary.latest_attempt_status == "reported"
+    else:
+        assert result.review_summary.latest_attempt_reason == "review_step_no_evidence_progress"
+        assert not is_review_unit_complete(result)
     assert all(issue.status == IssueStatus.candidate for issue in result.issues)
     if action.action.value == "file_read_diff":
         assert provider.inputs[1]["tool_feedback"][-1]["status"] == "rejected"

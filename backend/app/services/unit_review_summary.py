@@ -74,10 +74,12 @@ def validate_record(
         if any(item.hypothesis_id not in allowed_hypotheses for item in record.hypothesis_checks):
             raise ValueError("unknown risk hypothesis")
         items = [*record.target_checks, *record.hypothesis_checks,
-                 *record.contract_dependencies, *record.unresolved_questions, *record.question_updates]
+                 *record.contract_dependencies, *record.unresolved_questions, *record.question_updates, *record.obligation_updates]
         for item in items:
             if any(identity not in by_id for identity in item.evidence_ids):
                 raise ValueError("unknown or stale evidence reference")
+        from app.services.followup_contracts import validate_obligation_updates
+        validate_obligation_updates(record, record_input, by_id)
         for check in record.file_change_checks:
             reference = by_id.get(check.evidence_id)
             if reference is None or reference.source != "file_change":

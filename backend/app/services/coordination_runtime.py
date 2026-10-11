@@ -66,7 +66,7 @@ def coordination_fingerprint(state: dict) -> str:
     risk = {key: item for key, item in (state.get("cross_unit_risk") or {}).items()
             if key not in {"execution_status", "non_execution_reason"}}
     return stable_hash({
-        "purpose": "cross-unit-runtime-v1-request-admission-v1", "task_id": state.get("task_id"),
+        "purpose": "cross-unit-runtime-v2-bound-contract-closure", "task_id": state.get("task_id"),
         "unit_input_mode": settings.repoguardian_unit_input_mode,
         "request_profile": resolved.profile.model_dump(mode="json"),
         "model_profile_source": resolved.source, "context_budget_version": CONTEXT_BUDGET_VERSION,
