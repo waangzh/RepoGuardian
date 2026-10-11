@@ -110,6 +110,8 @@ class CoordinationRuntime:
             "calls": {}, "plan": None, "followups": {}, "batches": {}, "output": None,
             "base_metrics": {}, "resume_count": 0, "cache_hits": 0,
         }
+        self._committed = deepcopy(self.data)
+        self._invalidated = False
 
     async def load(self) -> None:
         if self.repository is not None:
@@ -122,6 +124,8 @@ class CoordinationRuntime:
             self.expected_budget = budget
             if budget:
                 self.data["budget"] = budget
+        self._committed = deepcopy(self.data)
+        self._invalidated = False
 
     @property
     def budget(self) -> ExecutionBudget:
@@ -135,6 +139,8 @@ class CoordinationRuntime:
         return ExecutionBudget.model_validate(self.data["budget"])
 
     async def persist(self) -> None:
+        if self._invalidated:
+            raise CoordinationLeaseLost("coordination runtime requires reload")
         run_budget = current_run_budget()
         if run_budget is not None:
             self.data["budget"] = self.budget.model_dump(mode="json")
@@ -144,10 +150,16 @@ class CoordinationRuntime:
                     call["attempt_records"] = [attempts[key] for key in call["attempt_ids"] if key in attempts]
         revision = self.data["revision"]
         payload = deepcopy({**self.data, "revision": revision + 1})
-        if self.repository is not None:
-            await asyncio.to_thread(self.repository.save_coordination_runtime,
-                self.task_id, self.fingerprint, payload, revision, self.expected_budget, self.lease)
+        try:
+            if self.repository is not None:
+                await asyncio.to_thread(self.repository.save_coordination_runtime,
+                    self.task_id, self.fingerprint, payload, revision, self.expected_budget, self.lease)
+        except BaseException:
+            self.data = deepcopy(self._committed)
+            self._invalidated = True
+            raise
         self.data = payload
+        self._committed = deepcopy(payload)
         self.expected_budget = deepcopy(payload["budget"])
         if self.progress is not None:
             self.progress(self.public_state())
@@ -159,8 +171,12 @@ class CoordinationRuntime:
         records = [live.get(raw["attempt_id"], raw) for call in calls
                    for raw in call.get("attempt_records", [])]
         legacy = [call for call in calls if "attempt_records" not in call]
-        usages = [ModelUsage.model_validate(item["usage"]) for item in calls if item.get("usage")]
-        attempts = sum(item.get("attempts", 1) for item in calls)
+        costs = [item.get("actual_cost_microusd") for item in records if item["sent"]]
+        costs.extend(ModelUsage.model_validate(item["usage"]).cost_microusd
+                     if item.get("usage") else None for item in legacy)
+        known_cost = (sum(costs) if all(item is not None for item in costs)
+                      and len(costs) == sum(item["sent"] for item in records)
+                      + sum(item.get("attempts", 1) for item in legacy) else None)
         issues = [raw for batch in self.data["batches"].values() for raw in batch.get("review_issues") or []]
         return CrossUnitRuntimeMetrics(
             model_calls=(sum(item.get("attempts", 1) for item in legacy)
@@ -177,9 +193,7 @@ class CoordinationRuntime:
             usage_reported_calls=(sum(item["usage_available"] for item in records)
                                   + sum(ModelUsage.model_validate(item["usage"]).usage_available
                                         for item in legacy if item.get("usage"))),
-            cost_microusd=(sum(item.cost_microusd for item in usages)
-                          if len(usages) == attempts and all(item.cost_microusd is not None for item in usages)
-                          else None),
+            cost_microusd=known_cost,
             latency_ms=sum(item.get("latency_ms", 0) for item in calls),
             completed_followups=sum(
                 item.get("outcome") != "failed" and (item.get("unit_result") or {}).get("status") == "completed"
@@ -221,7 +235,7 @@ class CoordinationRuntime:
         run_budget = current_run_budget()
         payload = normalize(args)
         resolver = getattr(provider, "resolve_request_profile", None)
-        model = args[3] if name == "review_unit" else args[1]
+        model = args[3] if name in {"review_unit", "review_step"} else args[1]
         resolved = resolver(model) if callable(resolver) else None
         key = stable_hash({"operation": name, "input": payload, "output_tokens": output_tokens,
                            "context_budget_version": CONTEXT_BUDGET_VERSION,
@@ -229,7 +243,8 @@ class CoordinationRuntime:
                            "model_profile_source": resolved.source if resolved else None,
                            "allocation": held.get("followup_id"), "phase": held.get("phase")})
         types = {"coordinate_cross_units": CrossUnitCoordinationPlan, "decide": AgentAction,
-                 "review_unit": UnitReviewResponse, "verify_issue": IssueVerification}
+                 "review_unit": UnitReviewResponse, "review_step": UnitReviewResponse,
+                 "verify_issue": IssueVerification}
         async with self.lock:
             existing = self.data["calls"].get(key)
             if existing and existing["status"] == "deferred_budget":
