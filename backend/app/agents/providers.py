@@ -363,15 +363,8 @@ class OpenAICompatibleProvider(LLMProvider):
         """合并 Plan/Decision/Diagnosis 的单步协议；下一步需求由服务端白名单校验。"""
         if not self._api_key:
             raise LLMProviderError("OPENAI_API_KEY is required for review_step")
-        prompt = self._build_unit_review_prompt(pr, changed_files, diff_text, record_input)
-        prompt += ("\n本次调用是 review_step：同时返回当前检查增量、issues、review_record，"
-                    "以及 next_need（无则为 null）。next_need 只能是一个受控 AgentAction，"
-                    "不得包含 command 或任意路径；服务端会再次校验范围。")
-        from app.review.review_policy import REVIEW_STEP_OUTPUT_TOKENS, REVIEW_STEP_PROTOCOL_VERSION
-        prompt = f"协议版本：{REVIEW_STEP_PROTOCOL_VERSION}\n" + prompt
-        response = await self._request_json_content(
-            prompt=prompt, model=model, operation="review_step",
-            system="Review one bounded Unit in one step. Return validated JSON only.", max_tokens=REVIEW_STEP_OUTPUT_TOKENS)
+        request = self.prepare_review_step_request(pr, changed_files, diff_text, model, record_input)
+        response = await self._send_prepared_json_request(request)
         try:
             raw = self._load_json(response.value)
             issues = self._parse_issues(response.value, require_array=True)
@@ -393,6 +386,26 @@ class OpenAICompatibleProvider(LLMProvider):
             raise
         except ValidationError as exc:
             raise LLMProviderError(f"review_step schema validation failed: {exc}", usage=response.usage) from exc
+
+    def prepare_review_step_request(self, pr, changed_files, diff_text, model, record_input) -> PreparedModelRequest:
+        """预检与发送共用完整单步协议，避免漏算协议正文或消息包装。"""
+        prompt = self._build_unit_review_prompt(pr, changed_files, diff_text, record_input)
+        prompt += ("\n本次调用是 review_step：同时返回当前检查增量、issues、review_record，"
+                    "以及 next_need（无则为 null）。next_need 只能是一个受控 AgentAction，"
+                    "不得包含 command 或任意路径；服务端会再次校验范围。")
+        from app.review.review_policy import REVIEW_STEP_OUTPUT_TOKENS, REVIEW_STEP_PROTOCOL_VERSION
+        prompt = f"协议版本：{REVIEW_STEP_PROTOCOL_VERSION}\n" + prompt
+        return self._prepare_json_request(
+            prompt=prompt, model=model, operation="review_step",
+            system="Review one bounded Unit in one step. Return validated JSON only.", max_tokens=REVIEW_STEP_OUTPUT_TOKENS)
+
+    def unit_review_step_admission(self, *args) -> dict:
+        request = self.prepare_review_step_request(*args)
+        try:
+            return request.estimate(self.resolve_request_profile(request.model).profile)
+        except RequestAdmissionError as exc:
+            raise LLMProviderError(str(exc)) from exc
+
     @classmethod
     def _build_unit_review_prompt(cls, pr, changed_files, diff_text, record_input) -> str:
         intent = build_pr_intent(pr)
@@ -808,8 +821,12 @@ class OpenAICompatibleProvider(LLMProvider):
         system: str,
         max_tokens: int,
     ) -> ModelCallResult[str]:
-        requested_model = model or self._default_model
         request = self._prepare_json_request(prompt, model, operation, system, max_tokens)
+        return await self._send_prepared_json_request(request)
+
+    async def _send_prepared_json_request(self, request: PreparedModelRequest) -> ModelCallResult[str]:
+        requested_model = request.model
+        operation, prompt, max_tokens = request.operation, request.prompt, request.output_tokens
         profile = self.resolve_request_profile(requested_model).profile
         try:
             admission = await asyncio.to_thread(request.estimate, profile)
@@ -892,7 +909,7 @@ class OpenAICompatibleProvider(LLMProvider):
             attempt_started = time.monotonic()
             emit_run_audit("model", request_id=audit_id, attempt=attempt, status="started",
                            operation=operation, model=requested_model,
-                           system=system, prompt=prompt, max_output_tokens=max_tokens)
+                           system=request.system, prompt=prompt, max_output_tokens=max_tokens)
             try:
                 response = await chat_model.ainvoke(messages)
                 break

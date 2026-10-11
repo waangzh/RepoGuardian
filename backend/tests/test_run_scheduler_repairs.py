@@ -108,7 +108,7 @@ async def test_parallel_units_recheck_budget_after_other_attempt_settles():
                 "target": target, "status": "checked", "reason": "完整证据",
                 "evidence_ids": [item["id"] for item in record_input["evidence"]],
             } for target in record_input["targets"]]))
-        def unit_diagnosis_admission(self, *args):
+        def unit_review_step_admission(self, *args):
             return {"reserved_tokens": 6000, "estimated_input_tokens": 5900}
     provider = Provider()
     provider._request_profile = ModelRequestProfile(context_window=100000)
