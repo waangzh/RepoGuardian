@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 from app.agents.providers import LLMProviderError
+from app.review.diff_base import review_diff_base
 from app.models.review import (
     ChangedFile, CrossUnitCoordinationPlan, CrossUnitFollowupResult,
     CrossUnitRiskAssessment, ExecutionBudget, IssueStatus, ReviewUnit,
@@ -102,7 +103,7 @@ class CrossUnitCoordinationService:
             records = build_record_input(
                 files, [item.model_dump(mode="json") for item in result.context_snippets],
                 None, str(state.get("head_sha") or ""),
-                str(state.get("base_sha") or ""),
+                review_diff_base(state),
             )
             if result.diff_batches:
                 from app.services.unit_worksets import restore_unit_workset_files
@@ -113,7 +114,7 @@ class CrossUnitCoordinationService:
                     try:
                         batch_files = restore_unit_workset_files(unit, files, batch)
                         batch_records = build_record_input(batch_files, [], None,
-                            str(state.get("head_sha") or ""), str(state.get("base_sha") or ""))
+                            str(state.get("head_sha") or ""), review_diff_base(state))
                     except (KeyError, TypeError, ValueError):
                         continue
                     records["evidence"].extend(batch_records["evidence"])

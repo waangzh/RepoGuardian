@@ -37,6 +37,8 @@ class ReviewState(TypedDict, total=False):
     # ---- 仓库 ----
     repo_path: str | None    # 克隆到本地的临时路径
     base_sha: str | None
+    effective_base_sha: str | None  # v2 评测锁定的内容基准；base_sha 保留 PR 身份
+    diff_policy: str | None
     head_sha: str | None
     project_adapter_id: str | None
     project_profile: dict[str, Any] | None
