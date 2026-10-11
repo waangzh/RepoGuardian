@@ -27,6 +27,16 @@ class Settings(BaseSettings):
     # JSON: {"provider:model":{"input":0.40,"output":1.60,"cached_input":0.10}}
     # Rates are USD per one million tokens. Missing entries keep observed cost unknown.
     repoguardian_model_pricing_json: str = "{}"
+    # 每个运行的独立上限，涵盖所有 Unit、Verifier 和协调传输尝试。
+    repoguardian_run_max_tokens: int = Field(default=1_000_000, ge=0)
+    repoguardian_run_max_calls: int = Field(default=200, ge=0)
+    repoguardian_run_max_cost_microusd: int | None = Field(default=None, ge=0)
+
+    def run_budget_limits(self) -> dict[str, int | None]:
+        """运行创建时保存有效策略；恢复以持久账本为准。"""
+        return {"max_tokens": self.repoguardian_run_max_tokens,
+                "max_calls": self.repoguardian_run_max_calls,
+                "max_cost_microusd": self.repoguardian_run_max_cost_microusd}
     # 显式通用配置优先于内置注册表；未配置时仅官方 endpoint 使用已知模型窗口。
     repoguardian_model_request_profile: ModelRequestProfile = Field(
         default_factory=ModelRequestProfile)
