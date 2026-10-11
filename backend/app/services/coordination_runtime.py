@@ -234,10 +234,12 @@ class CoordinationRuntime:
         held = holdback or {}
         run_budget = current_run_budget()
         payload = normalize(args)
-        if name == "verify_issue":
+        if name == "verify_issue" and isinstance(payload[0], dict):
             # Scheduling counters neither change the evidence nor the verifier
             # decision. Keep output/context limits in the semantic cache key.
-            payload[0]["budget"].pop("remaining_calls", None)
+            verifier_budget = payload[0].get("budget")
+            if isinstance(verifier_budget, dict):
+                verifier_budget.pop("remaining_calls", None)
         resolver = getattr(provider, "resolve_request_profile", None)
         model = args[3] if name in {"review_unit", "review_step"} else args[1]
         resolved = resolver(model) if callable(resolver) else None
