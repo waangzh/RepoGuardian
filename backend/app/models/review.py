@@ -996,6 +996,12 @@ class EvidenceCandidate(BaseModel):
     hunk_id: str | None = None
 
 
+class EvidenceBranchClaim(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    condition_code: str = Field(min_length=1, max_length=500)
+    arm: Literal["if", "else", "both"]
+
+
 class EvidenceAnchor(BaseModel):
     """模型提供代码片段，位置与哈希只能由服务端解析写入。"""
 
@@ -1006,6 +1012,7 @@ class EvidenceAnchor(BaseModel):
     symbol: str | None = None
     expected_side: Literal["head", "base", "either"] = "head"
     expected_hunk_id: str | None = None
+    branch_claim: EvidenceBranchClaim | None = None
     context_before: list[str] = Field(default_factory=list, max_length=12)
     context_after: list[str] = Field(default_factory=list, max_length=12)
     resolved_start_line: int | None = Field(default=None, ge=1)
@@ -1054,6 +1061,7 @@ class EvidenceAnchorInput(BaseModel):
     symbol: str | None = None
     expected_side: Literal["head", "base", "either"] = "head"
     expected_hunk_id: str | None = None
+    branch_claim: EvidenceBranchClaim | None = None
     context_before: list[str] = Field(default_factory=list, max_length=12)
     context_after: list[str] = Field(default_factory=list, max_length=12)
 
@@ -1163,6 +1171,13 @@ class ReviewIssue(BaseModel):
     resolved_location: ResolvedIssueLocation | None = None
     source_review_unit_ids: list[str] = Field(default_factory=list)
     source_issue_ids: list[str] = Field(default_factory=list)
+
+    def for_review_unit(self, unit_id: str) -> "ReviewIssue":
+        """服务端重绑定所属 Unit，同时投影真实来源；不抹掉其他 Unit 来源。"""
+        sources = [unit_id if source in {"unassigned", self.review_unit_id} else source
+                   for source in self.source_review_unit_ids]
+        return self.model_copy(update={"review_unit_id": unit_id,
+            "source_review_unit_ids": list(dict.fromkeys([*sources, unit_id]))})
 
     @field_validator("assumptions", "related_tests")
     @classmethod

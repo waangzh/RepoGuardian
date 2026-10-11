@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from provider_fixtures import CanonicalTestProvider
 from app.agents.providers import LLMProvider
 from app.graph.policies import ALLOWED_ACTIONS_BY_PHASE
 from app.graph.review_graph import build_review_graph
@@ -74,7 +75,7 @@ REGRESSIVE_SAMPLE_PATCH = """diff --git a/pricing.py b/pricing.py
 """
 
 
-class GraphScriptedProvider(LLMProvider):
+class GraphScriptedProvider(CanonicalTestProvider):
     """用于图测试的确定性 Provider，不访问网络或宿主机凭据。"""
 
     def __init__(
@@ -286,13 +287,11 @@ def test_legal_actions_are_routed_only_within_their_phase() -> None:
     assert ALLOWED_ACTIONS_BY_PHASE[ReviewPhase.discovery] == {
         "retrieve_context",
         "review_code",
-        "request_human",
     }
     assert ALLOWED_ACTIONS_BY_PHASE[ReviewPhase.repair] == {
         "revise_patch",
         "accept_patch",
         "abandon_patch",
-        "request_human",
     }
     assert route_discovery_action({"next_action": _retrieval_action()}) == (
         "context_retrieve"
@@ -413,7 +412,7 @@ async def test_illegal_retrieval_path_is_rejected_before_tool_execution(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_request_human_stops_automatic_review_and_repair(tmp_path: Path) -> None:
+async def test_legacy_human_action_is_rejected_and_readonly_review_continues(tmp_path: Path) -> None:
     provider = GraphScriptedProvider(actions=[{
         "action": "request_human",
         "reason": "折扣规则存在多个合理业务解释。",
@@ -427,8 +426,10 @@ async def test_request_human_stops_automatic_review_and_repair(tmp_path: Path) -
 
     result = await build_review_graph().compile().ainvoke(_initial_state(tmp_path, provider))
 
-    assert result["human_request"]["questions"]
-    assert provider.review_calls == provider.patch_calls == 0
+    assert not result.get("human_request") and not result.get("__interrupt__")
+    assert provider.review_calls == 1 and provider.patch_calls == 0
+    assert result.get("report_markdown")
+    assert result["status"] in {"completed", "completed_with_warnings"}
     assert not result.get("patches")
 
 

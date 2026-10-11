@@ -33,6 +33,11 @@ def review_unit_input_coverage(result: ReviewUnitResult) -> UnitInputCoverage | 
     """仅识别明确的降级标记；旧记录和显式 legacy 的 unknown 不等于降级。"""
     if result.input_coverage is not None:
         return result.input_coverage
+    summary = result.review_summary
+    if (summary.status != "reported" or summary.record is None
+            or summary.latest_attempt_status in {"missing", "invalid", "failed", "not_executed", "unknown"}):
+        return UnitInputCoverage(reason=summary.latest_attempt_reason or summary.reason or "missing_review_record",
+                                 evidence_coverage="unknown", target_coverage="unknown")
     if DIAGNOSIS_BACKGROUND_DEGRADED in (
         result.plan_skip_reason, result.review_summary.reason,
         result.review_summary.latest_attempt_reason,
@@ -70,6 +75,8 @@ def is_review_unit_complete(result: ReviewUnitResult) -> bool:
 
 
 def review_unit_coverage_warning(result: ReviewUnitResult) -> str | None:
+    if not is_review_unit_execution_complete(result) and result.input_coverage is None:
+        return None
     coverage = review_unit_input_coverage(result)
     if coverage is None or coverage.target_coverage == "complete":
         return None

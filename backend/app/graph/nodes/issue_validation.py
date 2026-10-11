@@ -153,10 +153,12 @@ async def issue_deduplication_node(state: ReviewState) -> ReviewState:
     service: Any = state.get("_issue_deduplication_service") or IssueDeduplicationService()
     result = await service.aggregate(issues, provider, state.get("model"), metrics)
     merged = {key: decision for decision in result.decisions for key in decision.duplicate_issue_ids}
+    canonical_units = {issue.id: issue.review_unit_id for issue in [*issues, *result.issues]}
     for issue in issues:
         decision = merged.get(issue.id)
         audit_issue("deduplication", issue,
                     canonical_id=decision.canonical_issue_id if decision else None,
+                    canonical_review_unit_id=canonical_units.get(decision.canonical_issue_id) if decision else None,
                     reason=decision.merged_rationale if decision else
                     "retained" if issue.status in {IssueStatus.confirmed, IssueStatus.unresolved}
                     else "not_publishable")

@@ -116,7 +116,8 @@ def test_canonical_diagnosis_sends_body_once_preserving_base_and_context_and_ref
         assert prompt.count(marker) == 1
     payload = json.loads(prompt.split("Bounded record input JSON:\n", 1)[1])
     diff, context = payload["evidence"]
-    encoded = json.dumps(diff["body"], ensure_ascii=False, sort_keys=True).encode()
+    encoded = json.dumps({**diff["body"], "removed_lines": diff["removed_lines"]},
+                         ensure_ascii=False, sort_keys=True).encode()
     assert hashlib.sha256(encoded).hexdigest() == diff["content_hash"]
     assert diff["id"] == catalog["evidence"][0]["id"]
     assert diff["removed_lines"][0]["content"] == "REMOVED_UNIQUE"
@@ -169,11 +170,12 @@ def test_diagnosis_contract_invalidates_unit_cache_and_old_checkpoint_namespace(
         tool_schema_version="t", planner_version="p", review_policy_version="policy",
         model="model", provider="provider")
     current = fingerprints.unit_fingerprint(**kwargs)
+    contract_version = fingerprints.DIAGNOSIS_INPUT_VERSION
     monkeypatch.setattr(fingerprints, "DIAGNOSIS_INPUT_VERSION", "old-contract")
     assert fingerprints.unit_fingerprint(**kwargs) != current
     namespace = unit_thread_config("task", "u")["configurable"]["checkpoint_ns"]
     assert namespace != "unit:u"
-    assert namespace.endswith("canonical-evidence-v2")
+    assert namespace == f"unit:u:{contract_version}"
 
 
 def test_verifier_sends_primary_and_supporting_anchors_once():

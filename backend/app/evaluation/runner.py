@@ -155,8 +155,25 @@ def final_audit(events: list[dict], state: dict, run_status: str) -> list[dict]:
             current = parents[current]
         return current
     final = {(owner(x["review_unit_id"]), x["id"]): x for x in state.get("review_issues") or []}
-    aliases = {(owner(x["review_unit_id"]), x["issue_id"]): x["canonical_id"]
-               for x in events if x.get("canonical_id")}
+    aliases = {}
+    for event in events:
+        if not event.get("canonical_id"):
+            continue
+        source = (owner(event["review_unit_id"]), event["issue_id"])
+        target = (owner(event.get("canonical_review_unit_id") or event["review_unit_id"]), event["canonical_id"])
+        aliases.setdefault(source, set()).add(target)
+
+    def resolve_alias(source):
+        current, seen = source, set()
+        while current in aliases:
+            if current in seen:
+                return source, "alias_cycle"
+            seen.add(current)
+            targets = aliases[current]
+            if len(targets) != 1:
+                return source, "alias_ambiguous"
+            current = next(iter(targets))
+        return current, None
     unit_reasons = {x["review_unit_id"]: x.get("terminal_reason") or x.get("status")
                     for x in state.get("review_unit_results") or []}
     latest, terminal = {}, {}
@@ -175,14 +192,13 @@ def final_audit(events: list[dict], state: dict, run_status: str) -> list[dict]:
             output.append(event)
     for (unit_id, issue_id), event in latest.items():
         root = owner(unit_id)
-        canonical = issue_id
-        seen = set()
-        while (root, canonical) in aliases and canonical not in seen:
-            seen.add(canonical)
-            canonical = aliases[(root, canonical)]
-        issue = final.get((root, canonical))
+        canonical_key, alias_error = resolve_alias((root, issue_id))
+        canonical_root, canonical = canonical_key
+        issue = final.get(canonical_key) if not alias_error else None
         event = terminal[(root, issue_id)]
-        if canonical != issue_id:
+        if alias_error:
+            disposition, reason = "not_published", alias_error
+        elif canonical_key != (root, issue_id):
             deduplicated = any(x["stage"] == "deduplication" and x["issue_id"] == issue_id
                                and owner(x["review_unit_id"]) == root for x in events)
             disposition = "merged" if deduplicated else "reidentified"
@@ -203,15 +219,16 @@ def final_audit(events: list[dict], state: dict, run_status: str) -> list[dict]:
         output.append({"stage": "final", "issue_id": issue_id, "review_unit_id": unit_id,
                        "status": disposition, "reason": reason,
                        "canonical_status": ("unresolved" if issue["status"] == "needs_human" else issue["status"]) if issue else None,
-                       "canonical_review_unit_id": root,
-                       "canonical_id": canonical if canonical != issue_id else None})
+                        "canonical_review_unit_id": canonical_root,
+                        "canonical_id": canonical if canonical_key != (root, issue_id) and not alias_error else None})
     # schema 预候选继承真实候选的最终处置，不能用“通过 schema”掩盖后续过滤。
     dispositions = {(owner(item["review_unit_id"]), item["issue_id"]): item
                     for item in output if item["stage"] == "final"}
     for event in events:
         if event["stage"] != "schema_validation" or not event.get("canonical_id"):
             continue
-        source = dispositions.get((owner(event["review_unit_id"]), event["canonical_id"]))
+        source_key, error = resolve_alias((owner(event["review_unit_id"]), event["issue_id"]))
+        source = dispositions.get(source_key) if not error else None
         if source:
             for target in output:
                 if (target["stage"] == "final" and target["issue_id"] == event["issue_id"]

@@ -43,21 +43,26 @@ def test_legacy_invalid_terminal_plan_stays_readable_but_cannot_be_reexecuted():
 
 @pytest.mark.asyncio
 async def test_prompt_budget_ignores_parent_state_that_is_not_sent(fake_chat):
-    # Unit 参数保留完整 hunk，实际决策提示只发送路径和裁剪后的 unit_diff。
-    parent = {"unit_agent": True, "unit_diff": "return wrong", "changed_files": [
-        {"file_path": "app.py", "hunks": [{"content": "x" * 600_000}]},
-    ]}
+    from test_unit_plan_canonical_diff import planning_state
+
+    # Unit Decision 发送合法 canonical hunks；未投影的父状态不应进入预算。
+    parent, _ = planning_state()
+    parent["parent_state"] = {"unselected_diff": "x" * 600_000}
     fake_chat.responses = [AIMessage(content='{"action":"task_done","reason":"完成"}')]
     provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
-    runtime = CoordinationRuntime("task", "fingerprint", ExecutionBudget(max_token_usage=10_000))
+    runtime = CoordinationRuntime("task", "fingerprint", ExecutionBudget(max_token_usage=12_000))
     result = await runtime.call(provider, "decide", (parent, None), 1200)
     assert result.action == "task_done"
     assert len(fake_chat.instances) == 1
     assert "xxx" not in fake_chat.instances[0].messages[1].content
+    payload = json.loads(fake_chat.instances[0].messages[1].content.split("Current state JSON:\n")[1])
+    assert payload["diff_evidence"]["format"] == "canonical-evidence-v3"
     call = next(iter(runtime.data["calls"].values()))
     assert call["estimate_source"] == "provider_prompt"
-    assert runtime.budget.token_usage < 10_000
-    assert call["input_chars"] == len(fake_chat.instances[0].messages[1].content) + 512
+    assert call["estimate_method"] == "prepared_request"
+    assert runtime.budget.token_usage < 12_000
+    assert call["request_admission"] == result.usage.response_metadata["request_admission"]
+    assert call["estimate"] == result.usage.estimated_input_tokens + 1200
     # 幂等恢复不会重新预留或请求。
     await runtime.call(provider, "decide", (parent, None), 1200)
     assert runtime.budget.model_calls == 1
@@ -127,7 +132,9 @@ async def test_review_record_unknown_fields_keep_issues_and_safe_error_paths(fak
     }]}
     fake_chat.responses = [AIMessage(content=json.dumps({"issues": [issue], "review_record": record}))]
     provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
-    catalog = {"targets": ["检查返回值"], "hypotheses": [], "evidence": []}
+    from app.services.unit_review_summary import build_record_input
+    catalog = build_record_input([], [], None, "h", "b")
+    catalog["targets"] = ["检查返回值"]
     response = await provider.review_unit(_sample_pr(), [], "", None, catalog)
     assert len(response.issues) == 1
     assert response.review_record is None
@@ -146,15 +153,15 @@ async def test_string_counterevidence_requires_human_without_fabricated_anchor(f
     }))]
     provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
     from app.models.review import IssueMetrics
-    batch = await IssueVerifierService(provider, enabled=True, fail_mode="needs_human",
+    batch = await IssueVerifierService(provider, enabled=True, fail_mode="unresolved",
                                        max_calls_per_unit=1).verify_issues(
         [_issue("i", severity="high")], [_unit()], _state(_unit()), IssueMetrics(),
     )
-    assert batch.issues[0].status == "needs_human"
+    assert batch.issues[0].status == "unresolved"
     assert not batch.issues[0].auto_fix_eligible
-    assert batch.issues[0].unresolved_reason == "verifier_needs_human"
+    assert batch.issues[0].unresolved_reason == "verifier_unresolved"
     result = batch.verifications[0]
-    assert result.decision == "needs_human"
+    assert result.decision == "unresolved"
     assert result.contradicting_evidence == []
     assert result.adjusted_severity is None
     assert "verifier_unstructured_counterevidence" in result.reason

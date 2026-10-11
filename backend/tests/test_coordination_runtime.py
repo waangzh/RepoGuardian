@@ -41,16 +41,16 @@ async def test_restart_reuses_completed_unit_and_preserves_budget_and_metrics(tm
         await CrossUnitCoordinationService(provider, repository=repository, progress=progress).run(value)
     restarted = ReviewRepository(sessions, repository._artifacts, require_migration=False)
     result = await CrossUnitCoordinationService(provider, repository=restarted).run(value)
-    assert provider.calls == ["coordinate", "decide", "review", "decide", "verify"]
-    assert result["coordination_plan"]["execution_budget"]["model_calls"] == 5
-    assert result["coordination_plan"]["runtime_metrics"]["model_calls"] == 5
+    assert provider.calls == ["coordinate", "decide", "review", "verify"]
+    assert result["coordination_plan"]["execution_budget"]["model_calls"] == 4
+    assert result["coordination_plan"]["runtime_metrics"]["model_calls"] == 4
     assert result["coordination_plan"]["runtime_metrics"]["resume_count"] == 1
     assert result["coordination_plan"]["runtime_metrics"]["cache_hits"] >= 1
     assert result["issue_metrics"]["candidate_issue_count"] == 1
     replay = await CrossUnitCoordinationService(provider, repository=restarted).run(value)
     assert replay["issue_metrics"] == result["issue_metrics"]
     assert len(replay["review_issues"]) == 1
-    assert provider.calls == ["coordinate", "decide", "review", "decide", "verify"]
+    assert provider.calls == ["coordinate", "decide", "review", "verify"]
     manifest = build_review_manifest({**value, **result}, datetime.now(timezone.utc))
     assert manifest.coverage.total_units == 2
     assert manifest.coordination_metrics.confirmed_count == 1
@@ -112,7 +112,7 @@ async def test_partial_verified_batch_survives_interruption(tmp_path, persistenc
     assert result["issue_metrics"]["candidate_issue_count"] == 2
     assert result["issue_metrics"]["verifier_call_count"] == 2
     assert provider.calls.count("review") == 2 and provider.calls.count("verify") == 2
-    assert result["coordination_plan"]["execution_budget"]["model_calls"] == 9
+    assert result["coordination_plan"]["execution_budget"]["model_calls"] == 7
 
 
 @pytest.mark.asyncio
@@ -152,8 +152,8 @@ async def test_transport_retries_also_reserve_budget(tmp_path, persistence):
             await model_request_budget_hook.get()()
             return await super().review_unit(*args)
     result = await CrossUnitCoordinationService(Retry(), repository=repository).run(value)
-    assert result["coordination_plan"]["execution_budget"]["model_calls"] == 6
-    assert result["coordination_plan"]["runtime_metrics"]["model_calls"] == 6
+    assert result["coordination_plan"]["execution_budget"]["model_calls"] == 5
+    assert result["coordination_plan"]["runtime_metrics"]["model_calls"] == 5
 
 
 @pytest.mark.asyncio

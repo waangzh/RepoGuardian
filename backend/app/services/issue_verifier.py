@@ -152,7 +152,7 @@ class IssueVerifierService:
             except Exception as exc:
                 rejection = getattr(exc, "admission_rejection", None)
                 if rejection and rejection.get("kind") == "budget":
-                    rejected = not observed_attempts
+                    rejected = not observed_attempts and not rejection.get("transport_retry", False)
                     if rejection.get("can_defer") and not observed_attempts:
                         runtime.defer(ReviewTask(f"verify:{issue.id}", "verify_issue", priority=(index,),
                             payload=(index, issue)), reason=rejection["reason"], budget_revision=revision())
@@ -338,6 +338,12 @@ class IssueVerifierService:
                 for text in sources.get((anchor.file_path, candidate_side), [])
             ):
                 raise ValueError("verifier_counterevidence_not_displayed")
+            if anchor.branch_claim:
+                from app.evidence.branch import counterevidence_branch_error
+                if not anchor.file_path.endswith(".py") or not any(
+                    counterevidence_branch_error(text, anchor) is None for candidate_side in sides
+                    for text in sources.get((anchor.file_path, candidate_side), [])):
+                    raise ValueError("verifier_branch_claim_unverified")
 
     @staticmethod
     def _code_sources(request: IssueVerificationRequest) -> dict[tuple[str, str], list[str]]:
@@ -382,6 +388,7 @@ class IssueVerifierService:
                 symbol=anchor.symbol,
                 expected_side=anchor.expected_side,
                 expected_hunk_id=anchor.expected_hunk_id,
+                branch_claim=anchor.branch_claim,
                 context_before=anchor.context_before,
                 context_after=anchor.context_after,
                 resolution_method=EvidenceResolutionMethod.unresolved,
