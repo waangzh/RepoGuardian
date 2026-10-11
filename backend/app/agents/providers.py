@@ -376,10 +376,20 @@ class OpenAICompatibleProvider(LLMProvider):
                 except ValidationError as exc:
                     record_error = f"invalid_review_record: {exc}"
             next_need = None
+            next_need_error = None
             if isinstance(raw, dict) and raw.get("next_need") is not None:
-                next_need = AgentAction.model_validate(self._normalize_agent_action(raw["next_need"]))
+                try:
+                    next_need = AgentAction.model_validate(self._normalize_agent_action(raw["next_need"]))
+                except ValidationError as exc:
+                    # 动作拒绝不能丢弃已通过 schema 的候选，也不能泄漏未校验的字段值。
+                    next_need_error = "invalid_next_need_schema: " + json.dumps([
+                        {"type": item["type"], "loc": [key if isinstance(key, int)
+                            or key in AgentAction.model_fields else "unknown_field" for key in item["loc"]]}
+                        for item in exc.errors(include_input=False, include_context=False, include_url=False)
+                    ])[:1000]
             return ModelCallResult(UnitReviewResponse(
                 issues=issues, review_record=record, record_error=record_error, next_need=next_need,
+                next_need_error=next_need_error,
             ), response.usage)
         except LLMProviderError as exc:
             exc.usage = response.usage
@@ -390,9 +400,18 @@ class OpenAICompatibleProvider(LLMProvider):
     def prepare_review_step_request(self, pr, changed_files, diff_text, model, record_input) -> PreparedModelRequest:
         """预检与发送共用完整单步协议，避免漏算协议正文或消息包装。"""
         prompt = self._build_unit_review_prompt(pr, changed_files, diff_text, record_input)
-        prompt += ("\n本次调用是 review_step：同时返回当前检查增量、issues、review_record，"
-                    "以及 next_need（无则为 null）。next_need 只能是一个受控 AgentAction，"
-                    "不得包含 command 或任意路径；服务端会再次校验范围。")
+        prompt += ('\n本次调用是 review_step。Return issues, review_record and next_need (null if absent). '
+                   'next_need has only action, reason, target_issue_ids, tool_args; no top-level type, file_path, symbol or command. '
+                   'Example: {"action":"file_read","reason":"读取调用方","tool_args":{"request":'
+                   '{"file_path":"app.py","start_line":1,"end_line":80}}}. Paths must stay in scope. '
+                   'Finish with action=task_done, tool_args={}. Allowed actions and request fields:\n')
+        from app.graph.policies import UNIT_ACTION_REGISTRY
+        from app.models.review import FileReadRequest, FileFindRequest, CodeSearchRequest, FileReadDiffRequest
+        request_types = {"file_read": FileReadRequest, "file_find": FileFindRequest,
+                         "code_search": CodeSearchRequest, "file_read_diff": FileReadDiffRequest}
+        prompt += "\n".join(f"{item.action.value}: " + (
+            "tool_args={request:{" + ",".join(request_types[item.action.value].model_fields) + "}}"
+            if item.action.value in request_types else "tool_args={}") for item in UNIT_ACTION_REGISTRY)
         from app.review.review_policy import REVIEW_STEP_OUTPUT_TOKENS, REVIEW_STEP_PROTOCOL_VERSION
         prompt = f"协议版本：{REVIEW_STEP_PROTOCOL_VERSION}\n" + prompt
         return self._prepare_json_request(

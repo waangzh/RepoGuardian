@@ -854,7 +854,10 @@ class ReviewUnitExecutor:
     def _aggregate_diff_batches(unit, entries, budget, binding, reason=None, manifest=None, evidence_store=None):
         """只聚合已验证记录；任何未执行批次或记录缺口保留 partial。"""
         results = [entry.result for entry in entries if entry.result is not None]
-        batches_complete = all(entry.status == "completed" for entry in entries)
+        explicit_failure = reason is not None
+        batches_complete = all(entry.status == "completed" and entry.result is not None
+            and entry.result.review_summary.status == "reported" and entry.result.review_summary.record is not None
+            and entry.result.review_summary.latest_attempt_status in (None, "reported") for entry in entries)
         complete = batches_complete and not reason
         ledger = rebuild_coverage(manifest, entries) if manifest else None
         if manifest and unsupported_hunk_ids(manifest):
@@ -889,20 +892,31 @@ class ReviewUnitExecutor:
                 snapshot = input_snapshot({"snapshot": previous,
                     "pr_intent": {"intent_hash": previous.get("pr_intent_hash", "")},
                     "targets": [check.target for check in record.target_checks], "hypotheses": []})
-                summary = summary.model_copy(update={"status": "reported" if complete else "unknown",
-                    "record": record if complete else None,
+                summary = summary.model_copy(update={"status": "reported",
+                    "record": record,
                     "last_valid_record": record, "last_valid_snapshot": snapshot,
-                    "latest_attempt_snapshot": snapshot, "latest_attempt_status": "reported" if complete else "unknown",
+                    "latest_attempt_snapshot": snapshot, "latest_attempt_status": "failed" if explicit_failure else "reported",
+                    "latest_attempt_reason": reason if explicit_failure else None,
                     "reason": "batch_references_validated_not_correctness_proof" if complete else reason or "unit_diff_batches_incomplete"})
             except ValueError:
                 complete, reason = False, "unit_batch_record_aggregate_limit_exceeded"
         evidence_complete = batches_complete and all(not result.input_coverage or
             result.input_coverage.evidence_coverage == "complete" for result in results)
+        from app.services.unit_coverage import classified_coverage_gaps
+        details = classified_coverage_gaps(manifest, ledger) if manifest else {"targets": [], "questions": [], "dependencies": []}
+        if not ledger and records:
+            details["questions"] = list(dict.fromkeys(question.id or question.question for record in records
+                                                     for question in record.unresolved_questions))
+            details["dependencies"] = list(dict.fromkeys(check.file_path for record in records
+                for check in record.contract_dependencies if check.status != "verified"))
+        targets_complete = batches_complete and summary.status == "reported" and not details["targets"]
         coverage = UnitInputCoverage(evidence_coverage="complete" if evidence_complete else "partial",
-            target_coverage="complete" if complete else "partial", reason=reason or (
+            target_coverage="complete" if targets_complete else "partial",
+            contract_coverage=("partial" if details["questions"] or details["dependencies"] else "complete") if ledger or records else "unknown",
+            unresolved_questions=details["questions"], unresolved_dependencies=details["dependencies"], reason=reason or (
                 "unit_diff_batches_complete" if complete else "unit_diff_batches_incomplete"),
             omitted_targets=list(dict.fromkeys([*[entry.id for entry in entries if entry.status != "completed"],
-                *(coverage_gaps(manifest, ledger) if manifest else [])])),
+                *details["targets"]])),
             omitted_context=[item for result in results if result.input_coverage
                              for item in result.input_coverage.omitted_context])
         has_progress = any(result.status == ReviewUnitStatus.completed for result in results)
@@ -1719,6 +1733,10 @@ class ReviewUnitExecutor:
             state.get("review_summary") or state.get("last_valid_review_summary") or UnitReviewSummary(),
             summary, response.review_record,
         )
+        if response.next_need_error:
+            summary = summary.model_copy(update={"latest_attempt_status": "invalid",
+                "latest_attempt_reason": response.next_need_error, "reason": response.next_need_error})
+            latest_attempt = {"status": "invalid", "reason": response.next_need_error}
         if input_coverage and input_coverage.target_coverage != "complete" and summary.status == "reported":
             # 核心证据诊断可产生候选，但省略的检查目标/工作记忆不能被宣称为完整覆盖。
             summary = summary.model_copy(update={"status": "unknown", "record": None,
@@ -1760,7 +1778,8 @@ class ReviewUnitExecutor:
             "latest_review_attempt": latest_attempt,
             "budget": budget,
             "model_usages": append_usage(state.get("model_usages") or [], usage),
-            "next_action": response.next_need,
+            "next_action": (AgentAction(action="task_done", reason="下一步动作格式无效，拒绝执行并保留当前候选")
+                            if response.next_need_error else response.next_need),
             "budget_rejection": None,
         }
 
@@ -1967,6 +1986,9 @@ class ReviewUnitExecutor:
             update = {"coverage_ledger": ledger, "active_evidence_set": active}
             self._remember_unit_state(update)
             if gaps:
+                from app.services.unit_coverage import classified_coverage_gaps
+                details = classified_coverage_gaps(state["diff_manifest"], ledger,
+                    active if state["diff_manifest"].review_unit_id != state["unit"].id else None, state.get("unit_plan"))
                 unsupported = set(unsupported_hunk_ids(state["diff_manifest"], active))
                 unchecked_text = any(item.evidence_id and item.manifest_id in gaps for item in active.hunks)
                 if (not state["issue_round_completed"] and (not unsupported or unchecked_text)
@@ -1975,9 +1997,11 @@ class ReviewUnitExecutor:
                         reason="覆盖门拒绝提前结束，先检查当前活动证据")}
                 previous = state.get("input_coverage")
                 coverage = (previous or UnitInputCoverage()).model_copy(update={"target_coverage":
-                    "unknown" if previous and previous.target_coverage == "unknown" else "partial",
+                    "unknown" if previous and previous.target_coverage == "unknown" else "partial" if details["targets"] else "complete",
+                    "contract_coverage": "partial" if details["questions"] or details["dependencies"] else "complete",
+                    "unresolved_questions": details["questions"], "unresolved_dependencies": details["dependencies"],
                     "reason": previous.reason if previous and previous.reason else "unit_coverage_gate_incomplete", "omitted_targets": list(dict.fromkeys([
-                        *(previous.omitted_targets if previous else []), *gaps]))})
+                        *(previous.omitted_targets if previous else []), *details["targets"]]))})
                 if unsupported:
                     coverage = coverage.model_copy(update={"reason": NO_HUNK_CHANGE_REASON,
                         "evidence_coverage": "partial"})
@@ -1985,7 +2009,11 @@ class ReviewUnitExecutor:
                     "terminal_reason": state.get("terminal_reason") or (ReviewUnitTerminalReason.completed if state["issues"] else ReviewUnitTerminalReason.no_issue),
                     "messages": [*state["messages"], AgentEvent(action="task_done", reason=action.reason,
                         status="failed", message="覆盖门未通过；保留未覆盖项与当前有效记录", review_unit_id=state["unit"].id)]}
-            return {**update, "done": True, "terminal_reason": state.get("terminal_reason") or (ReviewUnitTerminalReason.completed if state["issues"] else ReviewUnitTerminalReason.no_issue),
+            previous = state.get("input_coverage")
+            coverage = (previous or UnitInputCoverage(evidence_coverage="complete", target_coverage="complete")).model_copy(
+                update={"contract_coverage": "complete", "unresolved_questions": [], "unresolved_dependencies": []})
+            return {**update, "done": True, "input_coverage": coverage,
+                "terminal_reason": state.get("terminal_reason") or (ReviewUnitTerminalReason.completed if state["issues"] else ReviewUnitTerminalReason.no_issue),
                 "messages": [*state["messages"], AgentEvent(action="task_done", reason=action.reason, status="completed",
                     message="活动范围覆盖门通过；检查记录不表示正确性证明", review_unit_id=state["unit"].id)]}
         return {
