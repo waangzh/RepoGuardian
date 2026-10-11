@@ -1794,7 +1794,8 @@ class ReviewUnitExecutor:
                 state["parent_state"].get("model"), record_input)
 
     def _diagnosis_estimate(self, args):
-        estimator = getattr(self.provider, "unit_diagnosis_admission", None)
+        estimator_name = "unit_review_step_admission" if self._supports_native_review_step() else "unit_diagnosis_admission"
+        estimator = getattr(self.provider, estimator_name, None)
         if callable(estimator):
             token = legacy_unit_input_allowed.set(self.input_mode == "legacy")
             try:
