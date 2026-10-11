@@ -60,6 +60,12 @@ async def repo_prepare_node(state: ReviewState) -> ReviewState:
             pass
         raise
     prepared_callback = state.get("_repo_prepared_callback")
+    context_reader = getattr(git_tool, "review_diff_context", None)
+    diff_context = (await asyncio.to_thread(context_reader, repo_path)) if callable(context_reader) else {}
+    if diff_context.get("diff_policy") == "merge_base":
+        expected = state.get("effective_base_sha")
+        if expected and expected != diff_context.get("effective_base_sha"):
+            raise ValueError("prepared effective base differs from graph input")
     if callable(prepared_callback):
         prepared_callback(repo_path)
     logger.info("📥 [准备] 克隆完成: %s，diff 长度: %d 字符", repo_path, len(diff_text))
@@ -69,6 +75,7 @@ async def repo_prepare_node(state: ReviewState) -> ReviewState:
         repo_path=str(repo_path),
         base_sha=pr_info.base.sha,
         head_sha=pr_info.head.sha,
+        **diff_context,
         diff_text=diff_text,
         step_progress=append_step(
             state,

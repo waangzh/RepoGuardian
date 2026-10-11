@@ -6,6 +6,7 @@ from app.agents.providers import build_provider
 from app.core.config import settings
 from app.graph.nodes._events import append_step
 from app.graph.state import ReviewState
+from app.review.diff_base import review_diff_base
 from app.models.review import ReviewPlan, ReviewUnitResult
 from app.graph.checkpointer import get_checkpointer
 from app.services.review_planner import DeterministicReviewPlanner
@@ -25,7 +26,7 @@ async def review_plan_node(state: ReviewState) -> ReviewState:
     planner: Any = state.get("_review_planner") or DeterministicReviewPlanner()
     plan = planner.plan(
         state.get("changed_files") or [],
-        base_sha=str(state.get("base_sha") or ""),
+        base_sha=review_diff_base(state),
         head_sha=state.get("head_sha") or "",
         file_index=state.get("file_index") or [],
         symbol_index=state.get("symbol_index") or [],
