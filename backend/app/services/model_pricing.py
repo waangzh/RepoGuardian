@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, ROUND_CEILING
 from typing import Any
 
 
@@ -15,6 +15,7 @@ def calculate_cost_microusd(
     input_tokens: int | None,
     output_tokens: int | None,
     cached_input_tokens: int | None,
+    round_up: bool = False,
 ) -> int | None:
     try:
         catalog = json.loads(pricing_json or "{}")
@@ -36,7 +37,20 @@ def calculate_cost_microusd(
     # USD/1M tokens converted to micro-USD cancels the one-million factor.
     cost = Decimal(uncached) * input_rate + Decimal(cached) * cached_rate
     cost += Decimal(output_tokens) * output_rate
-    return int(cost.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    return int(cost.quantize(Decimal("1"), rounding=ROUND_CEILING if round_up else ROUND_HALF_UP))
+
+
+def estimate_cost_microusd(
+    pricing_json: str, *, provider: str, model: str,
+    input_tokens: int | None, output_tokens: int | None,
+) -> int | None:
+    """按未命中缓存的输入和最大输出估算发送前金额。"""
+    return calculate_cost_microusd(
+        pricing_json, provider=provider, model=model,
+        input_tokens=input_tokens, output_tokens=output_tokens,
+        cached_input_tokens=0,
+        round_up=True,
+    )
 
 
 def _find_rates(catalog: dict[str, Any], provider: str, model: str) -> dict[str, Any] | None:
@@ -52,6 +66,6 @@ def _rate(rates: dict[str, Any], name: str, *, default: Decimal | None = None) -
     if value is None and default is not None:
         return default
     rate = Decimal(str(value))
-    if rate < 0:
+    if not rate.is_finite() or rate < 0:
         raise ValueError("model price must not be negative")
     return rate

@@ -16,6 +16,7 @@ from app.services.fingerprints import stable_hash
 from app.services.coordination_catalog import CATALOG_BATCH_VERSION
 from app.services.model_usage import unpack_model_call, model_request_budget_hook
 from app.services.model_request_budgeter import request_budget_reserver
+from app.services.review_run_budget import current_run_budget, run_budget_attempt_observer
 
 
 class CoordinationLeaseLost(asyncio.CancelledError):
@@ -124,9 +125,23 @@ class CoordinationRuntime:
 
     @property
     def budget(self) -> ExecutionBudget:
+        run_budget = current_run_budget()
+        if run_budget is not None:
+            return ExecutionBudget(
+                max_model_calls=run_budget.max_calls, max_token_usage=run_budget.max_tokens,
+                model_calls=run_budget.calls_consumed,
+                token_usage=run_budget.settled_actual + run_budget.in_flight_reserved + run_budget.unknown_reserved,
+            )
         return ExecutionBudget.model_validate(self.data["budget"])
 
     async def persist(self) -> None:
+        run_budget = current_run_budget()
+        if run_budget is not None:
+            self.data["budget"] = self.budget.model_dump(mode="json")
+            attempts = run_budget.snapshot()["attempts"]
+            for call in self.data["calls"].values():
+                if "attempt_ids" in call:
+                    call["attempt_records"] = [attempts[key] for key in call["attempt_ids"] if key in attempts]
         revision = self.data["revision"]
         payload = deepcopy({**self.data, "revision": revision + 1})
         if self.repository is not None:
@@ -139,17 +154,29 @@ class CoordinationRuntime:
 
     def metrics(self) -> CrossUnitRuntimeMetrics:
         calls = list(self.data["calls"].values())
+        run_budget = current_run_budget()
+        live = run_budget.snapshot()["attempts"] if run_budget is not None else {}
+        records = [live.get(raw["attempt_id"], raw) for call in calls
+                   for raw in call.get("attempt_records", [])]
+        legacy = [call for call in calls if "attempt_records" not in call]
         usages = [ModelUsage.model_validate(item["usage"]) for item in calls if item.get("usage")]
         attempts = sum(item.get("attempts", 1) for item in calls)
         issues = [raw for batch in self.data["batches"].values() for raw in batch.get("review_issues") or []]
         return CrossUnitRuntimeMetrics(
-            model_calls=sum(item.get("attempts", 1) for item in calls),
-            failed_calls=sum(item["status"] == "failed" for item in calls),
-            unknown_calls=sum(item["status"] in {"running", "unknown"} for item in calls),
+            model_calls=(sum(item.get("attempts", 1) for item in legacy)
+                         + sum(item["sent"] for item in records)),
+            failed_calls=sum(item["status"] == "failed" and item.get("attempts", 1) > 0 for item in calls),
+            unknown_calls=(sum(item["status"] in {"running", "unknown"} for item in legacy)
+                           + sum(item["state"] == "unknown" for item in records)),
             cache_hits=self.data["cache_hits"], resume_count=self.data["resume_count"],
-            estimated_tokens=sum(item["estimate"] * item.get("attempts", 1) for item in calls),
-            actual_tokens=sum(item.actual_total_tokens or 0 for item in usages),
-            usage_reported_calls=sum(item.usage_available for item in usages),
+            estimated_tokens=(sum(item["estimate"] * item.get("attempts", 1) for item in legacy)
+                              + sum(item["estimated_tokens"] for item in records if item["sent"])),
+            actual_tokens=(sum(item.get("actual_tokens") or 0 for item in records)
+                           + sum(ModelUsage.model_validate(item["usage"]).actual_total_tokens or 0
+                                 for item in legacy if item.get("usage"))),
+            usage_reported_calls=(sum(item["usage_available"] for item in records)
+                                  + sum(ModelUsage.model_validate(item["usage"]).usage_available
+                                        for item in legacy if item.get("usage"))),
             cost_microusd=(sum(item.cost_microusd for item in usages)
                           if len(usages) == attempts and all(item.cost_microusd is not None for item in usages)
                           else None),
@@ -169,6 +196,9 @@ class CoordinationRuntime:
                 "followup_results": list(self.data["followups"].values())}
 
     def _settle_usage(self, key: str, usage: ModelUsage | None, estimate: int) -> None:
+        if current_run_budget() is not None:
+            self.data["budget"] = self.budget.model_dump(mode="json")
+            return
         if usage is None or usage.actual_total_tokens is None:
             return
         call = self.data["calls"][key]
@@ -188,6 +218,7 @@ class CoordinationRuntime:
         from app.services.model_request_budgeter import CONTEXT_BUDGET_VERSION
 
         held = holdback or {}
+        run_budget = current_run_budget()
         payload = normalize(args)
         resolver = getattr(provider, "resolve_request_profile", None)
         model = args[3] if name == "review_unit" else args[1]
@@ -201,6 +232,14 @@ class CoordinationRuntime:
                  "review_unit": UnitReviewResponse, "verify_issue": IssueVerification}
         async with self.lock:
             existing = self.data["calls"].get(key)
+            if existing and existing["status"] == "deferred_budget":
+                if run_budget is not None and existing.get("budget_revision") != run_budget.revision:
+                    self.data["calls"].pop(key)
+                    existing = None
+                else:
+                    error = LLMProviderError(existing["error"])
+                    error.admission_rejection = existing["admission_rejection"]
+                    raise error
             if existing:
                 self.data["cache_hits"] += 1
                 if existing["status"] == "completed":
@@ -217,13 +256,13 @@ class CoordinationRuntime:
                             "estimate_method": "prepared_request"}
                            if prepared else estimate_request(provider, name, args, output_tokens))
             estimate = reservation["estimate"]
-            if not self.budget.can_consume(model_calls=1 + held.get("model_calls", 0),
+            if run_budget is None and not self.budget.can_consume(model_calls=1 + held.get("model_calls", 0),
                                            token_usage=estimate + held.get("token_usage", 0)):
                 rejection = budget_rejection(self.budget, name, estimate, held)
                 self.data.setdefault("budget_rejections", []).append(rejection)
                 await self.persist()
                 raise LLMProviderError("cross_unit_shared_budget_exhausted: " + json.dumps(rejection))
-            if not prepared:
+            if not prepared and run_budget is None:
                 self.data["budget"] = self.budget.consume(model_calls=1, token_usage=estimate).model_dump(mode="json")
             self.data["calls"][key] = {"status": "running", "operation": name,
                                        **reservation, "holdback": held, "attempts": 0 if prepared else 1,
@@ -266,8 +305,20 @@ class CoordinationRuntime:
                     input_chars=metadata["prompt_chars"] + 512)
                 self.data["calls"][key]["attempts"] += 1
                 await self.persist()
-            hook_token = model_request_budget_hook.set(reserve_retry)
-            prepared_token = request_budget_reserver.set(reserve_prepared) if prepared else None
+            # RunBudget/Provider owns each prepared attempt; compatibility
+            # hooks are only installed when no unified ledger is active.
+            hook_token = model_request_budget_hook.set(reserve_retry) if run_budget is None else None
+            prepared_token = (request_budget_reserver.set(reserve_prepared)
+                              if prepared and run_budget is None else None)
+            async def observe_attempt(record, metadata):
+                call = self.data["calls"][key]
+                call.setdefault("attempt_ids", []).append(record.attempt_id)
+                call.update(attempts=len(call["attempt_ids"]), estimate=metadata["reserved_tokens"],
+                            request_admission=metadata)
+                self.data["budget"] = self.budget.model_dump(mode="json")
+                await self.persist()
+
+            attempt_token = run_budget_attempt_observer.set(observe_attempt) if run_budget is not None else None
             usage = None
             try:
                 raw = await getattr(provider, name)(*args)
@@ -280,20 +331,28 @@ class CoordinationRuntime:
                 self.data["calls"][key].update(status="unknown", error="cancelled_call_outcome_unknown")
                 raise
             except Exception as exc:
+                rejection = getattr(exc, "admission_rejection", None)
                 usage = getattr(exc, "usage", None) or usage
                 self.data["calls"][key].update(status="failed", error=f"{type(exc).__name__}: {exc}",
                     usage=usage.model_dump(mode="json") if usage else None)
+                if rejection and rejection.get("can_defer") and not self.data["calls"][key].get("attempt_ids"):
+                    self.data["calls"][key].update(status="deferred_budget",
+                        admission_rejection=rejection, budget_revision=run_budget.revision)
                 self._settle_usage(key, usage, estimate)
                 self.data["calls"][key]["latency_ms"] = int((time.monotonic() - started) * 1000)
                 await self.persist()
                 raise
             finally:
+                if attempt_token is not None:
+                    run_budget_attempt_observer.reset(attempt_token)
+                    self.data["budget"] = self.budget.model_dump(mode="json")
                 if self.budget.token_usage > self.budget.max_token_usage:
                     self.data["budget_overrun"] = {"actual_accounted_tokens": self.budget.token_usage,
                         "max_token_usage": self.budget.max_token_usage}
                 if prepared_token is not None:
                     request_budget_reserver.reset(prepared_token)
-                model_request_budget_hook.reset(hook_token)
+                if hook_token is not None:
+                    model_request_budget_hook.reset(hook_token)
                 self.data["calls"][key]["latency_ms"] = int((time.monotonic() - started) * 1000)
             await self.persist()
             return raw
