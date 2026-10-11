@@ -366,21 +366,24 @@ class OpenAICompatibleProvider(LLMProvider):
         request = self.prepare_review_step_request(pr, changed_files, diff_text, model, record_input)
         response = await self._send_prepared_json_request(request)
         try:
-            issues = self._parse_issues(response.value, require_array=True)
+            issues = [] if record_input.get("output_repair") else self._parse_issues(response.value, require_array=True)
             raw = self._load_json(response.value)
             record = None
             record_error = None
+            schema_errors = []
             if isinstance(raw, dict) and raw.get("review_record") is not None:
                 try:
                     record = UnitReviewRecord.model_validate(self._normalize_review_record(raw["review_record"]))
                 except ValidationError as exc:
-                    record_error = f"invalid_review_record: {exc}"
+                    schema_errors.extend(self._output_schema_diagnostics(exc, "review_record"))
+                    record_error = "invalid_review_record: " + json.dumps(schema_errors, ensure_ascii=False)
             next_need = None
             next_need_error = None
             if isinstance(raw, dict) and raw.get("next_need") is not None:
                 try:
                     next_need = AgentAction.model_validate(self._normalize_agent_action(raw["next_need"]))
                 except ValidationError as exc:
+                    schema_errors.extend(self._output_schema_diagnostics(exc, "next_need"))
                     # 动作拒绝不能丢弃已通过 schema 的候选，也不能泄漏未校验的字段值。
                     next_need_error = "invalid_next_need_schema: " + json.dumps([
                         {"type": item["type"], "loc": [key if isinstance(key, int)
@@ -390,20 +393,41 @@ class OpenAICompatibleProvider(LLMProvider):
             return ModelCallResult(UnitReviewResponse(
                 issues=issues, review_record=record, record_error=record_error, next_need=next_need,
                 next_need_error=next_need_error,
+                output_schema_errors=schema_errors,
             ), response.usage)
         except LLMProviderError as exc:
             exc.usage = response.usage
+            exc.output_schema_errors = [{"type": "invalid_json_or_issue_schema", "loc": ["response"]}]
             raise
         except ValidationError as exc:
-            raise LLMProviderError(f"review_step schema validation failed: {exc}", usage=response.usage) from exc
+            error = LLMProviderError("review_step schema validation failed", usage=response.usage)
+            error.output_schema_errors = self._output_schema_diagnostics(exc, "response")
+            raise error from exc
+
+    @staticmethod
+    def _output_schema_diagnostics(exc, section):
+        known = set(UnitReviewRecord.model_fields) | set(AgentAction.model_fields) | {
+            "target", "status", "reason", "evidence_ids", "question_id", "replacement_id", "tool_args", "request",
+            "file_path", "hunk_ids", "start_line", "end_line", "max_results", "query", "hypothesis_id"}
+        return [{"type": item["type"], "loc": [section, *(key if isinstance(key, int) or key in known else "unknown_field"
+            for key in item["loc"])], "message": item["msg"][:180]}
+            for item in exc.errors(include_input=False, include_context=False, include_url=False)[:10]]
 
     def prepare_review_step_request(self, pr, changed_files, diff_text, model, record_input) -> PreparedModelRequest:
         """预检与发送共用完整单步协议，避免漏算协议正文或消息包装。"""
         from app.services.review_planner import DeterministicReviewPlanner
+        from app.services.unit_review_summary import review_target_catalog
+        if record_input.get("targets"):
+            record_input = {**record_input, "target_catalog": review_target_catalog(record_input["targets"])}
         record_input = {**record_input, "readonly_tool_scope": {"file_read_diff": {
             file.file_path: [DeterministicReviewPlanner.hunk_id(file.file_path, index, hunk.model_dump(mode="json"))
                              for index, hunk in enumerate(file.hunks)] for file in changed_files}}}
         prompt = self._build_unit_review_prompt(pr, changed_files, diff_text, record_input)
+        if record_input.get("output_repair"):
+            prompt = ("Correct only the reported output structure using the same evidence. Return issues: []; "
+                "previous validated candidates are retained by the server. Never invent replacement IDs, evidence or checks. "
+                "If a transition cannot be justified, omit it and keep the question unresolved. "
+                "Use target_catalog IDs exactly and the separate target/hypothesis status enums.\n") + prompt
         prompt += ('\n本次调用是 review_step。Return issues, review_record and next_need (null if absent). '
                    'next_need has only action, reason, target_issue_ids, tool_args; no top-level type, file_path, symbol or command. '
                    'Example: {"action":"file_read","reason":"读取调用方","tool_args":{"request":'
@@ -419,7 +443,7 @@ class OpenAICompatibleProvider(LLMProvider):
         from app.review.review_policy import REVIEW_STEP_OUTPUT_TOKENS, REVIEW_STEP_PROTOCOL_VERSION
         prompt = f"协议版本：{REVIEW_STEP_PROTOCOL_VERSION}\n" + prompt
         return self._prepare_json_request(
-            prompt=prompt, model=model, operation="review_step",
+            prompt=prompt, model=model, operation="review_step_repair" if record_input.get("output_repair") else "review_step",
             system="Review one bounded Unit in one step. Return validated JSON only.", max_tokens=REVIEW_STEP_OUTPUT_TOKENS)
 
     def unit_review_step_admission(self, *args) -> dict:
@@ -458,13 +482,13 @@ class OpenAICompatibleProvider(LLMProvider):
             "All summary, question and reason text must be Simplified Chinese.\n"
             "review_record schema (replace values; empty lists are allowed): "
             '{"change_summary":"变更概括","target_checks":[{"target":"输入中的目标",'
-            '"status":"checked|unresolved|not_checked","evidence_ids":[],"reason":"检查依据或缺口"}],'
-            '"hypothesis_checks":[{"hypothesis_id":"输入中的ID","status":"supported|refuted|unresolved",'
+            '"status":"not_checked","evidence_ids":[],"reason":"检查依据或缺口"}],'
+            '"hypothesis_checks":[{"hypothesis_id":"输入中的ID","status":"unresolved",'
             '"evidence_ids":[],"reason":"核验理由"}],"contract_dependencies":[{"file_path":"仓库路径",'
-            '"symbol":null,"assumption":"依赖的条件","status":"verified|unresolved|conflicting",'
+            '"symbol":null,"assumption":"依赖的条件","status":"unresolved",'
             '"evidence_ids":[]}],"unresolved_questions":[{"id":null,"question":"未决问题",'
             '"affected_files":[],"evidence_ids":[]}],"question_updates":[{"question_id":"记忆中的问题ID",'
-            '"status":"resolved|superseded","reason":"更新依据","evidence_ids":[],"replacement_id":null}]}\n'
+            '"status":"resolved","reason":"更新依据","evidence_ids":["current evidence ID"],"replacement_id":null}]}\n'
             f"{metadata_protocol}"
             "checked, supported, refuted, verified and conflicting require evidence IDs. "
             "For a verified/conflicting dependency include evidence from that dependency file.\n"
@@ -473,12 +497,10 @@ class OpenAICompatibleProvider(LLMProvider):
             "unresolved_questions has no reason or status field; "
             "put its explanation in question. Copy prior question IDs from working_memory to update them; "
             "new questions use id=null or a unique response-local alias, which the server replaces with a stable ID. "
-            "Omission does not resolve a prior question. Explicit question_updates may retire only visible prior "
-            "questions: resolved requires current evidence IDs; superseded requires replacement_id of an active "
-            "prior question or a new question alias from this response. Never guess a prior ID. "
-            "If supplied, use allowed_question_update_ids; otherwise only active working-memory IDs. "
-            "Closed IDs are history; repeat a closed_question_updates "
-            "entry exactly for a same-snapshot no-op. Existing question text/files are immutable. "
+            "Questions keep immutable text/files and current IDs. Omission does not resolve them. "
+            "resolved requires current evidence and no replacement; superseded requires a distinct active/new replacement_id. "
+            "With no valid replacement omit the update. Use allowed_question_update_ids or visible active IDs. "
+            "Closed transitions are history: do not repeat them. Never guess a prior ID. "
             "Do not copy input evidence objects into the record.\n"
             "For canonical evidence, each full diff body is supplied once; removed_lines is its "
             "base-side part. Its hash binds body together with removed_lines. Context evidence "
@@ -500,6 +522,9 @@ class OpenAICompatibleProvider(LLMProvider):
             + ("For origin_obligations, report obligation_updates with the exact obligation_id, status verified for dependencies "
                "or resolved for questions, current evidence_ids covering all bound files, and reason. Omit unproven closures.\n"
                if record_input.get("origin_obligations") else "")
+            + ("Copy target_catalog IDs into target (exact legacy names accepted). "
+               "Target status: checked/unresolved/not_checked; hypothesis status: supported/refuted/unresolved.\n"
+               if record_input.get("target_catalog") else "")
             + f"Bounded record input JSON:\n{json.dumps(catalog, ensure_ascii=False)}"
         )
 
@@ -507,6 +532,8 @@ class OpenAICompatibleProvider(LLMProvider):
     def _unit_evidence_payload(changed_files, record_input) -> dict:
         """单份正文，复用原证据 ID/哈希；绝不提供未展示正文的可引用证据。"""
         payload = {key: value for key, value in record_input.items() if key not in {"evidence", "memory_evidence"}}
+        if record_input.get("target_catalog"):
+            payload["targets"] = [item["id"] for item in record_input["target_catalog"]]
         snapshot = record_input.get("snapshot") or {}
         first = next(iter(record_input["evidence"]), {})
         head, base = snapshot.get("head_sha", first.get("head_sha", "")), snapshot.get("base_sha", first.get("base_sha", ""))

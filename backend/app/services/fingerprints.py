@@ -8,7 +8,7 @@ import re
 from typing import Any, Iterable
 from app.services.model_request_budgeter import CONTEXT_BUDGET_VERSION
 
-DIAGNOSIS_INPUT_VERSION = "provider-memory-v22-bound-contract-closure-progress-gated-review-isolated-next-need-python-branch-claims-provenance-record-completion-settled-budget-path-counterevidence-evidence-store-v1-active-context-v1-diff-manifest-v1-coverage-ledger-v1-unit-diff-worksets-v1-canonical-evidence-v3"
+DIAGNOSIS_INPUT_VERSION = "provider-memory-v23-target-ids-output-repair-bound-contract-closure-progress-gated-review-isolated-next-need-python-branch-claims-provenance-record-completion-settled-budget-path-counterevidence-evidence-store-v1-active-context-v1-diff-manifest-v1-coverage-ledger-v1-unit-diff-worksets-v1-canonical-evidence-v3"
 
 
 def stable_hash(value: Any) -> str:

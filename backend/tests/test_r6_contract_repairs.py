@@ -64,7 +64,7 @@ async def test_invalid_next_need_preserves_valid_candidates_without_completing_u
             "task_id": "r6-regression", "pr_info": pr.model_dump(mode="json"),
             "changed_files": [changed.model_dump(mode="json")], "repo_path": str(repo),
             "head_sha": "head", "base_sha": "base", "model": "fixture"})
-    assert len(requests) == 1, (result.error, result.terminal_reason, result.plan_skip_reason)
+    assert len(requests) == 2, (result.error, result.terminal_reason, result.plan_skip_reason)
     assert len(result.issues) == 1
     assert any(event["stage"] == "generated" for event in events)
     assert result.review_summary.latest_attempt_status == "invalid"

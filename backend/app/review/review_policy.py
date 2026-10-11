@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 
-REVIEW_STEP_PROTOCOL_VERSION = "review-step-v1"
+REVIEW_STEP_PROTOCOL_VERSION = "review-step-v2-target-ids-output-repair"
 REVIEW_STEP_OUTPUT_TOKENS = 4_096
 REVIEW_STEP_MAX_NEXT_NEEDS = 1
 REVIEW_STEP_MAX_SAME_EVIDENCE_CALLS = 2

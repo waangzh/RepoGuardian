@@ -10,6 +10,7 @@ from app.models.review import (
 from app.services.review_input_context import build_context_evidence, make_evidence, EVIDENCE_INPUT_VERSION, input_snapshot, question_identity
 from app.review.input_protocol import CANONICAL_UNIT_INPUT_PROTOCOL
 from app.services.file_change_evidence import file_change_reference, set_file_change_impact_scope
+from app.services.fingerprints import stable_hash
 
 
 def build_record_input(
@@ -46,6 +47,18 @@ def build_record_input(
     return result
 
 
+def review_target_catalog(targets):
+    return [{"id": "target-" + stable_hash(target)[:24], "target": target} for target in targets]
+
+
+def normalize_review_targets(record, record_input):
+    if record is None:
+        return None
+    target_ids = {item["id"]: item["target"] for item in record_input.get("target_catalog", [])}
+    return record.model_copy(update={"target_checks": [check.model_copy(update={
+        "target": target_ids.get(check.target, check.target)}) for check in record.target_checks]})
+
+
 def validate_record(
     record: UnitReviewRecord | None, record_input: dict[str, Any],
     readable_files: set[str], error: str | None = None,
@@ -64,6 +77,9 @@ def validate_record(
         return UnitReviewSummary(**common, reason=reason, latest_attempt_reason=reason,
                                  latest_attempt_status="invalid" if error else "missing")
     try:
+        record = normalize_review_targets(record, record_input)
+        if len({check.target for check in record.target_checks}) != len(record.target_checks):
+            raise ValueError("duplicate review target identity")
         if len(record.contract_dependencies) > 20 or len(record.unresolved_questions) > 20:
             raise ValueError("one diagnosis record exceeds its 20-item limit")
         by_id = {item.id: item for item in catalog}
