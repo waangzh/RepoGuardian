@@ -578,7 +578,7 @@ class CrossUnitCoordinationService:
             local["_cross_unit_budget"] = ExecutionBudget(
                 max_model_calls=allocation["exploration_calls"],
                 max_token_usage=allocation["exploration_tokens"],
-                max_diagnosis_attempts=1, max_context_retrievals=2, max_patch_attempts=0,
+                max_diagnosis_attempts=2 if executor._supports_native_review_step() else 1, max_context_retrievals=2, max_patch_attempts=0,
             ).model_dump(mode="json")
             deferred_followups = self.runtime.data.setdefault("deferred_followups", {})
             if saved and request.id in deferred_followups:
