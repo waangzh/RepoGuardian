@@ -265,6 +265,15 @@ def coverage_gaps(manifest, ledger, active=None, plan=None):
             *[key for key, check in ledger.dependencies.items() if check.status != "verified"]]
 
 
+def classified_coverage_gaps(manifest, ledger, active=None, plan=None):
+    gaps = coverage_gaps(manifest, ledger, active, plan)
+    questions = [key for key in gaps if ledger and key in ledger.questions]
+    dependencies = [key for key in gaps if ledger and key in ledger.dependencies]
+    contracts = set(questions + dependencies)
+    return {"targets": [key for key in gaps if key not in contracts],
+            "questions": questions, "dependencies": dependencies}
+
+
 def rebuild_coverage(manifest, entries):
     ledger = new_coverage_ledger(manifest)
     for entry in entries:
