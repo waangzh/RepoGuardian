@@ -6,6 +6,52 @@ from app.review.unit_completion import is_review_unit_complete, is_review_unit_e
 from app.services.issue_deduplication import IssueDeduplicationService
 
 
+def test_provider_issue_passes_filter_and_batch_aggregation_with_parent_source():
+    from app.models.review import ReviewUnit, UnitDiffBatch, ExecutionBudget
+    from app.services.review_planner import DeterministicReviewPlanner
+    from app.services.review_unit_executor import ReviewUnitExecutor
+
+    child = ReviewUnit(id="child", primary_files=["a.py"], fingerprint="child", grouping_reason="fixture",
+                       estimated_tokens=10, complexity="small")
+    parent = child.model_copy(update={"id": "parent", "fingerprint": "parent"})
+    scope = DeterministicReviewPlanner().build_scope(child, None, repository_files={"a.py"})
+    filtered = ReviewUnitExecutor._filter_issues([issue("i")], child, scope)
+    assert filtered[0].source_review_unit_ids == ["child"]
+    summary = UnitReviewSummary(status="reported", record=UnitReviewRecord(change_summary="检查完成"),
+                               latest_attempt_status="reported")
+    result = ReviewUnitResult(review_unit_id="child", status="completed", issues=filtered, review_summary=summary)
+    batch = UnitDiffBatch(id="child", parent_unit_id="parent", input_hash="hash", ranges=[],
+                         version="unit-diff-worksets-v1", admission={}, status="completed", result=result)
+    aggregated = ReviewUnitExecutor._aggregate_diff_batches(parent, [batch], ExecutionBudget(), "binding")
+    assert aggregated.issues[0].review_unit_id == "parent"
+    assert aggregated.issues[0].source_review_unit_ids == ["parent"]
+
+
+async def test_dedup_node_records_intermediate_canonical_unit_for_two_hops():
+    from types import SimpleNamespace
+    from app.graph.nodes.issue_validation import issue_deduplication_node
+    from app.models.review import IssueDeduplicationDecision, IssueMetrics, IssueStatus
+    from app.review.issue_audit import capture_issue_audit
+
+    original = [issue("A", "u1"), issue("B", "u2"), issue("C", "u3")]
+    canonical = original[2].model_copy(update={"status": IssueStatus.confirmed})
+    decisions = [IssueDeduplicationDecision(canonical_issue_id="B", duplicate_issue_ids=["A"], merged_rationale="same"),
+                 IssueDeduplicationDecision(canonical_issue_id="C", duplicate_issue_ids=["B"], merged_rationale="same")]
+
+    class Dedup:
+        async def aggregate(self, *args):
+            return SimpleNamespace(issues=[canonical], decisions=decisions, metrics=IssueMetrics(), model_usages=[])
+
+    events = [event("schema_validation", "u1", "schema", "A")]
+    with capture_issue_audit(events.append):
+        state = await issue_deduplication_node({"review_issues": [raw.model_dump(mode="json") for raw in original],
+            "_provider": object(), "_issue_deduplication_service": Dedup()})
+    final = next(row for row in final_audit(events, state, "completed")
+                 if row["stage"] == "final" and row["issue_id"] == "schema")
+    assert final["status"] == "confirmed" and final["canonical_id"] == "C"
+    assert final["canonical_review_unit_id"] == "u3"
+
+
 def issue(identity, unit="unassigned"):
     return ReviewIssue(id=identity, review_unit_id=unit, title="返回空值", category="correctness",
         severity="medium", confidence=.9, affected_behavior="调用方读取失败", failure_scenario="空值路径导致失败",

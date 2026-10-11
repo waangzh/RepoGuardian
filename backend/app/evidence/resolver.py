@@ -168,7 +168,8 @@ class EvidenceResolver:
                 return CommentPlacement.inline, None
             return CommentPlacement.summary, "resolved_outside_diff"
         if anchor.unresolved_reason in {
-            "multiple_matches", "side_conflict", "rename_ambiguity", "deletion_ambiguity"
+            "multiple_matches", "side_conflict", "rename_ambiguity", "deletion_ambiguity",
+            "branch_claim_required", "branch_claim_unverified", "branch_claim_mismatch",
         }:
             return CommentPlacement.unresolved, anchor.unresolved_reason
         return CommentPlacement.suppressed, anchor.unresolved_reason
@@ -337,6 +338,15 @@ class EvidenceResolver:
         if len(candidates) != 1:
             return self._unresolved(anchor, "multiple_matches", candidates)
         candidate = candidates[0]
+        if anchor.file_path.endswith(".py"):
+            from app.evidence.branch import branch_error
+            canonical = self.diff_index.canonical_path(anchor.file_path, candidate.side) or anchor.file_path
+            error = branch_error(self.file_loader(canonical, candidate.side), candidate.start_line,
+                                 candidate.end_line, anchor.branch_claim)
+            if error:
+                return self._unresolved(anchor, error, candidates)
+        elif anchor.branch_claim:
+            return self._unresolved(anchor, "branch_claim_unverified", candidates)
         surrounding = self._actual_surrounding(anchor, candidate)
         payload = {
             "file_path": anchor.file_path,
