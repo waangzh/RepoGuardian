@@ -86,6 +86,7 @@ class IssueVerifierService:
         decisions: list[IssueVerification] = []
         warnings: list[str] = []
         model_usages: list[ModelUsage] = []
+        verified_inputs: dict[str, IssueVerification] = {}
         call_count = metrics.verifier_call_count
         token_count = metrics.verifier_token_count
         verifier_drop_count = metrics.verifier_drop_count
@@ -109,13 +110,20 @@ class IssueVerifierService:
                 continue
             unit = by_unit.get(issue.review_unit_id)
             used = calls_by_unit.get(issue.review_unit_id, 0)
-            if unit is None or (run_budget is None and used >= self.max_calls_per_unit):
+            if unit is None:
                 reason = "review_unit_not_found" if unit is None else "verifier_budget_exhausted"
                 output[index] = self._on_failure(issue, reason)
                 warnings.append(f"Issue {issue.id} 未完成独立验证：{reason}")
                 continue
 
             request = self._build_request(issue, unit, state, used)
+            key = self._verification_input_key(request, unit, state)
+            cached = verified_inputs.get(key)
+            reused = cached is not None
+            if not reused and run_budget is None and used >= self.max_calls_per_unit:
+                output[index] = self._on_failure(issue, "verifier_budget_exhausted")
+                warnings.append(f"Issue {issue.id} 未完成独立验证：verifier_budget_exhausted")
+                continue
             observed_attempts = []
             outer_observer = run_budget_attempt_observer.get()
             async def observe(record, admission):
@@ -126,19 +134,18 @@ class IssueVerifierService:
             rejected = False
             usage = None
             try:
-                async with asyncio.timeout(self.timeout_seconds):
-                    raw_result = await self.provider.verify_issue(
-                        request, state.get("model")
-                    )
-                verification, usage = unpack_model_call(raw_result)
-                usage = annotate_usage(
-                    usage,
-                    accounted_tokens_estimate=self._estimate_tokens(request),
-                    review_unit_id=unit.id,
-                    unit_complexity=unit.complexity,
-                )
-                if usage is not None:
-                    model_usages.append(usage)
+                if reused:
+                    verification = cached.model_copy(update={"issue_id": issue.id}, deep=True)
+                    from app.review.issue_audit import audit_issue
+                    audit_issue("verifier_reuse", issue, reason="identical_verified_input:" + cached.issue_id)
+                else:
+                    async with asyncio.timeout(self.timeout_seconds):
+                        raw_result = await self.provider.verify_issue(request, state.get("model"))
+                    verification, usage = unpack_model_call(raw_result)
+                    usage = annotate_usage(usage, accounted_tokens_estimate=self._estimate_tokens(request),
+                                           review_unit_id=unit.id, unit_complexity=unit.complexity)
+                    if usage is not None:
+                        model_usages.append(usage)
                 verification = IssueVerification.model_validate(verification)
                 self._validate_decision(issue, unit, verification, request)
                 if verification.decision == IssueVerificationDecision.keep and (
@@ -149,6 +156,9 @@ class IssueVerifierService:
                         "decision": IssueVerificationDecision.unresolved,
                         "reason": "verifier_counterevidence_or_incomplete_context: " + verification.reason[:940],
                     })
+                if (not reused and usage is not None and usage.usage_available and request.evidence_complete
+                        and verification.decision in {IssueVerificationDecision.keep, IssueVerificationDecision.drop}):
+                    verified_inputs[key] = verification.model_copy(deep=True)
             except Exception as exc:
                 rejection = getattr(exc, "admission_rejection", None)
                 if rejection and rejection.get("kind") == "budget":
@@ -180,11 +190,11 @@ class IssueVerifierService:
                     calls_by_unit[unit.id] = used + len(sent)
                     token_count += sum(item.actual_tokens if item.actual_tokens is not None
                                        else item.reserved_tokens for item in sent)
-                elif not rejected:
+                elif not rejected and not reused:
                     calls_by_unit[unit.id] = used + 1
                     call_count += 1
                     token_count += self._estimate_tokens(request)
-                if not rejected:
+                if not rejected and not reused:
                     local_revision += 1
 
             decisions.append(self._sanitize_contradictions(verification, unit))
@@ -230,6 +240,20 @@ class IssueVerifierService:
         return IssueVerifierBatchResult(
             [output[index] for index in range(len(issues))], decisions, updated_metrics, warnings, model_usages
         )
+
+    @staticmethod
+    def _verification_input_key(request, unit, state):
+        from app.services.fingerprints import stable_hash
+        from app.review.diff_base import review_diff_base
+        payload = request.model_dump(mode="json")
+        for field in ("id", "review_unit_id", "source_issue_ids", "source_review_unit_ids"):
+            payload["issue"].pop(field, None)
+        payload["budget"].pop("remaining_calls", None)
+        for snippet in payload["readonly_context"]:
+            snippet.pop("review_unit_id", None)
+        return stable_hash({"request": payload, "model": state.get("model"),
+            "head": state.get("head_sha"), "base": review_diff_base(state),
+            "scope": unit.model_dump(mode="json", include={"primary_files", "related_files", "diff_hunk_ids", "rule_ids"})})
 
     def _build_request(
         self,

@@ -222,7 +222,33 @@ def build_working_memory(summary: UnitReviewSummary | None, record_input: dict,
             len(current[identity].get("content", "")) for identity in item.get("evidence_ids", []))
         return (tier, -int(goal), cost)
 
-    memory = json.loads(assemble_context(payload, required, 8_000, item_priority=rank))
+    closed = {}
+    if summary and not invalidated and summary.last_valid_snapshot == input_snapshot(record_input):
+        active = {question_identity(item) for item in (record.unresolved_questions if record else [])}
+        ledger_questions = (record_input.get("coverage_ledger") or {}).get("questions", {})
+        for prior in [*summary.record_history, *([record] if record else [])]:
+            for update in prior.question_updates:
+                if update.question_id in active or (ledger_questions and
+                    ledger_questions.get(update.question_id, {}).get("status") != update.status):
+                    continue
+                if all(identity in current and trusted.get(identity) == {
+                    key: value for key, value in current[identity].items() if key != "content"
+                } for identity in update.evidence_ids):
+                    closed[update.question_id] = update.model_dump(mode="json")
+    selected, cost = [], 0
+    for update in reversed(list(closed.values())):
+        size = len(json.dumps(update, ensure_ascii=False))
+        if len(selected) < 8 and cost + size <= 1_500:
+            selected.append(update)
+            cost += size
+    if selected:
+        payload.update(closed_question_updates=selected, question_catalog_snapshot=input_snapshot(record_input))
+        required.update({"closed_question_updates", "question_catalog_snapshot"})
+    memory = json.loads(assemble_context(payload, required, 6_800 if selected else 8_000, item_priority=rank))
+    if selected:
+        memory["allowed_question_update_ids"] = list(dict.fromkeys([
+            *(item["id"] for item in memory.get("unresolved_questions", [])),
+            *(item["question_id"] for item in selected)]))
     references = set()
     for key in ("unresolved_questions", "hypothesis_checks", "contract_dependencies", "target_checks", "file_change_checks"):
         for item in memory.get(key, []):
