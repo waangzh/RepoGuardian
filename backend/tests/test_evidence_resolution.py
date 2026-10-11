@@ -111,7 +111,7 @@ def test_multiple_matches_are_not_auto_selected() -> None:
     )
     assert result.primary_evidence.resolution_method == "unresolved"
     assert result.primary_evidence.match_count == 2
-    assert result.placement == "needs_human"
+    assert result.placement == "unresolved"
 
 
 def test_missing_code_is_unresolved_and_suppressed() -> None:
@@ -214,7 +214,7 @@ def test_deleted_file_can_resolve_base_but_head_request_reports_side_conflict() 
     )
     assert base.primary_evidence.resolved_side == "base"
     assert conflict.unresolved_reason == "side_conflict"
-    assert conflict.placement == "needs_human"
+    assert conflict.placement == "unresolved"
 
 
 def test_primary_evidence_cannot_target_related_only_file() -> None:

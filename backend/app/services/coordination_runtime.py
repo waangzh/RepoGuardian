@@ -73,7 +73,7 @@ def coordination_fingerprint(state: dict) -> str:
         "model_profiles": {key: value.model_dump(mode="json") for key, value in
                            settings.repoguardian_model_request_profiles.items()},
         "catalog_version": CATALOG_BATCH_VERSION,
-        "request_contract_version": "coordination-canonical-evidence-allocation-v10-verification-rollover",
+        "request_contract_version": "coordination-canonical-evidence-allocation-v11-deferred-recheck",
         "repository": (state.get("pr_info") or {}).get("clone_url"),
         "base_sha": state.get("base_sha"), "head_sha": state.get("head_sha"),
         "model": state.get("model") or settings.repoguardian_model,
@@ -209,6 +209,22 @@ class CoordinationRuntime:
         return {"coordination_plan": plan.model_dump(mode="json"),
                 "followup_results": list(self.data["followups"].values())}
 
+    def budget_signature(self, holdback: dict | None = None) -> str:
+        run = current_run_budget()
+        return stable_hash({"budget": run.available() if run else self.budget.model_dump(mode="json"),
+                            "revision": run.revision if run else None,
+                            "holdback": holdback or {}})
+
+    def deferred_error(self, reason: str, *, holdback=None, retry=False) -> LLMProviderError:
+        error = LLMProviderError(reason)
+        run = current_run_budget()
+        error.admission_rejection = {"kind": "budget", "reason": reason,
+            "can_defer": not retry and (run is not None or bool(holdback and (
+                holdback.get("token_usage") or holdback.get("model_calls")))),
+            "transport_retry": retry,
+            "budget_revision": run.revision if run else self.data["revision"]}
+        return error
+
     def _settle_usage(self, key: str, usage: ModelUsage | None, estimate: int) -> None:
         if current_run_budget() is not None:
             self.data["budget"] = self.budget.model_dump(mode="json")
@@ -254,7 +270,7 @@ class CoordinationRuntime:
         async with self.lock:
             existing = self.data["calls"].get(key)
             if existing and existing["status"] == "deferred_budget":
-                if run_budget is not None and existing.get("budget_revision") != run_budget.revision:
+                if existing.get("budget_signature") != self.budget_signature(held):
                     self.data["calls"].pop(key)
                     existing = None
                 else:
@@ -282,7 +298,8 @@ class CoordinationRuntime:
                 rejection = budget_rejection(self.budget, name, estimate, held)
                 self.data.setdefault("budget_rejections", []).append(rejection)
                 await self.persist()
-                raise LLMProviderError("cross_unit_shared_budget_exhausted: " + json.dumps(rejection))
+                raise self.deferred_error("cross_unit_shared_budget_exhausted: " + json.dumps(rejection),
+                                          holdback=held)
             if not prepared and run_budget is None:
                 self.data["budget"] = self.budget.consume(model_calls=1, token_usage=estimate).model_dump(mode="json")
             self.data["calls"][key] = {"status": "running", "operation": name,
@@ -313,7 +330,8 @@ class CoordinationRuntime:
                     await self.persist()
                     reason = ("cross_unit_shared_budget_exhausted_before_transport_retry"
                               if rejection["transport_retry"] else "cross_unit_shared_budget_exhausted")
-                    raise LLMProviderError(reason + ": " + json.dumps(rejection))
+                    raise self.deferred_error(reason + ": " + json.dumps(rejection),
+                                              holdback=held, retry=rejection["transport_retry"])
                 if outer_reserver is not None:
                     # A follow-up Unit also owns a local budget. Check both ledgers
                     # against this exact request, without masking the Unit hook.
@@ -363,8 +381,10 @@ class CoordinationRuntime:
                 self.data["calls"][key].update(status="failed", error=f"{type(exc).__name__}: {exc}",
                     usage=usage.model_dump(mode="json") if usage else None)
                 if rejection and rejection.get("can_defer") and not self.data["calls"][key].get("attempt_ids"):
-                    self.data["calls"][key].update(status="deferred_budget",
-                        admission_rejection=rejection, budget_revision=run_budget.revision)
+                    if self.data["calls"][key].get("attempts", 0) == 0:
+                        self.data["calls"][key].update(status="deferred_budget",
+                            admission_rejection=rejection, budget_signature=self.budget_signature(held),
+                            budget_revision=run_budget.revision if run_budget else self.data["revision"])
                 self._settle_usage(key, usage, estimate)
                 self.data["calls"][key]["latency_ms"] = int((time.monotonic() - started) * 1000)
                 await self.persist()

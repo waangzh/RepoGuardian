@@ -197,13 +197,13 @@ async def test_verifier_failure_uses_configured_mode_and_other_issue_continues()
     service = IssueVerifierService(
         provider,  # type: ignore[arg-type]
         enabled=True,
-        fail_mode="needs_human",
+        fail_mode="unresolved",
         max_calls_per_unit=5,
     )
     result = await service.verify_issues(issues, [unit], _state(unit), IssueMetrics())
 
     assert [issue.status for issue in result.issues] == [
-        IssueStatus.needs_human, IssueStatus.confirmed
+        IssueStatus.unresolved, IssueStatus.confirmed
     ]
     assert result.metrics.verifier_call_count == 2
     assert result.warnings
@@ -229,7 +229,7 @@ async def test_verifier_calls_are_bounded_per_unit() -> None:
 
     assert provider.calls == 1
     assert result.issues[0].status == IssueStatus.confirmed
-    assert result.issues[1].status == IssueStatus.confirmed
+    assert result.issues[1].status == IssueStatus.candidate
     assert result.issues[1].unresolved_reason.startswith("verifier_failure:")
 
 
@@ -362,7 +362,7 @@ async def test_zero_confirmed_is_valid_and_metrics_are_accurate() -> None:
     verified = await IssueVerifierService(
         provider,  # type: ignore[arg-type]
         enabled=True,
-        fail_mode="needs_human",
+        fail_mode="unresolved",
         max_calls_per_unit=5,
     ).verify_issues([issue], [_unit()], _state(_unit()), IssueMetrics(candidate_issue_count=1))
     final = await IssueDeduplicationService().aggregate(
@@ -373,16 +373,16 @@ async def test_zero_confirmed_is_valid_and_metrics_are_accurate() -> None:
     assert final.metrics.candidate_issue_count == 1
     assert final.metrics.verifier_drop_count == 1
     assert final.metrics.confirmed_count == 0
-    assert final.metrics.needs_human_count == 0
+    assert final.metrics.unresolved_count == 0
     assert final.metrics.verifier_call_count == 1
     assert final.metrics.verifier_token_count > 0
 
 
-def test_api_rebuild_only_publishes_confirmed_or_needs_human() -> None:
+def test_api_rebuild_only_publishes_confirmed_or_unresolved() -> None:
     candidates = [
         _issue("candidate", status="candidate"),
         _issue("confirmed", anchor_hash="b", status="confirmed"),
-        _issue("human", anchor_hash="c", status="needs_human"),
+        _issue("human", anchor_hash="c", status="unresolved"),
         _issue("dismissed", anchor_hash="d", status="dismissed"),
     ]
     task = rebuild_task_from_state({
@@ -392,7 +392,31 @@ def test_api_rebuild_only_publishes_confirmed_or_needs_human() -> None:
         "review_issues": [issue.model_dump(mode="json") for issue in candidates],
     })
 
-    assert [issue.id for issue in task.issues] == ["confirmed", "human"]
+    assert [issue.id for issue in task.issues] == ["candidate", "confirmed", "human"]
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_issue_with_located_evidence_stays_in_final_report() -> None:
+    from app.graph.nodes.report import report_node
+
+    issue = _issue("uncertain", status="unresolved")
+    issue = issue.model_copy(update={"unresolved_reason": "verifier_failure:TimeoutError"})
+    issue.primary_evidence = issue.primary_evidence.model_copy(update={
+        "resolved_start_line": 2, "resolved_end_line": 2,
+    })
+    report = await report_node({"task_id": "report-task", "status": "reviewing",
+        "review_issues": [issue.model_dump(mode="json")], "cross_unit_risk": {"decision": "skip"}})
+    assert report["status"] == "completed_with_warnings"
+    assert "已确认 0 项" in report["report_markdown"]
+    assert "未确认 1 项" in report["report_markdown"]
+    assert "verifier_failure:TimeoutError" in report["report_markdown"]
+    assert not report.get("__interrupt__")
+
+
+def test_legacy_human_issue_and_verifier_decision_become_unresolved() -> None:
+    assert _issue("legacy", status="needs_human").status == IssueStatus.unresolved
+    decision = IssueVerification.model_validate({"issue_id": "legacy", "decision": "needs_human", "reason": "缺少证据"})
+    assert decision.decision == "unresolved"
 
 
 def test_api_rebuild_preserves_diff_lines_binary_flag_and_context_provenance() -> None:

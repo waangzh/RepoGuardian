@@ -68,6 +68,7 @@ def plan(payload):
 
 
 class Provider:
+    unit_input_protocol = "canonical-evidence-v3"
     def __init__(self, *, candidate=True, verifier_fail=False):
         self.candidate = candidate
         self.verifier_fail = verifier_fail
@@ -106,7 +107,7 @@ async def test_followup_batch_is_verified_without_mutating_original_coverage(tmp
     result = await CrossUnitCoordinationService(provider).run(value)
     assert value == before
     assert result["coordination_plan"]["status"] == "completed", result
-    assert provider.calls == ["coordinate", "decide", "review", "decide", "verify"]
+    assert provider.calls == ["coordinate", "decide", "review", "verify"]
     assert result["review_issues"][0]["status"] == "confirmed"
     assert result["issue_metrics"]["candidate_issue_count"] == 1
     assert result["issue_metrics"]["verifier_call_count"] == 1
@@ -116,20 +117,20 @@ async def test_followup_batch_is_verified_without_mutating_original_coverage(tmp
     scope = provider.decisions[0]["review_tool_scope"]
     assert set(scope["readable_files"]) == {"caller.py", "callee.py"}
     assert not scope["repository_discovery_enabled"]
-    assert result["coordination_plan"]["execution_budget"]["model_calls"] == 5
+    assert result["coordination_plan"]["execution_budget"]["model_calls"] == 4
     rebuilt = rebuild_task_from_state({**value, **result})
-    assert rebuilt.coordination_plan.execution_budget.model_calls == 5
+    assert rebuilt.coordination_plan.execution_budget.model_calls == 4
     assert "跨 Unit 协调与定向补查" in ReportService().generate(rebuilt)
     assert await CrossUnitCoordinationService(provider).run({**value, **result}) == {}
 
 
 @pytest.mark.asyncio
-async def test_zero_candidates_stays_unresolved_and_verifier_failure_needs_human(tmp_path):
+async def test_zero_candidates_stays_unresolved_and_verifier_failure_unresolved(tmp_path):
     result = await CrossUnitCoordinationService(Provider(candidate=False)).run(state())
     assert result["followup_results"][0]["outcome"] == "unresolved"
     assert result["coordination_plan"]["status"] == "unresolved"
     failed = await CrossUnitCoordinationService(Provider(verifier_fail=True)).run(state(tmp_path))
-    assert failed["review_issues"][0]["status"] == "needs_human"
+    assert failed["review_issues"][0]["status"] == "unresolved"
     assert failed["coordination_plan"]["status"] == "unresolved"
 
 

@@ -916,7 +916,7 @@ class ReviewUnitExecutor:
             input_coverage=coverage, diff_batches=entries, review_summary=summary, execution_budget=budget,
             diff_manifest=manifest, coverage_ledger=ledger,
             plan=next((item.plan for item in results if item.plan), None),
-            issues=[issue.model_copy(update={"review_unit_id": unit.id}) for result in results for issue in result.issues],
+            issues=[issue.for_review_unit(unit.id) for result in results for issue in result.issues],
             context_snippets=[item for result in results for item in result.context_snippets],
             evidence_store=merge_stores([evidence_store, *[result.evidence_store for result in results]]),
             context_selection=next((result.context_selection for result in reversed(results) if result.context_selection), None),
@@ -1707,7 +1707,7 @@ class ReviewUnitExecutor:
         from app.review.issue_audit import audit_issue
 
         for issue in response.issues:
-            audit_issue("generated", issue.model_copy(update={"review_unit_id": state["unit"].id}))
+            audit_issue("generated", issue.for_review_unit(state["unit"].id))
         summary = validate_record(
             response.review_record, record_input, state["scope"].readable_files,
             response.record_error,
@@ -2522,7 +2522,7 @@ class ReviewUnitExecutor:
         accepted: list[ReviewIssue] = []
         seen: set[str] = set()
         for issue in model_issues:
-            issue = issue.model_copy(update={"review_unit_id": unit.id})
+            issue = issue.for_review_unit(unit.id)
             if issue.id in seen:
                 audit_issue("unit_filter", issue, reason="duplicate_issue_id")
                 continue
@@ -2537,7 +2537,7 @@ class ReviewUnitExecutor:
                 audit_issue("unit_filter", issue, reason="supporting_file_out_of_scope")
                 continue
             audit_issue("unit_filter", issue, reason="accepted")
-            accepted.append(issue.model_copy(update={"review_unit_id": unit.id}))
+            accepted.append(issue)
         return accepted
 
     @staticmethod

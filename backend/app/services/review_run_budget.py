@@ -138,6 +138,7 @@ class ReviewRunBudget:
         self.obligations: dict[str, ObligationRecord] = {}
         self.store = store
         self._lock = asyncio.Lock()
+        self._changed = asyncio.Event()
         self._committed = self.snapshot()
         self._initialized = store is None
         self._invalidated = False
@@ -197,6 +198,15 @@ class ReviewRunBudget:
             raise
         self._committed = payload
         self._initialized = True
+
+        changed, self._changed = self._changed, asyncio.Event()
+        changed.set()
+
+    async def wait_for_change(self, revision: int) -> None:
+        """等待一笔已在途请求结算；调用方仍负责超时和取消。"""
+        changed = self._changed
+        if self.revision == revision:
+            await changed.wait()
 
     @asynccontextmanager
     async def _mutation(self):

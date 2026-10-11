@@ -58,7 +58,9 @@ async def test_file_read_is_clamped_and_file_find_stays_in_scope(tmp_path: Path)
     assert snippet["start_line"] == 2
     assert snippet["end_line"] == 4
     assert snippet["content"].startswith("two\nthree\nfour")
-    assert snippet["content"].endswith("...(truncated)")
+    assert snippet["content"] == "two\nthree\nfour"
+    assert snippet["truncated"] is True
+    assert len(snippet["content"].splitlines()) == snippet["end_line"] - snippet["start_line"] + 1
     assert matches == ["src/service.ts", "tests/service.test.ts"]
     with pytest.raises(ScopedContextToolError, match="outside Review Unit"):
         await tool.file_read(scope=scope, file_path="secret.ts")
@@ -218,6 +220,8 @@ def test_agent_action_validates_structured_file_tool_requests() -> None:
 
 @pytest.mark.asyncio
 async def test_unit_executor_routes_direct_file_read_to_scoped_tool(tmp_path: Path) -> None:
+    from test_unit_review_summary import _state
+
     repo = _repo(tmp_path)
     scope = _scope(repo)
     unit = ReviewUnit(
@@ -239,6 +243,8 @@ async def test_unit_executor_routes_direct_file_read_to_scoped_tool(tmp_path: Pa
     executor = ReviewUnitExecutor(object(), concurrency=1, timeout_seconds=2)  # type: ignore[arg-type]
 
     result = await executor._execute_read_tool_node({
+        "parent_state": _state(),
+        "unit_diff": "",
         "unit": unit,
         "scope": scope,
         "unit_files": [],

@@ -110,7 +110,8 @@ async def test_schema_rejection_audits_entire_batch_without_exposing_raw_values(
     events = []
     with capture_issue_audit(events.append), issue_audit_unit("unit-a"):
         with pytest.raises(LLMProviderError, match="schema validation failed") as raised:
-            await provider.review_unit(PullRequestInfo.model_validate(state()["pr_info"]), [], "", None, {})
+            await provider.review_unit(PullRequestInfo.model_validate(state()["pr_info"]), [], "", None,
+                                      build_record_input([], [], None, "h", "b"))
     assert raised.value.usage.actual_total_tokens == 15
     assert "secret-token" not in str(raised.value)
     assert "secret-token" not in json.dumps(events)
