@@ -48,6 +48,20 @@ async def test_verifier_observer_crosses_coordination_once_per_attempt():
     assert next(iter(wrapper.runtime.data["calls"].values()))["attempt_ids"] == ids
 
 
+async def test_legacy_verification_without_budget_keeps_compatibility():
+    from app.models.review import IssueVerification
+
+    class Provider:
+        def coordination_request_chars(self, name, args):
+            return 4000
+        async def verify_issue(self, *args):
+            return IssueVerification(issue_id="i", decision="needs_human", reason="missing evidence")
+    runtime = CoordinationRuntime("run", "a" * 64, ExecutionBudget())
+    result = await runtime.call(Provider(), "verify_issue", ({}, None), 0)
+    assert result.issue_id == "i"
+    assert runtime.budget.model_calls == len(runtime.data["calls"]) == 1
+
+
 @pytest.mark.parametrize("interrupt", [False, True])
 async def test_verification_replay_ignores_remaining_call_counter(persistence, interrupt):
     repository, _, _ = persistence
