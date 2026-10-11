@@ -234,6 +234,10 @@ class CoordinationRuntime:
         held = holdback or {}
         run_budget = current_run_budget()
         payload = normalize(args)
+        if name == "verify_issue":
+            # Scheduling counters neither change the evidence nor the verifier
+            # decision. Keep output/context limits in the semantic cache key.
+            payload[0]["budget"].pop("remaining_calls", None)
         resolver = getattr(provider, "resolve_request_profile", None)
         model = args[3] if name in {"review_unit", "review_step"} else args[1]
         resolved = resolver(model) if callable(resolver) else None
@@ -325,13 +329,19 @@ class CoordinationRuntime:
             hook_token = model_request_budget_hook.set(reserve_retry) if run_budget is None else None
             prepared_token = (request_budget_reserver.set(reserve_prepared)
                               if prepared and run_budget is None else None)
+            outer_observer = run_budget_attempt_observer.get()
             async def observe_attempt(record, metadata):
                 call = self.data["calls"][key]
-                call.setdefault("attempt_ids", []).append(record.attempt_id)
+                ids = call.setdefault("attempt_ids", [])
+                if record.attempt_id in ids:
+                    return
+                ids.append(record.attempt_id)
                 call.update(attempts=len(call["attempt_ids"]), estimate=metadata["reserved_tokens"],
                             request_admission=metadata)
                 self.data["budget"] = self.budget.model_dump(mode="json")
                 await self.persist()
+                if outer_observer is not None:
+                    await outer_observer(record, metadata)
 
             attempt_token = run_budget_attempt_observer.set(observe_attempt) if run_budget is not None else None
             usage = None
