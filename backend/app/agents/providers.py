@@ -366,8 +366,8 @@ class OpenAICompatibleProvider(LLMProvider):
         request = self.prepare_review_step_request(pr, changed_files, diff_text, model, record_input)
         response = await self._send_prepared_json_request(request)
         try:
-            raw = self._load_json(response.value)
             issues = self._parse_issues(response.value, require_array=True)
+            raw = self._load_json(response.value)
             record = None
             record_error = None
             if isinstance(raw, dict) and raw.get("review_record") is not None:
@@ -399,6 +399,10 @@ class OpenAICompatibleProvider(LLMProvider):
 
     def prepare_review_step_request(self, pr, changed_files, diff_text, model, record_input) -> PreparedModelRequest:
         """预检与发送共用完整单步协议，避免漏算协议正文或消息包装。"""
+        from app.services.review_planner import DeterministicReviewPlanner
+        record_input = {**record_input, "readonly_tool_scope": {"file_read_diff": {
+            file.file_path: [DeterministicReviewPlanner.hunk_id(file.file_path, index, hunk.model_dump(mode="json"))
+                             for index, hunk in enumerate(file.hunks)] for file in changed_files}}}
         prompt = self._build_unit_review_prompt(pr, changed_files, diff_text, record_input)
         prompt += ('\n本次调用是 review_step。Return issues, review_record and next_need (null if absent). '
                    'next_need has only action, reason, target_issue_ids, tool_args; no top-level type, file_path, symbol or command. '
@@ -472,6 +476,9 @@ class OpenAICompatibleProvider(LLMProvider):
             "Omission does not resolve a prior question. Explicit question_updates may retire only visible prior "
             "questions: resolved requires current evidence IDs; superseded requires replacement_id of an active "
             "prior question or a new question alias from this response. Never guess a prior ID. "
+            "If supplied, use allowed_question_update_ids; otherwise only active working-memory IDs. "
+            "Closed IDs are history; repeat a closed_question_updates "
+            "entry exactly for a same-snapshot no-op. Existing question text/files are immutable. "
             "Do not copy input evidence objects into the record.\n"
             "For canonical evidence, each full diff body is supplied once; removed_lines is its "
             "base-side part. Its hash binds body together with removed_lines. Context evidence "
@@ -1235,7 +1242,10 @@ class OpenAICompatibleProvider(LLMProvider):
             match = re.search(r"\{[\s\S]*\}|\[[\s\S]*\]", content)
             if not match:
                 raise LLMProviderError("LLM output is not valid JSON")
-            return json.loads(match.group(0))
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError as exc:
+                raise LLMProviderError(f"LLM output is not valid JSON: line {exc.lineno}, column {exc.colno}") from exc
 
     @staticmethod
     def _normalize_unit_plan(raw: Any) -> Any:
