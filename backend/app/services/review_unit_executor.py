@@ -112,6 +112,8 @@ class _ReviewUnitGraphState(TypedDict, total=False):
     evidence_store: UnitEvidenceStore
     context_selection: UnitContextSelection
     native_review_counts: dict[str, int]
+    last_review_evidence_key: str
+    last_review_requires_context: bool
 
 
 class ReviewUnitExecutor:
@@ -1076,6 +1078,10 @@ class ReviewUnitExecutor:
             if (state.get("retrieval_no_new_rounds", 0) >= 2 and state.get("native_review_counts")) or (
                 count >= REVIEW_STEP_MAX_SAME_EVIDENCE_CALLS and (pending is None or pending.action == AgentActionName.report_issue)
             ):
+                if (pending is None or pending.action == AgentActionName.report_issue) and self._current_checks_complete(state):
+                    return {"next_action": AgentAction(action="task_done", reason="当前检查与契约已完成，结束重复报告"),
+                        "issue_round_completed": True,
+                        "terminal_reason": ReviewUnitTerminalReason.completed}
                 reason = "review_step_no_evidence_progress"
                 summary = state.get("review_summary") or UnitReviewSummary()
                 if summary.latest_attempt_status not in {"invalid", "failed", "missing"}:
@@ -1743,7 +1749,9 @@ class ReviewUnitExecutor:
             key = self._native_evidence_key(state)
             counts = dict(state.get("native_review_counts") or {})
             counts[key] = counts.get(key, 0) + 1
-            native_update = {"native_review_counts": counts}
+            native_update = {"native_review_counts": counts, "last_review_evidence_key": key,
+                "last_review_requires_context": bool(response.next_need_error or (response.next_need
+                    and response.next_need.action not in {AgentActionName.report_issue, AgentActionName.task_done}))}
         if self.input_mode == "legacy":
             response = response.model_copy(update={"review_record": None,
                 "record_error": "legacy_provider_without_canonical_evidence_protocol"})
@@ -1814,6 +1822,29 @@ class ReviewUnitExecutor:
         }
 
     @staticmethod
+    def _current_checks_complete(state):
+        summary = state.get("review_summary")
+        if (state.get("last_review_requires_context", True)
+                or not summary or summary.status != "reported" or summary.latest_attempt_status != "reported"
+                or not summary.record or state.get("last_review_evidence_key") != ReviewUnitExecutor._native_evidence_key(state)
+                or summary.last_valid_snapshot.get("head_sha") != state["parent_state"].get("head_sha")
+                or summary.last_valid_snapshot.get("base_sha", "") != review_diff_base(state["parent_state"])):
+            return False
+        record = summary.record
+        if (not record.target_checks or any(check.status != "checked" or not check.evidence_ids for check in record.target_checks)
+                or record.unresolved_questions or any(check.status != "verified" for check in record.contract_dependencies)
+                or any(check.status not in {"supported", "refuted"} for check in record.hypothesis_checks)):
+            return False
+        coverage = state.get("input_coverage")
+        if coverage and (coverage.omitted_targets or coverage.omitted_context or coverage.omitted_components):
+            return False
+        manifest, ledger = state.get("diff_manifest"), state.get("coverage_ledger")
+        if manifest is None or ledger is None:
+            return False
+        active = state.get("active_evidence_set") if manifest.review_unit_id != state["unit"].id else None
+        return not coverage_gaps(manifest, ledger, active, state.get("unit_plan"))
+
+    @staticmethod
     def _file_find_paths(events):
         found_paths = set()
         for event in events:
@@ -1845,6 +1876,8 @@ class ReviewUnitExecutor:
         from app.services.file_change_evidence import set_file_change_impact_scope
         set_file_change_impact_scope(record_input, getattr(state["unit"], "related_files", []))
         record_input["pr_intent"] = build_pr_intent(pr)
+        if state["parent_state"].get("origin_obligations"):
+            record_input["origin_obligations"] = state["parent_state"]["origin_obligations"]
         if state.get("diff_manifest"):
             record_input.update(diff_manifest=state["diff_manifest"].model_dump(mode="json"),
                 coverage_ledger=state["coverage_ledger"].model_dump(mode="json"),

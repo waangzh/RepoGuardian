@@ -110,6 +110,7 @@ def catalog_batches(catalog: dict[str, Any],
             "coverage_manifest": {"scope": "batch_local", "total_units": len(units),
                                   "omitted_units": len(units) - len(ids), "global_index_hash": index_hash},
             "units": selected, "summaries": selected_summaries,
+            "origin_obligations": [item for item in catalog.get("origin_obligations", []) if item["unit_id"] in ids],
             "evidence": [item for item in catalog["evidence"]
                          if item["id"] in evidence_ids],
             "risk": {**risk, "relationships": [relations[key] for key in sorted(relation_ids)],

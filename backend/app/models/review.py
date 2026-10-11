@@ -1935,6 +1935,14 @@ class UnitFileChangeCoverage(BaseModel):
     reason: str | None = None
 
 
+class UnitObligationUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    obligation_id: str = Field(min_length=1, max_length=100)
+    status: Literal["verified", "resolved"]
+    evidence_ids: list[str] = Field(min_length=1, max_length=12)
+    reason: str = Field(min_length=1, max_length=1_000)
+
+
 class UnitReviewRecord(BaseModel):
     """模型提供的语义检查记录；引用由执行器核对，checked 不等于正确性证明。"""
 
@@ -1947,6 +1955,7 @@ class UnitReviewRecord(BaseModel):
     unresolved_questions: list[UnitUnresolvedQuestion] = Field(default_factory=list, max_length=60)
     question_updates: list[UnitQuestionUpdate] = Field(default_factory=list, max_length=20)
     file_change_checks: list[UnitFileChangeCheck] = Field(default_factory=list, max_length=40)
+    obligation_updates: list[UnitObligationUpdate] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="after")
     def unique_checks(self) -> "UnitReviewRecord":
@@ -1955,6 +1964,7 @@ class UnitReviewRecord(BaseModel):
             [item.hypothesis_id for item in self.hypothesis_checks],
             [item.question_id for item in self.question_updates],
             [item.evidence_id for item in self.file_change_checks],
+            [item.obligation_id for item in self.obligation_updates],
         ):
             if len(identifiers) != len(set(identifiers)):
                 raise ValueError("review record contains duplicate checks")
@@ -2047,6 +2057,7 @@ class CrossUnitFollowupRequest(BaseModel):
     evidence_ids: list[str] = Field(default_factory=list, max_length=20)
     counterevidence_goal: str = Field(min_length=1, max_length=1_000)
     stop_condition: str = Field(min_length=1, max_length=1_000)
+    origin_obligation_ids: list[str] = Field(default_factory=list, max_length=20)
 
     @field_validator("primary_files")
     @classmethod
