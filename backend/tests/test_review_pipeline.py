@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from provider_fixtures import CanonicalTestProvider
 from app.agents.providers import LLMProvider
 from app.models.review import (
     AgentAction,
@@ -106,7 +107,7 @@ class FixtureGitTool:
         subprocess.run(["git", "clean", "-fdx"], cwd=repo_path, check=True, capture_output=True)
 
 
-class ScriptedProvider(LLMProvider):
+class ScriptedProvider(CanonicalTestProvider):
     """仅用于图编排测试的确定性 Provider，不属于运行时 Provider。"""
 
     def __init__(
@@ -127,6 +128,16 @@ class ScriptedProvider(LLMProvider):
             "reason": "测试动作序列结束",
         }
         return raw if isinstance(raw, AgentAction) else AgentAction.model_validate(raw)
+
+    async def review_unit(self, pr, changed_files, diff_text, model, record_input):
+        from app.models.review import UnitReviewRecord, ModelCallResult
+        from app.services.model_usage import unpack_model_call
+
+        response, usage = unpack_model_call(await super().review_unit(pr, changed_files, diff_text, model, record_input))
+        response.review_record = UnitReviewRecord(change_summary="合成夹具逐个检查活动证据", target_checks=[{
+            "target": target, "status": "checked", "reason": "测试夹具显式记录已展示范围",
+            "evidence_ids": [item["id"] for item in record_input["evidence"]]} for target in record_input["targets"]])
+        return ModelCallResult(response, usage) if usage else response
 
     async def review(
         self,

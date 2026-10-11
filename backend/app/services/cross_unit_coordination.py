@@ -9,7 +9,7 @@ from app.review.diff_base import review_diff_base
 from app.models.review import (
     ChangedFile, CrossUnitCoordinationPlan, CrossUnitFollowupResult,
     CrossUnitRiskAssessment, ExecutionBudget, IssueStatus, ReviewUnit,
-    ReviewUnitResult, ReviewUnitStatus, ReviewIssueInput, EvidenceAnchorInput,
+    ReviewUnitResult, ReviewUnitStatus, ReviewIssueInput, EvidenceAnchorInput, ReviewIssue, IssueMetrics,
 )
 from app.review.tool_scope import is_sensitive_repository_change
 from app.services.model_usage import unpack_model_call
@@ -228,7 +228,8 @@ class CrossUnitCoordinationService:
         fingerprint = coordination_fingerprint(state)
         existing = state.get("coordination_plan")
         if (existing and existing.get("runtime_fingerprint") == fingerprint
-                and existing.get("status") in {"completed", "unresolved", "failed", "cancelled"}):
+                and existing.get("status") in {"completed", "unresolved", "failed", "cancelled"}
+                and not existing.get("reason", "").startswith("deferred_budget_not_executed")):
             return {}
         risk = CrossUnitRiskAssessment.model_validate(state["cross_unit_risk"])
         if risk.decision == "skip":
@@ -238,9 +239,13 @@ class CrossUnitCoordinationService:
         await self.runtime.load()
         self.provider.runtime = self.runtime
         if self.runtime.data["output"] is not None:
-            self.runtime.data["cache_hits"] += 1
-            await self.runtime.persist()
-            return {**self.runtime.data["output"], **self.runtime.public_state()}
+            if self.runtime.data.get("deferred_signature") != self.runtime.budget_signature():
+                if self.runtime.data.get("deferred_signature") is not None:
+                    self.runtime.data["output"] = None
+            if self.runtime.data["output"] is not None:
+                self.runtime.data["cache_hits"] += 1
+                await self.runtime.persist()
+                return {**self.runtime.data["output"], **self.runtime.public_state()}
         if self.runtime.data["revision"] == -1:
             self.runtime.data["base_metrics"] = dict(state.get("issue_metrics") or {})
         await self.runtime.persist()
@@ -255,7 +260,16 @@ class CrossUnitCoordinationService:
                         plan = CrossUnitCoordinationPlan.model_validate(saved_plan)
                         self.validate_plan(plan, payload)
                     else:
-                        plan = await self.plan_catalog(payload, state.get("model"), usages)
+                        while True:
+                            before = self.runtime.budget_signature()
+                            try:
+                                plan = await self.plan_catalog(payload, state.get("model"), usages)
+                            except Exception:
+                                if self._catalog_deferred() and await self._budget_progress(before):
+                                    continue
+                                raise
+                            if not self._catalog_deferred() or not await self._budget_progress(before):
+                                break
                 except Exception as exc:
                     usage = getattr(exc, "usage", None)
                     if usage is not None:
@@ -276,6 +290,9 @@ class CrossUnitCoordinationService:
                               for issue in result.get("review_issues") or []
                               if issue["review_unit_id"].startswith("followup-"))) else "unresolved"
                 plan = plan.model_copy(update={"status": status})
+                if self._pending_budget_work():
+                    plan = plan.model_copy(update={"status": "unresolved",
+                        "reason": "deferred_budget_not_executed: coordination"})
                 if self.provider.budget.token_usage > self.provider.budget.max_token_usage:
                     plan = plan.model_copy(update={"status": "unresolved", "reason": "cross_unit_budget_overrun",
                         "unresolved_questions": [*plan.unresolved_questions, "实际用量超过共享预留预算，需核对账本。"]})
@@ -293,8 +310,10 @@ class CrossUnitCoordinationService:
             raise
         except Exception as exc:
             plan = CrossUnitCoordinationPlan.model_validate(self.runtime.data["plan"] or plan)
-            plan = plan.model_copy(update={"status": "failed",
-                                          "reason": f"{type(exc).__name__}: {exc}"[:1000]})
+            deferred = self._catalog_deferred()
+            plan = plan.model_copy(update={"status": "unresolved" if deferred else "failed",
+                "reason": ("deferred_budget_not_executed: catalog" if deferred
+                           else f"{type(exc).__name__}: {exc}"[:1000])})
             result = {**self._aggregate_output(state), "warnings": [*(state.get("warnings") or []),
                                    f"跨 Unit 协调未完成：{plan.reason}"],
                       "model_usages": [*(state.get("model_usages") or []), *usages]}
@@ -316,9 +335,27 @@ class CrossUnitCoordinationService:
                 known.setdefault(call["usage"]["id"], call["usage"])
         result["model_usages"] = list(known.values())
         self.runtime.data["output"] = result
+        self.runtime.data["deferred_signature"] = (self.runtime.budget_signature()
+            if self._pending_budget_work() else None)
         await self.runtime.persist()
         result.update(self.runtime.public_state())
         return result
+
+    def _catalog_deferred(self) -> bool:
+        return any(item.get("deferred_budget") for item in self.runtime.data.get("catalog_batches", {}).values())
+
+    def _pending_budget_work(self) -> bool:
+        return self._catalog_deferred() or bool(self.runtime.data.get("deferred_followups")) or any(
+            item.get("pending_verifications") for item in self.runtime.data["batches"].values())
+
+    async def _budget_progress(self, before: str) -> bool:
+        if self.runtime.budget_signature() != before:
+            return True
+        run = current_run_budget()
+        if run is not None and run.in_flight_reserved:
+            await run.wait_for_change(run.revision)
+            return self.runtime.budget_signature() != before
+        return False
 
     async def plan_catalog(self, payload: dict, model: str | None,
                            usages: list[dict]) -> CrossUnitCoordinationPlan:
@@ -333,6 +370,10 @@ class CrossUnitCoordinationService:
         followups, identities, questions, relationships, evidence = [], set(), [], set(), set()
         proposals, warnings = [], []
         for index, (entry, batch) in enumerate(batches):
+            saved = self.runtime.data.setdefault("catalog_batches", {})
+            cached = saved.get(entry.id)
+            if cached and cached.get("deferred_budget") and cached.get("budget_signature") != self.runtime.budget_signature():
+                saved.pop(entry.id)
             if entry.id in saved:
                 raw = saved[entry.id]
                 coverage = type(entry).model_validate(raw["coverage"])
@@ -367,9 +408,13 @@ class CrossUnitCoordinationService:
                         proposal = None
                         coverage = entry.model_copy(update={"status": "failed",
                             "reason": f"{type(exc).__name__}: {exc}"[:1000]})
+                        rejection = getattr(exc, "admission_rejection", None)
+                        if rejection and rejection.get("can_defer"):
+                            saved[entry.id] = {"deferred_budget": True,
+                                "budget_signature": self.runtime.budget_signature()}
                     finally:
                         self.provider.holdback = None
-                saved[entry.id] = {"coverage": coverage.model_dump(mode="json"),
+                self.runtime.data["catalog_batches"][entry.id] = {**saved.get(entry.id, {}), "coverage": coverage.model_dump(mode="json"),
                                   "proposal": proposal.model_dump(mode="json") if proposal else None}
             if proposal is not None:
                 self.validate_plan(proposal, batch)
@@ -438,6 +483,34 @@ class CrossUnitCoordinationService:
 
     async def execute_followups(self, plan: CrossUnitCoordinationPlan,
                                state: dict[str, Any]) -> dict[str, Any]:
+        # 每轮只执行缺失任务；后续补查结算后重查，未知/已发送失败不能重发。
+        for round_index in range(len(plan.followups) + 1):
+            before = self.runtime.budget_signature()
+            await self._execute_followup_pass(plan, state)
+            await self._retry_verifications(state)
+            if not self.runtime.data.get("deferred_followups") and not any(
+                    item.get("pending_verifications") for item in self.runtime.data["batches"].values()):
+                break
+            changed = await self._budget_progress(before)
+            if not changed and round_index > 0:
+                break
+            # 首轮所有未来任务已尝试，旧份额保留不再阻断暂缓任务。
+            for request_id in self.runtime.data.get("deferred_followups", {}):
+                allocation = self.runtime.data["allocations"].get(request_id)
+                if allocation:
+                    allocation.update(future_calls=0, future_tokens=0,
+                        exploration_calls=max(1, self.provider.budget.max_model_calls - self.provider.budget.model_calls),
+                        exploration_tokens=max(1, self.provider.budget.max_token_usage - self.provider.budget.token_usage))
+            await self.runtime.persist()
+        output = self._aggregate_output(state)
+        usages = {raw["id"]: raw for raw in output["model_usages"]}
+        for followup in self.runtime.data["followups"].values():
+            usages.update({raw["id"]: raw for raw in followup["unit_result"].get("model_usages") or []})
+        output["model_usages"] = list(usages.values())
+        return output
+
+    async def _execute_followup_pass(self, plan: CrossUnitCoordinationPlan,
+                                     state: dict[str, Any]) -> dict[str, Any]:
         from app.graph.nodes.resolve_evidence import resolve_evidence_node
         from app.graph.nodes.issue_validation import issue_policy_node, issue_verifier_node
         from app.services.issue_verifier import IssueVerifierService
@@ -494,6 +567,10 @@ class CrossUnitCoordinationService:
                 max_token_usage=allocation["exploration_tokens"],
                 max_diagnosis_attempts=1, max_context_retrievals=2, max_patch_attempts=0,
             ).model_dump(mode="json")
+            deferred_followups = self.runtime.data.setdefault("deferred_followups", {})
+            if saved and request.id in deferred_followups:
+                local["review_unit_results"] = [saved["unit_result"]]
+                saved = None
             if saved:
                 self.runtime.data["cache_hits"] += 1
             self.provider.holdback = {
@@ -506,6 +583,18 @@ class CrossUnitCoordinationService:
                           else await executor.execute_unit(unit, local))
             finally:
                 self.provider.holdback = None
+            refusal = result.budget_rejection
+            deferred_followups = self.runtime.data.setdefault("deferred_followups", {})
+            if ((refusal and refusal.can_defer) or any(
+                    item.admission.get("deferred_budget") for item in result.diff_batches)):
+                deferred_followups[request.id] = {"reason": result.error or "budget",
+                    "budget_signature": self.runtime.budget_signature()}
+                self.runtime.data["followups"][request.id] = CrossUnitFollowupResult(
+                    request_id=request.id, outcome="unresolved", unit_result=result, fingerprint=digest,
+                    evidence_ids=request.evidence_ids, reason="deferred_budget_not_executed: followup").model_dump(mode="json")
+                await self.runtime.persist()
+                continue
+            self.runtime.data["deferred_followups"].pop(request.id, None)
             # 候选 ID 和生命周期由服务端重新赋值；补查不能冒充已确认 Issue。
             issues = []
             for index, issue in enumerate(result.issues[:20]):
@@ -520,7 +609,8 @@ class CrossUnitCoordinationService:
                 candidate = ReviewIssueInput.model_validate(raw_issue).to_issue(unit.id)
                 candidate = candidate.model_copy(update={"id": identity, "status": IssueStatus.candidate,
                     "source_issue_ids": [identity], "source_review_unit_ids": request.unit_ids})
-                audit_issue("identity", issue, reason="followup_server_identity", canonical_id=identity)
+                audit_issue("identity", issue, reason="followup_server_identity", canonical_id=identity,
+                            canonical_review_unit_id=unit.id)
                 audit_issue("identity_assigned", candidate, reason="followup_server_identity")
                 issues.append(candidate)
             result = result.model_copy(update={"issues": issues})
@@ -576,18 +666,62 @@ class CrossUnitCoordinationService:
                 "model_calls": allocation["future_calls"], "token_usage": allocation["future_tokens"],
             }
             try:
-                for node in (resolve_evidence_node, issue_policy_node, issue_verifier_node):
+                for node in (resolve_evidence_node, issue_policy_node):
                     batch.update(await node(batch))
+                ready = {raw["id"]: raw for raw in batch["review_issues"] if raw["status"] == "evidence_resolved"}
+                batch.update(await issue_verifier_node(batch))
             finally:
                 self.provider.holdback = None
             self.runtime.data["batches"][request.id] = {key: batch.get(key) for key in (
                 "review_issues", "issue_metrics", "model_usages", "deterministic_issue_checks",
                 "issue_verifications", "warnings")}
+            pending = {raw["id"]: ready[raw["id"]] for raw in batch["review_issues"]
+                if "deferred_budget_not_executed:" in str(raw.get("unresolved_reason") or "")}
+            self.runtime.data["batches"][request.id].update(pending_verifications=pending,
+                verification_unit=unit.model_dump(mode="json"))
             result = result.model_copy(update={"issues": [type(issues[0]).model_validate(raw)
                                                            for raw in batch["review_issues"]]})
-            followup = followup.model_copy(update={"unit_result": result, "validation_status": "completed"})
+            followup = followup.model_copy(update={"unit_result": result,
+                "validation_status": "pending" if pending else "completed"})
             self.runtime.data["followups"][request.id] = followup.model_dump(mode="json")
             await self.runtime.persist()
         aggregated = self._aggregate_output(state)
         aggregated["model_usages"].extend(usages)
         return aggregated
+
+    async def _retry_verifications(self, state: dict) -> None:
+        from app.services.issue_verifier import IssueVerifierService
+
+        for request_id, saved in list(self.runtime.data["batches"].items()):
+            pending = saved.get("pending_verifications") or {}
+            if not pending:
+                continue
+            followup = self.runtime.data["followups"][request_id]
+            unit = ReviewUnit.model_validate(saved["verification_unit"])
+            context = (followup.get("unit_result") or {}).get("context_snippets") or []
+            self.provider.holdback = {"followup_id": request_id, "phase": "verification"}
+            try:
+                verified = await IssueVerifierService(self.provider, enabled=True, fail_mode="unresolved",
+                    max_calls_per_unit=max(0, self.provider.budget.max_model_calls - self.provider.budget.model_calls)).verify_issues(
+                        [ReviewIssue.model_validate(raw) for raw in pending.values()], [unit],
+                        {**state, "context_snippets": context}, IssueMetrics.model_validate(saved.get("issue_metrics") or {}))
+            finally:
+                self.provider.holdback = None
+            # persist 可能替换嵌套字典，重新取引用；只替换本次延期候选，不重做 Policy。
+            saved = self.runtime.data["batches"][request_id]
+            updated = {issue.id: issue.model_dump(mode="json") for issue in verified.issues}
+            saved["review_issues"] = [updated.get(raw["id"], raw) for raw in saved["review_issues"]]
+            saved["issue_metrics"] = verified.metrics.model_dump(mode="json")
+            saved["issue_verifications"] = [*(saved.get("issue_verifications") or []),
+                *(item.model_dump(mode="json") for item in verified.verifications)]
+            usages = {item["id"]: item for item in saved.get("model_usages") or []}
+            usages.update({item.id: item.model_dump(mode="json") for item in verified.model_usages})
+            saved["model_usages"] = list(usages.values())
+            saved["warnings"] = [warning for warning in saved.get("warnings") or []
+                if not any(warning.startswith(f"Issue {identity} ") for identity in pending)] + verified.warnings
+            saved["pending_verifications"] = {identity: pending[identity] for identity, raw in updated.items()
+                if "deferred_budget_not_executed:" in str(raw.get("unresolved_reason") or "")}
+            followup = self.runtime.data["followups"][request_id]
+            followup["unit_result"]["issues"] = saved["review_issues"]
+            followup["validation_status"] = "pending" if saved["pending_verifications"] else "completed"
+            await self.runtime.persist()

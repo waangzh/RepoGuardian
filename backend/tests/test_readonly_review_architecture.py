@@ -64,7 +64,9 @@ def test_review_manifest_reports_partial_unit_failure_without_losing_coverage() 
         "review_units": [item.model_dump(mode="json") for item in units],
         "review_unit_results": [
             ReviewUnitResult(
-                review_unit_id="ok", status=ReviewUnitStatus.completed
+                review_unit_id="ok", status=ReviewUnitStatus.completed,
+                review_summary={"status": "reported", "latest_attempt_status": "reported",
+                    "record": {"change_summary": "完成 a.py 的结构化检查"}},
             ).model_dump(mode="json"),
             ReviewUnitResult(
                 review_unit_id="failed", status=ReviewUnitStatus.failed, error="provider down"
@@ -114,6 +116,8 @@ def test_review_manifest_marks_split_file_partial_unless_all_units_complete() ->
                 review_unit_id="foo",
                 status=ReviewUnitStatus.completed,
                 terminal_reason=ReviewUnitTerminalReason.completed,
+                review_summary={"status": "reported", "latest_attempt_status": "reported",
+                    "record": {"change_summary": "完成 foo 工作集结构化检查"}},
             ).model_dump(mode="json"),
             ReviewUnitResult(
                 review_unit_id="bar",

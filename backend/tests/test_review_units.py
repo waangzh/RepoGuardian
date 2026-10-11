@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from app.agents.providers import LLMProvider
+from provider_fixtures import CanonicalTestProvider
 from app.core.config import settings
 from app.graph.nodes.report import complete_node, report_node
 from app.graph.nodes.review_units import review_units_node
@@ -160,7 +160,7 @@ def test_small_unit_skips_plan_and_public_api_unit_enters_plan() -> None:
     assert "public_api" in public.risk_tags
 
 
-class UnitProvider(LLMProvider):
+class UnitProvider(CanonicalTestProvider):
     def __init__(
         self,
         *,
@@ -267,7 +267,7 @@ async def test_completed_issue_round_converges_at_model_budget_boundary() -> Non
 
 
 @pytest.mark.asyncio
-async def test_unfinished_issue_round_still_reports_model_budget_exhaustion() -> None:
+async def test_unfinished_issue_round_enters_explicit_diagnosis_admission_rejection() -> None:
     provider = UnitProvider()
     executor = ReviewUnitExecutor(provider, concurrency=1, timeout_seconds=2)
 
@@ -278,8 +278,8 @@ async def test_unfinished_issue_round_still_reports_model_budget_exhaustion() ->
         "model_usages": [],
     })  # type: ignore[arg-type]
 
-    assert action.action == "task_done"
-    assert terminal_reason == ReviewUnitTerminalReason.model_budget_exhausted
+    assert action.action == "report_issue"
+    assert terminal_reason is None
     assert provider.decide_calls == 0
 
 
@@ -450,6 +450,8 @@ async def test_budget_exhausted_unit_is_reexecuted_on_resume() -> None:
                 review_unit_id=unit.id,
                 status=ReviewUnitStatus.completed,
                 terminal_reason=ReviewUnitTerminalReason.no_issue,
+                review_summary={"status": "reported", "latest_attempt_status": "reported",
+                                "record": {"change_summary": "恢复后完成结构化诊断"}},
             )]
 
     aggregate = await review_units_node({

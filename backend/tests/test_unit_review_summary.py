@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.agents.providers import LLMProvider
+from app.review.input_protocol import CANONICAL_UNIT_INPUT_PROTOCOL
 from app.models.review import (
     AgentAction, ChangedFile, ChangedLine, DiffHunk, PullRequestInfo, PullRequestRef,
     ReviewUnit, ReviewUnitResult, UnitReviewPlan, UnitReviewRecord, UnitReviewResponse,
@@ -75,6 +76,7 @@ def test_missing_and_legacy_records_are_unknown_not_completed_checks() -> None:
 
 
 class RecordingProvider(LLMProvider):
+    unit_input_protocol = CANONICAL_UNIT_INPUT_PROTOCOL
     def __init__(self, invalid: bool = False) -> None:
         self.calls = 0
         self.invalid = invalid
@@ -176,6 +178,6 @@ async def test_legacy_provider_adapter_keeps_unknown_summary() -> None:
     unit = ReviewUnit(id="u1", primary_files=["a.py"], fingerprint="f", estimated_tokens=10,
                       complexity="small", grouping_reason="single")
     provider = LegacyProvider()
-    result = await ReviewUnitExecutor(provider, concurrency=1, timeout_seconds=10).execute_unit(unit, _state())
+    result = await ReviewUnitExecutor(provider, concurrency=1, timeout_seconds=10, input_mode="legacy").execute_unit(unit, _state())
     assert result.review_summary.status == "unknown"
     assert provider.calls == 1

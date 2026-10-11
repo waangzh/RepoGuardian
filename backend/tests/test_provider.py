@@ -6,6 +6,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.agents.providers import LLMProviderError, OpenAICompatibleProvider, build_provider
 from app.graph.policies import UNIT_ACTION_REGISTRY
+from app.services.unit_review_summary import build_record_input
 from app.models.review import (
     ChangedFile,
     IssueVerificationBudget,
@@ -55,9 +56,13 @@ async def test_unit_review_record_shares_diagnosis_call_and_invalid_record_prese
     issue = {"severity": "high", "category": "correctness", "title": "空值未处理", "confidence": 0.9,
              "affected_behavior": "空值会失败", "failure_scenario": "输入为空", "recommendation": "处理空值",
              "primary_evidence": {"file_path": "a.py", "existing_code": "return value"}}
+    record_input = build_record_input([], [{"file": "a.py", "start_line": 1, "end_line": 1,
+        "content": "return value", "relevance": "direct"}], None, "head", "base")
+    record_input["targets"] = ["检查返回值"]
+    if not invalid:
+        record["target_checks"][0]["evidence_ids"] = [record_input["evidence"][0]["id"]]
     fake_chat.responses = [AIMessage(content=json.dumps({"issues": [issue], "review_record": record}))]
     provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
-    record_input = {"targets": ["检查返回值"], "evidence": [{"id": "e1", "content": "return value"}]}
     result = await provider.review_unit(_sample_pr(), [], "", None, record_input)
     assert len(fake_chat.instances) == 1
     assert len(result.value.issues) == 1
@@ -66,14 +71,14 @@ async def test_unit_review_record_shares_diagnosis_call_and_invalid_record_prese
     assert result.usage.operation == "diagnosis"
     assert "review_record" in fake_chat.instances[0].messages[1].content
     assert "return value" in fake_chat.instances[0].messages[1].content
-    assert '"id": "e1"' in fake_chat.instances[0].messages[1].content
+    assert record_input["evidence"][0]["id"] in fake_chat.instances[0].messages[1].content
 
 
 @pytest.mark.asyncio
-async def test_unit_review_legacy_response_does_not_invent_record(fake_chat: type[FakeChatOpenAI]) -> None:
+async def test_canonical_unit_response_without_record_remains_missing(fake_chat: type[FakeChatOpenAI]) -> None:
     fake_chat.responses = [AIMessage(content='{"issues":[]}')]
     provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
-    result = await provider.review_unit(_sample_pr(), [], "", None, {})
+    result = await provider.review_unit(_sample_pr(), [], "", None, build_record_input([], [], None, "h", "b"))
     assert result.value.review_record is None
 
 
@@ -253,8 +258,8 @@ def test_unit_decision_prompt_is_generated_from_action_registry() -> None:
     assert f"Allowed actions: {expected_actions}." in prompt
     for item in UNIT_ACTION_REGISTRY:
         assert f"- {item.action.value}: {item.prompt_instruction}" in prompt
-    assert '"action":"request_human"' in prompt
-    assert '"missing_information"' in prompt
+    assert '"action":"request_human"' not in prompt
+    assert '"missing_information"' not in prompt
 
 
 @pytest.mark.asyncio

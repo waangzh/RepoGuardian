@@ -57,9 +57,10 @@ def capture_issue_audit(sink: Callable[[dict], None]) -> Iterator[None]:
 
 
 def audit_issue(stage: str, issue: ReviewIssue, *, reason: str | None = None,
-                canonical_id: str | None = None) -> None:
+                canonical_id: str | None = None, canonical_review_unit_id: str | None = None) -> None:
     sink = _sink.get()
     if sink is not None:
         sink({"stage": stage, "issue_id": issue.id, "review_unit_id": issue.review_unit_id,
               "status": issue.status.value, "reason": reason,
-              "canonical_id": canonical_id, "issue": issue.model_dump(mode="json")})
+              "canonical_id": canonical_id, "canonical_review_unit_id": canonical_review_unit_id,
+              "issue": issue.model_dump(mode="json")})

@@ -4,7 +4,8 @@ from typing import Any
 
 import pytest
 
-from app.agents.providers import LLMProvider, OpenAICompatibleProvider
+from app.agents.providers import OpenAICompatibleProvider
+from provider_fixtures import CanonicalTestProvider
 from app.graph.policies import UNIT_ACTION_REGISTRY, UNIT_ACTION_ROUTES
 from app.models.review import (
     AgentAction,
@@ -20,7 +21,7 @@ from app.models.review import (
 from app.services.review_unit_executor import ReviewUnitExecutor
 
 
-class MultiRoundProvider(LLMProvider):
+class MultiRoundProvider(CanonicalTestProvider):
     def __init__(self) -> None:
         self.decision_states: list[dict[str, Any]] = []
         self.actions = [
@@ -148,7 +149,7 @@ async def test_per_unit_langgraph_supports_bounded_read_rounds_and_explicit_done
     graph_nodes = set(executor.unit_graph.get_graph().nodes)
     assert {"prepare_unit", "plan_unit", "agent_decide", "execute_read_tool",
             "report_issue", "collect_issue", "finish_unit"} <= graph_nodes
-    assert result.status.value == "completed"
+    assert result.status.value == "completed", result.error
     assert result.execution_budget.context_retrievals == 2
     assert result.issues and result.issues[0].review_unit_id == unit.id
     assert result.messages[-1].action == "task_done"
@@ -161,4 +162,4 @@ def test_unit_graph_routes_are_generated_from_action_registry() -> None:
     assert UNIT_ACTION_ROUTES == {
         item.action.value: item.route for item in UNIT_ACTION_REGISTRY
     }
-    assert UNIT_ACTION_ROUTES["request_human"] == "finish_unit"
+    assert "request_human" not in UNIT_ACTION_ROUTES

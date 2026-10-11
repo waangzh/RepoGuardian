@@ -20,7 +20,6 @@ from app.core.config import settings
 from app.api import reviews as reviews_api
 from app.core.database import Base
 from app.models.orm import PatchOrm, ReviewTaskOrm, SideEffectOrm, WorkerJobOrm, utcnow
-from app.models.persistence import HumanRequestAnswer, HumanRequestStatus
 from app.models.review import (
     ChangedFile,
     DiffHunk,
@@ -202,7 +201,9 @@ def test_completed_unit_reuses_but_failed_unit_and_version_mismatch_do_not(persi
     source = _task()
     repository.create_task(source)
     unit = _unit()
-    completed = ReviewUnitResult(review_unit_id=unit.id, status=ReviewUnitStatus.completed)
+    completed = ReviewUnitResult(review_unit_id=unit.id, status=ReviewUnitStatus.completed,
+        review_summary={"status": "reported", "record": {"change_summary": "完成检查"},
+                        "input_protocol": "canonical-evidence-v3", "latest_attempt_status": "reported"})
     repository.record_unit_result(task_id=source.id, unit=unit, result=completed)
 
     matched = repository.find_reusable_unit(
@@ -382,102 +383,40 @@ def test_large_patch_is_externalized_and_bound_to_head(persistence, monkeypatch)
         assert row.diff_artifact_uri and row.diff_artifact_uri.startswith("file:///")
 
 
-def test_human_request_answer_is_idempotent_and_cancel_blocks_resume(persistence) -> None:
-    repository, queue, _ = persistence
+def test_legacy_waiting_task_is_readable_without_resuming_or_claiming_completion(persistence) -> None:
+    repository, _, sessions = persistence
     task = _task()
+    task.status = TaskStatus.waiting_for_human
+    task.human_request = HumanReviewRequest(missing_information=["业务规则"], known_evidence=["两个合理解释"],
+        questions=["采用哪个解释？"], prohibited_operations=["不得自动修复"])
     repository.create_task(task)
-    request = repository.create_human_request(
-        task_id=task.id,
-        request=HumanReviewRequest(
-            missing_information=["业务规则"],
-            known_evidence=["代码存在两个合理解释"],
-            questions=["应采用哪个解释？"],
-            prohibited_operations=["不得自动修复"],
-        ),
-        reason="ambiguous",
-    )
-    answer = HumanRequestAnswer(option_id="provide_information", text="采用百分比语义")
-    first, replay = repository.answer_human_request(
-        task_id=task.id, request_id=request.request_id, answer=answer, answered_by="alice"
-    )
-    second, second_replay = repository.answer_human_request(
-        task_id=task.id, request_id=request.request_id, answer=answer, answered_by="alice"
-    )
-    assert first.status == HumanRequestStatus.answered
-    assert replay is False and second_replay is True and second.answer == first.answer
-
-    other = _task()
-    repository.create_task(other)
-    pending = repository.create_human_request(
-        task_id=other.id,
-        request=HumanReviewRequest(
-            missing_information=["规则"], known_evidence=["证据"],
-            questions=["继续吗？"], prohibited_operations=["禁止修复"],
-        ),
-        reason="blocked",
-    )
-    assert repository.cancel_task(other.id)
-    queue.cancel_for_task(other.id)
-    with pytest.raises(ValueError, match="cancelled"):
-        repository.answer_human_request(
-            task_id=other.id,
-            request_id=pending.request_id,
-            answer=HumanRequestAnswer(option_id="provide_information", text="继续"),
-            answered_by="alice",
-        )
+    loaded = repository.get_task(task.id)
+    assert loaded.status == TaskStatus.failed
+    assert loaded.review.completed is False
+    assert loaded.human_request.questions == task.human_request.questions
+    assert loaded.warnings and "人工" in loaded.error
+    with sessions() as session:
+        assert session.get(ReviewTaskOrm, task.id).status == "waiting_for_human"
 
 
 @pytest.mark.asyncio
-async def test_api_reads_persistence_and_rejects_unauthorized_human_answer(
+async def test_api_reads_persistence_without_human_answer_routes(
     persistence, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repository, _, _ = persistence
     task = _task()
     repository.create_task(task)
-    request = repository.create_human_request(
-        task_id=task.id,
-        request=HumanReviewRequest(
-            missing_information=["规则"], known_evidence=["证据"],
-            questions=["如何继续？"], prohibited_operations=["禁止修复"],
-        ),
-        reason="human",
-    )
 
     class PersistentOnlyService:
         def get_task(self, task_id: str):
             return repository.get_task(task_id)
 
-        def answer_human_request(self, task_id, request_id, answer, *, answered_by):
-            return repository.answer_human_request(
-                task_id=task_id,
-                request_id=request_id,
-                answer=answer,
-                answered_by=answered_by,
-            )
-
     service = PersistentOnlyService()
     monkeypatch.setattr(reviews_api, "get_review_service", lambda: service)
-    monkeypatch.setattr(settings, "repoguardian_human_answer_token", "secret-token")
     loaded = await reviews_api.get_review(task.id)
     assert loaded.id == task.id
-    with pytest.raises(HTTPException) as denied:
-        await reviews_api.answer_human_request(
-            task.id,
-            request.request_id,
-            HumanRequestAnswer(option_id="provide_information", text="继续"),
-            authorization="Bearer wrong",
-            actor="mallory",
-        )
-    assert denied.value.status_code == 403
-    accepted = await reviews_api.answer_human_request(
-        task.id,
-        request.request_id,
-        HumanRequestAnswer(option_id="provide_information", text="继续"),
-        authorization="Bearer secret-token",
-        actor="alice",
-    )
-    assert accepted.request.answered_by == "alice"
-    assert accepted.idempotent_replay is False
+    assert not any("human-requests" in route.path for route in reviews_api.router.routes)
+    assert not hasattr(repository, "answer_human_request")
 
 
 def test_two_workers_cannot_claim_same_job_and_expired_lease_is_reclaimed(persistence) -> None:
