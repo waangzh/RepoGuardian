@@ -51,6 +51,7 @@ from app.models.review import (
     UnitActiveEvidenceSet,
     UnitEvidenceStore,
     UnitContextSelection,
+    UnitBudgetRejection,
 )
 from app.services.evidence_store import (ContextAdmission, evidence_snapshot, restore_store, put_chunks,
     store_chunks, evidence_priorities, archived_request_chunks, merge_stores, store_catalog, tool_result_metadata)
@@ -98,6 +99,7 @@ class _ReviewUnitGraphState(TypedDict, total=False):
     next_action: AgentAction | None
     done: bool
     error: str | None
+    budget_rejection: UnitBudgetRejection | None
     terminal_reason: ReviewUnitTerminalReason | None
     review_summary: UnitReviewSummary
     last_valid_review_summary: UnitReviewSummary | None
@@ -162,13 +164,20 @@ class ReviewUnitExecutor:
         run_budget = current_run_budget()
         runtime = ReviewRuntime()
 
-        def defer_unit(index):
-            result = results[index]
+        def deferrals(result):
             batches = [item for item in result.diff_batches if item.admission.get("deferred_budget")]
-            if run_budget is not None and batches:
+            items = [(item.reason or "budget_deferred", item.admission.get("budget_revision", run_budget.revision))
+                     for item in batches] if run_budget is not None else []
+            rejection = result.budget_rejection
+            if rejection is not None and rejection.can_defer:
+                items.append((rejection.reason, rejection.budget_revision))
+            return items
+
+        def defer_unit(index):
+            items = deferrals(results[index])
+            if run_budget is not None and items:
                 runtime.defer(ReviewTask(units[index].id, "review_step", priority=(index,), payload=index),
-                    reason=batches[0].reason or "budget_deferred",
-                    budget_revision=min(item.admission.get("budget_revision", run_budget.revision) for item in batches))
+                    reason=items[0][0], budget_revision=min(item[1] for item in items))
         queue: asyncio.Queue[tuple[int, ReviewUnit] | None] = asyncio.Queue()
         results: list[ReviewUnitResult | None] = [None] * len(units)
         for index, unit in enumerate(units):
@@ -203,7 +212,7 @@ class ReviewUnitExecutor:
                 refreshed_state = {**state, "review_unit_results": [
                     result.model_dump(mode="json") for result in results if result is not None]}
                 results[index] = await self.execute_unit(units[index], refreshed_state)
-                if any(item.admission.get("deferred_budget") for item in results[index].diff_batches):
+                if deferrals(results[index]):
                     defer_unit(index)
                     task.status = ReviewTaskStatus.DEFERRED_BUDGET
             for _ in range(len(units)):
@@ -549,6 +558,7 @@ class ReviewUnitExecutor:
             execution_budget=result.get("budget") or budget,
             model_usages=result.get("model_usages") or [],
             error=result.get("error"),
+            budget_rejection=result.get("budget_rejection"),
             diff_manifest=result.get("diff_manifest"), coverage_ledger=result.get("coverage_ledger"),
             active_evidence_set=result.get("active_evidence_set"),
             evidence_store=result.get("evidence_store"), context_selection=result.get("context_selection"),
@@ -1671,6 +1681,8 @@ class ReviewUnitExecutor:
                 accounted_tokens_estimate=exc.usage.accounted_tokens_estimate if exc.usage else None,
                 review_unit_id=state["unit"].id, unit_complexity=state["unit"].complexity,
             )
+            raw_rejection = getattr(exc, "admission_rejection", None)
+            rejection = UnitBudgetRejection.model_validate(raw_rejection) if raw_rejection is not None else None
             failed_summary = validate_record(None, record_input, state["scope"].readable_files, str(exc))
             failed_summary = failed_summary.model_copy(update={"latest_attempt_status": "failed"})
             failed_summary = merge_review_summaries(state.get("review_summary") or UnitReviewSummary(), failed_summary, None)
@@ -1680,6 +1692,7 @@ class ReviewUnitExecutor:
                 "review_summary": failed_summary,
                 "pending_issues": [], "next_action": None,
                 "budget": getattr(exc, "execution_budget", budget), "error": str(exc),
+                "budget_rejection": rejection,
                 "terminal_reason": (ReviewUnitTerminalReason.diagnosis_budget_exhausted
                                     if "unit_request_budget_exhausted" in str(exc)
                                     else ReviewUnitTerminalReason.provider_error),
@@ -1748,6 +1761,7 @@ class ReviewUnitExecutor:
             "budget": budget,
             "model_usages": append_usage(state.get("model_usages") or [], usage),
             "next_action": response.next_need,
+            "budget_rejection": None,
         }
 
     def _diagnosis_args(self, state, *, core=False):

@@ -765,6 +765,13 @@ export interface ReviewUnitResult {
   execution_budget: Record<string, number>;
   model_usages: ModelUsage[];
   error?: string | null;
+  budget_rejection?: {
+    kind: "budget";
+    reason: string;
+    can_defer: boolean;
+    budget_revision: number;
+    [key: string]: unknown;
+  } | null;
   human_request?: HumanReviewRequest | null;
 }
 

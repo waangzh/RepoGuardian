@@ -883,6 +883,7 @@ class OpenAICompatibleProvider(LLMProvider):
                     error = LLMProviderError(str(exc))
                     error.admission_rejection = {"kind": "budget", "reason": str(exc),
                         "can_defer": str(exc) in {"run_budget_admission_rejected", "run_budget_cost_rejected"},
+                        "budget_revision": run_budget.revision,
                         **exc.details}
                     raise error from exc
             elif (run_budget is None and attempt > 1 and reserver is None
