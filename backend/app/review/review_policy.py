@@ -8,6 +8,7 @@ from typing import Any
 REVIEW_STEP_PROTOCOL_VERSION = "review-step-v1"
 REVIEW_STEP_OUTPUT_TOKENS = 4_096
 REVIEW_STEP_MAX_NEXT_NEEDS = 1
+REVIEW_STEP_MAX_SAME_EVIDENCE_CALLS = 2
 
 
 def input_composition(record_input: dict[str, Any]) -> dict[str, int]:

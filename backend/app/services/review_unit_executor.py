@@ -111,6 +111,7 @@ class _ReviewUnitGraphState(TypedDict, total=False):
     active_evidence_set: UnitActiveEvidenceSet
     evidence_store: UnitEvidenceStore
     context_selection: UnitContextSelection
+    native_review_counts: dict[str, int]
 
 
 class ReviewUnitExecutor:
@@ -1067,6 +1068,25 @@ class ReviewUnitExecutor:
         self, state: "_ReviewUnitGraphState"
     ) -> "_ReviewUnitGraphState":
         pending = state.get("next_action")
+        from app.review.review_policy import REVIEW_STEP_MAX_SAME_EVIDENCE_CALLS
+        if self._supports_native_review_step() and not state.get("issue_round_completed") and (
+            pending is None or pending.action != AgentActionName.task_done
+        ):
+            count = state.get("native_review_counts", {}).get(self._native_evidence_key(state), 0)
+            if (state.get("retrieval_no_new_rounds", 0) >= 2 and state.get("native_review_counts")) or (
+                count >= REVIEW_STEP_MAX_SAME_EVIDENCE_CALLS and (pending is None or pending.action == AgentActionName.report_issue)
+            ):
+                reason = "review_step_no_evidence_progress"
+                summary = state.get("review_summary") or UnitReviewSummary()
+                if summary.latest_attempt_status not in {"invalid", "failed", "missing"}:
+                    summary = summary.model_copy(update={"latest_attempt_status": "unknown",
+                        "latest_attempt_reason": reason, "reason": reason})
+                self._remember_unit_state({"review_summary": summary})
+                return {"next_action": AgentAction(action="task_done", reason="取证未进展，停止重复推理并保留未决"),
+                    "review_summary": summary, "latest_review_attempt": {"status": "unknown", "reason": reason},
+                    "terminal_reason": ReviewUnitTerminalReason.no_new_context,
+                    "messages": [*state.get("messages", []), AgentEvent(action="task_done", status="failed",
+                        review_unit_id=state["unit"].id, reason=reason)]}
         if pending is not None:
             return {"next_action": pending}
         if self._supports_native_review_step() and state.get("issue_round_completed"):
@@ -1497,6 +1517,9 @@ class ReviewUnitExecutor:
             self._remember_unit_state({"budget": budget})
             admission = dict(admission)
             result_count = len(matches) if action.action == AgentActionName.file_find else len(new_items)
+            progress_count = result_count
+            if action.action == AgentActionName.file_find and self._supports_native_review_step():
+                progress_count = len(set(matches) - self._file_find_paths(events))
             observe("completed", results=matches if tool_name == "file_find" else snippets)
             events.append(ReviewUnitToolEvent(
                 review_unit_id=state["unit"].id,
@@ -1524,7 +1547,7 @@ class ReviewUnitExecutor:
                 "issue_round_completed": False if admission["active_set_changed"] else state.get("issue_round_completed", False),
                 "retrieval_history": [*history, history_item],
                 "retrieval_no_new_rounds": (
-                    0 if result_count else state["retrieval_no_new_rounds"] + 1
+                    0 if progress_count else state["retrieval_no_new_rounds"] + 1
                 ),
                 "tool_events": events,
             }
@@ -1715,6 +1738,12 @@ class ReviewUnitExecutor:
                 "input_coverage": input_coverage,
             }
         response, usage = unpack_model_call(raw_result)
+        native_update = {}
+        if self._supports_native_review_step():
+            key = self._native_evidence_key(state)
+            counts = dict(state.get("native_review_counts") or {})
+            counts[key] = counts.get(key, 0) + 1
+            native_update = {"native_review_counts": counts}
         if self.input_mode == "legacy":
             response = response.model_copy(update={"review_record": None,
                 "record_error": "legacy_provider_without_canonical_evidence_protocol"})
@@ -1765,6 +1794,7 @@ class ReviewUnitExecutor:
             self._remember_unit_state(hierarchy_update)
         return {
             **hierarchy_update,
+            **native_update,
             "pending_issues": response.issues,
             "input_coverage": input_coverage,
             **({"unit_plan": None, "plan_status": UnitPlanStatus.skipped,
@@ -1782,6 +1812,30 @@ class ReviewUnitExecutor:
                             if response.next_need_error else response.next_need),
             "budget_rejection": None,
         }
+
+    @staticmethod
+    def _file_find_paths(events):
+        found_paths = set()
+        for event in events:
+            if event.tool == "file_find" and event.result_count:
+                try:
+                    page = json.loads(event.detail or "{}")
+                    if isinstance(page, dict):
+                        found_paths.update(path for path in page.get("files", []) if isinstance(path, str))
+                except (ValueError, TypeError):
+                    pass
+        return found_paths
+
+    @staticmethod
+    def _native_evidence_key(state):
+        from app.services.fingerprints import stable_hash
+        contexts = [{key: item.get(key) for key in ("file", "start_line", "end_line", "source", "content")}
+                    for item in state.get("context", [])]
+        contexts.sort(key=lambda item: json.dumps(item, sort_keys=True, ensure_ascii=False))
+        return stable_hash({"files": [file.model_dump(mode="json") for file in state["unit_files"]],
+            "context": contexts, "found_paths": sorted(ReviewUnitExecutor._file_find_paths(state.get("tool_events", []))),
+            "head": state["parent_state"].get("head_sha"),
+            "base": review_diff_base(state["parent_state"])})
 
     def _diagnosis_args(self, state, *, core=False):
         pr = PullRequestInfo.model_validate(state["parent_state"].get("pr_info") or {})
@@ -1803,6 +1857,24 @@ class ReviewUnitExecutor:
         record_input["working_memory"] = {} if core else build_working_memory(
             state.get("last_valid_review_summary") or state["parent_state"].get("batch_memory_summary") or state.get("review_summary"), record_input,
             state["unit"].id, state.get("latest_review_attempt"))[0]
+        feedback = [{"tool": event.tool, "status": event.status, "detail": (event.detail or "")[:240],
+                     "result_count": event.result_count} for event in state.get("tool_events", [])[-3:]]
+        if feedback and self._supports_native_review_step():
+            for item, event in zip(feedback, state.get("tool_events", [])[-3:]):
+                if event.tool == "file_find" and event.result_count:
+                    try:
+                        page = json.loads(event.detail or "{}")
+                        if isinstance(page, dict):
+                            item["files"] = [path for path in page.get("files", []) if isinstance(path, str)]
+                    except (ValueError, TypeError):
+                        pass
+            record_input["tool_feedback"] = feedback
+            record_input["recent_tool_requests"] = [item["plan"][:500] for item in state.get("retrieval_history", [])[-3:]
+                                                   if isinstance(item.get("plan"), str)]
+        if self._supports_native_review_step():
+            record_input["readonly_tool_scope"] = {"file_read_diff": {
+                file.file_path: [self.planner.hunk_id(file.file_path, index, hunk.model_dump(mode="json"))
+                                 for index, hunk in enumerate(file.hunks)] for file in state["unit_files"]}}
         language = build_language_context((item.file_path for item in state["unit_files"]),
             state["parent_state"].get("file_index") or [], state["parent_state"].get("project_meta") or {})
         record_input["review_guidance"] = render_language_rule_context(language)
@@ -1991,7 +2063,8 @@ class ReviewUnitExecutor:
                     active if state["diff_manifest"].review_unit_id != state["unit"].id else None, state.get("unit_plan"))
                 unsupported = set(unsupported_hunk_ids(state["diff_manifest"], active))
                 unchecked_text = any(item.evidence_id and item.manifest_id in gaps for item in active.hunks)
-                if (not state["issue_round_completed"] and (not unsupported or unchecked_text)
+                if (state.get("terminal_reason") != ReviewUnitTerminalReason.no_new_context
+                        and not state["issue_round_completed"] and (not unsupported or unchecked_text)
                         and state["budget"].can_consume(model_calls=1, diagnosis_attempts=1)):
                     return {**update, "done": False, "next_action": AgentAction(action="report_issue",
                         reason="覆盖门拒绝提前结束，先检查当前活动证据")}

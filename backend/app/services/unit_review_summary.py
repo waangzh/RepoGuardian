@@ -101,8 +101,14 @@ def validate_record(
                 raise ValueError("question outside readable scope")
         known_questions = {question_identity(item): item for item in
                            (record_input.get("working_memory") or {}).get("unresolved_questions", [])}
+        memory = record_input.get("working_memory") or {}
+        closed = {item["question_id"]: item for item in memory.get("closed_question_updates", [])} if (
+            not memory.get("memory_invalidated") and memory.get("question_catalog_snapshot") == snapshot
+        ) else {}
         questions, aliases = [], {}
         for question in record.unresolved_questions:
+            if question.id in closed:
+                raise ValueError("closed question identity cannot be reused")
             if question.id in known_questions:
                 previous_question = known_questions[question.id]
                 if (question.question != previous_question["question"]
@@ -121,6 +127,10 @@ def validate_record(
         replacements = (set(known_questions) | {item.id for item in questions}) - retiring
         question_updates = []
         for update in record.question_updates:
+            if update.question_id in closed:
+                if update.model_dump(mode="json") != closed[update.question_id]:
+                    raise ValueError("closed question update must match its validated transition")
+                continue  # 同快照、同证据、逐字段相同的已完成转移不再次应用。
             if update.question_id not in known_questions:
                 raise ValueError("question update requires a visible prior question")
             replacement = aliases.get(update.replacement_id, update.replacement_id)
