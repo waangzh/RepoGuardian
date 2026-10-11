@@ -2271,6 +2271,16 @@ class UnitDiffBatch(BaseModel):
     result: ReviewUnitResult | None = None
 
 
+class UnitBudgetRejection(BaseModel):
+    """服务端发送准入拒绝；与工作集数量无关，恢复时仍可重查。"""
+
+    model_config = ConfigDict(extra="allow")
+    kind: Literal["budget"] = "budget"
+    reason: str = Field(min_length=1, max_length=1000)
+    can_defer: bool = False
+    budget_revision: int = Field(ge=0)
+
+
 class ReviewUnitResult(BaseModel):
     review_unit_id: str
     input_fingerprint: str | None = None
@@ -2296,6 +2306,7 @@ class ReviewUnitResult(BaseModel):
     execution_budget: ExecutionBudget = Field(default_factory=ExecutionBudget)
     model_usages: list[ModelUsage] = Field(default_factory=list)
     error: str | None = None
+    budget_rejection: UnitBudgetRejection | None = None
     human_request: HumanReviewRequest | None = None
 
 
