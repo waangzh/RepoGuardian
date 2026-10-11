@@ -1748,6 +1748,7 @@ class OpenAICompatibleProvider(LLMProvider):
     @staticmethod
     def _build_issue_verification_prompt(request: IssueVerificationRequest, *, context_budget=None) -> str:
         payload = request.model_dump(mode="json")
+        payload["budget"].pop("remaining_calls", None)
         # 证据已作为独立只读字段提供，不在 Issue 元数据中重复发送。
         payload["issue"] = request.issue.model_dump(
             mode="json", exclude={"primary_evidence", "supporting_evidence"},
