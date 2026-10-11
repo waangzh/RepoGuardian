@@ -17,9 +17,10 @@ async def diff_parse_node(state: ReviewState) -> ReviewState:
     changed_files = parser.parse(diff_text)
     from app.services.file_change_evidence import bind_file_change_evidence
     from app.tools.git_tool import GitTool
+    from app.review.diff_base import review_diff_base
 
     changed_files = await asyncio.to_thread(bind_file_change_evidence, changed_files,
-        state.get("repo_path"), state.get("head_sha") or "", str(state.get("base_sha") or ""),
+        state.get("repo_path"), state.get("head_sha") or "", review_diff_base(state),
         state.get("_git_tool") or GitTool())
     changed_files_dicts = [file.model_dump(mode="json") for file in changed_files]
     logger.info("📄 [解析] 解析完成: %d 个变更文件", len(changed_files))

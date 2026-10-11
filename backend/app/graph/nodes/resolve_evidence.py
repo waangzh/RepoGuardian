@@ -15,6 +15,7 @@ from app.models.review import (
 from app.tools.git_tool import GitTool
 from app.review.tool_scope import ReviewPathPolicyError, validate_repository_file
 from app.review.issue_audit import audit_issue
+from app.review.diff_base import review_diff_base
 
 
 async def resolve_evidence_node(state: ReviewState) -> ReviewState:
@@ -22,7 +23,7 @@ async def resolve_evidence_node(state: ReviewState) -> ReviewState:
     diff_index = DiffIndex(changed)
     git_tool: Any = state.get("_git_tool") or GitTool()
     repo_path = state.get("repo_path") or ""
-    base_sha = state.get("base_sha") or ""
+    base_sha = review_diff_base(state)
 
     def load_file(file_path: str, side: str) -> str | None:
         if side == "base":
