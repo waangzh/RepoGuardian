@@ -139,6 +139,16 @@ class ReviewUnitExecutor:
         self.planner = planner or DeterministicReviewPlanner()
         self.unit_graph = self._build_unit_graph().compile(checkpointer=checkpointer)
 
+    def _supports_native_review_step(self) -> bool:
+        from app.agents.providers import OpenAICompatibleProvider
+        if not getattr(self.provider, "supports_review_step", False):
+            return False
+        # A compatibility adapter overriding review_unit alone must retain that
+        # contract. Other subclasses inherit the native review_step normally.
+        provider_type = type(self.provider)
+        return not (getattr(provider_type, "review_step", None) is OpenAICompatibleProvider.review_step
+                    and getattr(provider_type, "review_unit", None) is not OpenAICompatibleProvider.review_unit)
+
     async def execute(
         self,
         units: list[ReviewUnit],
@@ -146,6 +156,19 @@ class ReviewUnitExecutor:
     ) -> list[ReviewUnitResult]:
         if not units:
             return []
+        from app.services.review_runtime import ReviewRuntime, ReviewTask, ReviewTaskStatus
+        from app.services.review_run_budget import current_run_budget
+
+        run_budget = current_run_budget()
+        runtime = ReviewRuntime()
+
+        def defer_unit(index):
+            result = results[index]
+            batches = [item for item in result.diff_batches if item.admission.get("deferred_budget")]
+            if run_budget is not None and batches:
+                runtime.defer(ReviewTask(units[index].id, "review_step", priority=(index,), payload=index),
+                    reason=batches[0].reason or "budget_deferred",
+                    budget_revision=min(item.admission.get("budget_revision", run_budget.revision) for item in batches))
         queue: asyncio.Queue[tuple[int, ReviewUnit] | None] = asyncio.Queue()
         results: list[ReviewUnitResult | None] = [None] * len(units)
         for index, unit in enumerate(units):
@@ -162,6 +185,7 @@ class ReviewUnitExecutor:
                         return
                     index, unit = entry
                     results[index] = await self.execute_unit(unit, state)
+                    defer_unit(index)
                 finally:
                     queue.task_done()
 
@@ -173,6 +197,21 @@ class ReviewUnitExecutor:
                 task.cancel()
             await asyncio.gather(*workers, return_exceptions=True)
             raise
+        if run_budget is not None:
+            async def execute_deferred(task):
+                index = task.payload
+                refreshed_state = {**state, "review_unit_results": [
+                    result.model_dump(mode="json") for result in results if result is not None]}
+                results[index] = await self.execute_unit(units[index], refreshed_state)
+                if any(item.admission.get("deferred_budget") for item in results[index].diff_batches):
+                    defer_unit(index)
+                    task.status = ReviewTaskStatus.DEFERRED_BUDGET
+            for _ in range(len(units)):
+                revision = run_budget.revision
+                await runtime.deferred.drain(budget_revision=revision,
+                    admit=lambda _task: {"admitted": True}, execute=execute_deferred)
+                if revision == run_budget.revision:
+                    break
         return [result for result in results if result is not None]
 
     async def execute_unit(
@@ -308,6 +347,8 @@ class ReviewUnitExecutor:
             skip_plan = batch.get("skip_plan", True)
         elif self.input_mode == "canonical" and not state.get("cross_unit_followup") and any(file.hunks or file.file_change_evidence for file in unit_files):
             admission = self._workset_admission(unit, unit_files, state, budget)
+            if admission.get("can_defer"):
+                return await self._execute_diff_batches(unit, unit_files, state, budget)
             minimum = ([unit_files[0].model_copy(update={"hunks": []})]
                        if not admission["admitted"] else None)
             minimum_unit = unit.model_copy(update={"primary_files": [unit.primary_files[0]],
@@ -518,6 +559,7 @@ class ReviewUnitExecutor:
         from app.agents.providers import LLMProviderError, OpenAICompatibleProvider
         from app.services.context_assembler import RequiredInputTooLarge
         from app.services.review_admission import AdmissionKind, annotate_admission, budget_fit
+        from app.services.review_run_budget import current_run_budget
 
         if sum(max(1, len(file.hunks)) for file in files) > MAX_ACTIVE_HUNKS or active_body_chars(files) > MAX_ACTIVE_DIFF_CHARS:
             return annotate_admission({"reason": "active_hunk_set_exceeded"}, admitted=False,
@@ -565,6 +607,10 @@ class ReviewUnitExecutor:
                                       kind=AdmissionKind.REQUEST_FIT, can_defer=False, can_split=True)
         admitted = budget.can_consume(model_calls=1, diagnosis_attempts=1,
                                      token_usage=estimate["reserved_tokens"])
+        run = current_run_budget()
+        if run is not None:
+            available = run.available()
+            admitted = available["calls"] > 0 and available["tokens"] >= estimate["reserved_tokens"]
         if admitted:
             decision_fit = budget_fit(budget, token_usage=estimate["reserved_tokens"], model_calls=1,
                                       diagnosis_attempts=1)
@@ -583,7 +629,22 @@ class ReviewUnitExecutor:
         from app.review.unit_completion import is_review_unit_complete, is_reusable_review_unit_result
 
         manifest = UnitDiffManifest.model_validate(state["diff_manifest"])
-        initial_token_usage = budget.token_usage
+        from app.services.review_runtime import ReviewRuntime, ReviewTask
+        from app.services.review_run_budget import current_run_budget
+
+        runtime = ReviewRuntime()
+        local_revision = 0
+
+        def revision():
+            run = current_run_budget()
+            return (run.revision if run is not None else 0) + local_revision
+
+        def defer(index, entry):
+            entry.admission["deferred_budget"] = True
+            if current_run_budget() is not None:
+                entry.admission["budget_revision"] = current_run_budget().revision
+            runtime.defer(ReviewTask(entry.id, "review_step", priority=(index,), payload=index),
+                          reason=entry.reason or "budget_deferred", budget_revision=revision())
 
         worksets = build_unit_worksets(unit, files,
             lambda child, selected, metadata: self._workset_admission(child, selected, state, budget, metadata))
@@ -637,17 +698,20 @@ class ReviewUnitExecutor:
             observer["diff_batches"] = entries
             observer["diff_manifest"] = manifest
             observer["budget"] = budget
-        for index, (child, selected, metadata) in enumerate(worksets):
+        async def execute_batch(index, *, draining=False):
+            nonlocal budget, local_revision
+            child, selected, metadata = worksets[index]
             entry = entries[index]
             if entry.status == "completed":
-                continue
-            if not entry.admission["admitted"]:
+                return
+            if not draining and not entry.admission["admitted"]:
                 entry.status = "skipped"
-                if entry.admission.get("can_defer"):
-                    entry.admission["deferred_budget"] = True
                 entry.reason = entry.reason or entry.admission["reason"]
-                continue
-            future = [item for item in entries[index + 1:] if item.admission["admitted"] and item.status != "completed"]
+                if entry.admission.get("can_defer"):
+                    defer(index, entry)
+                return
+            future = [] if draining else [item for item in entries[index + 1:]
+                if item.admission["admitted"] and item.status != "completed"]
             ledger = rebuild_coverage(manifest, entries)
             shared_plan = next((item.result.plan for item in entries if item.result and item.result.plan), None)
             forecast = {**state, "coverage_ledger": ledger.model_dump(mode="json"), "batch_plan": shared_plan,
@@ -655,13 +719,13 @@ class ReviewUnitExecutor:
             current_admission = self._workset_admission(child, selected, forecast, budget, metadata)
             if not current_admission["admitted"]:
                 entry.status = "skipped"
-                if current_admission.get("can_defer"):
-                    current_admission["deferred_budget"] = True
                 entry.reason = current_admission["reason"]
                 entry.admission = current_admission
-                continue
+                if current_admission.get("can_defer"):
+                    defer(index, entry)
+                return
             # 公共清单/账本/规划增量只计数一次，避免逐批重渲染整个剩余队列。
-            growth = max(0, current_admission["reserved_tokens"] - entry.admission["reserved_tokens"])
+            growth = max(0, current_admission["reserved_tokens"] - entry.admission.get("reserved_tokens", 0))
             held = self._workset_holdback(budget, future, current_admission["reserved_tokens"], growth)
             entry.admission = {**current_admission, "future_holdback": held}
             local = budget.model_copy(update={
@@ -672,8 +736,8 @@ class ReviewUnitExecutor:
             if not local.can_consume(model_calls=1, diagnosis_attempts=1,
                                     token_usage=entry.admission["reserved_tokens"]):
                 entry.status, entry.reason = "skipped", "unit_workset_budget_exhausted"
-                entry.admission["deferred_budget"] = True
-                continue
+                defer(index, entry)
+                return
             # 未来诊断预留扣除后，再检查本批可选决策与诊断能否同时执行。
             if "decision_reserved_tokens" in entry.admission:
                 entry.admission["decision_admitted"] = entry.admission["decision_admitted"] and local.can_consume(
@@ -700,6 +764,10 @@ class ReviewUnitExecutor:
                     and entry.result.review_summary.status == "reported"
                     and all(check.status == "checked" for check in entry.result.review_summary.record.target_checks)) else "partial"
                 entry.reason = entry.result.error or entry.result.review_summary.reason
+                if entry.result.error and entry.result.error.startswith((
+                        "run_budget_admission_rejected", "run_budget_cost_rejected")):
+                    entry.status = "skipped"
+                    defer(index, entry)
             except asyncio.CancelledError:
                 raise
             except TimeoutError:
@@ -715,25 +783,33 @@ class ReviewUnitExecutor:
                     evidence_store=child_snapshot.get("evidence_store"), context_selection=child_snapshot.get("context_selection"),
                     model_usages=child_snapshot.get("model_usages") or [])
             finally:
+                previous_resources = (budget.model_calls, budget.token_usage, budget.diagnosis_attempts)
                 spent = entry.result.execution_budget if entry.result else child_snapshot["budget"]
                 budget = budget.model_copy(update={name: getattr(spent, name) for name in (
                     "model_calls", "token_usage", "diagnosis_attempts", "context_retrievals", "patch_attempts")})
                 unit_budget_snapshot.reset(token)
+                if ((budget.model_calls, budget.token_usage, budget.diagnosis_attempts) != previous_resources
+                        or held["model_calls"] or held["token_usage"]):
+                    local_revision += 1  # settlement and future holdback release
                 if observer is not None:
                     observer.update(budget=budget, diff_batches=entries, evidence_store=merge_stores([
                         observer.get("evidence_store"), child_snapshot.get("evidence_store"), entry.result.evidence_store if entry.result else None]))
-        deferred = [item for item in entries
-                     if not item.admission.get("admitted")
-                     and (item.admission.get("can_defer") or item.admission.get("deferred_budget"))]
-        # 实测用量低于预留时，释放出的额度触发一次确定性 drain。递归调用复用
-        # 已完成批次的 canonical 记录，只重新准入原先因余额不足而跳过的批次。
-        if (deferred and budget.token_usage < initial_token_usage
-                and not state.get("_deferred_drained")):
-            prior = self._aggregate_diff_batches(unit, entries, budget, binding, manifest=manifest,
-                                                 evidence_store=observer.get("evidence_store") if observer else None)
-            return await self._execute_diff_batches(
-                unit, files, {**state, "review_unit_results": [prior.model_dump(mode="json")],
-                              "_deferred_drained": True}, budget)
+        for index in range(len(worksets)):
+            await execute_batch(index)
+        async def execute_deferred(task):
+            await execute_batch(task.payload, draining=True)
+            if entries[task.payload].admission.get("deferred_budget"):
+                from app.services.review_runtime import ReviewTaskStatus
+                task.status = ReviewTaskStatus.DEFERRED_BUDGET
+
+        # Rebuild admission and evidence in execute_batch; never trust a stale
+        # admitted=True. Queue revision guards prevent a no-resource busy loop.
+        for _ in range(len(entries)):
+            before = revision()
+            await runtime.deferred.drain(budget_revision=before,
+                admit=lambda _task: {"admitted": True}, execute=execute_deferred)
+            if revision() == before:
+                break
         return self._aggregate_diff_batches(unit, entries, budget, binding, manifest=manifest,
             evidence_store=observer.get("evidence_store") if observer else None)
 
@@ -852,7 +928,7 @@ class ReviewUnitExecutor:
         graph.add_edge(START, "prepare_unit")
         graph.add_conditional_edges(
             "prepare_unit",
-            lambda state: ("report_issue" if getattr(self.provider, "supports_review_step", False)
+            lambda state: ("report_issue" if self._supports_native_review_step()
                            else "agent_decide" if state["skip_plan"] else "plan_unit"),
             {"plan_unit": "plan_unit", "agent_decide": "agent_decide", "report_issue": "report_issue"},
         )
@@ -969,7 +1045,7 @@ class ReviewUnitExecutor:
         pending = state.get("next_action")
         if pending is not None:
             return {"next_action": pending}
-        if getattr(self.provider, "supports_review_step", False) and state.get("issue_round_completed"):
+        if self._supports_native_review_step() and state.get("issue_round_completed"):
             return {"next_action": AgentAction(action=AgentActionName.task_done,
                 reason="review_step 已完成当前工作集检查，服务端直接结束本轮")}
         if state.get("batch_decision_disabled") and state.get("issue_round_completed"):
@@ -999,6 +1075,9 @@ class ReviewUnitExecutor:
                     state["unit"].id, action, "selected", action.reason
                 )],
             }
+        if self._supports_native_review_step():
+            return {"next_action": AgentAction(action=AgentActionName.report_issue,
+                reason="当前工作集证据已更新，继续 review_step 检查")}
         from app.agents.providers import LLMProviderError
         from app.services.model_usage import annotate_usage, append_usage
 
@@ -1145,8 +1224,26 @@ class ReviewUnitExecutor:
         from app.agents.providers import LLMProviderError
         from app.services.model_request_budgeter import UnitRequestLedger
         from app.services.model_usage import unpack_model_call
+        from app.services.review_run_budget import current_run_budget, run_budget_attempt_observer
 
         ledger = UnitRequestLedger(budget, holdback=holdback)
+        run = current_run_budget()
+        observed = []
+        outer_observer = run_budget_attempt_observer.get()
+        async def observe(record, admission):
+            observed.append(record.attempt_id)
+            if outer_observer is not None:
+                await outer_observer(record, admission)
+        observer_token = run_budget_attempt_observer.set(observe) if run is not None else None
+
+        def project():
+            if run is not None and observed:
+                records = [run.attempts[key] for key in observed if run.attempts[key].sent]
+                ledger.budget = budget.model_copy(update={
+                    "model_calls": budget.model_calls + len(records),
+                    "token_usage": budget.token_usage + sum(item.actual_tokens if item.actual_tokens is not None
+                        else item.reserved_tokens for item in records)})
+                ledger.reserved_tokens = sum(item.reserved_tokens for item in records)
         legacy_token = legacy_unit_input_allowed.set(self.input_mode == "legacy")
         try:
             self._check_provider_protocol()
@@ -1157,15 +1254,17 @@ class ReviewUnitExecutor:
                     await ledger.reserve({"reserved_tokens": (chars + 3) // 4 + output_tokens})
                 result = await invoke()
             _, usage = unpack_model_call(result)
-            if ledger.reserved_tokens:
+            if ledger.reserved_tokens and run is None:
                 ledger.settle(usage)
+            project()
             if usage is not None and ledger.reserved_tokens:
                 usage.accounted_tokens_estimate = ledger.reserved_tokens
             return result, ledger.budget
         except Exception as exc:
             usage = getattr(exc, "usage", None)
-            if ledger.reserved_tokens:
+            if ledger.reserved_tokens and run is None:
                 ledger.settle(usage)
+            project()
             if usage is not None:
                 usage.accounted_tokens_estimate = ledger.reserved_tokens
             error = exc if isinstance(exc, LLMProviderError) else LLMProviderError(str(exc))
@@ -1176,6 +1275,9 @@ class ReviewUnitExecutor:
                 if not ledger.reserved_tokens and capacity_error else None)
             raise error from exc if error is not exc else None
         finally:
+            if observer_token is not None:
+                run_budget_attempt_observer.reset(observer_token)
+            project()
             legacy_unit_input_allowed.reset(legacy_token)
             from app.services.model_request_budgeter import unit_budget_snapshot
 
@@ -1558,7 +1660,7 @@ class ReviewUnitExecutor:
             record_input = args[-1]
             with issue_audit_unit(state["unit"].id):
                 async def invoke():
-                    if getattr(self.provider, "supports_review_step", False):
+                    if self._supports_native_review_step():
                         return await self.provider.review_step(*args)
                     return await self.provider.review_unit(*args)
                 from app.review.review_policy import REVIEW_STEP_OUTPUT_TOKENS
@@ -1773,6 +1875,41 @@ class ReviewUnitExecutor:
             if issue.id in known:
                 audit_issue("unit_filter", issue, reason="duplicate_from_previous_round")
         accepted = [issue for issue in accepted if issue.id not in known]
+        requested = state.get("next_action")
+        if requested is not None:
+            try:
+                requested = AgentAction.model_validate(requested.model_dump(mode="json"))
+            except ValueError:
+                return {"pending_issues": [], "issues": [*state["issues"], *accepted],
+                        "error": "review_step_next_need_invalid",
+                        "next_action": AgentAction(action=AgentActionName.task_done, reason="取证动作未通过 schema 校验")}
+        if requested is not None and requested.action not in UNIT_ALLOWED_ACTIONS:
+            return {"pending_issues": [], "issues": [*state["issues"], *accepted],
+                "error": "review_step_next_need_not_allowed",
+                "next_action": AgentAction(action=AgentActionName.task_done,
+                    reason="review_step 返回了白名单外动作，拒绝执行并保留未完成状态")}
+        followup_actions = {
+            AgentActionName.report_issue,
+            AgentActionName.file_read,
+            AgentActionName.file_find,
+            AgentActionName.code_search,
+            AgentActionName.file_read_diff,
+        }
+        # review_step 的 next_need 是下一轮取证义务。收集本轮问题时只清空
+        # pending_issues，不能把受控工具动作一起抹掉。
+        if requested is not None and requested.action in followup_actions:
+            return {
+                "next_action": requested,
+                "pending_issues": [],
+                "issues": [*state["issues"], *accepted],
+                "issue_round_completed": False,
+                "messages": [*state["messages"], AgentEvent(
+                    action=AgentActionName.report_issue,
+                    reason="保留 review_step 的受控取证需求，先更新证据再复查",
+                    status="completed", message=f"本轮报告 {len(accepted)} 个问题，待取证",
+                    review_unit_id=state["unit"].id,
+                )],
+            }
         return {
             "next_action": None,
             "pending_issues": [],
@@ -1858,9 +1995,14 @@ class ReviewUnitExecutor:
     @staticmethod
     def _budget_for(unit: ReviewUnit, *, workset_count: int = 1) -> ExecutionBudget:
         from app.services.unit_worksets import MAX_UNIT_WORKSETS
+        from app.services.review_run_budget import current_run_budget
 
         if not 1 <= workset_count <= MAX_UNIT_WORKSETS:
             raise ValueError("invalid_unit_workset_count")
+        run = current_run_budget()
+        if run is not None:
+            return ExecutionBudget(max_model_calls=run.max_calls, max_token_usage=run.max_tokens,
+                max_diagnosis_attempts=run.max_calls, max_context_retrievals=12, max_patch_attempts=0)
         additional_diagnoses = workset_count - 1
         if unit.complexity == ReviewUnitComplexity.small:
             return ExecutionBudget(

@@ -63,7 +63,19 @@ def build_unit_worksets(unit: ReviewUnit, files: list[ChangedFile],
         if admission["admitted"]:
             output.append((child, batch_files, {**metadata, "admission": admission}))
             continue
-        can_split = len(output) + len(pending) + 2 <= MAX_UNIT_WORKSETS
+        # Budget rejection means the request is affordable only after a later
+        # revision; splitting would duplicate input and misreport the reason.
+        can_split = (admission.get("can_split", True)
+                     and admission.get("kind") != "budget"
+                     and admission.get("reason") not in {
+                         "unit_request_budget_exhausted", "budget_tokens_insufficient",
+                         "budget_calls_insufficient", "budget_diagnosis_attempts_insufficient",
+                     }
+                     and len(output) + len(pending) + 2 <= MAX_UNIT_WORKSETS)
+        if not can_split and (admission.get("can_defer") or admission.get("kind") == "budget"):
+            output.append((child, batch_files, {**metadata, "admission": admission,
+                                                 "reason": admission.get("reason", "budget_deferred")}))
+            continue
         if len(selected) > 1 and can_split:
             middle = len(selected) // 2
             pending.appendleft(selected[middle:])

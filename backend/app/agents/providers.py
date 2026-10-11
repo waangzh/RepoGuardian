@@ -910,8 +910,10 @@ class OpenAICompatibleProvider(LLMProvider):
                                retryable=retryable, error_detail=detail,
                                duration_ms=round((time.monotonic() - attempt_started) * 1000))
                 if run_budget is not None and run_attempt is not None:
-                    usage_total = getattr(getattr(exc, "usage", None), "actual_total_tokens", None)
-                    await run_budget.settle(run_attempt.attempt_id, actual_tokens=usage_total)
+                    failed_usage = getattr(exc, "usage", None)
+                    await run_budget.settle(run_attempt.attempt_id,
+                        actual_tokens=getattr(failed_usage, "actual_total_tokens", None),
+                        cost_microusd=getattr(failed_usage, "cost_microusd", None))
                 attempt_errors.append({
                     "attempt": attempt,
                     "error_type": type(exc).__name__,

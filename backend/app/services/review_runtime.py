@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Awaitable, Callable
+import asyncio
 
 
 class ReviewTaskStatus(StrEnum):
@@ -85,10 +86,15 @@ class DeferredTaskQueue:
             task.attempts += 1
             try:
                 await execute(task)
+            except asyncio.CancelledError:
+                task.status = ReviewTaskStatus.CANCELLED
+                raise
             except Exception as exc:
                 task.status = ReviewTaskStatus.FAILED
                 task.reason = f"{type(exc).__name__}: {exc}"
             else:
+                if task.status == ReviewTaskStatus.DEFERRED_BUDGET:
+                    continue
                 task.status = ReviewTaskStatus.COMPLETED
                 task.reason = None
             completed.append(task)
