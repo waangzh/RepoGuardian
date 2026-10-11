@@ -205,6 +205,9 @@ def final_audit(events: list[dict], state: dict, run_status: str) -> list[dict]:
             schema_entry = any(x["stage"] == "schema_validation" and x["issue_id"] == issue_id
                                and owner(x["review_unit_id"]) == root for x in events)
             reason = "deduplication" if deduplicated else "schema_accepted" if schema_entry else "followup_server_identity"
+            if canonical_key not in terminal or terminal[canonical_key]["stage"] == "audit_gap":
+                disposition, reason = "not_published", "canonical_lifecycle_not_observed"
+                issue = None
         elif issue and issue["status"] in {"confirmed", "unresolved", "candidate", "needs_human"}:
             disposition, reason = "unresolved" if issue["status"] == "needs_human" else issue["status"], None
         elif issue and issue["status"] == "dismissed":
@@ -221,15 +224,15 @@ def final_audit(events: list[dict], state: dict, run_status: str) -> list[dict]:
                        "canonical_status": ("unresolved" if issue["status"] == "needs_human" else issue["status"]) if issue else None,
                         "canonical_review_unit_id": canonical_root,
                         "canonical_id": canonical if canonical_key != (root, issue_id) and not alias_error else None})
-    # schema 预候选继承真实候选的最终处置，不能用“通过 schema”掩盖后续过滤。
+    # schema 与服务端改名的原身份均继承真实目标终态，身份变化本身不是终态。
     dispositions = {(owner(item["review_unit_id"]), item["issue_id"]): item
                     for item in output if item["stage"] == "final"}
     for event in events:
-        if event["stage"] != "schema_validation" or not event.get("canonical_id"):
+        if event["stage"] not in {"schema_validation", "identity"} or not event.get("canonical_id"):
             continue
         source_key, error = resolve_alias((owner(event["review_unit_id"]), event["issue_id"]))
         source = dispositions.get(source_key) if not error else None
-        if source:
+        if source and terminal.get(source_key, {}).get("stage") != "audit_gap":
             for target in output:
                 if (target["stage"] == "final" and target["issue_id"] == event["issue_id"]
                         and owner(target["review_unit_id"]) == owner(event["review_unit_id"])):

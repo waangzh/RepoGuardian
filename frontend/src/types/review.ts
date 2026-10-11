@@ -669,6 +669,9 @@ export interface CrossUnitRuntimeMetrics {
 export interface UnitInputCoverage {
   evidence_coverage: "complete" | "partial" | "unknown";
   target_coverage: "complete" | "partial" | "unknown";
+  contract_coverage?: "complete" | "partial" | "unknown";
+  unresolved_questions?: string[];
+  unresolved_dependencies?: string[];
   reason?: string | null;
   omitted_components: string[];
   omitted_targets: string[];

@@ -265,6 +265,21 @@ class IssueVerifierService:
         # 其他文件的路径存在事实不提供正文，也不会扩张读取权限。
         focused_unit = unit.model_copy(update={"primary_files": [path for path in unit.primary_files if path in readable]})
         unit_diff = self._unit_diff(focused_unit, state)
+        diff_complete = len(unit_diff) <= 60_000
+        if not diff_complete:
+            # 不能在 JSON/代码正文中间截断；只保留完整 hunk，并明确输入不完整。
+            files = json.loads(unit_diff)
+            bounded = []
+            for file in files:
+                selected = {**file, "hunks": []}
+                if len(json.dumps([*bounded, selected], ensure_ascii=False)) > 60_000:
+                    continue
+                bounded.append(selected)
+                for hunk in file["hunks"]:
+                    selected["hunks"].append(hunk)
+                    if len(json.dumps(bounded, ensure_ascii=False)) > 60_000:
+                        selected["hunks"].pop()
+            unit_diff = json.dumps(bounded, ensure_ascii=False)
         cited_text = issue.model_dump_json() + unit_diff
         known_paths = sorted({raw["path"] for raw in state.get("file_index") or []
             if isinstance(raw.get("path"), str) and raw["path"] in cited_text})[:50]
@@ -272,10 +287,10 @@ class IssueVerifierService:
             issue=issue,
             primary_evidence=issue.primary_evidence,
             supporting_evidence=issue.supporting_evidence,
-            unit_diff=unit_diff[:60_000],
+            unit_diff=unit_diff,
             readonly_context=context,
             known_existing_paths=known_paths,
-            evidence_complete=complete and len(unit_diff) <= 60_000,
+            evidence_complete=complete and diff_complete,
             applicable_rules=unit.rule_ids,
             budget=IssueVerificationBudget(
                 remaining_calls=(current_run_budget().available()["calls"] if current_run_budget() is not None
@@ -296,7 +311,13 @@ class IssueVerifierService:
             ]
             for path, item in by_path.items()
         }
-        return planner.normalized_unit_diff(unit, by_path, hunk_ids)
+        files = json.loads(planner.normalized_unit_diff(unit, by_path, hunk_ids))
+        for file in files:
+            for hunk in file["hunks"]:
+                if hunk.get("lines"):
+                    hunk.pop("added_lines", None)
+                    hunk.pop("removed_lines", None)
+        return json.dumps(files, ensure_ascii=False)
 
     def _on_failure(self, issue: ReviewIssue, reason: str) -> ReviewIssue:
         if self.fail_mode != "candidate":

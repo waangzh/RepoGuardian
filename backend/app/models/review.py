@@ -1001,6 +1001,15 @@ class EvidenceBranchClaim(BaseModel):
     condition_code: str = Field(min_length=1, max_length=500)
     arm: Literal["if", "else", "both"]
 
+    @field_validator("condition_code")
+    @classmethod
+    def normalize_condition_header(cls, value: str) -> str:
+        value = value.strip()
+        for prefix in ("if ", "elif "):
+            if value.startswith(prefix):
+                return value[len(prefix):].removesuffix(":").strip()
+        return value
+
 
 class EvidenceAnchor(BaseModel):
     """模型提供代码片段，位置与哈希只能由服务端解析写入。"""
@@ -1961,6 +1970,7 @@ class UnitReviewResponse(BaseModel):
     record_error: str | None = None
     # 合并循环允许服务端执行至多一个受控的下一步；不携带任意命令或范围。
     next_need: AgentAction | None = None
+    next_need_error: str | None = None
 
 
 class UnitReviewSummary(BaseModel):
@@ -2146,6 +2156,9 @@ class UnitInputCoverage(BaseModel):
     model_config = ConfigDict(extra="forbid")
     evidence_coverage: Literal["complete", "partial", "unknown"] = "unknown"
     target_coverage: Literal["complete", "partial", "unknown"] = "unknown"
+    contract_coverage: Literal["complete", "partial", "unknown"] = "unknown"
+    unresolved_questions: list[str] = Field(default_factory=list)
+    unresolved_dependencies: list[str] = Field(default_factory=list)
     reason: str | None = None
     omitted_components: list[str] = Field(default_factory=list)
     omitted_targets: list[str] = Field(default_factory=list)

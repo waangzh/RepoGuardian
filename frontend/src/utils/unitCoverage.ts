@@ -1,6 +1,10 @@
 import type { ReviewUnitResult } from "../types/review";
 
 export function unitCoverageComplete(result: ReviewUnitResult): boolean {
+  const summary = result.review_summary;
+  if (summary && (summary.status !== "reported" || !summary.record ||
+      ["missing", "invalid", "failed", "not_executed", "unknown"].includes(summary.latest_attempt_status || "reported"))) return false;
+  if (result.input_coverage?.contract_coverage && result.input_coverage.contract_coverage !== "complete") return false;
   if (result.status !== "completed" || (result.input_coverage && result.input_coverage.target_coverage !== "complete")) return false;
   const ledger = result.coverage_ledger;
   const manifest = result.diff_manifest;

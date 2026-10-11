@@ -122,6 +122,7 @@ class IssueDeduplicationService:
     ) -> list[tuple[list[ReviewIssue], bool]]:
         exact: dict[tuple[str, str, str, str], list[ReviewIssue]] = defaultdict(list)
         semantic: dict[tuple[str, str, str, str, str], list[ReviewIssue]] = defaultdict(list)
+        nearby: dict[tuple, list[ReviewIssue]] = defaultdict(list)
         for issue in issues:
             anchor = issue.primary_evidence
             exact_key = (
@@ -134,6 +135,9 @@ class IssueDeduplicationService:
                 exact[exact_key].append(issue)
             root = self._normalized_root_cause(issue)
             symbol = anchor.symbol or ""
+            if symbol and anchor.expected_hunk_id and anchor.resolved_start_line and anchor.resolved_side:
+                nearby[(issue.status.value, issue.category.value, anchor.file_path, symbol.casefold(),
+                        anchor.expected_hunk_id, anchor.resolved_side)].append(issue)
             if symbol and root:
                 semantic[(
                     issue.status.value,
@@ -154,6 +158,18 @@ class IssueDeduplicationService:
             ids = frozenset(issue.id for issue in group)
             if len(group) > 1 and ids not in consumed_exact:
                 grouped.append((self._stable(group), False))
+                consumed_exact.add(ids)
+        # 相邻锚点可能描述同一根因，但措辞不同。仅送入语义判定，不能确定性合并。
+        for candidates in nearby.values():
+            ordered = sorted(candidates, key=lambda issue: (issue.primary_evidence.resolved_start_line, issue.id))
+            while ordered:
+                first = ordered[0].primary_evidence.resolved_start_line
+                group = [candidate for candidate in ordered if candidate.primary_evidence.resolved_start_line - first <= 4][:12]
+                ordered = ordered[len(group):]
+                ids = frozenset(candidate.id for candidate in group)
+                if len(group) > 1 and ids not in consumed_exact:
+                    grouped.append((group, False))
+                    consumed_exact.add(ids)
         return grouped
 
     @classmethod
