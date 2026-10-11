@@ -257,6 +257,7 @@ export interface EvidenceAnchor {
   symbol?: string | null;
   expected_side: "head" | "base" | "either";
   expected_hunk_id?: string | null;
+  branch_claim?: { condition_code: string; arm: 'if' | 'else' | 'both' } | null;
   context_before: string[];
   context_after: string[];
   resolved_start_line?: number | null;
