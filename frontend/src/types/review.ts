@@ -531,6 +531,7 @@ export interface UnitReviewRecord {
   unresolved_questions: UnitUnresolvedQuestion[];
   file_change_checks?: Array<{ evidence_id: string; impact_status: "checked" | "unresolved" | "not_checked";
     evidence_ids: string[]; reason: string }>;
+  obligation_updates?: Array<{ obligation_id: string; status: "verified" | "resolved"; evidence_ids: string[]; reason: string }>;
   question_updates?: Array<{
     question_id: string;
     status: "resolved" | "superseded";
@@ -598,6 +599,7 @@ export interface CrossUnitFollowupRequest {
   evidence_ids: string[];
   counterevidence_goal: string;
   stop_condition: string;
+  origin_obligation_ids?: string[];
 }
 
 export interface ExecutionBudget {

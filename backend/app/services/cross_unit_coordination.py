@@ -143,10 +143,12 @@ class CrossUnitCoordinationService:
                                                      if result.input_coverage else None),
                                   "evidence_ids": restored_ids,
                               }})
+        from app.services.followup_contracts import origin_obligations
         return {
             "risk": state["cross_unit_risk"],
             "units": [item.model_dump(mode="json") for item in units],
             "summaries": summaries, "evidence": list(evidence.values()),
+            "origin_obligations": origin_obligations(state, set(evidence)),
         }
 
     @staticmethod
@@ -178,6 +180,10 @@ class CrossUnitCoordinationService:
         # 这是计划准入门槛，不是实际调用预留；每次请求仍按真实提示和实测补记控制。
         seen: set[tuple] = set()
         for request in plan.followups:
+            origins = {item["id"]: item for item in payload.get("origin_obligations", [])}
+            if any(identity not in origins or origins[identity]["unit_id"] not in request.unit_ids
+                   for identity in request.origin_obligation_ids):
+                raise ValueError("unknown or out-of-scope origin obligation")
             if len(set(request.unit_ids)) < 2 or set(request.unit_ids) - units.keys():
                 raise ValueError("followup must name at least two known Units")
             selected = [units[key] for key in request.unit_ids]
@@ -205,7 +211,7 @@ class CrossUnitCoordinationService:
     def followup_identity(request) -> tuple:
         return (tuple(sorted(set(request.unit_ids))), tuple(sorted(set(request.primary_files))),
                 tuple(sorted(set(request.evidence_ids))), request.question.strip(),
-                request.counterevidence_goal.strip(), request.stop_condition.strip())
+                request.counterevidence_goal.strip(), request.stop_condition.strip(), tuple(sorted(set(request.origin_obligation_ids))))
 
     @classmethod
     def normalize_plan(cls, plan, payload, budget=None):
@@ -459,6 +465,10 @@ class CrossUnitCoordinationService:
         return aggregate
 
     def _aggregate_output(self, state: dict) -> dict:
+        from app.services.followup_contracts import reconcile_contracts
+        current_plan = (self.runtime.data.get("plan") or {}) if self.runtime else {}
+        reconciled = reconcile_contracts({**state, "coordination_plan": current_plan},
+            list(self.runtime.data["followups"].values()) if self.runtime else [], self.catalog)
         batches = list(self.runtime.data["batches"].values()) if self.runtime else []
         metrics = dict(self.runtime.data["base_metrics"] if self.runtime else state.get("issue_metrics") or {})
         for batch in batches:
@@ -467,7 +477,8 @@ class CrossUnitCoordinationService:
         issues = {item["id"]: item for item in state.get("review_issues") or []}
         for batch in batches:
             issues.update({item["id"]: item for item in batch.get("review_issues") or []})
-        return {"review_issues": list(issues.values()), "issue_metrics": metrics,
+        return {**({"review_unit_results": reconciled} if reconciled else {}),
+            "review_issues": list(issues.values()), "issue_metrics": metrics,
             "followup_results": list(self.runtime.data["followups"].values()) if self.runtime else [],
             "model_usages": [usage for batch in batches for usage in batch.get("model_usages") or []],
             "deterministic_issue_checks": [*(state.get("deterministic_issue_checks") or []),
@@ -537,6 +548,8 @@ class CrossUnitCoordinationService:
                 fingerprint=digest, grouping_reason="cross_unit_followup",
             )
             local = {**state, "cross_unit_followup": request.model_dump(mode="json"),
+                     "origin_obligations": [item for item in self.catalog(state).get("origin_obligations", [])
+                                            if item["id"] in request.origin_obligation_ids],
                      "cross_unit_followup_context": [
                          {**snippet, "review_unit_id": unit.id}
                          for raw in state.get("review_unit_results") or []
