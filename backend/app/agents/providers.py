@@ -821,10 +821,15 @@ class OpenAICompatibleProvider(LLMProvider):
         attempt_errors: list[dict[str, Any]] = []
         response: AIMessage | None = None
         from app.review.run_audit import emit_run_audit
-        from app.services.review_run_budget import RunBudgetError, current_run_budget
+        from app.services.review_run_budget import (
+            RunBudgetError, current_run_budget, run_budget_attempt_observer,
+        )
+        from app.services.model_pricing import estimate_cost_microusd
+        from app.core.config import settings
         from uuid import uuid4
 
         audit_id = uuid4().hex
+        pricing_json = settings.repoguardian_model_pricing_json
         for attempt in range(1, self._request_attempts + 1):
             reserver = request_budget_reserver.get()
             run_budget = current_run_budget()
@@ -849,20 +854,39 @@ class OpenAICompatibleProvider(LLMProvider):
                     raise LLMProviderError(str(exc), usage=usage) from exc
             if run_budget is not None:
                 try:
+                    estimated_cost = estimate_cost_microusd(
+                        pricing_json,
+                        provider=self._provider_name, model=requested_model,
+                        input_tokens=admission.get("estimated_input_tokens"),
+                        output_tokens=request.output_tokens,
+                    )
                     run_attempt = await run_budget.reserve(
                         request_id=audit_id, operation=operation,
                         estimated_tokens=admission["reserved_tokens"],
                         output_tokens=request.output_tokens,
                         request_hash=admission.get("request_hash"),
+                        estimated_cost_microusd=estimated_cost,
+                        price_snapshot={"provider": self._provider_name,
+                            "endpoint": self._base_url, "model": requested_model,
+                            "currency": "USD", "unit": "microusd",
+                            "pricing": json.loads(pricing_json) if estimated_cost is not None else None},
                     )
+                    observer = run_budget_attempt_observer.get()
+                    if observer is not None:
+                        await observer(run_attempt, admission)
                     await run_budget.mark_dispatching(run_attempt.attempt_id)
                 except RunBudgetError as exc:
                     emit_run_audit("model", request_id=audit_id, attempt=attempt,
                                    status="admission_rejected", operation=operation,
                                    model=requested_model, reason=str(exc)[:800],
                                    admission={**admission, "run_budget": exc.details})
-                    raise LLMProviderError(str(exc)) from exc
-            elif run_budget is None and attempt > 1 and model_request_budget_hook.get() is not None:
+                    error = LLMProviderError(str(exc))
+                    error.admission_rejection = {"kind": "budget", "reason": str(exc),
+                        "can_defer": str(exc) in {"run_budget_admission_rejected", "run_budget_cost_rejected"},
+                        **exc.details}
+                    raise error from exc
+            elif (run_budget is None and attempt > 1 and reserver is None
+                  and model_request_budget_hook.get() is not None):
                 await model_request_budget_hook.get()()
             attempt_started = time.monotonic()
             emit_run_audit("model", request_id=audit_id, attempt=attempt, status="started",
@@ -949,6 +973,7 @@ class OpenAICompatibleProvider(LLMProvider):
             estimated_input_tokens=admission["estimated_input_tokens"],
             max_output_tokens=max_tokens,
             latency_ms=latency_ms,
+            pricing_json=pricing_json,
         )
         usage = usage.model_copy(update={"response_metadata": {
             "request_admission": admission,
@@ -972,6 +997,7 @@ class OpenAICompatibleProvider(LLMProvider):
         estimated_input_tokens: int,
         max_output_tokens: int,
         latency_ms: int,
+        pricing_json: str | None = None,
     ) -> ModelUsage:
         raw = dict(message.usage_metadata or {})
         input_details = raw.get("input_token_details") or {}
@@ -1007,7 +1033,7 @@ class OpenAICompatibleProvider(LLMProvider):
             ),
             latency_ms=latency_ms,
             cost_microusd=calculate_cost_microusd(
-                settings.repoguardian_model_pricing_json,
+                pricing_json if pricing_json is not None else settings.repoguardian_model_pricing_json,
                 provider=actual_provider,
                 model=actual_model_name,
                 input_tokens=input_tokens,
