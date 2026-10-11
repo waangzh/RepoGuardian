@@ -508,8 +508,7 @@ class ReviewService:
             )
             run_budget = await ReviewRunBudget.load_or_create(
                 task_id,
-                max_tokens=ExecutionBudget().max_token_usage,
-                max_calls=ExecutionBudget().max_model_calls,
+                **settings.run_budget_limits(),
                 store=run_budget_store,
                 recover_running=True,
             )
