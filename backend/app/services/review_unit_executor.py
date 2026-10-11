@@ -13,7 +13,7 @@ from langgraph.graph import END, START, StateGraph
 from app.agents.providers import LLMProvider
 from app.services.review_input_context import build_pr_intent, build_working_memory, complete_line_prefix, build_context_evidence
 from app.review.input_protocol import CANONICAL_UNIT_INPUT_PROTOCOL, legacy_unit_input_allowed
-from app.review.unit_completion import DIAGNOSIS_BACKGROUND_DEGRADED, review_unit_input_coverage
+from app.review.unit_completion import DIAGNOSIS_BACKGROUND_DEGRADED
 from app.services.fingerprints import unit_execution_fingerprint
 from app.review.diff_base import review_diff_base
 from app.models.review import (
@@ -114,6 +114,7 @@ class _ReviewUnitGraphState(TypedDict, total=False):
     native_review_counts: dict[str, int]
     last_review_evidence_key: str
     last_review_requires_context: bool
+    output_repair_attempted: bool
 
 
 class ReviewUnitExecutor:
@@ -248,6 +249,7 @@ class ReviewUnitExecutor:
             return ReviewUnitResult(
                 review_unit_id=unit.id,
                 input_fingerprint=snapshot["input_fingerprint"],
+                output_repair_attempted=snapshot.get("output_repair_attempted", False), issues=snapshot.get("issues") or [],
                 status=ReviewUnitStatus.timed_out,
                 terminal_reason=ReviewUnitTerminalReason.timed_out,
                 plan_skipped=False,
@@ -281,6 +283,7 @@ class ReviewUnitExecutor:
             return ReviewUnitResult(
                 review_unit_id=unit.id,
                 input_fingerprint=snapshot["input_fingerprint"],
+                output_repair_attempted=snapshot.get("output_repair_attempted", False), issues=snapshot.get("issues") or [],
                 status=ReviewUnitStatus.failed,
                 terminal_reason=(
                     ReviewUnitTerminalReason.provider_error
@@ -381,7 +384,7 @@ class ReviewUnitExecutor:
                 "max_context_chars": 12_000,
             })
             budget = ExecutionBudget.model_validate(state["_cross_unit_budget"]) if state.get("_cross_unit_budget") else ExecutionBudget(
-                max_model_calls=3, max_token_usage=12_000, max_diagnosis_attempts=1,
+                max_model_calls=3, max_token_usage=12_000, max_diagnosis_attempts=2 if self._supports_native_review_step() else 1,
                 max_context_retrievals=2, max_patch_attempts=0)
             skip_plan = True
             followup_plan = UnitReviewPlan(
@@ -483,9 +486,10 @@ class ReviewUnitExecutor:
                 plan_status=prior.plan_status if restored_plan else graph_state["plan_status"],
                 plan_skip_reason="restored_plan" if restored_plan else graph_state["plan_skip_reason"],
                 review_summary=recovered, last_valid_review_summary=recovered if recovered.last_valid_record else None,
+                issues=list(prior.issues), output_repair_attempted=prior.output_repair_attempted,
                 issue_round_completed=bool(recovered.record and recovered.status == "reported"),
                 latest_review_attempt={"status": recovered.latest_attempt_status or recovered.status, "reason": recovered.reason},
-                input_coverage=review_unit_input_coverage(prior),
+                input_coverage=prior.input_coverage,
                 model_usages=[item.model_dump(mode="json") for item in prior.model_usages])
             if self.input_mode == "canonical":
                 graph_state["coverage_ledger"] = update_coverage(ledger, manifest,
@@ -553,6 +557,7 @@ class ReviewUnitExecutor:
             input_coverage=result.get("input_coverage"),
             review_summary=result.get("review_summary") or UnitReviewSummary(),
             issues=result.get("issues") or [],
+            output_repair_attempted=result.get("output_repair_attempted", False),
             context_snippets=[
                 ContextSnippet.model_validate(item) for item in result.get("context") or []
             ],
@@ -770,6 +775,12 @@ class ReviewUnitExecutor:
             batch_state["batch_review_issues"] = [issue for item in entries[:index] if item.result for issue in item.result.issues]
             child_snapshot = {"budget": local, "input_fingerprint": unit_execution_fingerprint(
                 child.fingerprint, batch_state, self.provider, self.input_mode)}
+            cached = saved.get(entry.id)
+            if (cached and cached.result and cached.result.input_fingerprint == child_snapshot["input_fingerprint"]
+                    and cached.result.diff_manifest == manifest
+                    and cached.result.active_evidence_set == active_evidence_set(manifest, selected, child.id, entry.ranges,
+                        [snippet.model_dump(mode="json") for snippet in cached.result.context_snippets])):
+                batch_state["review_unit_results"] = [cached.result.model_copy(update={"execution_budget": local}).model_dump(mode="json")]
             token = unit_budget_snapshot.set(child_snapshot)
             try:
                 entry.result = await self._execute_unit(child, batch_state)
@@ -1670,7 +1681,8 @@ class ReviewUnitExecutor:
     ) -> "_ReviewUnitGraphState":
         self._remember_unit_state(state)
         budget = state["budget"]
-        if not budget.can_consume(diagnosis_attempts=1, model_calls=1):
+        if (not budget.can_consume(diagnosis_attempts=1, model_calls=1)
+                or (self._supports_native_review_step() and state["parent_state"].get("cross_unit_followup") and budget.diagnosis_attempts >= 1)):
             return {
                 "pending_issues": [],
                 "next_action": None,
@@ -1717,7 +1729,12 @@ class ReviewUnitExecutor:
                         return await self.provider.review_step(*args)
                     return await self.provider.review_unit(*args)
                 from app.review.review_policy import REVIEW_STEP_OUTPUT_TOKENS
-                raw_result, budget = await self._call_unit_model(budget, record_input, REVIEW_STEP_OUTPUT_TOKENS, invoke)
+                repair_usages, repair_attempted, diagnosis_calls = [], False, 1
+                if self._supports_native_review_step():
+                    raw_result, budget, repair_usages, repair_attempted, diagnosis_calls = await self._review_with_output_repair(
+                        state, args, budget, REVIEW_STEP_OUTPUT_TOKENS)
+                else:
+                    raw_result, budget = await self._call_unit_model(budget, record_input, REVIEW_STEP_OUTPUT_TOKENS, invoke)
         except LLMProviderError as exc:
             usage = annotate_usage(
                 exc.usage,
@@ -1739,7 +1756,8 @@ class ReviewUnitExecutor:
                 "terminal_reason": (ReviewUnitTerminalReason.diagnosis_budget_exhausted
                                     if "unit_request_budget_exhausted" in str(exc)
                                     else ReviewUnitTerminalReason.provider_error),
-                "model_usages": append_usage(state.get("model_usages") or [], usage),
+                "model_usages": append_usage([*(state.get("model_usages") or []), *getattr(exc, "output_repair_usages", [])], usage),
+                "output_repair_attempted": state.get("output_repair_attempted", False) or getattr(exc, "output_repair_attempted", False),
                 "latest_review_attempt": {"status": "failed", "reason": str(exc)},
                 "input_coverage": input_coverage,
             }
@@ -1748,7 +1766,7 @@ class ReviewUnitExecutor:
         if self._supports_native_review_step():
             key = self._native_evidence_key(state)
             counts = dict(state.get("native_review_counts") or {})
-            counts[key] = counts.get(key, 0) + 1
+            counts[key] = counts.get(key, 0) + diagnosis_calls
             native_update = {"native_review_counts": counts, "last_review_evidence_key": key,
                 "last_review_requires_context": bool(response.next_need_error or (response.next_need
                     and response.next_need.action not in {AgentActionName.report_issue, AgentActionName.task_done}))}
@@ -1757,8 +1775,11 @@ class ReviewUnitExecutor:
                 "record_error": "legacy_provider_without_canonical_evidence_protocol"})
         from app.review.issue_audit import audit_issue
 
-        for issue in response.issues:
-            audit_issue("generated", issue.for_review_unit(state["unit"].id))
+        if not response.issues_audited:
+            for issue in response.issues:
+                audit_issue("generated", issue.for_review_unit(state["unit"].id))
+        from app.services.unit_review_summary import normalize_review_targets
+        response = response.model_copy(update={"review_record": normalize_review_targets(response.review_record, record_input)})
         summary = validate_record(
             response.review_record, record_input, state["scope"].readable_files,
             response.record_error,
@@ -1787,10 +1808,11 @@ class ReviewUnitExecutor:
             review_unit_id=state["unit"].id,
             unit_complexity=state["unit"].complexity,
         )
+        previous_usages = [*(state.get("model_usages") or []), *repair_usages]
         self._remember_unit_state({"review_summary": summary,
             "input_coverage": input_coverage,
             **({"unit_plan": None, "plan_status": UnitPlanStatus.skipped} if degradation else {}),
-            "model_usages": append_usage(state.get("model_usages") or [], usage)})
+            "model_usages": append_usage(previous_usages, usage)})
         if observer is not None:
             observer["diagnosis_pending"] = False
         hierarchy_update = {}
@@ -1803,6 +1825,7 @@ class ReviewUnitExecutor:
         return {
             **hierarchy_update,
             **native_update,
+            "output_repair_attempted": state.get("output_repair_attempted", False) or repair_attempted,
             "pending_issues": response.issues,
             "input_coverage": input_coverage,
             **({"unit_plan": None, "plan_status": UnitPlanStatus.skipped,
@@ -1815,11 +1838,105 @@ class ReviewUnitExecutor:
                                           else state.get("last_valid_review_summary")),
             "latest_review_attempt": latest_attempt,
             "budget": budget,
-            "model_usages": append_usage(state.get("model_usages") or [], usage),
+            "model_usages": append_usage(previous_usages, usage),
             "next_action": (AgentAction(action="task_done", reason="下一步动作格式无效，拒绝执行并保留当前候选")
                             if response.next_need_error else response.next_need),
             "budget_rejection": None,
         }
+
+    async def _review_with_output_repair(self, state, args, budget, output_tokens):
+        from app.agents.providers import LLMProviderError
+        from app.models.review import ModelCallResult
+        from app.services.model_usage import unpack_model_call, annotate_usage
+        from app.review.run_audit import emit_run_audit
+
+        original, retained, attempted, calls = None, [], False, 0
+        current_args = args
+        while True:
+            calls += 1
+            before_calls = budget.model_calls
+            try:
+                raw, budget = await self._call_unit_model(budget, current_args[-1], output_tokens,
+                    lambda: self.provider.review_step(*current_args))
+                response, usage = unpack_model_call(raw)
+                errors = response.output_schema_errors
+                checked = validate_record(response.review_record, args[-1], state["scope"].readable_files, response.record_error)
+                if not errors and checked.latest_attempt_reason == "invalid_review_record: unknown review target":
+                    errors = [{"type": "unknown_target", "loc": ["review_record", "target_checks"]}]
+                if attempted:
+                    preserve = {"issues": original.issues if original else [], "issues_audited": bool(original and original.issues_audited)}
+                if attempted and original is not None:
+                    original_check = validate_record(original.review_record, args[-1], state["scope"].readable_files, original.record_error)
+                    if original_check.status == "reported":
+                        preserve.update(review_record=original.review_record, record_error=original.record_error)
+                    if not original.next_need_error:
+                        preserve.update(next_need=original.next_need, next_need_error=None)
+                if attempted:
+                    response = response.model_copy(update=preserve)
+                if not errors or attempted:
+                    if attempted:
+                        emit_run_audit("output_repair", review_unit_id=state["unit"].id, status="completed" if not errors else "invalid")
+                    return ModelCallResult(response, usage), budget, retained, attempted, calls
+                original = response
+            except LLMProviderError as exc:
+                budget = getattr(exc, "execution_budget", budget)
+                if attempted and budget.model_calls == before_calls and getattr(exc, "unit_budget_rejection", None):
+                    calls -= 1
+                    budget = budget.model_copy(update={"diagnosis_attempts": max(0, budget.diagnosis_attempts - 1)})
+                    attempted = False
+                    self._remember_unit_state({"budget": budget, "output_repair_attempted": False})
+                    emit_run_audit("output_repair", review_unit_id=state["unit"].id, status="budget_rejected")
+                    if original:
+                        return ModelCallResult(original, exc.usage), budget, retained, attempted, calls
+                    exc.output_repair_usages, exc.output_repair_attempted = retained, False
+                    raise
+                usage = exc.usage
+                errors = getattr(exc, "output_schema_errors", [])
+                if attempted or not errors:
+                    emit_run_audit("output_repair", review_unit_id=state["unit"].id, status="failed", error_type=type(exc).__name__)
+                    if original is not None:
+                        return ModelCallResult(original.model_copy(update={"next_need_error": original.next_need_error or "output_repair_failed"}), usage), budget, retained, attempted, calls
+                    exc.output_repair_usages, exc.output_repair_attempted = retained, attempted
+                    raise
+            if (state.get("output_repair_attempted") or attempted or usage is None or not usage.usage_available
+                    or not budget.can_consume(model_calls=1, diagnosis_attempts=1)
+                    or any("requires evidence" in item.get("message", "") for item in errors)):
+                if original is not None:
+                    return ModelCallResult(original, usage), budget, retained, attempted, calls
+                error = LLMProviderError("invalid model output; corrective attempt unavailable", usage=usage)
+                error.execution_budget = budget
+                raise error
+            feedback = {"attempt": 1, "errors": errors[:10]}
+            corrective_args = (*args[:-1], {**args[-1], "output_repair": feedback})
+            from app.services.review_run_budget import current_run_budget
+            try:
+                required = self._diagnosis_estimate(corrective_args)["reserved_tokens"]
+                run = current_run_budget()
+                available = run.available() if run else None
+                admitted = budget.can_consume(model_calls=1, diagnosis_attempts=1, token_usage=required) and (
+                    available is None or (available["calls"] > 0 and available["tokens"] >= required))
+            except LLMProviderError:
+                admitted = False
+            if not admitted:
+                if original:
+                    return ModelCallResult(original, usage), budget, retained, attempted, calls
+                error = LLMProviderError("invalid model output; corrective request not admitted", usage=usage)
+                error.execution_budget = budget
+                raise error
+            retained.append(annotate_usage(usage, accounted_tokens_estimate=usage.accounted_tokens_estimate,
+                review_unit_id=state["unit"].id, unit_complexity=state["unit"].complexity).model_dump(mode="json"))
+            budget = budget.consume(diagnosis_attempts=1)
+            attempted = True
+            if original:
+                from app.review.issue_audit import audit_issue
+                for issue in original.issues:
+                    audit_issue("generated", issue.for_review_unit(state["unit"].id))
+                original = original.model_copy(update={"issues_audited": True})
+                self._remember_unit_state({"issues": [*state.get("issues", []), *(issue.for_review_unit(state["unit"].id) for issue in original.issues)]})
+            self._remember_unit_state({"budget": budget, "output_repair_attempted": True,
+                "model_usages": [*(state.get("model_usages") or []), *retained]})
+            current_args = corrective_args
+            emit_run_audit("output_repair", review_unit_id=state["unit"].id, status="started", diagnostics=feedback)
 
     @staticmethod
     def _current_checks_complete(state):
@@ -1876,6 +1993,9 @@ class ReviewUnitExecutor:
         from app.services.file_change_evidence import set_file_change_impact_scope
         set_file_change_impact_scope(record_input, getattr(state["unit"], "related_files", []))
         record_input["pr_intent"] = build_pr_intent(pr)
+        if self._supports_native_review_step():
+            from app.services.unit_review_summary import review_target_catalog
+            record_input["target_catalog"] = review_target_catalog(record_input["targets"])
         if state["parent_state"].get("origin_obligations"):
             record_input["origin_obligations"] = state["parent_state"]["origin_obligations"]
         if state.get("diff_manifest"):
@@ -1988,7 +2108,7 @@ class ReviewUnitExecutor:
 
         observer = unit_budget_snapshot.get()
         if observer is not None:
-            observer.update({key: state[key] for key in ("review_summary", "context", "unit_plan", "plan_status", "model_usages", "budget", "input_coverage", "diff_manifest", "coverage_ledger", "active_evidence_set", "evidence_store", "context_selection") if key in state})
+            observer.update({key: state[key] for key in ("review_summary", "context", "unit_plan", "plan_status", "model_usages", "budget", "input_coverage", "diff_manifest", "coverage_ledger", "active_evidence_set", "evidence_store", "context_selection", "issues", "output_repair_attempted") if key in state})
 
     @staticmethod
     def _failure_summary(snapshot, reason):
@@ -2014,6 +2134,24 @@ class ReviewUnitExecutor:
             if issue.id in known:
                 audit_issue("unit_filter", issue, reason="duplicate_from_previous_round")
         accepted = [issue for issue in accepted if issue.id not in known]
+        prior_issues = list(state["issues"])
+        from app.services.fingerprints import stable_hash
+        def claim_key(issue):
+            return stable_hash(issue.model_dump(mode="json", exclude={"id", "source_issue_ids", "source_review_unit_ids"}))
+        claims = {claim_key(issue): index for index, issue in enumerate(prior_issues)}
+        prior_count = len(prior_issues)
+        for issue in accepted:
+            index = claims.get(claim_key(issue))
+            if index is None:
+                claims[claim_key(issue)] = len(prior_issues)
+                prior_issues.append(issue)
+                continue
+            canonical = prior_issues[index]
+            prior_issues[index] = canonical.model_copy(update={"source_issue_ids": list(dict.fromkeys([
+                *canonical.source_issue_ids, canonical.id, *issue.source_issue_ids, issue.id]))})
+            audit_issue("deduplication", issue, reason="identical_restored_candidate", canonical_id=canonical.id,
+                canonical_review_unit_id=canonical.review_unit_id)
+        accepted, prior_issues = prior_issues[prior_count:], prior_issues[:prior_count]
         requested = state.get("next_action")
         if requested is not None:
             try:
@@ -2040,7 +2178,7 @@ class ReviewUnitExecutor:
             return {
                 "next_action": requested,
                 "pending_issues": [],
-                "issues": [*state["issues"], *accepted],
+                "issues": [*prior_issues, *accepted],
                 "issue_round_completed": False,
                 "messages": [*state["messages"], AgentEvent(
                     action=AgentActionName.report_issue,
@@ -2052,7 +2190,7 @@ class ReviewUnitExecutor:
         return {
             "next_action": None,
             "pending_issues": [],
-            "issues": [*state["issues"], *accepted],
+            "issues": [*prior_issues, *accepted],
             "issue_round_completed": True,
             "messages": [*state["messages"], AgentEvent(
                 action=AgentActionName.report_issue,

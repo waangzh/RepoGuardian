@@ -1981,6 +1981,8 @@ class UnitReviewResponse(BaseModel):
     # 合并循环允许服务端执行至多一个受控的下一步；不携带任意命令或范围。
     next_need: AgentAction | None = None
     next_need_error: str | None = None
+    output_schema_errors: list[dict[str, Any]] = Field(default_factory=list)
+    issues_audited: bool = False
 
 
 class UnitReviewSummary(BaseModel):
@@ -2344,6 +2346,7 @@ class ReviewUnitResult(BaseModel):
     tool_events: list[ReviewUnitToolEvent] = Field(default_factory=list)
     execution_budget: ExecutionBudget = Field(default_factory=ExecutionBudget)
     model_usages: list[ModelUsage] = Field(default_factory=list)
+    output_repair_attempted: bool = False
     error: str | None = None
     budget_rejection: UnitBudgetRejection | None = None
     human_request: HumanReviewRequest | None = None

@@ -724,6 +724,7 @@ export interface UnitCoverageLedger {
 }
 
 export interface ReviewUnitResult {
+  output_repair_attempted?: boolean;
   review_unit_id: string;
   input_fingerprint?: string | null;
   status: ReviewUnitStatus;
