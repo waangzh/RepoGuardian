@@ -81,6 +81,8 @@ class AttemptRecord:
     sent: bool = False
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     settled_at: str | None = None
+    actual_cost_microusd: int | None = None
+    price_snapshot: dict[str, Any] | None = None
 
 
 @dataclass
@@ -208,7 +210,8 @@ class ReviewRunBudget:
     async def reserve(self, *, request_id: str, operation: str, estimated_tokens: int,
                       output_tokens: int = 0, task_id: str | None = None,
                       request_hash: str | None = None, obligation_id: str | None = None,
-                      estimated_cost_microusd: int | None = None) -> AttemptRecord:
+                      estimated_cost_microusd: int | None = None,
+                      price_snapshot: dict[str, Any] | None = None) -> AttemptRecord:
         if estimated_tokens < 0 or output_tokens < 0 or (estimated_cost_microusd is not None and estimated_cost_microusd < 0):
             raise ValueError("request reservation must not be negative")
         async with self._mutation():
@@ -222,6 +225,8 @@ class ReviewRunBudget:
                                "budget_revision": self.revision,
                                "protected_obligations": self.protected_obligations}
                     raise RunBudgetError("run_budget_admission_rejected", details=details)
+            if self.max_cost_microusd is not None and estimated_cost_microusd is None:
+                raise RunBudgetError("run_budget_price_unavailable")
             if (self.max_cost_microusd is not None and estimated_cost_microusd is not None
                     and self.cost_settled_microusd + self.cost_reserved_microusd + estimated_cost_microusd > self.max_cost_microusd):
                 raise RunBudgetError("run_budget_cost_rejected", details={
@@ -236,6 +241,7 @@ class ReviewRunBudget:
                 estimated_tokens=estimated_tokens, reserved_tokens=estimated_tokens,
                 output_tokens=output_tokens,
                 reserved_cost_microusd=estimated_cost_microusd,
+                price_snapshot=copy.deepcopy(price_snapshot),
             )
             self.attempts[attempt_id] = record
             self.in_flight_reserved += estimated_tokens
@@ -258,12 +264,17 @@ class ReviewRunBudget:
 
     async def settle(self, attempt_id: str, *, actual_tokens: int | None,
                      cost_microusd: int | None = None) -> AttemptRecord:
+        if ((actual_tokens is not None and actual_tokens < 0)
+                or (cost_microusd is not None and cost_microusd < 0)):
+            raise ValueError("actual usage must not be negative")
         async with self._mutation():
             record = self._get(attempt_id)
             if record.settled:
+                if self._settle_cost(record, cost_microusd):
+                    self.revision += 1
+                    await self._persist()
                 return copy.deepcopy(record)
             self.in_flight_reserved = max(0, self.in_flight_reserved - record.reserved_tokens)
-            self.cost_reserved_microusd = max(0, self.cost_reserved_microusd - (record.reserved_cost_microusd or 0))
             if actual_tokens is None:
                 self.unknown_reserved += record.reserved_tokens
                 record.state = AttemptState.UNKNOWN
@@ -275,8 +286,7 @@ class ReviewRunBudget:
                 record.overrun_tokens = max(0, actual_tokens - record.reserved_tokens)
                 self.settled_actual += actual_tokens
                 record.state = AttemptState.SETTLED
-                if cost_microusd is not None:
-                    self.cost_settled_microusd += cost_microusd
+            self._settle_cost(record, cost_microusd)
             record.settled = True
             record.settled_at = datetime.now(timezone.utc).isoformat()
             self.revision += 1
@@ -285,6 +295,9 @@ class ReviewRunBudget:
 
     async def reconcile_unknown(self, attempt_id: str, *, actual_tokens: int | None,
                                 cost_microusd: int | None = None) -> AttemptRecord:
+        if ((actual_tokens is not None and actual_tokens < 0)
+                or (cost_microusd is not None and cost_microusd < 0)):
+            raise ValueError("actual usage must not be negative")
         current = self.attempts.get(attempt_id)
         if current is None:
             raise RunBudgetError("unknown_attempt", details={"attempt_id": attempt_id})
@@ -293,9 +306,11 @@ class ReviewRunBudget:
                                       cost_microusd=cost_microusd)
         async with self._mutation():
             record = self._get(attempt_id)
-            if record.state != AttemptState.UNKNOWN:
-                return copy.deepcopy(record)
-            if actual_tokens is None:
+            cost_changed = self._settle_cost(record, cost_microusd)
+            if record.state != AttemptState.UNKNOWN or actual_tokens is None:
+                if cost_changed:
+                    self.revision += 1
+                    await self._persist()
                 return copy.deepcopy(record)
             self.unknown_reserved = max(0, self.unknown_reserved - record.reserved_tokens)
             record.actual_tokens = actual_tokens
@@ -303,12 +318,18 @@ class ReviewRunBudget:
             record.released_tokens = max(0, record.reserved_tokens - actual_tokens)
             record.overrun_tokens = max(0, actual_tokens - record.reserved_tokens)
             record.state = AttemptState.SETTLED
-            if cost_microusd is not None:
-                self.cost_settled_microusd += cost_microusd
             self.settled_actual += actual_tokens
             self.revision += 1
             await self._persist()
             return copy.deepcopy(record)
+
+    def _settle_cost(self, record: AttemptRecord, cost: int | None) -> bool:
+        if cost is None or record.actual_cost_microusd is not None or record.state == AttemptState.RELEASED:
+            return False
+        self.cost_reserved_microusd -= record.reserved_cost_microusd or 0
+        self.cost_settled_microusd += cost
+        record.actual_cost_microusd = cost
+        return True
 
     async def release_unsent(self, attempt_id: str, *, reason: str = "not_sent") -> AttemptRecord:
         async with self._mutation():
@@ -439,6 +460,7 @@ class ReviewRunBudget:
 
 
 _active_run_budget: ContextVar[ReviewRunBudget | None] = ContextVar("active_review_run_budget", default=None)
+run_budget_attempt_observer: ContextVar[Any] = ContextVar("run_budget_attempt_observer", default=None)
 
 
 def current_run_budget() -> ReviewRunBudget | None:
