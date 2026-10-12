@@ -84,7 +84,11 @@ def reconcile_wire_usage(result: dict[str, Any]) -> dict[str, Any]:
             "request_admission", {}).get("request_hash")
         matches = [item for item in ledger if item.get("request_id") == key[0]
                    and request_hash and item.get("request_hash") == request_hash]
-        # 只有请求身份和 request hash 唯一匹配时才建立关联，不能按列表顺序猜测。
+        # 同一逻辑请求的传输重试共享hash。已知usage只能绑定唯一相符的结算；
+        # 未知attempt不能被成功重试的消费填充，不按列表顺序推断身份。
+        if len(matches) > 1 and actual is not None:
+            matches = [item for item in matches if item.get("settled")
+                       and _tokens(item.get("actual_tokens")) and item["actual_tokens"] == actual]
         if len(matches) != 1:
             if actual is not None:
                 errors.append("ledger_attempt_not_unique")
