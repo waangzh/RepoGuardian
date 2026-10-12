@@ -96,3 +96,31 @@ Ollama第一次传输发生APIConnectionError，已发送但无可信usage，账
 五样本共38次wire、已知230,208 tokens、1次未知消费，不能给出已知总消费或总体token reduction。固定范围24/24目标examined不证明质量，Gemini两候选等待验证证据、Ollama验证取消、Ragflow证据准备未调度仍为unresolved。七条原候选已隔离在runtime-p5-v12-remaining-quality/blind，用户另外明确授权发送到同一独立评审聊天；质量/遗漏裁决尚待完成。P5累计195次wire、至少1,253,221已知tokens，另有未知消费。当前联合门不通过，完整调度组和留出集未派发，默认仍legacy_units。
 
 离线修复56项聚焦回归通过，完整后端1230 passed、2 skipped（250.26秒），Ruff和git diff --check通过。原始Ollama结果重放验证known=56,423、unknown_attempts=1、actual_total_tokens=null；compare_group_run输出另存comparison.json，记录离线复算实现哈希与原始执行实现哈希，原始结果未修改。离线对账修复已改变当前app实现哈希，未来真实运行须重新冻结计划，不能继续沿用v12派发新组。
+
+## v13 完整调度消融首样本
+
+对账修复已提交为 `48be8d6` 后，新冻结计划 `runtime-p5-plan-20261012-v13.json`，哈希 `9821d02f857f131459b1da0e4565b2d1eddbca2973bb7cc939f35c391a0ea6a2`。不重跑protocol_180，仅执行full_180的ComfyUI首样本，模型/provider、SHA、diff、权限、200次/100万tokens及180秒Unit期限均保持，实验差异为启用统一调查队列。真实7次wire、46,649 tokens、usage complete、无unknown，3/3固定目标examined，1次工具事件；3个inspect与3个investigate任务完成，没有候选或verify。
+
+首样本接入门通过，但同快照历史独立有效缺陷1个、本次原始响应候选0个。重新验收历史三条候选（1个valid_defect及2个duplicate）并按现有empty-candidate筛选器计算，质量筛选failed，reason=independent_valid_defects_lost。产物保存在runtime-p5-v13-full_180-quality/empty-candidate-screen.json，明确expand_allowed=false；后四个不派发，不能因调查supported、覆盖完整或费用较低改判通过。
+
+输入已展示完整关键代码，失败不是初始范围缺失的证明：检查者误将triu_(1)理解为0/1掩码，并假设它是DirectML不支持-inf的替代，没有取得对应外部契约证据。调查目录中的命题仅为文件间imports/calls关系“仍满足调用或数据契约”；调查回答主要核对签名/形状，却明确未核验掩码数值兼容性。当前实现只检查证据原文与范围，没有语义证明能力；answered/supported只保留模型回答，不应视为广义契约正确。后续应先诊断静态关系到具体命题的绑定、必要调用方取证与模型语义能力，再决定新的受控实验，不能继续增加重试层或将已知缺陷注入评审Prompt。
+
+截至v13累计202次wire、至少1,299,870已知tokens，另有v12 Ollama未知消费；完整调度首样本未通过，full_runtime和留出集未派发，默认仍legacy_units。v12剩余四样本独立标签已根据源码契约修正为有效1、误报6、重复0、无法判断0，比较摘要尚在独立聊天重算，未把中间不一致材料计为最终质量门。
+
+## v12 四样本质量验收结果
+
+独立评审修正Gemini两条为false_positive：非Method not found错误已console.error记录，prompts是可选能力；固定调用方没有要求CONNECTED必须代表prompts发现成功。不能仅凭catch未向上抛出和缓存删除设定新业务契约。第二条不再绑定duplicate。同一评审补核计数：Ollama整数溢出来自有效参考而非历史有效候选，Ragflow重复来源与canonical有效候选分离。
+
+| 样本 | 有效候选 | 误报 | 历史有效候选缺陷 | 保留 | 遗漏 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Gemini CLI | 0 | 2 | 4 | 0 | 4 |
+| Checkmate | 1 | 2 | 2 | 1 | 1 |
+| Ollama | 0 | 1 | 0 | 0 | 0 |
+| Ragflow | 0 | 1 | 2 | 0 | 2 |
+| 合计 | 1 | 6 | 8 | 1 | 7 |
+
+四样本有效参考为9条、8个独立缺陷，Checkmate默认语言的两条参考对应同一缺陷：覆盖条目2、独立缺陷1，遗漏条目7、独立缺陷7。另有4条参考未决，未转为非缺陷。Ollama参考中的uint→int上界溢出未被当前-1/0主张覆盖。原始七候选全部独立标注，duplicate=0、cannot_determine=0；这些计数不是全量precision/recall。
+
+现有adjudication验收器通过7/7标注和固定SHA引用；主线程核对逐项新标签、历史8个canonical有效ID的保留/遗漏全集、有效参考9条的覆盖/遗漏全集及不重叠关系。Ragflow范围末尾空行由独立评审收紧到实际代码，不改标签；格式适配副本不覆盖原产物。失败筛选单独保存为runtime-p5-v12-remaining-quality/group-quality-screen.json（quality_passed=false、expand_allowed=false），原始盲包、标注、比较材料和验证产物均留在本地，不提交运行产物。
+
+下一步需要解决具体缺陷遗漏、按可得证据限定调查命题与模型操作语义误判。未知消费仍须保留，不能用实测已知消费推断完整成本。两次有效失败筛选均禁止扩展；不启动重复付费调用，不增加递归层或放宽验证契约，不切换默认引擎。
