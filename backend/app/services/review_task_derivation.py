@@ -40,7 +40,7 @@ class TaskReviewDerivation:
                  investigations_enabled=True, risk_planner_version="legacy"):
         if not steps or not 1 <= max_derived_items <= 1_000:
             raise ValueError("invalid derived task configuration")
-        if risk_planner_version not in {"legacy", "risk-planner-v2"}:
+        if risk_planner_version not in {"legacy", "risk-planner-v2", "risk-planner-v3"}:
             raise ValueError("unsupported risk planner version")
         self.runtime, self.steps = runtime, steps
         self.initial_ids = set(steps)
@@ -110,7 +110,7 @@ class TaskReviewDerivation:
         active = {identity for identity, value in catalog.items() if value["file_path"] in item.scope_files}
         if item.kind.value == "verify" and root.executor.spec.prompt_version in {"task-review-prompt-v4", "task-review-prompt-v5"}:
             active = {*item.required_evidence_ids, *item.counter_evidence_ids}
-        if item.kind.value == "investigate" and self.risk_planner_version == "risk-planner-v2":
+        if item.kind.value == "investigate" and self.risk_planner_version in {"risk-planner-v2", "risk-planner-v3"}:
             active = set(item.required_evidence_ids)
         executor = ReviewTaskExecutor(root.executor.spec, item, list(goals.values()),
             active_evidence_ids=active, evidence_catalog=catalog, request_id="not-dispatched")
@@ -309,7 +309,7 @@ class TaskReviewDerivation:
         catalog = self._all_evidence()
         required = sorted(identity for identity, value in catalog.items()
                           if value["file_path"] in {target.target_ref for target in targets})
-        if self.risk_planner_version == "risk-planner-v2":
+        if self.risk_planner_version in {"risk-planner-v2", "risk-planner-v3"}:
             requested = {identity for identity, value in catalog.items()
                 if any(value["file_path"] == request.file_path and value.get("side", "head") == "head"
                     and value["start_line"] <= request.end_line and value["end_line"] >= request.start_line
@@ -478,19 +478,20 @@ class TaskReviewDerivation:
 
 
 def build_task_risk_catalog(goals, work_items, repository_graph, *, planner_version="legacy", max_lines_per_read=240):
-    """将关系目录投影为调查命题；v2 绑定图符号和实际变更范围。"""
+    """绑定关系符号；v3 调查任一侧变更影响，未变更端只作为证据。"""
     by_path = {}
     owners = {goal: item.work_item_id for item in work_items for goal in item.goal_ids}
     for goal in goals:
         if goal.origin == "initial" and goal.target_kind == "source_range":
             by_path.setdefault(goal.target_ref, []).append(goal)
     output = {}
-    if planner_version not in {"legacy", "risk-planner-v2"}:
+    if planner_version not in {"legacy", "risk-planner-v2", "risk-planner-v3"}:
         raise ValueError("unsupported risk planner version")
     if planner_version == "legacy":
         return _build_legacy_risk_catalog(repository_graph, by_path, owners)
     if not 1 <= max_lines_per_read <= 2_000:
         raise ValueError("invalid risk planner read limit")
+    single_changed_side = planner_version == "risk-planner-v3"
 
     symbols = {}
     for value in repository_graph.get("symbols", []):
@@ -513,7 +514,9 @@ def build_task_risk_catalog(goals, work_items, repository_graph, *, planner_vers
             continue
         source = str(edge.get("source_file") or edge.get("source", "").split("::", 1)[0])
         target = str(edge.get("target_file") or edge.get("target", "").split("::", 1)[0])
-        if source == target or source not in by_path or target not in by_path:
+        if source == target or (source not in by_path and target not in by_path):
+            continue
+        if not single_changed_side and (source not in by_path or target not in by_path):
             continue
         source_symbol = symbols.get(str(edge.get("source")))
         target_symbol = symbols.get(str(edge.get("target")))
@@ -521,20 +524,24 @@ def build_task_risk_catalog(goals, work_items, repository_graph, *, planner_vers
             source_symbol = None
         if target_symbol and target_symbol.get("file") != target:
             target_symbol = None
-        callers = [goal for goal in by_path[source]
+        callers = [goal for goal in by_path.get(source, [])
                    if source_symbol and overlaps(goal, source_symbol)]
-        callees = [goal for goal in by_path[target]
+        callees = [goal for goal in by_path.get(target, [])
                    if target_symbol and overlaps(goal, target_symbol)]
-        if edge["type"] != "calls" or not source_symbol or not target_symbol or not callers or not callees:
+        missing_changed_binding = not (callers or callees) if single_changed_side else not callers or not callees
+        if (edge["type"] != "calls" or not source_symbol or not target_symbol
+                or not valid_range(source_symbol) or not valid_range(target_symbol) or missing_changed_binding):
             if (edge["type"] == "calls" and source_symbol and target_symbol
                     and valid_range(source_symbol) and valid_range(target_symbol)
-                    and (not callers or not callees)):
-                # 已定位但两侧变更未触及这条关系，不将无关 hunk 当作风险。
+                    and missing_changed_binding):
+                # 已定位且变更未触及所需符号，不将无关 hunk 当作风险。
                 continue
             # 关系保留为可见线索，不猜测符号或行号，也不生成泛化调查。
-            origin = next((owners.get(goal.goal_id) for goal in sorted(by_path[source], key=lambda goal: goal.goal_id)
+            changed = [goal for path in (source, target) for goal in by_path.get(path, [])]
+            origin_goals = changed if single_changed_side else by_path[source]
+            origin = next((owners.get(goal.goal_id) for goal in sorted(origin_goals, key=lambda goal: goal.goal_id)
                            if owners.get(goal.goal_id)), None)
-            related = sorted(goal.goal_id for path in (source, target) for goal in by_path[path])
+            related = sorted(goal.goal_id for goal in changed)
             key = "risk-unbound-" + stable_hash([edge.get("type"), edge.get("source"), edge.get("target"),
                                                related, planner_version])[:32]
             output[key] = {"id": key, "origin_work_item_id": origin,
@@ -542,33 +549,35 @@ def build_task_risk_catalog(goals, work_items, repository_graph, *, planner_vers
                     "proposition": f"{source} 与 {target} 的 {edge['type']} 关系缺少可绑定的具体符号与变更范围",
                     "evidence_requests": [], "not_scheduled_reason": "relationship_not_bound_to_symbols"}
             continue
-        for caller in callers:
-            for callee in callees:
-                if caller.unit_id == callee.unit_id:
-                    continue
-                related = [caller.goal_id, callee.goal_id]
-                proposition = (f"待源码核对的 calls 命题：调用方 {source_symbol['id']}"
-                               f"（定义范围 {source_symbol['start_line']}-{source_symbol['end_line']}）"
-                               f"对 {target_symbol['id']}"
-                               f"（定义范围 {target_symbol['start_line']}-{target_symbol['end_line']}）的调用，"
-                               "在本次变更后仍兼容该调用链的实际参数传递、返回值消费与异常处理路径")
-                key = "risk-" + stable_hash([related, edge.get("type"), source_symbol["id"],
-                                               target_symbol["id"], proposition])[:32]
-                requests = []
-                for symbol in (source_symbol, target_symbol):
-                    for start in range(symbol["start_line"], symbol["end_line"] + 1, max_lines_per_read):
-                        requests.append(RuntimeReadArguments(file_path=symbol["file"], start_line=start,
-                            end_line=min(symbol["end_line"], start + max_lines_per_read - 1)).model_dump(mode="json"))
-                        if len(requests) > 20:
-                            break
+        bindings = ([sorted([*callers, *callees], key=lambda goal: goal.goal_id)] if single_changed_side else
+                    [[caller, callee] for caller in callers for callee in callees if caller.unit_id != callee.unit_id])
+        for binding in bindings:
+            related = [goal.goal_id for goal in binding]
+            origin_goal = (next((goal for goal in binding if goal.goal_id in owners), binding[0])
+                           if single_changed_side else binding[0])
+            proposition = (f"待源码核对的 calls 命题：调用方 {source_symbol['id']}"
+                           f"（定义范围 {source_symbol['start_line']}-{source_symbol['end_line']}）"
+                           f"对 {target_symbol['id']}"
+                           f"（定义范围 {target_symbol['start_line']}-{target_symbol['end_line']}）的调用，"
+                           "在本次变更后仍兼容该调用链的实际参数传递、返回值消费与异常处理路径")
+            key = "risk-" + stable_hash([related, edge.get("type"), source_symbol["id"],
+                                       target_symbol["id"], proposition])[:32]
+            requests = []
+            for symbol in (source_symbol, target_symbol):
+                for start in range(symbol["start_line"], symbol["end_line"] + 1, max_lines_per_read):
+                    requests.append(RuntimeReadArguments(file_path=symbol["file"], start_line=start,
+                        end_line=min(symbol["end_line"], start + max_lines_per_read - 1)).model_dump(mode="json"))
                     if len(requests) > 20:
                         break
-                reason = ("necessary_evidence_capacity_exceeded" if len(requests) > 20 else
-                          "origin_work_item_missing" if caller.goal_id not in owners else
-                          "relationship_proposition_capacity_exceeded" if len(proposition) > 2_000 else None)
-                output[key] = {"id": key, "origin_work_item_id": owners.get(caller.goal_id),
-                    "related_goal_ids": related, "proposition": proposition,
-                    "evidence_requests": requests if not reason else [], "not_scheduled_reason": reason}
+                if len(requests) > 20:
+                    break
+            reason = ("necessary_evidence_capacity_exceeded" if len(requests) > 20 else
+                      "origin_work_item_missing" if origin_goal.goal_id not in owners else
+                      "relationship_target_capacity_exceeded" if len(related) > 40 else
+                      "relationship_proposition_capacity_exceeded" if len(proposition) > 2_000 else None)
+            output[key] = {"id": key, "origin_work_item_id": owners.get(origin_goal.goal_id),
+                "related_goal_ids": related, "proposition": proposition,
+                "evidence_requests": requests if not reason else [], "not_scheduled_reason": reason}
     return [output[key] for key in sorted(output)]
 
 
