@@ -113,6 +113,7 @@ class ReviewGoal(BaseModel):
     target_kind: Literal["source_range", "file_change"] = "source_range"
     start_line: int = Field(default=1, ge=1)
     end_line: int = Field(default=1, ge=1)
+    unsupported_reason: str | None = None
 
     @model_validator(mode="after")
     def valid_source_range(self) -> "ReviewGoal":
@@ -307,3 +308,29 @@ class VerificationResult(VerificationSubmission):
 
 
 ReviewWorkItem.model_rebuild()
+
+
+class TaskRuntimeReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    engine: Literal["task_review_v1"] = "task_review_v1"
+    coverage_version: Literal["task-goals-v1"] = "task-goals-v1"
+    execution_status: Literal["running", "completed", "failed", "cancelled"]
+    termination_reason: str
+    scope_complete: bool = False
+    initial_scope_coverage: list[dict] = Field(default_factory=list)
+    admitted_investigations: list[dict] = Field(default_factory=list)
+    unscheduled_leads: list[dict] = Field(default_factory=list)
+    findings: list[dict] = Field(default_factory=list)
+    usage_integrity: Literal["complete", "unknown", "inconsistent"] = "unknown"
+    sent_calls: int = Field(default=0, ge=0)
+    settled_tokens: int = Field(default=0, ge=0)
+    unknown_attempts: int = Field(default=0, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+    work_items: list[dict] = Field(default_factory=list)
+
+
+class TaskRuntimeRetryResult(BaseModel):
+    engine: Literal["task_review_v1"] = "task_review_v1"
+    unit_id: str
+    requeued_work_item_ids: list[str]
+    task_runtime_report: TaskRuntimeReport

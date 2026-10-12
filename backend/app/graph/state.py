@@ -13,12 +13,17 @@ from app.models.review import ExecutionBudget, ReviewPhase
 class ReviewRunContext(TypedDict, total=False):
     """每次调用重新注入的进程依赖，不进入业务状态或 checkpoint。"""
     coordination_repository: Any
+    task_runtime_provider: Any
+    task_runtime_git: Any
 
 
 class ReviewState(TypedDict, total=False):
     # ---- 基础标识 ----
     task_id: str
     engine: str
+    task_runtime_configuration: dict[str, Any] | None
+    task_runtime_report: dict[str, Any] | None
+    task_runtime_retry_unit_id: str | None
     mode: str
     status: str
     generate_patches: bool

@@ -32,7 +32,7 @@ async def review_plan_node(state: ReviewState) -> ReviewState:
         symbol_index=state.get("symbol_index") or [],
         repository_graph=state.get("repository_graph") or {},
         model=state.get("model") or settings.repoguardian_model,
-        provider=settings.repoguardian_provider,
+        provider=(state.get("task_runtime_configuration") or {}).get("provider", settings.repoguardian_provider),
         pr_intent_hash=build_pr_intent(state.get("pr_info"))["intent_hash"],
     )
     return ReviewState(
@@ -50,6 +50,8 @@ async def review_plan_node(state: ReviewState) -> ReviewState:
 
 
 async def review_units_node(state: ReviewState) -> ReviewState:
+    if state.get("engine") == "task_review_v1":
+        raise ValueError("frozen task_review_v1 cannot enter legacy Unit executor")
     plan = ReviewPlan.model_validate(state.get("review_plan") or {
         "planner_version": "unknown",
         "review_units": state.get("review_units") or [],

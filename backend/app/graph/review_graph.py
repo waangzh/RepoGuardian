@@ -20,6 +20,7 @@ from app.graph.nodes.report import complete_node, report_node
 from app.graph.nodes.review import review_node
 from app.graph.nodes.review_units import review_plan_node, review_units_node
 from app.graph.nodes.resolve_evidence import resolve_evidence_node
+from app.graph.nodes.task_review_runtime import task_review_runtime_node
 from app.graph.routers import route_discovery_action
 from app.graph.state import ReviewState, ReviewRunContext
 
@@ -28,6 +29,8 @@ def build_review_graph(phase: int | None = None) -> StateGraph:
     """构建阶段一确定性主图；phase 参数仅保留调用兼容性。"""
     if phase == 2:
         return _build_review_unit_graph()
+    if phase == 3:
+        return _build_task_review_graph()
     graph = StateGraph(ReviewState)
     graph.add_node("intake", intake_node)
     graph.add_node("repo_prepare", repo_prepare_node)
@@ -69,6 +72,24 @@ def build_review_graph(phase: int | None = None) -> StateGraph:
     # review plane.  The main graph terminates after static issue aggregation.
     graph.add_edge("issue_deduplication", "report")
     graph.add_edge("report", "complete")
+    graph.add_edge("complete", END)
+    return graph
+
+
+def _build_task_review_graph() -> StateGraph:
+    graph = StateGraph(ReviewState, context_schema=ReviewRunContext)
+    for name, node in (("intake", intake_node), ("repo_prepare", repo_prepare_node),
+                       ("diff_parse", diff_parse_node), ("repo_index", repo_index_node),
+                       ("project_detection", project_detection_node), ("review_plan", review_plan_node),
+                       ("task_review_runtime", task_review_runtime_node), ("report", report_node),
+                       ("complete", complete_node)):
+        graph.add_node(name, node)
+    graph.set_entry_point("intake")
+    for before, after in (("intake", "repo_prepare"), ("repo_prepare", "diff_parse"),
+                          ("diff_parse", "repo_index"), ("repo_index", "project_detection"),
+                          ("project_detection", "review_plan"), ("review_plan", "task_review_runtime"),
+                          ("task_review_runtime", "report"), ("report", "complete")):
+        graph.add_edge(before, after)
     graph.add_edge("complete", END)
     return graph
 

@@ -6,6 +6,7 @@ import type {
   ReviewTask,
   TaskStepProgress,
   ReviewUnitResult,
+  TaskRuntimeRetryResult,
   ValidationBackend,
 } from "../types/review";
 import type {
@@ -119,8 +120,8 @@ export async function getAvailableModels(): Promise<ModelCatalogResponse> {
 export async function retryReviewUnit(
   taskId: string,
   unitId: string,
-): Promise<ReviewUnitResult> {
-  return request<ReviewUnitResult>(`/api/reviews/${taskId}/units/${unitId}/retry`, {
+): Promise<ReviewUnitResult | TaskRuntimeRetryResult> {
+  return request<ReviewUnitResult | TaskRuntimeRetryResult>(`/api/reviews/${taskId}/units/${unitId}/retry`, {
     method: "POST",
   });
 }
