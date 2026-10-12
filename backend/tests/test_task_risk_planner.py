@@ -109,9 +109,10 @@ def test_v2_investigation_uses_bound_evidence_instead_of_unrelated_file_archive(
     assert derivation.data["leads"]["bound"]["status"] == "scheduled"
 
 
-async def test_risk_planner_version_is_frozen_even_when_catalog_is_empty(production_input, persistence):
+@pytest.mark.parametrize("version", ["risk-planner-v2", "risk-planner-v3"])
+async def test_risk_planner_version_is_frozen_even_when_catalog_is_empty(production_input, persistence, version):
     state, provider, calls = production_input
-    state["task_runtime_configuration"]["risk_planner_version"] = "risk-planner-v2"
+    state["task_runtime_configuration"]["risk_planner_version"] = version
     state["_provider"] = provider
     repository = persistence[0]
     repository.create_task(ReviewTask(id="run", pr_url=state["pr_url"], engine="task_review_v1",
@@ -135,8 +136,112 @@ async def test_unknown_planner_version_rejected_before_any_dispatch(production_i
     assert not calls
 
 
-def test_new_task_configuration_freezes_v2():
-    assert task_runtime_configuration()["risk_planner_version"] == "risk-planner-v2"
+def test_new_task_configuration_freezes_v3():
+    assert task_runtime_configuration()["risk_planner_version"] == "risk-planner-v3"
+
+
+@pytest.mark.parametrize("changed_side", ["caller", "callee", "both"])
+def test_v3_investigates_either_changed_endpoint_without_inventing_coverage(changed_side):
+    goals, items, graph = relationship_fixture()
+    selected = [goal for goal in goals if goal.goal_id in
+                ({"caller", "callee"} if changed_side == "both" else {changed_side})]
+    risks = build_task_risk_catalog(selected, items, graph, planner_version="risk-planner-v3")
+    assert len(risks) == 1 and risks[0]["not_scheduled_reason"] is None
+    assert set(risks[0]["related_goal_ids"]) == {goal.goal_id for goal in selected}
+    assert {request["file_path"] for request in risks[0]["evidence_requests"]} == {"src/a.py", "src/b.py"}
+    assert risks[0]["origin_work_item_id"] in {goal.goal_id + "-work" for goal in selected}
+    if changed_side != "both":
+        assert not build_task_risk_catalog(selected, items, graph, planner_version="risk-planner-v2")
+
+
+def test_v3_ignores_relationship_when_neither_changed_symbol_is_related():
+    goals, items, graph = relationship_fixture()
+    selected = [goal for goal in goals if goal.goal_id.startswith("unrelated")]
+    assert not build_task_risk_catalog(selected, items, graph, planner_version="risk-planner-v3")
+
+
+def test_v3_one_relationship_groups_related_hunks_once_and_supports_same_unit():
+    goals, items, graph = relationship_fixture()
+    goals = [goal.model_copy(update={"unit_id": "same"}) for goal in goals]
+    goals.append(goals[0].model_copy(update={"goal_id": "caller-second", "start_line": 14, "end_line": 15}))
+    risks = build_task_risk_catalog(goals, items, graph, planner_version="risk-planner-v3")
+    assert len(risks) == 1
+    assert risks[0]["related_goal_ids"] == ["callee", "caller", "caller-second"]
+
+
+@pytest.mark.parametrize("target_path", ["src/outside.py", ".env"])
+def test_v3_unchanged_endpoint_cannot_expand_frozen_permissions(tmp_path, target_path):
+    runtime, steps, derivation, messages = configured(tmp_path, [], risk_planner_version="risk-planner-v3")
+    goal = derivation.initial_goals["t1"]
+    graph = {"symbols": [
+        {"id": goal.target_ref + "::caller", "file": goal.target_ref, "start_line": 1, "end_line": 1},
+        {"id": target_path + "::callee", "file": target_path, "start_line": 1, "end_line": 1}],
+        "edges": [{"type": "calls", "source": goal.target_ref + "::caller", "target": target_path + "::callee"}]}
+    derivation.risk_catalog = build_task_risk_catalog([goal], [steps["w1"].executor.work_item], graph,
+                                                     planner_version="risk-planner-v3")
+    assert len(derivation.risk_catalog) == 1
+    derivation.refresh()
+    report = project_task_runtime(runtime, steps, [goal], termination_reason="running")
+    assert len(steps) == 1 and not messages
+    assert report.unscheduled_leads[0]["reason"] == "no_legal_evidence_path"
+
+
+async def test_production_v3_reads_unchanged_caller_and_preserves_coverage_on_restore(production_input, persistence):
+    state, provider, _ = production_input
+    root = Path(state["repo_path"])
+    def git(*args):
+        return subprocess.run(["git", "-C", str(root), *args], capture_output=True,
+                              check=True, encoding="utf-8").stdout.strip()
+    (root / "a.py").write_text("from b import other\ndef answer():\n    return other().value\n", encoding="utf-8")
+    (root / "b.py").write_text("def other():\n    return object()\n", encoding="utf-8")
+    git("add", "a.py", "b.py")
+    git("commit", "-m", "caller base")
+    state["base_sha"] = git("rev-parse", "HEAD")
+    (root / "b.py").write_text("def other():\n    return None\n", encoding="utf-8")
+    git("add", "b.py")
+    git("commit", "-m", "callee head")
+    state["head_sha"] = git("rev-parse", "HEAD")
+    state["changed_files"] = [value.model_dump(mode="json") for value in
+        DiffParser().parse(git("diff", "--unified=3", state["base_sha"], state["head_sha"]))]
+    unit = state["review_plan"]["review_units"][0]
+    state["review_plan"]["review_units"] = [{**unit, "primary_files": ["b.py"], "related_files": [], "diff_hunk_ids": []}]
+    state["repository_graph"] = {"symbols": [
+        {"id": "a.py::answer", "file": "a.py", "start_line": 2, "end_line": 3},
+        {"id": "b.py::other", "file": "b.py", "start_line": 1, "end_line": 2}],
+        "edges": [{"type": "calls", "source": "a.py::answer", "target": "b.py::other"}]}
+    state["task_runtime_configuration"].update(risk_planner_version="risk-planner-v3", prompt_version="task-review-prompt-v5")
+    calls = []
+    class SDK:
+        async def ainvoke(self, messages):
+            payload = json.loads(messages[1].content.split("\n")[0])
+            calls.append(payload)
+            if payload["task"]["kind"] == "inspect":
+                raw = {"kind": "submit", "examinations": [{"target_id": goal["goal_id"],
+                    "disposition": "examined", "evidence_ids": payload["active_evidence_ids"],
+                    "reason": "检查变更"} for goal in payload["goals"]]}
+                assert {goal["target_ref"] for goal in payload["goals"]} == {"b.py"}
+            else:
+                assert payload["task"]["kind"] == "investigate"
+                assert any(value["file_path"] == "a.py" and "other().value" in value["content"]
+                           for value in payload["active_evidence"])
+                raw = {"kind": "submit", "investigation": {"answer": "refuted",
+                    "evidence_ids": payload["active_evidence_ids"], "limitations": [], "reason": "stub 调查结论"}}
+            return AIMessage(content=json.dumps(raw), usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15})
+    provider._build_chat_model = lambda *args: SDK()
+    state["_provider"] = provider
+    repository = persistence[0]
+    repository.create_task(ReviewTask(id="run", pr_url=state["pr_url"], engine="task_review_v1",
+                                     task_runtime_configuration=state["task_runtime_configuration"]))
+    state["_coordination_repository"] = repository
+    report = (await task_review_runtime_node(state))["task_runtime_report"]
+    assert len(calls) == 2 and report["settled_tokens"] == 30
+    assert {goal["target_ref"] for goal in report["initial_scope_coverage"]} == {"b.py"}
+    assert report["scope_complete"] and report["admitted_investigations"][0]["answer"] == "refuted"
+    assert any(observation.get("status") == "completed" for item in report["work_items"]
+               for observation in item["tool_observations"])
+    restored = (await task_review_runtime_node(state))["task_runtime_report"]
+    assert len(calls) == 2 and restored["settled_tokens"] == 30
+    assert restored["initial_scope_coverage"] == report["initial_scope_coverage"]
 
 
 async def test_production_v2_investigation_binds_both_files_and_restores_without_resend(production_input, persistence):
