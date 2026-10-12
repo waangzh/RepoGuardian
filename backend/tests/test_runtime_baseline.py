@@ -175,6 +175,30 @@ def test_pending_reservations_do_not_invent_an_extra_unknown_attempt():
     assert report["unreconciled_reservations"] is True
 
 
+def test_successful_retry_binds_known_usage_and_keeps_failed_attempt_unknown():
+    result = _result()
+    result["model_requests"][0]["attempt"] = 2
+    result["model_requests"][1]["attempt"] = 2
+    result["model_requests"][:0] = [
+        {"request_id": "request-1", "attempt": 1, "status": "started", "operation": "review_step"},
+        {"request_id": "request-1", "attempt": 1, "status": "failed"},
+    ]
+    known = result["run_budget"]["attempts"]["attempt-1"]
+    result["run_budget"]["attempts"]["failed-attempt"] = {
+        **known, "attempt_id": "failed-attempt", "actual_tokens": None, "usage_available": False}
+    result["run_budget"].update(calls_consumed=2, unknown_reserved=20)
+    report = reconcile_wire_usage(result)
+    assert report["integrity"] == "unknown" and report["errors"] == []
+    assert report["wire_attempts"] == 2 and report["unknown_usage_attempts"] == 1
+    assert report["observed_total_tokens"] == 10 and report["actual_total_tokens"] is None
+    assert report["attempts"][0]["actual_total_tokens"] is None
+    assert report["attempts"][1]["attempt_id"] == "attempt-1"
+    result["run_budget"]["attempts"]["another-known"] = {**known, "attempt_id": "another-known"}
+    ambiguous = reconcile_wire_usage(result)
+    assert ambiguous["integrity"] == "inconsistent"
+    assert "ledger_attempt_not_unique" in ambiguous["errors"]
+
+
 def test_pre_send_rejection_is_separate_from_wire_usage():
     result = _result()
     result["model_requests"].append({
