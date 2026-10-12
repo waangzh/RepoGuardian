@@ -57,6 +57,7 @@ class InspectTaskStep:
                                                                  spec.snapshot_base_sha))
         self.pending_read: RuntimeReadResponse | None = None
         self.repair_errors: list[dict] = []
+        self.rejected_items: list[dict] = []
         self.last_response: str | None = None
         self.usages = []
         self._lock = asyncio.Lock()
@@ -113,10 +114,14 @@ class InspectTaskStep:
                     "recent_tool_observations": self.tool_observations}, ensure_ascii=False))
             if self.repair_errors:
                 from dataclasses import replace
-                request = replace(request, prompt=request.prompt + "\n" + json.dumps({
+                feedback = {
                     "correction": self.repair_errors,
                     "instruction": "Only resubmit rejected items; accepted results are stored by server.",
-                }, ensure_ascii=False))
+                }
+                if executor.spec.prompt_version == "task-review-prompt-v5":
+                    feedback.update(rejected_items=self.rejected_items,
+                        accepted_target_ids=sorted(executor.projection.accepted_target_ids))
+                request = replace(request, prompt=request.prompt + "\n" + json.dumps(feedback, ensure_ascii=False))
 
             async def bind_attempt(attempt, admission):
                 executor.request_id = attempt.request_id
@@ -177,11 +182,36 @@ class InspectTaskStep:
         if schema_errors and executor.work_item.format_corrections < 1:
             executor.work_item.format_corrections += 1
             self.repair_errors = schema_errors
-        page_advanced = executor.advance_page()
+        self.rejected_items = self._rejected_items(raw, schema_errors) if self.repair_errors else []
+        page_advanced = executor.advance_page() if not self.repair_errors else False
         self.last_observation = {"action": "model", "errors": [asdict(error) for error in parsed.errors],
                 "pending_goals": sorted(executor.projection.pending_target_ids),
                 "correction_pending": bool(self.repair_errors), "page_advanced": page_advanced}
         return self.last_observation
+
+    def _rejected_items(self, raw, errors) -> list[dict]:
+        """保留本次被拒项的最小原文，供一次纠错只重交这些项。"""
+        if not raw:
+            return []
+        try:
+            value = json.loads(raw)
+        except (TypeError, ValueError):
+            return []
+        if not isinstance(value, dict):
+            return []
+        rejected = []
+        for field in ("examinations", "candidates", "leads"):
+            indices = {item.get("index") for item in errors
+                       if item.get("item_type") == field and isinstance(item.get("index"), int)}
+            for index in sorted(indices):
+                items = value.get(field)
+                if isinstance(items, list) and 0 <= index < len(items):
+                    rejected.append({"item_type": field, "index": index, "item": items[index]})
+        for field in ("investigation", "verification", "read"):
+            if any(item["item_type"] == field for item in errors):
+                rejected.append({"item_type": field, "index": None,
+                    "item": value if field == "read" else value.get(field)})
+        return rejected
 
     async def _read(self) -> dict:
         read = self.pending_read

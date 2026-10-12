@@ -77,7 +77,7 @@ class TaskRuntimeCheckpoint:
     def _session(step):
         executor = step.executor
         projection = executor.projection
-        return {
+        session = {
             "examinations": {k: v.model_dump(mode="json") for k, v in projection.examinations.items()},
             "candidates": {k: v.model_dump(mode="json") for k, v in projection.candidates.items()},
             "leads": [v.model_dump(mode="json") for v in projection.leads],
@@ -98,6 +98,9 @@ class TaskRuntimeCheckpoint:
             "verification": projection.verification.model_dump(mode="json") if projection.verification else None,
             "invalidated_results": projection.invalidated_results,
         }
+        if executor.spec.prompt_version == "task-review-prompt-v5":
+            session["rejected_items"] = step.rejected_items
+        return session
 
     @staticmethod
     def _restore_session(step, payload):
@@ -116,6 +119,7 @@ class TaskRuntimeCheckpoint:
         executor.request_id, executor.attempt_id = payload["request_id"], payload["attempt_id"]
         step.pending_read = RuntimeReadResponse.model_validate(payload["pending_read"]) if payload["pending_read"] else None
         step.repair_errors = payload["repair_errors"]
+        step.rejected_items = payload.get("rejected_items", [])
         step.store = UnitEvidenceStore.model_validate(payload["store"])
         executor.page_index = payload["page_index"]
         executor.page_examinations = {

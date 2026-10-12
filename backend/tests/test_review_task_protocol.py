@@ -3,6 +3,7 @@ from app.services.review_task_executor import ReviewTaskExecutor
 from app.services.review_task_protocol import TaskReviewV1Protocol
 from runtime_v1_fixtures import evidence_catalog
 import json
+import hashlib
 import pytest
 
 
@@ -103,3 +104,39 @@ def test_v2_keeps_validation_contract_but_separates_review_from_empty_findings_e
         assert executor.projection.examinations and executor.projection.candidates
     with pytest.raises(ValueError):
         ReviewRunSpec.model_validate({**spec.model_dump(), "prompt_version": "unrecognized"})
+
+
+def test_v5_compacts_diff_without_losing_removed_code_or_active_source():
+    spec = ReviewRunSpec(run_id="run", snapshot_head_sha="a" * 40, snapshot_base_sha="b" * 40,
+        diff_manifest_hash="manifest", model_provider="stub", model_name="model", policy_version="p",
+        max_tokens=100_000, max_calls=5, prompt_version="task-review-prompt-v4")
+    goal = ReviewGoal(goal_id="g1", unit_id="u1", kind="inspect", target_ref="src/a.py", end_line=3)
+    item = ReviewWorkItem(work_item_id="w1", kind="inspect", goal_ids=["g1"], scope_files=["src/a.py"])
+    content = "def answer():\n    return value\n# end"
+    catalog = evidence_catalog("e1")
+    catalog["e1"].update(content=content, end_line=3, content_hash=hashlib.sha256(content.encode()).hexdigest(),
+        canonical_change={"goal_id": "g1", "hunk_id": "h1", "hunk_hash": "frozen-hunk",
+            "new_start": 1, "new_length": 3, "old_start": 1, "old_length": 4, "lines": [
+                {"kind": "context", "content": "def answer():", "new_line_no": 1, "old_line_no": 1},
+                {"kind": "deleted", "content": "    return original", "new_line_no": None, "old_line_no": 2},
+                {"kind": "added", "content": "    return value", "new_line_no": 2, "old_line_no": None},
+                {"kind": "context", "content": "# end", "new_line_no": 3, "old_line_no": 3},
+                {"kind": "deleted", "content": "# removed tail", "new_line_no": None, "old_line_no": 4},
+            ]})
+    def prepare(version, selected_goal=goal):
+        return json.loads(TaskReviewV1Protocol(spec.model_copy(update={"prompt_version": version})).prepare(
+            item, [selected_goal], active_evidence_ids={"e1"}, evidence_catalog=catalog).prompt)
+    old, new = prepare("task-review-prompt-v4"), prepare("task-review-prompt-v5")
+    assert old["active_evidence"] == new["active_evidence"]
+    assert old["response"] == new["response"]
+    change = new["canonical_changes"][0]
+    assert change["lines"] == [line for line in old["canonical_changes"][0]["lines"] if line["kind"] != "context"]
+    assert change["hunk_hash"] == "frozen-hunk"
+    assert change["visible_head_start"] == 1 and change["visible_head_end"] == 3
+    assert len(old["canonical_changes"][0]["lines"]) == 5
+    assert new["active_evidence"][0]["content"] == content
+    second_page = prepare("task-review-prompt-v5", goal.model_copy(update={"start_line": 2, "end_line": 2}))
+    assert [line["content"] for line in second_page["canonical_changes"][0]["lines"]] == [
+        "    return original", "    return value"]
+    tail_page = prepare("task-review-prompt-v5", goal.model_copy(update={"start_line": 3, "end_line": 3}))
+    assert tail_page["canonical_changes"][0]["lines"][0]["content"] == "# removed tail"
