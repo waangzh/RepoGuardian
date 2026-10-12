@@ -355,7 +355,8 @@ def implementation_digest() -> str:
 async def run_dataset(lock_path: Path, output: Path, provider, *, sample_ids: list[str] | None = None,
                       limit: int | None = None, timeout_seconds: float = 1800,
                       diff_lock_path: Path | None = None, experiment_plan=None, experiment_group=None,
-                      experiment_stage=None, first_gate=None, experiment_registry: Path | None = None) -> dict:
+                      experiment_stage=None, first_gate=None, quality_gate=None,
+                      experiment_registry: Path | None = None) -> dict:
     data = await asyncio.to_thread(lock_path.read_bytes)
     lock = DatasetLock.model_validate_json(data)
     experiment = None
@@ -370,7 +371,7 @@ async def run_dataset(lock_path: Path, output: Path, provider, *, sample_ids: li
     if experiment_plan is not None:
         from app.evaluation.runtime_experiments import validate_experiment_plan, GROUPS, FIXED_SETTINGS
         validate_experiment_plan(experiment_plan, data, diff_data or b"", experiment_group,
-                                 experiment_stage, sample_ids, first_gate)
+                                 experiment_stage, sample_ids, first_gate, quality_gate)
         if await asyncio.to_thread(implementation_digest) != experiment_plan["implementation_sha256"]:
             raise ValueError("experiment implementation changed; new frozen audit plan required")
         if limit is not None or timeout_seconds != experiment_plan["timeout_seconds"]:

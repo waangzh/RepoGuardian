@@ -21,19 +21,54 @@ from test_phase6a_persistence import persistence as persistence
 def frozen_plan():
     payload = {"version": "runtime-experiments-v1", "lock_sha256": sha256(b"lock"),
         "diff_lock_sha256": sha256(b"diff"), "groups": GROUPS, "settings": FIXED_SETTINGS,
-        "first_sample_id": "first", "sample_ids": ["first", "a", "b", "c", "d"]}
+        "first_sample_id": "first", "sample_ids": ["first", "a", "b", "c", "d"],
+        "screening": {"token_reduction": 0.25}}
     return {**payload, "plan_sha256": stable_hash(payload)}
 
 
 @pytest.mark.parametrize("group", list(GROUPS))
 def test_remaining_requires_exact_same_group_successful_first_gate(group):
     plan = frozen_plan()
-    gate = {"plan_sha256": plan["plan_sha256"], "group": group, "admitted": True}
+    first_result = {"sample": "first"}
+    gate = {"version": "runtime-first-gate-v1", "plan_sha256": plan["plan_sha256"], "group": group,
+            "sample_id": "first", "result_sha256": stable_hash(first_result), "admitted": True,
+            "fixed_scope_coverage": {"not_worse_than_baseline": True}}
+    quality_payload = {"version": "runtime-quality-gate-v1", "plan_sha256": plan["plan_sha256"],
+        "group": group, "sample_id": "first", "result_sha256": gate["result_sha256"],
+        "adjudication_status": "complete", "quality_passed": True, "expand_allowed": True,
+        "metrics": {"token_reduction": 0.25, "lost_baseline_defects": 0,
+                     "new_false_positives": 0, "baseline_false_positives": 0,
+                     "new_cannot_determine": 0}}
+    quality = {**quality_payload, "gate_sha256": stable_hash(quality_payload)}
     validate_experiment_plan(plan, b"lock", b"diff", group, "first", ["first"])
-    validate_experiment_plan(plan, b"lock", b"diff", group, "remaining", ["a", "b", "c", "d"], gate)
+    validate_experiment_plan(plan, b"lock", b"diff", group, "remaining", ["a", "b", "c", "d"], gate, quality)
     for bad in (None, {**gate, "admitted": False}, {**gate, "group": "wrong"}):
         with pytest.raises(ValueError, match="successful same-group first gate"):
-            validate_experiment_plan(plan, b"lock", b"diff", group, "remaining", ["a", "b", "c", "d"], bad)
+            validate_experiment_plan(plan, b"lock", b"diff", group, "remaining", ["a", "b", "c", "d"], bad, quality)
+    with pytest.raises(ValueError, match="independent quality gate"):
+        validate_experiment_plan(plan, b"lock", b"diff", group, "remaining", ["a", "b", "c", "d"], gate, None)
+    for field, value in (("plan_sha256", "wrong"), ("group", "wrong"),
+                         ("result_sha256", "other"), ("adjudication_status", "pending")):
+        bad_quality = {**quality_payload, field: value}
+        bad_quality["gate_sha256"] = stable_hash(bad_quality)
+        with pytest.raises(ValueError, match="independent quality gate"):
+            validate_experiment_plan(plan, b"lock", b"diff", group, "remaining",
+                                     ["a", "b", "c", "d"], gate, bad_quality)
+    for field, value in (("token_reduction", 0.24), ("lost_baseline_defects", 1),
+                         ("new_false_positives", 1), ("new_cannot_determine", 1)):
+        bad_quality = deepcopy(quality_payload)
+        bad_quality["metrics"][field] = value
+        bad_quality["gate_sha256"] = stable_hash(bad_quality)
+        with pytest.raises(ValueError, match="joint quality/scope/cost screening"):
+            validate_experiment_plan(plan, b"lock", b"diff", group, "remaining",
+                                     ["a", "b", "c", "d"], gate, bad_quality)
+    for value in (True, None, float("nan"), "0.5"):
+        bad_quality = deepcopy(quality_payload)
+        bad_quality["metrics"]["token_reduction"] = value
+        bad_quality["gate_sha256"] = stable_hash(bad_quality)
+        with pytest.raises(ValueError, match="valid quality metrics"):
+            validate_experiment_plan(plan, b"lock", b"diff", group, "remaining",
+                                     ["a", "b", "c", "d"], gate, bad_quality)
     with pytest.raises(ValueError, match="first-one/remaining-four"):
         validate_experiment_plan(plan, b"lock", b"diff", group, "first", ["a"])
     changed = deepcopy(plan)
