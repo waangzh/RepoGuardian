@@ -30,6 +30,7 @@ from app.services.task_context_pages import build_context_pages
 from app.services.task_review_projection import project_task_runtime, task_runtime_issues, task_runtime_coverage
 from app.tools.git_tool import GitTool
 from app.services.review_planner import DeterministicReviewPlanner
+from app.services.review_input_context import build_context_evidence
 
 
 def fit_context_pages(executor, step, configuration):
@@ -48,7 +49,7 @@ def fit_context_pages(executor, step, configuration):
         catalog = deepcopy(original)
         try:
             pages = build_context_pages(executor.work_item, list(executor.goals.values()), catalog,
-                                         capacity_chars=capacity)
+                capacity_chars=capacity, chunk_evidence=executor.spec.prompt_version == "task-review-prompt-v4")
             for page in pages:
                 goals = [executor.goals[value["goal_id"]].model_copy(update={
                     "start_line": value["start_line"], "end_line": value["end_line"]}) for value in page.ranges]
@@ -69,6 +70,7 @@ def task_runtime_configuration(model=None, *, provider=None):
     resolver = getattr(provider, "resolve_request_profile", None)
     profile = resolver(selected_model) if callable(resolver) else settings.resolve_model_profile(selected_model)
     return {"provider": provider_name, "model": selected_model,
+        "prompt_version": "task-review-prompt-v4",
         "readable_scope_version": "repository-tracked-v1",
         "endpoint": getattr(provider, "_base_url", settings.openai_base_url),
         "limits": settings.run_budget_limits(), "policy_version": settings.repoguardian_review_policy_version,
@@ -119,6 +121,7 @@ def frozen_runtime_spec(state, configuration, budget, *, readable_files=()):
             "changed_files": state.get("changed_files") or [], "plan": state.get("review_plan") or {}}),
         model_provider=configuration["provider"], model_name=configuration["model"],
         policy_version=configuration["policy_version"], max_tokens=budget.max_tokens, max_calls=budget.max_calls,
+        prompt_version=configuration.get("prompt_version", "task-review-prompt-v1"),
         readable_scope_files=tuple(sorted(readable_files)))
 
 
@@ -159,7 +162,16 @@ async def source_catalog(goals, spec, root, git, changed_files=None):
                     "new_start": hunk.new_start, "new_length": hunk.new_length,
                     "lines": [line.model_dump(mode="json") for line in hunk.lines]}
                 break
-        catalog["evidence-" + stable_hash(value)[:32]] = value
+        if spec.prompt_version == "task-review-prompt-v4":
+            chunks, _ = build_context_evidence([{**value, "file": goal.target_ref}],
+                                              spec.snapshot_head_sha, spec.snapshot_base_sha)
+            for chunk in chunks:
+                # 每块有自己的原文、范围和hash；保留规范diff的目标绑定。
+                catalog[chunk["evidence_id"]] = {**chunk, "file_path": goal.target_ref,
+                    "source": "fixed_snapshot", "hunk_id": goal.goal_id,
+                    "canonical_change": value.get("canonical_change")}
+        else:
+            catalog["evidence-" + stable_hash(value)[:32]] = value
     return catalog
 
 
@@ -239,8 +251,7 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
                 goal_ids=[goal.goal_id for goal in selected], scope_files=paths, sequence=len(items),
                 readable_scope_hash=spec.readable_scope_hash if expanded_scope else None)
             initial = {key: deepcopy(value) for key, value in catalog.items()
-                       if any(value["file_path"] == goal.target_ref and value["start_line"] == goal.start_line
-                              and value["end_line"] == goal.end_line for goal in selected)}
+                       if any(value["hunk_id"] == goal.goal_id for goal in selected)}
             executor = ReviewTaskExecutor(spec, item, selected, active_evidence_ids=set(initial),
                                           evidence_catalog=initial, request_id="not-dispatched")
             scope = ReviewToolScope(review_unit_id=identity, commentable_files={goal.target_ref for goal in selected},
@@ -251,7 +262,7 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
                 changed_files=changed, file_index=state.get("file_index"), symbol_index=state.get("symbol_index"),
                 repository_graph=state.get("repository_graph"))
             # 无原文的目标继续显示缺口；不能用空 catalog 假装 examined。
-            if len(initial) == len(selected):
+            if all(executor._covers(goal, list(initial)) for goal in selected):
                 fit_context_pages(executor, steps[identity], configuration)
             items.append(item)
     experiment = configuration.get("experiment") or {}
