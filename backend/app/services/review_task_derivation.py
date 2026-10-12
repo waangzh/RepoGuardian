@@ -103,6 +103,8 @@ class TaskReviewDerivation:
         goals = {**self.initial_goals, **derived_goals}
         catalog = deepcopy(self._all_evidence())
         active = {identity for identity, value in catalog.items() if value["file_path"] in item.scope_files}
+        if item.kind.value == "verify" and root.executor.spec.prompt_version == "task-review-prompt-v4":
+            active = {*item.required_evidence_ids, *item.counter_evidence_ids}
         executor = ReviewTaskExecutor(root.executor.spec, item, list(goals.values()),
             active_evidence_ids=active, evidence_catalog=catalog, request_id="not-dispatched")
         scope = root.scope.model_copy(update={"review_unit_id": item.work_item_id,
