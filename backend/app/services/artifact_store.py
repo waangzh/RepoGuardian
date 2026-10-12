@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
+from tempfile import NamedTemporaryFile
+from urllib.parse import unquote
 
 from app.core.config import settings
 
@@ -23,6 +27,8 @@ class LocalArtifactStore:
         self.root = (root or settings.repoguardian_artifact_dir).resolve()
 
     def put_text(self, *, task_id: str, kind: str, content: str) -> StoredArtifact:
+        if not re.fullmatch(r"[a-zA-Z0-9_-]+", kind):
+            raise ValueError("invalid artifact kind")
         data = content.encode("utf-8")
         digest = hashlib.sha256(data).hexdigest()
         artifact_id = uuid4().hex
@@ -30,9 +36,18 @@ class LocalArtifactStore:
         if self.root not in directory.parents:
             raise ValueError("artifact path escapes configured root")
         directory.mkdir(parents=True, exist_ok=True)
-        path = directory / f"{kind}-{digest}.txt"
+        path = (directory / f"{kind}-{digest}.txt").resolve()
+        if directory not in path.parents:
+            raise ValueError("artifact path escapes task directory")
         if not path.exists():
-            path.write_bytes(data)
+            # 并发读者只能看到完整文件；崩溃不能留下被 hash 命名的半份响应。
+            with NamedTemporaryFile(dir=directory, delete=False) as temporary:
+                temporary.write(data)
+                temporary_path = Path(temporary.name)
+            try:
+                os.replace(temporary_path, path)
+            finally:
+                temporary_path.unlink(missing_ok=True)
         return StoredArtifact(
             id=artifact_id,
             uri=path.as_uri(),
@@ -43,7 +58,8 @@ class LocalArtifactStore:
     def read_text(self, uri: str) -> str:
         if not uri.startswith("file:///"):
             raise ValueError("unsupported artifact URI")
-        path = Path(uri.removeprefix("file:///")).resolve()
+        path = Path(unquote(uri.removeprefix("file:///"))).resolve()
         if self.root != path and self.root not in path.parents:
             raise ValueError("artifact path escapes configured root")
-        return path.read_text(encoding="utf-8")
+        with path.open(encoding="utf-8", newline="") as handle:
+            return handle.read()
