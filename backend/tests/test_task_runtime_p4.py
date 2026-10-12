@@ -94,6 +94,7 @@ def production_input(tmp_path):
     changed = DiffParser().parse(git("diff", "--unified=3", base, head))
     plan = DeterministicReviewPlanner().plan(changed, base_sha=base, head_sha=head, model="fixture")
     configuration = {"provider": "openai-compatible", "model": "fixture", "endpoint": "https://example.test/v1",
+        "readable_scope_version": "repository-tracked-v1",
         "policy_version": "test-v1", "limits": {"max_tokens": 100_000, "max_calls": 5},
         "concurrency": 2, "deadline_seconds": 10, "request_attempts": 1, "request_timeout_seconds": 60,
         "request_profile": {"context_window": 32_000}, "max_lines_per_read": 240, "max_search_results": 12}
@@ -156,6 +157,93 @@ async def test_production_spec_ignores_hot_default_changes(production_input, mon
     assert calls[0]["task"]["kind"] == "inspect"
     assert result["task_runtime_report"]["scope_complete"]
     assert result["run_budget"]["limits"]["max_tokens"] == 100_000
+    change = calls[0]["canonical_changes"][0]
+    assert {line["content"] for line in change["lines"] if line["kind"] == "deleted"} == {"    return 1"}
+    assert {line["content"] for line in change["lines"] if line["kind"] == "added"} == {"    return 2"}
+    assert all("canonical_change" not in value for value in calls[0]["active_evidence"])
+
+
+async def test_frozen_repository_scope_reads_caller_beyond_first_forty(production_input):
+    state, provider, _ = production_input
+    root = state["repo_path"]
+    for index in range(55):
+        from pathlib import Path
+        Path(root, f"caller{index:02}.py").write_text("answer()\n", encoding="utf-8")
+    subprocess.run(["git", "-C", root, "add", "."], check=True, capture_output=True)
+    subprocess.run(["git", "-C", root, "commit", "-m", "callers"], check=True, capture_output=True)
+    state["head_sha"] = subprocess.run(["git", "-C", root, "rev-parse", "HEAD"], check=True,
+        capture_output=True, encoding="utf-8").stdout.strip()
+    requests = []
+    class SDK:
+        async def ainvoke(self, messages):
+            payload = json.loads(messages[1].content.split("\n")[0])
+            requests.append(payload)
+            assert payload["readable_scope"]["file_count"] == 56
+            assert len(payload["scope_files"]) <= 40
+            if len(requests) == 1:
+                raw = {"kind": "read", "tool": "file_read", "purpose": "核对远端调用方",
+                       "arguments": {"file_path": "caller54.py", "start_line": 1, "end_line": 1}}
+            else:
+                assert any(value["file_path"] == "caller54.py" for value in payload["active_evidence"])
+                raw = {"kind": "submit", "examinations": [{"target_id": value["goal_id"],
+                    "disposition": "examined", "evidence_ids": payload["active_evidence_ids"],
+                    "reason": "核对调用方"} for value in payload["goals"]]}
+            return AIMessage(content=json.dumps(raw), usage_metadata={"input_tokens": 10,
+                "output_tokens": 5, "total_tokens": 15})
+    provider._build_chat_model = lambda *args: SDK()
+    state["_provider"] = provider
+    result = await task_review_runtime_node(state)
+    assert result["task_runtime_report"]["scope_complete"] and len(requests) == 2
+
+
+def test_executor_rejects_tampered_frozen_readable_scope():
+    from app.models.review_runtime import ReviewRunSpec, ReviewGoal, ReviewWorkItem
+    from app.services.review_task_executor import ReviewTaskExecutor
+    spec = ReviewRunSpec(run_id="scope", snapshot_head_sha="a" * 40, snapshot_base_sha="b" * 40,
+        diff_manifest_hash="diff", model_provider="fixture", model_name="fixture", policy_version="test",
+        max_tokens=10, max_calls=1, readable_scope_files=("a.py", "caller.py", ".env"))
+    goal = ReviewGoal(goal_id="g", unit_id="u", kind="inspect", target_ref="a.py")
+    item = ReviewWorkItem(work_item_id="w", kind="inspect", goal_ids=["g"], scope_files=["a.py"],
+                         readable_scope_hash=spec.readable_scope_hash)
+    executor = ReviewTaskExecutor(spec, item, [goal], active_evidence_ids=set(), request_id="r", evidence_catalog={})
+    for path in ("outside.py", ".env"):
+        result = executor.parse_and_apply({"kind": "read", "tool": "file_read", "purpose": "read",
+            "arguments": {"file_path": path, "start_line": 1, "end_line": 1}})
+        assert result.response is None
+    changed = spec.model_copy(update={"readable_scope_files": (*spec.readable_scope_files, "extra.py")})
+    with pytest.raises(ValueError, match="frozen_readable_scope_hash_mismatch"):
+        ReviewTaskExecutor(changed, item, [goal], active_evidence_ids=set(), request_id="r", evidence_catalog={})
+
+
+async def test_p4_saved_configuration_keeps_its_original_scope(production_input):
+    state, provider, calls = production_input
+    state["task_runtime_configuration"].pop("readable_scope_version")
+    state["_provider"] = provider
+    result = await task_review_runtime_node(state)
+    assert calls[0]["readable_scope"]["hash"] is None
+    assert result["task_runtime_report"]["readable_scope_hash"] is None
+    assert result["task_runtime_report"]["scope_complete"]
+
+
+async def test_production_source_range_preserves_last_blank_line(production_input):
+    from pathlib import Path
+    state, provider, calls = production_input
+    root = state["repo_path"]
+    Path(root, "a.py").write_text("def answer():\n    return 2\n\n", encoding="utf-8")
+    subprocess.run(["git", "-C", root, "add", "."], check=True, capture_output=True)
+    subprocess.run(["git", "-C", root, "commit", "-m", "blank-line"], check=True, capture_output=True)
+    head = subprocess.run(["git", "-C", root, "rev-parse", "HEAD"], check=True, capture_output=True,
+                          encoding="utf-8").stdout.strip()
+    diff = subprocess.run(["git", "-C", root, "diff", "--unified=3", state["base_sha"], head],
+                          check=True, capture_output=True, encoding="utf-8").stdout
+    changed = DiffParser().parse(diff)
+    state.update(head_sha=head, changed_files=[value.model_dump(mode="json") for value in changed],
+                 review_plan=DeterministicReviewPlanner().plan(changed, base_sha=state["base_sha"],
+                     head_sha=head, model="fixture").model_dump(mode="json"), _provider=provider)
+    result = await task_review_runtime_node(state)
+    evidence = calls[0]["active_evidence"][0]
+    assert len(evidence["content"].splitlines()) == evidence["end_line"] - evidence["start_line"] + 1 == 3
+    assert result["task_runtime_report"]["scope_complete"]
 
 
 def test_excluded_and_deleted_files_remain_in_initial_denominator(production_input):

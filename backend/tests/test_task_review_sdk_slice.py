@@ -83,6 +83,37 @@ async def test_sdk_stub_read_tool_submit_uses_real_provider_budget_and_store(tmp
     assert await runtime.advance_one(steps) is None
 
 
+async def test_task_prompt_separates_transport_and_business_shape(tmp_path):
+    step, messages = make_slice(tmp_path, [{"kind": "submit", "examinations": [
+        {"target_id": "t1", "disposition": "examined", "evidence_ids": ["e1"], "reason": "核对固定目标"}]}])
+    await step.advance()
+    payload = json.loads(messages[0][1].content)
+    assert payload["submit_example"]["examinations"][0]["target_id"] == "t1"
+    assert "Never emit API transport fields" in messages[0][0].content
+    assert "type" not in payload["submit_example"]
+
+
+async def test_read_more_than_eighty_lines_saves_matching_chunk_bodies_and_hashes(tmp_path):
+    import hashlib
+    body = "return value\n" * 100
+    step, messages = make_slice(tmp_path, [{"kind": "read", "tool": "file_read",
+        "arguments": {"file_path": "src/a.py", "start_line": 1, "end_line": 100}, "purpose": "读取实现"}])
+    (tmp_path / "src/a.py").write_text(body, encoding="utf-8")
+    step.git.get_file_content_at_revision = lambda *args: body
+    await step.advance()
+    observation = await step.advance()
+    assert observation["status"] == "completed" and len(observation["evidence_ids"]) == 2
+    assert step.executor.evidence_error(observation["evidence_ids"]) is None
+    for identity in observation["evidence_ids"]:
+        value = step.executor.evidence_catalog[identity]
+        assert value["content_hash"] == hashlib.sha256(value["content"].encode()).hexdigest()
+        assert len(value["content"].splitlines()) == value["end_line"] - value["start_line"] + 1
+    request = step.protocol.prepare(step.executor.work_item, step.executor.current_goals(),
+        active_evidence_ids=step.executor.active_evidence_ids, evidence_catalog=step.executor.evidence_catalog)
+    assert len(json.loads(request.prompt)["active_evidence"]) == 3
+    assert len(messages) == 1 and step.budget.calls_consumed == 1
+
+
 async def test_malformed_output_is_billed_and_correction_is_once_for_logical_work_item(tmp_path):
     step, messages = make_slice(tmp_path, ["not json", "not json", "not json"])
     assert (await step.advance())["correction_pending"]

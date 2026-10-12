@@ -36,18 +36,20 @@ class TaskReviewDerivation:
     """结果 → Policy → 严格归并 → 取证/独立验证。没有私有异步消费循环。"""
 
     def __init__(self, runtime, steps, *, changed_files=None, rule_ids=None,
-                 risk_catalog=None, counter_evidence_ids=None, max_derived_items=256):
+                 risk_catalog=None, counter_evidence_ids=None, max_derived_items=256,
+                 investigations_enabled=True):
         if not steps or not 1 <= max_derived_items <= 1_000:
             raise ValueError("invalid derived task configuration")
         self.runtime, self.steps = runtime, steps
         self.initial_ids = set(steps)
         self.initial_goals = {key: goal for step in steps.values() for key, goal in step.executor.goals.items()}
-        self.allowed_files = set(path for step in steps.values() for path in step.executor.work_item.scope_files)
+        self.allowed_files = set(path for step in steps.values() for path in step.executor.readable_files)
         self.changed_files = changed_files or []
         self.rule_ids = rule_ids or {}
         self.risk_catalog = risk_catalog or []
         self.counter_evidence_ids = counter_evidence_ids or {}
         self.max_derived_items = max_derived_items
+        self.investigations_enabled = investigations_enabled
         self.policy = IssuePolicyService()
         self.data = {"candidates": {}, "lead_keys": {}, "leads": {}, "processed_candidates": [],
                      "processed_leads": [], "risk_catalog_processed": False, "verification_cache": {},
@@ -69,10 +71,13 @@ class TaskReviewDerivation:
         return self.steps[origin]
 
     def frozen_configuration(self):
-        return {"changed_files": [value.model_dump(mode="json") if hasattr(value, "model_dump") else value
+        result = {"changed_files": [value.model_dump(mode="json") if hasattr(value, "model_dump") else value
                                   for value in self.changed_files], "rule_ids": self.rule_ids,
                 "risk_catalog": self.risk_catalog, "max_derived_items": self.max_derived_items,
                 "counter_evidence_ids": self.counter_evidence_ids, "initial_ids": sorted(self.initial_ids)}
+        if not self.investigations_enabled:
+            result["investigations_enabled"] = False
+        return result
 
     def _new_item(self, origin, kind, identity, goal, *, scope, **subject):
         root = self._root(origin)
@@ -83,7 +88,8 @@ class TaskReviewDerivation:
         item = ReviewWorkItem(work_item_id=identity, kind=kind, goal_ids=[goal.goal_id],
             scope_files=sorted(scope), unit_id=root.executor.work_item.unit_id or goal.unit_id,
             sequence=len(self.steps), scheduling_class="verification" if kind == "verify" else "investigation",
-            generation=1, origin_work_item_id=root.executor.work_item.work_item_id, **subject)
+            generation=1, origin_work_item_id=root.executor.work_item.work_item_id,
+            readable_scope_hash=root.executor.work_item.readable_scope_hash, **subject)
         return self.restore_item(item, {goal.goal_id: goal})
 
     def restore_item(self, item, derived_goals):
@@ -92,13 +98,15 @@ class TaskReviewDerivation:
         if set(item.scope_files) - self.allowed_files:
             raise ValueError("derived task cannot expand frozen run scope")
         root = self.steps[item.origin_work_item_id]
+        if item.readable_scope_hash != root.executor.work_item.readable_scope_hash:
+            raise ValueError("derived task readable scope identity changed")
         goals = {**self.initial_goals, **derived_goals}
         catalog = deepcopy(self._all_evidence())
         active = {identity for identity, value in catalog.items() if value["file_path"] in item.scope_files}
         executor = ReviewTaskExecutor(root.executor.spec, item, list(goals.values()),
             active_evidence_ids=active, evidence_catalog=catalog, request_id="not-dispatched")
         scope = root.scope.model_copy(update={"review_unit_id": item.work_item_id,
-            "readable_files": set(item.scope_files), "seed_files": set(item.scope_files),
+            "readable_files": executor.readable_files, "seed_files": set(item.scope_files),
             "commentable_files": {goals[key].target_ref for key in item.related_goal_ids}})
         step = InspectTaskStep(executor, root.provider, root.budget, scope,
                                git_tool=root.git, context_tool=root.tools, search_tool=root.search_tool,
@@ -146,7 +154,7 @@ class TaskReviewDerivation:
                     lines[index] = line
             return "\n".join(lines.get(index, "") for index in range(1, max(lines) + 1))
         resolver = EvidenceResolver(DiffIndex(self.changed_files), file_loader=load_file,
-                                    repository_files=set(root.executor.work_item.scope_files))
+                                    repository_files=root.executor.readable_files)
         issue = resolver.resolve_issue(issue, unit)
         check = self.policy.check(issue, [unit])
         if issue.primary_evidence.resolved_start_line != primary["start_line"]:
@@ -260,6 +268,10 @@ class TaskReviewDerivation:
             record["verification_work_item_id"] = identity
 
     def _investigation(self, origin, source_id, proposition, target_ids, requests, *, source):
+        if not self.investigations_enabled:
+            self.data["leads"][source_id] = {"status": "not_scheduled",
+                "reason": "experiment_investigations_disabled", "proposition": proposition, "source": source}
+            return None
         source_step = self.steps[origin]
         targets = [self.initial_goals[identity] for identity in target_ids if identity in self.initial_goals]
         if not targets or not requests or any(request.file_path not in self.allowed_files
@@ -348,7 +360,7 @@ class TaskReviewDerivation:
                                 projection.accepted_target_ids.discard(key)
                             projection.pending_target_ids.update(affected)
                             for e, value in self.steps[identity].executor.evidence_catalog.items():
-                                if value["file_path"] in parent.executor.work_item.scope_files:
+                                if value["file_path"] in parent.executor.readable_files:
                                     parent.executor.evidence_catalog[e] = value
                                     parent.executor.active_evidence_ids.add(e)
                             item = parent.executor.work_item

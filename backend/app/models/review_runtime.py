@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 from enum import StrEnum
+import hashlib
+import json
 from pathlib import PurePosixPath
 from typing import Annotated, Literal
 
@@ -94,11 +96,21 @@ class ReviewRunSpec(BaseModel):
     protocol_version: Literal["task-review-protocol-v1"] = "task-review-protocol-v1"
     max_tokens: int = Field(ge=0)
     max_calls: int = Field(ge=0)
+    readable_scope_files: tuple[RelativePath, ...] = ()
+
+    @property
+    def readable_scope_hash(self) -> str:
+        return hashlib.sha256(json.dumps(sorted(self.readable_scope_files), separators=(",", ":"),
+                                        ensure_ascii=False).encode()).hexdigest()
 
     @model_validator(mode="after")
     def different_snapshot_revisions(self) -> "ReviewRunSpec":
         if self.snapshot_head_sha == self.snapshot_base_sha:
             raise ValueError("snapshot head and base must differ")
+        for path in self.readable_scope_files:
+            _path(path)
+        if len(set(self.readable_scope_files)) != len(self.readable_scope_files):
+            raise ValueError("duplicate frozen readable path")
         return self
 
 
@@ -129,6 +141,7 @@ class ReviewWorkItem(BaseModel):
     kind: WorkItemKind
     goal_ids: list[str] = Field(min_length=1, max_length=40)
     scope_files: list[RelativePath] = Field(default_factory=list, max_length=40)
+    readable_scope_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     state: WorkItemState = WorkItemState.ready
     revision: int = Field(default=0, ge=0)
     attempt_count: int = Field(default=0, ge=0)
@@ -316,6 +329,8 @@ class TaskRuntimeReport(BaseModel):
     coverage_version: Literal["task-goals-v1"] = "task-goals-v1"
     execution_status: Literal["running", "completed", "failed", "cancelled"]
     termination_reason: str
+    readable_scope_hash: str | None = None
+    readable_file_count: int | None = Field(default=None, ge=0)
     scope_complete: bool = False
     initial_scope_coverage: list[dict] = Field(default_factory=list)
     admitted_investigations: list[dict] = Field(default_factory=list)

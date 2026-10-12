@@ -37,13 +37,18 @@ def project_task_runtime(runtime, steps, goals, *, termination_reason, budget=No
         integrity = "inconsistent"
     execution = ("cancelled" if runtime.cancelled else "failed" if termination_reason == "technical_failure"
                  else "running" if termination_reason == "running" else "completed")
+    spec = next(iter(steps.values())).executor.spec if steps else None
     return TaskRuntimeReport(execution_status=execution, termination_reason=termination_reason,
+        readable_scope_hash=spec.readable_scope_hash if spec and spec.readable_scope_files else None,
+        readable_file_count=len(spec.readable_scope_files) if spec else None,
         scope_complete=all(value["status"] == "examined" for value in outcomes),
         initial_scope_coverage=outcomes, admitted_investigations=investigations,
         unscheduled_leads=leads, findings=findings, usage_integrity=integrity,
         sent_calls=sum(attempt.sent for attempt in attempts), settled_tokens=budget.settled_actual if budget else 0,
         unknown_attempts=len(unknown), total_tokens=budget.settled_actual if budget and integrity == "complete" else None,
-        work_items=runtime.snapshot())
+        work_items=[{**item, "last_observation": steps[item["work_item_id"]].last_observation,
+                     "tool_observations": steps[item["work_item_id"]].tool_observations}
+                    for item in runtime.snapshot()])
 
 
 def task_runtime_coverage(report, changed):

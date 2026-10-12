@@ -114,6 +114,8 @@ class ObservedProvider:
                 result = await method(*args, **kwargs)
                 _, usage = unpack_model_call(result)
                 record.update(status="completed", usage=usage.model_dump(mode="json") if usage else None)
+                if name == "task_review_step":
+                    record["raw_response"] = result.value
                 return result
             except BaseException as exc:
                 usage = getattr(exc, "usage", None)
@@ -244,7 +246,7 @@ def final_audit(events: list[dict], state: dict, run_status: str) -> list[dict]:
 
 
 async def run_sample(sample: FrozenSample, provider, workdir: Path, *, timeout_seconds: float = 1800,
-                     git_tool=None, prepared_diff: PreparedDiff | None = None) -> dict:
+                     git_tool=None, prepared_diff: PreparedDiff | None = None, experiment=None) -> dict:
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive")
     observed = ObservedProvider(provider)
@@ -261,6 +263,9 @@ async def run_sample(sample: FrozenSample, provider, workdir: Path, *, timeout_s
     if state["engine"] == "task_review_v1":
         from app.graph.nodes.task_review_runtime import task_runtime_configuration
         state["task_runtime_configuration"] = task_runtime_configuration(state["model"], provider=provider)
+        if experiment is not None:
+            state["task_runtime_configuration"].update(experiment=experiment["variables"],
+                experiment_expected_scope_hash=experiment["samples"][sample.instance_id]["readable_scope_hash"])
     if prepared_diff:
         state.update(effective_base_sha=prepared_diff.effective_base_sha, diff_policy="merge_base")
     started = time.monotonic()
@@ -349,9 +354,11 @@ def implementation_digest() -> str:
 
 async def run_dataset(lock_path: Path, output: Path, provider, *, sample_ids: list[str] | None = None,
                       limit: int | None = None, timeout_seconds: float = 1800,
-                      diff_lock_path: Path | None = None) -> dict:
+                      diff_lock_path: Path | None = None, experiment_plan=None, experiment_group=None,
+                      experiment_stage=None, first_gate=None, experiment_registry: Path | None = None) -> dict:
     data = await asyncio.to_thread(lock_path.read_bytes)
     lock = DatasetLock.model_validate_json(data)
+    experiment = None
     samples = lock.samples
     diff_lock, diff_inputs, diff_data = None, {}, None
     if diff_lock_path:
@@ -360,14 +367,40 @@ async def run_dataset(lock_path: Path, output: Path, provider, *, sample_ids: li
         diff_lock.validate_dataset(lock)
         diff_inputs = {x.instance_id: x for x in diff_lock.samples}
         samples = [s for s in samples if s.instance_id in diff_inputs]
+    if experiment_plan is not None:
+        from app.evaluation.runtime_experiments import validate_experiment_plan, GROUPS, FIXED_SETTINGS
+        validate_experiment_plan(experiment_plan, data, diff_data or b"", experiment_group,
+                                 experiment_stage, sample_ids, first_gate)
+        if await asyncio.to_thread(implementation_digest) != experiment_plan["implementation_sha256"]:
+            raise ValueError("experiment implementation changed; new frozen audit plan required")
+        if limit is not None or timeout_seconds != experiment_plan["timeout_seconds"]:
+            raise ValueError("experiment sample limit or timeout cannot change")
+        for name, value in FIXED_SETTINGS.items():
+            if getattr(settings, name) != value:
+                raise ValueError("experiment live configuration mismatch: " + name)
+        if settings.repoguardian_model_request_profile.model_dump(mode="json") != experiment_plan["request_profile"]:
+            raise ValueError("experiment request profile mismatch")
+        resolved = provider.resolve_request_profile(settings.repoguardian_model)
+        if {"source": resolved.source, "profile": resolved.profile.model_dump(mode="json")} != experiment_plan["effective_model_profile"]:
+            raise ValueError("experiment effective model profile mismatch")
+        experiment = {"variables": GROUPS[experiment_group], "samples": experiment_plan["samples"]}
+        if experiment_registry is None:
+            raise ValueError("experiment requires a shared plan dispatch registry")
     if sample_ids:
+        if len(set(sample_ids)) != len(sample_ids):
+            raise ValueError("duplicate sample-id")
         if set(sample_ids) - {x.instance_id for x in samples}:
             raise ValueError("未知 sample-id")
-        samples = [x for x in samples if x.instance_id in sample_ids]
+        by_id = {x.instance_id: x for x in samples}
+        samples = [by_id[identity] for identity in sample_ids]
     if limit is not None:
         if limit < 1:
             raise ValueError("limit must be positive")
         samples = samples[:limit]
+    if experiment is not None:
+        from app.evaluation.runtime_experiments import claim_experiment_slot
+        await asyncio.to_thread(claim_experiment_slot, experiment_plan, experiment_group, experiment_stage,
+                                experiment_registry, output)
     await asyncio.to_thread(output.mkdir, parents=True, exist_ok=False)
     config = {k: v for k, v in settings.model_dump(mode="json").items()
               if k.startswith("repoguardian_") and not any(x in k for x in
@@ -379,14 +412,21 @@ async def run_dataset(lock_path: Path, output: Path, provider, *, sample_ids: li
                "implementation_sha256": await asyncio.to_thread(implementation_digest),
                "timeout_seconds": timeout_seconds, "cache_reuse": False,
                "samples": [{"instance_id": s.instance_id, "status": "not_run"} for s in samples]}
+    if experiment is not None:
+        summary["experiment"] = {"plan_sha256": experiment_plan["plan_sha256"], "group": experiment_group,
+                                  "stage": experiment_stage, "variables": experiment["variables"]}
     await asyncio.to_thread(write_json, output / "run.json", summary)
     for index, sample in enumerate(samples):
         summary["samples"][index]["status"] = "running"
         await asyncio.to_thread(write_json, output / "run.json", summary)
         result = await run_sample(sample, provider, output / "workspaces", timeout_seconds=timeout_seconds,
-                                  prepared_diff=diff_inputs.get(sample.instance_id))
+                                  prepared_diff=diff_inputs.get(sample.instance_id), experiment=experiment)
         filename = f"{index:04d}.json"
         await asyncio.to_thread(write_json, output / filename, result)
         summary["samples"][index].update(status=result["status"], result_file=filename)
         await asyncio.to_thread(write_json, output / "run.json", summary)
+        if experiment is not None and experiment_stage == "first":
+            from app.evaluation.runtime_experiments import first_sample_gate
+            gate = first_sample_gate(result, experiment_plan, experiment_group)
+            await asyncio.to_thread(write_json, output / "first-gate.json", gate)
     return summary

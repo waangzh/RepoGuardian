@@ -161,6 +161,11 @@ class ReviewTaskExecutor:
             raise ValueError("work item references unknown goal")
         self.spec = spec
         self.work_item = work_item
+        if work_item.readable_scope_hash is not None:
+            if work_item.readable_scope_hash != spec.readable_scope_hash:
+                raise ValueError("frozen_readable_scope_hash_mismatch")
+            if set(work_item.scope_files) - set(spec.readable_scope_files):
+                raise ValueError("task_seed_outside_frozen_readable_scope")
         if set(work_item.related_goal_ids) - set(goal_map):
             raise ValueError("work item references unknown related goal")
         self.goals = {identity: goal_map[identity] for identity in
@@ -174,6 +179,11 @@ class ReviewTaskExecutor:
         self.pages = []
         self.page_index = 0
         self.page_examinations: dict[str, dict[str, ExaminationResult]] = {}
+
+    @property
+    def readable_files(self) -> set[str]:
+        return set(self.spec.readable_scope_files if self.work_item.readable_scope_hash is not None
+                   else self.work_item.scope_files)
 
     def bind_pages(self, pages) -> None:
         if self.work_item.attempt_count or self.projection.examinations or self.pages:
@@ -234,7 +244,7 @@ class ReviewTaskExecutor:
             return parsed
         if isinstance(parsed.response, RuntimeReadResponse):
             path = getattr(parsed.response.arguments, "file_path", None)
-            if path is not None and (path not in self.work_item.scope_files or is_sensitive_repository_path(path)):
+            if path is not None and (path not in self.readable_files or is_sensitive_repository_path(path)):
                 parsed.errors.append(RuntimeParseError("read", None, "read_path_outside_work_item_scope"))
                 parsed.response = None
             return parsed
@@ -397,7 +407,7 @@ class ReviewTaskExecutor:
             if (evidence.get("head_sha") != self.spec.snapshot_head_sha
                     or evidence.get("base_sha") != self.spec.snapshot_base_sha):
                 return "stale_evidence_snapshot"
-            if (evidence.get("file_path") not in self.work_item.scope_files
+            if (evidence.get("file_path") not in self.readable_files
                     or is_sensitive_repository_path(evidence.get("file_path", ""))):
                 return "evidence_outside_scope"
             content = evidence.get("content")

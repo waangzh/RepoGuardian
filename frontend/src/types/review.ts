@@ -985,6 +985,8 @@ export interface TaskRuntimeReport {
   coverage_version: "task-goals-v1";
   execution_status: "running" | "completed" | "failed" | "cancelled";
   termination_reason: string;
+  readable_scope_hash?: string | null;
+  readable_file_count?: number | null;
   scope_complete: boolean;
   initial_scope_coverage: Array<Record<string, unknown>>;
   admitted_investigations: Array<Record<string, unknown>>;
