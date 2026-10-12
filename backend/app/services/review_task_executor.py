@@ -144,6 +144,62 @@ class ReviewTaskExecutor:
         self.attempt_id = attempt_id
         self.parser = RuntimeResponseParser()
         self.projection = TaskProjection(pending_target_ids=set(work_item.goal_ids))
+        self.pages = []
+        self.page_index = 0
+        self.page_examinations: dict[str, dict[str, ExaminationResult]] = {}
+
+    def bind_pages(self, pages) -> None:
+        if self.work_item.attempt_count or self.projection.examinations or self.pages:
+            raise ValueError("context pages are frozen before scheduling")
+        covered = {}
+        for page in pages:
+            if page.page_id != "page-" + stable_hash([self.work_item.work_item_id, page.ranges])[:32]:
+                raise ValueError("invalid page manifest hash")
+            for interval in page.ranges:
+                goal = self.goals.get(interval["goal_id"])
+                if (goal is None or interval["file_path"] != goal.target_ref
+                        or interval["original_start_line"] != goal.start_line
+                        or interval["original_end_line"] != goal.end_line
+                        or not goal.start_line <= interval["start_line"] <= interval["end_line"] <= goal.end_line):
+                    raise ValueError("invalid page goal binding")
+                covered.setdefault(goal.goal_id, []).append((interval["start_line"], interval["end_line"]))
+            if self.evidence_error_for_page(page):
+                raise ValueError("invalid page source evidence")
+        for goal in self.goals.values():
+            cursor = goal.start_line
+            for start, end in sorted(covered.get(goal.goal_id, [])):
+                if start > cursor:
+                    break
+                cursor = max(cursor, end + 1)
+            if cursor <= goal.end_line:
+                raise ValueError("incomplete frozen page manifest")
+        self.pages = list(pages)
+        self.active_evidence_ids = set(self.pages[0].evidence_ids)
+
+    def evidence_error_for_page(self, page):
+        checker = set(self.active_evidence_ids)
+        self.active_evidence_ids = set(page.evidence_ids)
+        try:
+            return self.evidence_error(list(page.evidence_ids))
+        finally:
+            self.active_evidence_ids = checker
+
+    def current_goals(self):
+        if not self.pages:
+            return [goal for goal in self.goals.values() if goal.goal_id in self.projection.pending_target_ids]
+        page = self.pages[self.page_index]
+        return [self.goals[value["goal_id"]].model_copy(update={
+                    "start_line": value["start_line"], "end_line": value["end_line"]})
+                for value in page.ranges
+                if value["goal_id"] in self.projection.pending_target_ids
+                and page.page_id not in self.page_examinations.get(value["goal_id"], {})]
+
+    def advance_page(self) -> bool:
+        if not self.pages or self.current_goals() or self.page_index + 1 >= len(self.pages):
+            return False
+        self.page_index += 1
+        self.active_evidence_ids = set(self.pages[self.page_index].evidence_ids)
+        return True
 
     def parse_and_apply(self, raw: Any) -> ParsedRuntimeResponse:
         parsed = self.parser.parse(raw)
@@ -177,7 +233,10 @@ class ReviewTaskExecutor:
             if evidence_error:
                 errors.append(RuntimeParseError("examinations", index, evidence_error))
                 continue
-            goal = self.goals[item.target_id]
+            goal = next((goal for goal in self.current_goals() if goal.goal_id == item.target_id), None)
+            if goal is None:
+                errors.append(RuntimeParseError("examinations", index, "target_not_in_current_page"))
+                continue
             if item.disposition.value == "examined" and not self._covers(goal, item.evidence_ids):
                 errors.append(RuntimeParseError("examinations", index, "incomplete_goal_evidence"))
                 continue
@@ -195,6 +254,18 @@ class ReviewTaskExecutor:
                 snapshot_head_sha=self.spec.snapshot_head_sha,
                 disposition=item.disposition, evidence_ids=item.evidence_ids, reason=item.reason,
             )
+            if self.pages and item.disposition.value == "examined":
+                page = self.pages[self.page_index]
+                fragments = self.page_examinations.setdefault(target_id, {})
+                fragments.setdefault(page.page_id, result)
+                needed = {p.page_id for p in self.pages
+                          if any(value["goal_id"] == target_id for value in p.ranges)}
+                if needed - set(fragments):
+                    continue
+                result = result.model_copy(update={
+                    "evidence_ids": list(dict.fromkeys(e for fragment in fragments.values() for e in fragment.evidence_ids)),
+                    "reason": "\n".join(fragment.reason for fragment in fragments.values()),
+                })
             self.projection.examinations[target_id] = result
             self.projection.pending_target_ids.discard(target_id)
             self.projection.accepted_target_ids.add(target_id)

@@ -471,6 +471,9 @@ class ReviewRunBudget:
 
 _active_run_budget: ContextVar[ReviewRunBudget | None] = ContextVar("active_review_run_budget", default=None)
 run_budget_attempt_observer: ContextVar[Any] = ContextVar("run_budget_attempt_observer", default=None)
+run_budget_dispatch_guard: ContextVar[Any] = ContextVar("run_budget_dispatch_guard", default=None)
+run_budget_response_observer: ContextVar[Any] = ContextVar("run_budget_response_observer", default=None)
+run_budget_task_id: ContextVar[str | None] = ContextVar("run_budget_task_id", default=None)
 
 
 def current_run_budget() -> ReviewRunBudget | None:

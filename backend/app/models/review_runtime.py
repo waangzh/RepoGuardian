@@ -48,6 +48,8 @@ class WorkItemState(StrEnum):
     completed = "completed"
     failed = "failed"
     cancelled = "cancelled"
+    unknown = "unknown"
+    result_missing = "result_missing"
 
 
 class ExaminationDisposition(StrEnum):
@@ -129,6 +131,13 @@ class ReviewWorkItem(BaseModel):
     revision: int = Field(default=0, ge=0)
     attempt_count: int = Field(default=0, ge=0)
     format_corrections: int = Field(default=0, ge=0, le=1)
+    unit_id: str | None = Field(default=None, max_length=160)
+    sequence: int = Field(default=0, ge=0)
+    scheduling_class: Literal["basic", "continuation", "verification", "investigation"] = "basic"
+    started: bool = False
+    last_checked_budget_revision: int = -1
+    last_checked_obligation_revision: int = -1
+    reason: str | None = None
 
     @model_validator(mode="after")
     def validate_scope(self) -> "ReviewWorkItem":
