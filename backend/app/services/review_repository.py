@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import hashlib
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any, Iterable
 from uuid import uuid4
 
@@ -528,6 +527,69 @@ class ReviewRepository:
             row = session.get(SideEffectOrm, f"run-budget:{task_id}")
             return dict(row.result) if row and row.result else None
 
+    def load_task_review_runtime(self, task_id: str) -> dict | None:
+        with self._session_factory() as session:
+            row = session.get(SideEffectOrm, f"task-review-v1:{task_id}")
+            return dict(row.result) if row and row.result else None
+
+    def save_task_review_runtime(self, task_id: str, payload: dict, expected_revision: int,
+                                 lease: dict | None = None) -> None:
+        """新引擎独立 namespace；任何取消/过期 lease 都不能继续发布。"""
+        from app.services.coordination_runtime import CoordinationLeaseLost
+        from sqlalchemy.exc import IntegrityError
+        if (payload.get("version") != "task-review-runtime-v1"
+                or payload.get("spec", {}).get("run_id") != task_id
+                or payload.get("revision") != expected_revision + 1):
+            raise ValueError("invalid task runtime revision or identity")
+        try:
+            with self._session_factory.begin() as session:
+                task = session.get(ReviewTaskOrm, task_id)
+                if task is None or task.deleted_at is not None:
+                    raise CoordinationLeaseLost("missing task review run")
+                # 引擎由持久化任务快照冻结，运行 spec 不能升级旧任务。
+                snapshot = self._load_task_snapshot(task)
+                if snapshot.get("engine", "legacy_units") != "task_review_v1":
+                    raise ValueError("task runtime engine mismatch")
+                if lease:
+                    job = session.get(WorkerJobOrm, lease["job_id"])
+                    if (job is None or job.task_id != task_id or job.status != "leased"
+                            or job.lease_owner != lease["owner"] or job.attempts != lease["attempt"]
+                            or job.lease_until is None
+                            or job.lease_until.replace(tzinfo=timezone.utc) <= utcnow()):
+                        raise CoordinationLeaseLost("task review worker lease lost")
+                if task.status == TaskStatus.cancelled.value and not payload.get("cancelled"):
+                    raise CoordinationLeaseLost("task review cancelled")
+                key = f"task-review-v1:{task_id}"
+                row = session.get(SideEffectOrm, key)
+                if row is None:
+                    if expected_revision != -1:
+                        raise CoordinationLeaseLost("task runtime missing")
+                    session.add(SideEffectOrm(idempotency_key=key, task_id=task_id,
+                        effect_type="task-review-runtime-v1", target=task_id,
+                        status="cancelled" if payload.get("cancelled") else "active",
+                        request_hash=stable_hash(payload["spec"]), result=payload))
+                else:
+                    if (row.result["spec"] != payload["spec"] or row.result["goals"] != payload["goals"]
+                            or row.result["pages"] != payload["pages"]):
+                        raise ValueError("task runtime frozen manifest mismatch")
+                    changed = session.execute(update(SideEffectOrm).where(
+                        SideEffectOrm.idempotency_key == key,
+                        SideEffectOrm.result["revision"].as_integer() == expected_revision,
+                    ).values(result=payload, status="cancelled" if payload.get("cancelled") else "active"))
+                    if changed.rowcount != 1:
+                        raise CoordinationLeaseLost("task runtime revision changed")
+                references = list(payload.get("sessions", {}).values())
+                references.extend(call["response"] for call in payload.get("calls", {}).values()
+                                  if call.get("response"))
+                for ref in references:
+                    content = self._artifacts.read_text(ref["uri"])
+                    if (hashlib.sha256(content.encode("utf-8")).hexdigest() != ref["sha256"]
+                            or len(content.encode("utf-8")) != ref["size_bytes"]):
+                        raise ValueError("task runtime artifact hash mismatch")
+                    self._record_artifact(session, task_id, "task-review-v1", ref["uri"])
+        except IntegrityError as exc:
+            raise CoordinationLeaseLost("concurrent task runtime writer") from exc
+
     def save_run_budget(self, task_id: str, payload: dict, expected_revision: int,
                         lease: dict | None = None) -> None:
         """以 SideEffect CAS 持久化运行预算；旧 worker 无法覆盖新 revision。"""
@@ -904,8 +966,7 @@ class ReviewRepository:
     ) -> None:
         if not uri:
             return
-        path = Path(uri.removeprefix("file:///"))
-        data = path.read_bytes()
+        data = self._artifacts.read_text(uri).encode("utf-8")
         digest = hashlib.sha256(data).hexdigest()
         existing = session.scalar(select(ArtifactOrm).where(ArtifactOrm.uri == uri))
         if existing is None:

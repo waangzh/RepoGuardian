@@ -906,6 +906,8 @@ class OpenAICompatibleProvider(LLMProvider):
         from app.review.run_audit import emit_run_audit
         from app.services.review_run_budget import (
             RunBudgetError, current_run_budget, run_budget_attempt_observer,
+            run_budget_dispatch_guard, run_budget_response_observer,
+            run_budget_task_id,
         )
         from app.services.model_pricing import estimate_cost_microusd
         from app.core.config import settings
@@ -945,6 +947,7 @@ class OpenAICompatibleProvider(LLMProvider):
                     )
                     run_attempt = await run_budget.reserve(
                         request_id=audit_id, operation=operation,
+                        task_id=run_budget_task_id.get(),
                         estimated_tokens=admission["reserved_tokens"],
                         output_tokens=request.output_tokens,
                         request_hash=admission.get("request_hash"),
@@ -957,7 +960,12 @@ class OpenAICompatibleProvider(LLMProvider):
                     observer = run_budget_attempt_observer.get()
                     if observer is not None:
                         await observer(run_attempt, admission)
+                    guard = run_budget_dispatch_guard.get()
+                    if guard is not None:
+                        await guard(run_attempt)
                     await run_budget.mark_dispatching(run_attempt.attempt_id)
+                    if guard is not None:
+                        await guard(run_attempt)
                 except RunBudgetError as exc:
                     emit_run_audit("model", request_id=audit_id, attempt=attempt,
                                    status="admission_rejected", operation=operation,
@@ -1065,6 +1073,9 @@ class OpenAICompatibleProvider(LLMProvider):
             "request_admission": admission,
             **usage.response_metadata, "request_attempts": attempt, "request_errors": attempt_errors,
         }})
+        response_observer = run_budget_response_observer.get()
+        if response_observer is not None and run_attempt is not None:
+            await response_observer(run_attempt, self._extract_message_content(response), usage)
         if run_budget is not None and run_attempt is not None:
             await run_budget.settle(run_attempt.attempt_id, actual_tokens=usage.actual_total_tokens,
                                     cost_microusd=usage.cost_microusd)
