@@ -264,6 +264,10 @@ async def run_sample(sample: FrozenSample, provider, workdir: Path, *, timeout_s
         from app.graph.nodes.task_review_runtime import task_runtime_configuration
         state["task_runtime_configuration"] = task_runtime_configuration(state["model"], provider=provider)
         if experiment is not None:
+            if (not experiment.get("runtime_versions") or any(
+                    state["task_runtime_configuration"].get(key) != value
+                    for key, value in experiment["runtime_versions"].items())):
+                raise ValueError("experiment runtime versions changed before dispatch")
             state["task_runtime_configuration"].update(experiment=experiment["variables"],
                 experiment_expected_scope_hash=experiment["samples"][sample.instance_id]["readable_scope_hash"])
     if prepared_diff:
@@ -374,6 +378,11 @@ async def run_dataset(lock_path: Path, output: Path, provider, *, sample_ids: li
                                  experiment_stage, sample_ids, first_gate, quality_gate)
         if await asyncio.to_thread(implementation_digest) != experiment_plan["implementation_sha256"]:
             raise ValueError("experiment implementation changed; new frozen audit plan required")
+        from app.graph.nodes.task_review_runtime import task_runtime_configuration
+        configuration = task_runtime_configuration(settings.repoguardian_model, provider=provider)
+        if (not experiment_plan.get("runtime_versions") or any(
+                configuration.get(key) != value for key, value in experiment_plan["runtime_versions"].items())):
+            raise ValueError("experiment runtime versions changed; new frozen audit plan required")
         if limit is not None or timeout_seconds != experiment_plan["timeout_seconds"]:
             raise ValueError("experiment sample limit or timeout cannot change")
         for name, value in FIXED_SETTINGS.items():
@@ -384,7 +393,8 @@ async def run_dataset(lock_path: Path, output: Path, provider, *, sample_ids: li
         resolved = provider.resolve_request_profile(settings.repoguardian_model)
         if {"source": resolved.source, "profile": resolved.profile.model_dump(mode="json")} != experiment_plan["effective_model_profile"]:
             raise ValueError("experiment effective model profile mismatch")
-        experiment = {"variables": GROUPS[experiment_group], "samples": experiment_plan["samples"]}
+        experiment = {"variables": GROUPS[experiment_group], "samples": experiment_plan["samples"],
+                      "runtime_versions": experiment_plan["runtime_versions"]}
         if experiment_registry is None:
             raise ValueError("experiment requires a shared plan dispatch registry")
     if sample_ids:
@@ -415,7 +425,8 @@ async def run_dataset(lock_path: Path, output: Path, provider, *, sample_ids: li
                "samples": [{"instance_id": s.instance_id, "status": "not_run"} for s in samples]}
     if experiment is not None:
         summary["experiment"] = {"plan_sha256": experiment_plan["plan_sha256"], "group": experiment_group,
-                                  "stage": experiment_stage, "variables": experiment["variables"]}
+                                  "stage": experiment_stage, "variables": experiment["variables"],
+                                  "runtime_versions": experiment["runtime_versions"]}
     await asyncio.to_thread(write_json, output / "run.json", summary)
     for index, sample in enumerate(samples):
         summary["samples"][index]["status"] = "running"

@@ -11,6 +11,24 @@ from app.evaluation.runner import run_sample
 from app.services.review_run_budget import current_run_budget
 
 
+@pytest.mark.parametrize("versions", [None, {"prompt_version": "task-review-prompt-v5", "risk_planner_version": "risk-planner-v2"}])
+async def test_experiment_sample_rejects_version_drift_before_graph_or_budget(monkeypatch, tmp_path, versions):
+    monkeypatch.setattr("app.evaluation.runner.settings.repoguardian_review_engine", "task_review_v1")
+    monkeypatch.setattr("app.evaluation.runner.settings.repoguardian_model", "deepseek-flash")
+    sample = FrozenSample(instance_id="local__sample@2222222", repository="local/sample",
+        pr_url="https://github.com/local/sample/pull/1", base_sha="1" * 40, head_sha="2" * 40,
+        language="Python", changed_lines=1)
+    provider = OpenAICompatibleProvider("fixture", "https://api.deepseek.com", "deepseek-flash", request_attempts=1)
+    def forbidden(*args, **kwargs):
+        pytest.fail("version mismatch must reject before graph construction or budget creation")
+    monkeypatch.setattr("app.evaluation.runner.build_review_graph", forbidden)
+    monkeypatch.setattr("app.evaluation.runner.ReviewRunBudget.load_or_create", forbidden)
+    with pytest.raises(ValueError, match="versions changed before dispatch"):
+        await run_sample(sample, provider, tmp_path, git_tool=object(),
+                         experiment={"runtime_versions": versions})
+    assert not list(tmp_path.iterdir()) and current_run_budget() is None
+
+
 @pytest.mark.parametrize("usage_known", [True, False])
 async def test_evaluation_activates_and_exports_each_attempt(monkeypatch, tmp_path, usage_known):
     monkeypatch.setattr("app.evaluation.runner.settings.repoguardian_model", "deepseek-flash")
