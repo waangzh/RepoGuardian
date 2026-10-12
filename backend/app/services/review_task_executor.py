@@ -19,6 +19,7 @@ from app.models.review_runtime import (
     ExaminationResult,
     ExaminationSubmission,
     InvestigationSubmission,
+    InvestigationResult, InvestigationSubmitResponse,
     LeadSubmission,
     ProposedLead,
     ReviewGoal,
@@ -26,6 +27,7 @@ from app.models.review_runtime import (
     ReviewWorkItem,
     RuntimeReadResponse,
     RuntimeSubmitResponse,
+    VerificationSubmission, VerificationResult, VerificationSubmitResponse,
 )
 from app.services.fingerprints import stable_hash
 from app.review.tool_scope import is_sensitive_repository_path
@@ -40,7 +42,7 @@ class RuntimeParseError:
 
 @dataclass
 class ParsedRuntimeResponse:
-    response: RuntimeReadResponse | RuntimeSubmitResponse | None
+    response: RuntimeReadResponse | RuntimeSubmitResponse | InvestigationSubmitResponse | VerificationSubmitResponse | None
     errors: list[RuntimeParseError] = field(default_factory=list)
     item_indices: dict[str, list[int]] = field(default_factory=dict)
 
@@ -50,9 +52,11 @@ class TaskProjection:
     examinations: dict[str, ExaminationResult] = field(default_factory=dict)
     candidates: dict[str, Candidate] = field(default_factory=dict)
     leads: list[ProposedLead] = field(default_factory=list)
-    investigation: InvestigationSubmission | None = None
+    investigation: InvestigationResult | None = None
+    verification: VerificationResult | None = None
     accepted_target_ids: set[str] = field(default_factory=set)
     pending_target_ids: set[str] = field(default_factory=set)
+    invalidated_results: list[dict] = field(default_factory=list)
 
 
 class RuntimeResponseParser:
@@ -60,7 +64,7 @@ class RuntimeResponseParser:
 
     _read_adapter = TypeAdapter(RuntimeReadResponse)
 
-    def parse(self, raw: Any) -> ParsedRuntimeResponse:
+    def parse(self, raw: Any, *, task_kind: str = "inspect") -> ParsedRuntimeResponse:
         if isinstance(raw, str):
             def unique_object(pairs):
                 obj = {}
@@ -81,20 +85,25 @@ class RuntimeResponseParser:
                 return ParsedRuntimeResponse(self._read_adapter.validate_python(raw))
             except ValidationError as exc:
                 return ParsedRuntimeResponse(None, [RuntimeParseError("read", None, str(exc))])
-        return self._parse_submit(raw)
+        return self._parse_submit(raw, task_kind)
 
-    def _parse_submit(self, raw: dict[str, Any]) -> ParsedRuntimeResponse:
-        if set(raw) - {"kind", "examinations", "candidates", "leads"}:
+    def _parse_submit(self, raw: dict[str, Any], task_kind: str) -> ParsedRuntimeResponse:
+        schemas = {"inspect": RuntimeSubmitResponse, "investigate": InvestigationSubmitResponse,
+                   "verify": VerificationSubmitResponse}
+        response_schema = schemas[task_kind]
+        if set(raw) - set(response_schema.model_fields):
             return ParsedRuntimeResponse(None, [RuntimeParseError("top_level", None, "unknown_submit_field")])
         errors: list[RuntimeParseError] = []
         values: dict[str, Any] = {"kind": "submit"}
         item_indices = {}
-        schemas = {
+        component_schemas = {
             "examinations": ExaminationSubmission,
             "candidates": CandidateSubmission,
             "leads": LeadSubmission,
         }
-        for item_field, schema in schemas.items():
+        for item_field, schema in component_schemas.items():
+            if item_field not in response_schema.model_fields:
+                continue
             raw_items = raw.get(item_field, [])
             if not isinstance(raw_items, list):
                 errors.append(RuntimeParseError(item_field, None, "field_must_be_array"))
@@ -102,7 +111,7 @@ class RuntimeResponseParser:
                 continue
             values[item_field] = []
             item_indices[item_field] = []
-            limit = RuntimeSubmitResponse.model_fields[item_field].metadata[0].max_length
+            limit = response_schema.model_fields[item_field].metadata[0].max_length
             if len(raw_items) > limit:
                 errors.append(RuntimeParseError(item_field, None, "array_limit_exceeded"))
                 continue
@@ -112,8 +121,21 @@ class RuntimeResponseParser:
                     item_indices[item_field].append(index)
                 except ValidationError as exc:
                     errors.append(RuntimeParseError(item_field, index, str(exc)))
+        # 命题答案失败不丢掉候选兄弟项；分量存在与否由执行器分别处理。
+        for key, schema in (("investigation", InvestigationSubmission), ("verification", VerificationSubmission)):
+            if key not in response_schema.model_fields:
+                continue
+            try:
+                values[key] = schema.model_validate(raw.get(key))
+            except ValidationError as exc:
+                errors.append(RuntimeParseError(key, None, str(exc)))
         try:
-            response = RuntimeSubmitResponse.model_validate(values)
+            result_field = {"investigate": "investigation", "verify": "verification"}.get(task_kind)
+            if result_field and result_field not in values:
+                # 只为保留合法兄弟项创建内部部分解析结果；不能绕过后续分量验收。
+                response = response_schema.model_construct(**values)
+            else:
+                response = response_schema.model_validate(values)
         except ValidationError as exc:
             errors.append(RuntimeParseError("submit", None, str(exc)))
             response = None
@@ -126,8 +148,10 @@ class ReviewTaskExecutor:
     def __init__(self, spec: ReviewRunSpec, work_item: ReviewWorkItem,
                  goals: list[ReviewGoal], *, active_evidence_ids: set[str],
                  request_id: str, evidence_catalog: dict[str, dict], attempt_id: str = "first"):
-        if work_item.kind.value != "inspect":
-            raise ValueError("P1 executor requires inspect work item")
+        if work_item.kind.value == "investigate" and not work_item.proposition:
+            raise ValueError("investigation requires a server-bound proposition")
+        if work_item.kind.value == "verify" and work_item.verification_candidate is None:
+            raise ValueError("verification requires a server-bound candidate")
         if any(goal.kind != work_item.kind for goal in goals if goal.goal_id in work_item.goal_ids):
             raise ValueError("work item goal kind mismatch")
         goal_map = {goal.goal_id: goal for goal in goals}
@@ -137,7 +161,10 @@ class ReviewTaskExecutor:
             raise ValueError("work item references unknown goal")
         self.spec = spec
         self.work_item = work_item
-        self.goals = {identity: goal_map[identity] for identity in work_item.goal_ids}
+        if set(work_item.related_goal_ids) - set(goal_map):
+            raise ValueError("work item references unknown related goal")
+        self.goals = {identity: goal_map[identity] for identity in
+                      [*work_item.goal_ids, *work_item.related_goal_ids]}
         self.active_evidence_ids = set(active_evidence_ids)
         self.evidence_catalog = evidence_catalog
         self.request_id = request_id
@@ -202,27 +229,76 @@ class ReviewTaskExecutor:
         return True
 
     def parse_and_apply(self, raw: Any) -> ParsedRuntimeResponse:
-        parsed = self.parser.parse(raw)
+        parsed = self.parser.parse(raw, task_kind=self.work_item.kind.value)
         if parsed.response is None:
             return parsed
         if isinstance(parsed.response, RuntimeReadResponse):
-            path = parsed.response.arguments.file_path
-            if path not in self.work_item.scope_files or is_sensitive_repository_path(path):
+            path = getattr(parsed.response.arguments, "file_path", None)
+            if path is not None and (path not in self.work_item.scope_files or is_sensitive_repository_path(path)):
                 parsed.errors.append(RuntimeParseError("read", None, "read_path_outside_work_item_scope"))
                 parsed.response = None
             return parsed
-        self._apply_submit(parsed.response, parsed.errors, parsed.item_indices)
+        if isinstance(parsed.response, VerificationSubmitResponse):
+            self._apply_verification(getattr(parsed.response, "verification", None), parsed.errors)
+        else:
+            if isinstance(parsed.response, InvestigationSubmitResponse):
+                self._apply_investigation(getattr(parsed.response, "investigation", None), parsed.errors)
+            self._apply_submit(parsed.response, parsed.errors, parsed.item_indices)
         return parsed
+
+    def _apply_investigation(self, item, errors):
+        if item is None:
+            return
+        error = self.evidence_error(item.evidence_ids)
+        if error is None and item.answer.value != "insufficient_evidence":
+            if not item.evidence_ids or set(self.work_item.required_evidence_ids) - set(item.evidence_ids):
+                error = "incomplete_investigation_evidence"
+            else:
+                for request in self.work_item.evidence_requests:
+                    goal = self.goals[self.work_item.goal_ids[0]].model_copy(update={
+                        "target_ref": request.file_path, "start_line": request.start_line,
+                        "end_line": request.end_line, "target_kind": "source_range"})
+                    if not self._covers(goal, item.evidence_ids):
+                        error = "incomplete_investigation_evidence"
+                        break
+        if error:
+            errors.append(RuntimeParseError("investigation", None, error))
+            return
+        if self.projection.investigation is None:
+            self.projection.investigation = InvestigationResult(**item.model_dump(),
+                work_item_id=self.work_item.work_item_id, proposition=self.work_item.proposition,
+                request_id=self.request_id, attempt_id=self.attempt_id,
+                snapshot_head_sha=self.spec.snapshot_head_sha)
+        self.projection.pending_target_ids.clear()
+
+    def _apply_verification(self, item, errors):
+        if item is None:
+            return
+        error = self.evidence_error(item.evidence_ids)
+        if item.candidate_id != self.work_item.verification_candidate.candidate_id:
+            error = "verification_candidate_identity_mismatch"
+        required = {*self.work_item.required_evidence_ids, *self.work_item.counter_evidence_ids}
+        if error is None and item.decision.value != "insufficient_evidence":
+            if not item.evidence_ids or required - set(item.evidence_ids):
+                error = "incomplete_verification_evidence"
+        if error:
+            errors.append(RuntimeParseError("verification", None, error))
+            return
+        if self.projection.verification is None:
+            self.projection.verification = VerificationResult(**item.model_dump(),
+                work_item_id=self.work_item.work_item_id, request_id=self.request_id,
+                attempt_id=self.attempt_id, snapshot_head_sha=self.spec.snapshot_head_sha)
+        self.projection.pending_target_ids.clear()
 
     def _apply_submit(self, response: RuntimeSubmitResponse,
                       errors: list[RuntimeParseError], item_indices: dict[str, list[int]]) -> None:
         grouped = {}
-        for item in response.examinations:
+        for item in getattr(response, "examinations", []):
             grouped.setdefault(item.target_id, []).append(item)
         conflicts = {identity for identity, items in grouped.items()
                      if len({stable_hash(item.model_dump(mode="json")) for item in items}) > 1}
         valid_examinations: list[ExaminationSubmission] = []
-        for index, item in enumerate(response.examinations):
+        for index, item in enumerate(getattr(response, "examinations", [])):
             if item.target_id in conflicts:
                 errors.append(RuntimeParseError("examinations", index, "conflicting_duplicate_target"))
                 continue
@@ -287,6 +363,9 @@ class ReviewTaskExecutor:
                 candidate_id=candidate_id, claim=item.claim,
                 primary_anchor=item.primary_anchor,
                 supporting_evidence=item.evidence_ids, source_result_ids=[self.request_id],
+                affected_behavior=item.affected_behavior, failure_scenario=item.failure_scenario,
+                recommendation=item.recommendation, category=item.category, severity=item.severity,
+                evidence_requests=item.evidence_requests,
             )
         for index, item in enumerate(response.leads):
             index = item_indices.get("leads", list(range(len(response.leads))))[index]
@@ -300,6 +379,7 @@ class ReviewTaskExecutor:
                 lead_id=lead_id, proposition=item.proposition,
                 related_targets=item.related_target_ids,
                 missing_evidence=item.missing_evidence, origin_result_id=self.request_id,
+                evidence_requests=item.evidence_requests,
             ))
 
     def _item_identity(self, kind: str, index: str) -> str:
@@ -312,6 +392,8 @@ class ReviewTaskExecutor:
             if identity not in self.active_evidence_ids or identity not in self.evidence_catalog:
                 return "unknown_or_inactive_evidence"
             evidence = self.evidence_catalog[identity]
+            if evidence.get("source") == "file_read_diff":
+                return "diff_observation_requires_source_anchor"
             if (evidence.get("head_sha") != self.spec.snapshot_head_sha
                     or evidence.get("base_sha") != self.spec.snapshot_base_sha):
                 return "stale_evidence_snapshot"

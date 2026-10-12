@@ -12,6 +12,7 @@ from typing import Any, Protocol
 
 from app.models.review_runtime import (
     ReviewGoal, ReviewRunSpec, ReviewWorkItem, RuntimeReadResponse, RuntimeSubmitResponse,
+    InvestigationSubmitResponse, VerificationSubmitResponse,
 )
 from app.services.model_request_budgeter import PreparedModelRequest
 from app.services.review_task_executor import ParsedRuntimeResponse, ReviewTaskExecutor
@@ -29,15 +30,14 @@ class TaskReviewV1Protocol:
     protocol_name = "task-review-protocol-v1"
 
     def prepare(self, work_item: ReviewWorkItem, goals: list[ReviewGoal],
-                *, active_evidence_ids: set[str], evidence_catalog: dict[str, dict]) -> PreparedModelRequest:
-        if work_item.kind.value != "inspect":
-            raise ValueError("P1 protocol only supports inspect")
+                *, active_evidence_ids: set[str], evidence_catalog: dict[str, dict],
+                related_goals: list[ReviewGoal] | None = None) -> PreparedModelRequest:
         goal_map = {goal.goal_id: goal for goal in goals}
         selected = [goal_map[identity].model_dump(mode="json") for identity in work_item.goal_ids
                     if identity in goal_map]
         if len(selected) != len(work_item.goal_ids):
             raise ValueError("cannot prepare work item with unknown goal")
-        checker = ReviewTaskExecutor(self.spec, work_item, goals,
+        checker = ReviewTaskExecutor(self.spec, work_item, [*goals, *(related_goals or [])],
             active_evidence_ids=active_evidence_ids, evidence_catalog=evidence_catalog, request_id="prepare")
         invalid = checker.evidence_error(list(active_evidence_ids))
         if invalid:
@@ -53,18 +53,25 @@ class TaskReviewV1Protocol:
             "snapshot": {"head_sha": self.spec.snapshot_head_sha,
                           "base_sha": self.spec.snapshot_base_sha},
             "goals": selected,
+            "related_goals": [goal.model_dump(mode="json") for goal in related_goals or []],
+            "proposition": work_item.proposition,
+            "candidate": work_item.verification_candidate.model_dump(mode="json",
+                exclude={"source_result_ids"}) if work_item.verification_candidate else None,
+            "required_evidence_ids": work_item.required_evidence_ids,
+            "counter_evidence_ids": work_item.counter_evidence_ids,
             "scope_files": work_item.scope_files,
             "active_evidence_ids": sorted(active_evidence_ids),
             "active_evidence": [{"id": identity, **evidence_catalog[identity]}
                                 for identity in sorted(active_evidence_ids)],
             "response": {"one_of": [RuntimeReadResponse.model_json_schema(),
-                                     RuntimeSubmitResponse.model_json_schema()]},
+                                      {"inspect": RuntimeSubmitResponse, "investigate": InvestigationSubmitResponse,
+                                       "verify": VerificationSubmitResponse}[work_item.kind.value].model_json_schema()]},
         }
         prompt = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return PreparedModelRequest(
             model=self.spec.model_name, operation="task_review_v1",
             system=("You review one server-selected task. Return exactly one JSON object: "
-                    "kind=read for one controlled file_read, or kind=submit for results. "
+                     "kind=read for one controlled readonly tool, or kind=submit for results. "
                     "Do not change task identity, snapshot, goals, or completion state."),
             prompt=prompt, output_tokens=4096,
         )

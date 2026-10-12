@@ -570,7 +570,10 @@ class ReviewRepository:
                         request_hash=stable_hash(payload["spec"]), result=payload))
                 else:
                     if (row.result["spec"] != payload["spec"] or row.result["goals"] != payload["goals"]
-                            or row.result["pages"] != payload["pages"]):
+                            or any(payload["pages"].get(key) != value for key, value in row.result["pages"].items())
+                            or row.result.get("derivation_config_hash") != payload.get("derivation_config_hash")
+                            or any(payload.get("derived_goals", {}).get(key) != value
+                                   for key, value in row.result.get("derived_goals", {}).items())):
                         raise ValueError("task runtime frozen manifest mismatch")
                     changed = session.execute(update(SideEffectOrm).where(
                         SideEffectOrm.idempotency_key == key,
@@ -579,6 +582,8 @@ class ReviewRepository:
                     if changed.rowcount != 1:
                         raise CoordinationLeaseLost("task runtime revision changed")
                 references = list(payload.get("sessions", {}).values())
+                if payload.get("derivation"):
+                    references.append(payload["derivation"])
                 references.extend(call["response"] for call in payload.get("calls", {}).values()
                                   if call.get("response"))
                 for ref in references:
