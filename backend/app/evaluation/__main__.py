@@ -37,6 +37,8 @@ def main(argv=None):
     run.add_argument("--experiment-group", choices=["protocol_180", "full_180", "full_runtime"])
     run.add_argument("--experiment-stage", choices=["first", "remaining"])
     run.add_argument("--first-gate", type=Path)
+    run.add_argument("--quality-gate", type=Path,
+                     help="remaining 阶段必需的独立语义质量门")
     experiment = commands.add_parser("prepare-runtime-experiments", help="只读冻结 P5 组别、预算与 r9 基线")
     experiment.add_argument("--lock", type=Path, required=True)
     experiment.add_argument("--diff-lock", type=Path, required=True)
@@ -95,11 +97,12 @@ def main(argv=None):
         from app.agents.providers import build_provider
         from app.core.config import settings
 
-        plan, gate = None, None
+        plan, gate, quality_gate = None, None, None
         if args.experiment_plan:
             from app.evaluation.runtime_experiments import read_json, FIXED_SETTINGS, first_sample_gate
             plan = read_json(args.experiment_plan)
             gate = read_json(args.first_gate) if args.first_gate else None
+            quality_gate = read_json(args.quality_gate) if args.quality_gate else None
             if gate and first_sample_gate(read_json(args.first_gate.parent / "0000.json"), plan,
                                            args.experiment_group) != gate:
                 parser.error("首样本验收文件与真实结果不一致")
@@ -113,6 +116,7 @@ def main(argv=None):
             sample_ids=args.sample_id, limit=args.limit, timeout_seconds=args.timeout_seconds,
             diff_lock_path=args.diff_lock, experiment_plan=plan, experiment_group=args.experiment_group,
             experiment_stage=args.experiment_stage, first_gate=gate,
+            quality_gate=quality_gate,
             experiment_registry=Path(settings.repoguardian_workdir).resolve() / "evaluation-runs" /
                 "runtime-experiment-dispatch" if plan else None))
         print(f"已记录 {len(summary['samples'])} 个样本：{args.output}")
