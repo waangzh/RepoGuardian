@@ -73,3 +73,26 @@ v11计划哈希为 `0c4e7220264693ab9acf2f1c6a199c4fcb7ea722f494fd9ee8a6b9fda890
 本地 `runtime-p5-v12-quality/blind/packets.json` 保存1个候选，pipeline-map另存，独立只读语义复核尚在等待；未生成通过的质量门、未扩展后四个或其他组。v12未触发格式纠正，不能用它证明真实模型在纠错场景一定成功。另补数据库恢复回归，证明被拒候选、一次纠错次数和合法检查保存；恢复后只发一次纠正请求，原检查result_id保持，账本为2次/30个stub tokens，测试1项通过，Ruff通过。它验证恢复行为，不是模型质量证明。
 
 P5截至v12累计161次wire、1,044,110 tokens，旧尝试保留；默认仍legacy_units，P5未通过。独立代码复核子代理因外部524错误未返回结论，不记为通过。
+
+## v12 首样本独立裁决与同组扩展
+
+独立盲审子代理随后也因外部524终止，没有产出裁决。用户明确授权将v12材料发送到现有独立质量评审聊天 `01a12fff-fb19-7e71-81c7-0fd8d494a150`。该聊天先保存当前候选裁决再读取历史材料，最终判为valid_defect：固定1.0前提错误，但“DirectML分支没有可靠屏蔽未来token”的核心失败行为由固定源码支持，具体数值及必然输出表述不采信。历史三条来源归并的1个有效缺陷保留1、遗漏0；有效参考覆盖1、遗漏0。该标准与v10不同主张不混淆，v10只声称舍入后影响有限的加1差异，不能等同于v12的因果屏蔽失效主张。
+
+原始标注为单对象且使用file_path，另存annotation-adapter.json规范成数组/path，不覆盖评审产物、不修改标签。现有确定性验收器验收为complete且blind=true，主线程另核对比较材料20处固定SHA证据（末尾空行只作文本规范化），及原始响应重提取盲包一致。quality-gate.json绑定v12计划、同组、首样本结果和三份独立材料哈希：token reduction=90.59%，lost_baseline_defects=0，new_false_positives=baseline_false_positives=0，new_cannot_determine=0，固定范围未检查比例不增加。自校验哈希和源码匹配仅验证材料一致，语义标签来自独立评审，不证明泛化或纠正了生产输出。
+
+首样本联合门成立后，才派发protocol_180同组剩余四个样本，沿用同计划、deepseek-flash、每样本200次/100万tokens、180秒Unit期限和1800秒样本期限。该次扩展仍需逐样本独立质量核验，不能凭首样本批准完整调度组、留出集或默认切换；default_switch_allowed=false。剩余组结果待运行终态核对。
+
+扩展四样本已结束，原始结果不覆盖：
+
+| 样本 | wire | 已知tokens | 用量完整性 | 固定范围examined | 实际工具事件 | 原始候选 |
+| --- | ---: | ---: | --- | --- | ---: | ---: |
+| Gemini CLI | 11 | 83,302 | complete | 8/8 | 5 | 2 |
+| Checkmate | 8 | 35,034 | complete | 3/3 | 2 | 3 |
+| Ollama | 9 | 56,423 | unknown | 6/6 | 4 | 1 |
+| Ragflow | 6 | 34,352 | complete | 4/4 | 2 | 1 |
+
+Ollama第一次传输发生APIConnectionError，已发送但无可信usage，账本保留9,511 tokens未知预留；同逻辑请求第二次传输成功消费4,755 tokens，不消除第一次的unknown。离线对账原先仅按request_id/hash匹配，重试共享二者导致错误的ledger_attempt_not_unique；现仅在多个匹配时，已知usage再要求唯一已结算且实际tokens相符的attempt。两个相同结算仍判不唯一，不按数组顺序猜测。重放原结果改为unknown、已知56,423、总消费null，无模型重跑或改写账本。
+
+五样本共38次wire、已知230,208 tokens、1次未知消费，不能给出已知总消费或总体token reduction。固定范围24/24目标examined不证明质量，Gemini两候选等待验证证据、Ollama验证取消、Ragflow证据准备未调度仍为unresolved。七条原候选已隔离在runtime-p5-v12-remaining-quality/blind，用户另外明确授权发送到同一独立评审聊天；质量/遗漏裁决尚待完成。P5累计195次wire、至少1,253,221已知tokens，另有未知消费。当前联合门不通过，完整调度组和留出集未派发，默认仍legacy_units。
+
+离线修复56项聚焦回归通过，完整后端1230 passed、2 skipped（250.26秒），Ruff和git diff --check通过。原始Ollama结果重放验证known=56,423、unknown_attempts=1、actual_total_tokens=null；compare_group_run输出另存comparison.json，记录离线复算实现哈希与原始执行实现哈希，原始结果未修改。离线对账修复已改变当前app实现哈希，未来真实运行须重新冻结计划，不能继续沿用v12派发新组。
