@@ -162,7 +162,8 @@ def freeze_experiment_plan(lock_path, diff_path, selection_path, baseline_runs, 
     return {**payload, "plan_sha256": stable_hash(payload)}
 
 
-def validate_experiment_plan(plan, lock_bytes, diff_bytes, group, stage, sample_ids, first_gate=None):
+def validate_experiment_plan(plan, lock_bytes, diff_bytes, group, stage, sample_ids,
+                             first_gate=None, quality_gate=None):
     payload = {key: value for key, value in plan.items() if key != "plan_sha256"}
     if (plan["version"] != "runtime-experiments-v1" or plan["plan_sha256"] != stable_hash(payload)
             or plan["groups"] != GROUPS or plan["settings"] != FIXED_SETTINGS
@@ -175,8 +176,35 @@ def validate_experiment_plan(plan, lock_bytes, diff_bytes, group, stage, sample_
         raise ValueError("experiment requires exact first-one/remaining-four order")
     if stage == "remaining":
         if (not first_gate or first_gate.get("plan_sha256") != plan["plan_sha256"]
-                or first_gate.get("group") != group or first_gate.get("admitted") is not True):
+                or first_gate.get("group") != group or first_gate.get("admitted") is not True
+                or not isinstance(first_gate.get("result_sha256"), str)
+                or len(first_gate["result_sha256"]) != 64):
             raise ValueError("remaining samples require a successful same-group first gate")
+        if (not quality_gate or quality_gate.get("version") != "runtime-quality-gate-v1"
+                or quality_gate.get("gate_sha256") != stable_hash({key: value for key, value in quality_gate.items()
+                                                                   if key != "gate_sha256"})
+                or quality_gate.get("plan_sha256") != plan["plan_sha256"]
+                or quality_gate.get("group") != group
+                or quality_gate.get("sample_id") != plan["first_sample_id"]
+                or quality_gate.get("result_sha256") != first_gate.get("result_sha256")
+                or quality_gate.get("adjudication_status") != "complete"
+                or quality_gate.get("quality_passed") is not True
+                or quality_gate.get("expand_allowed") is not True):
+            raise ValueError("remaining samples require an independent quality gate")
+        metrics = quality_gate.get("metrics") or {}
+        reduction = metrics.get("token_reduction")
+        counts = [metrics.get(name) for name in ("lost_baseline_defects", "new_false_positives",
+                  "baseline_false_positives", "new_cannot_determine")]
+        if (not isinstance(reduction, (float, int)) or isinstance(reduction, bool)
+                or not 0 <= reduction <= 1
+                or any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in counts)):
+            raise ValueError("remaining samples require valid quality metrics")
+        if (first_gate.get("fixed_scope_coverage", {}).get("not_worse_than_baseline") is not True
+                or metrics.get("token_reduction", -1) < plan["screening"]["token_reduction"]
+                or metrics.get("lost_baseline_defects") != 0
+                or metrics.get("new_false_positives", 1) > metrics.get("baseline_false_positives", 0)
+                or metrics.get("new_cannot_determine", 1) != 0):
+            raise ValueError("remaining samples fail joint quality/scope/cost screening")
 
 
 def claim_experiment_slot(plan, group, stage, registry: Path, output: Path):

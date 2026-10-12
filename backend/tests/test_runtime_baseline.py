@@ -43,6 +43,104 @@ def test_reconcile_wire_usage_matches_budget_without_guessing():
     assert report["attempts"][0]["attempt_id"] == "attempt-1"
 
 
+def _task_result():
+    return {
+        "engine": "task_review_v1",
+        "sample": {"repository": "org/repo", "base_sha": "b" * 40, "head_sha": "a" * 40},
+        "snapshot": {"verified_base": "b" * 40, "verified_head": "a" * 40,
+                     "diff_sha256": "d" * 64},
+        "model_requests": [{"status": "started", "operation": "task_review_v1",
+            "request_id": "r1", "attempt": 1, "prompt": json.dumps({
+            "task": {"kind": "inspect"},
+            "snapshot": {"base_sha": "b" * 40, "head_sha": "a" * 40},
+            "goals": [{"goal_id": "g1"}],
+            "active_evidence": [{"id": "e1", "file_path": "src/a.py", "content": "return 0",
+                                  "start_line": 1, "end_line": 1, "side": "head"}],
+        })}, {"status": "completed", "request_id": "r1", "attempt": 1, "usage": {"id": "u1"}}],
+        "model_calls": [{"usage": {"id": "u1"}, "raw_response": json.dumps({"kind": "submit", "candidates": [{
+            "claim": "候选", "primary_anchor": "g1", "evidence_ids": ["e1"],
+            "affected_behavior": "行为改变", "failure_scenario": "输入触发", "recommendation": "修复"}]} )}],
+    }
+
+
+def test_task_runtime_candidate_packets_are_extracted_without_pipeline_terminal_state():
+    result = _task_result()
+    packets, mapping = blind_review_packets(result)
+    assert len(packets) == len(mapping) == 1
+    assert packets[0]["quality_label"] is None
+    assert packets[0]["claim"]["primary_evidence"]["file_path"] == "src/a.py"
+
+
+def test_task_packet_binds_response_to_usage_identity_not_call_order():
+    result = _task_result()
+    other = deepcopy(result["model_requests"][0])
+    other["request_id"] = "r2"
+    context = json.loads(other["prompt"])
+    context["active_evidence"][0]["content"] = "return 1"
+    other["prompt"] = json.dumps(context)
+    result["model_requests"] += [other, {"status": "completed", "request_id": "r2", "attempt": 1,
+                                         "usage": {"id": "u2"}}]
+    result["model_calls"].insert(0, {"usage": {"id": "u2"}, "raw_response": '{"kind":"submit","candidates":[]}'})
+    packets, mapping = blind_review_packets(result)
+    assert packets[0]["claim"]["primary_evidence"]["existing_code"] == "return 0"
+    assert mapping[0]["request_id"] == "r1"
+
+
+@pytest.mark.parametrize("mutation,error", [
+    ("missing_array", "array_missing"), ("invalid_json", "observation_invalid"),
+    ("missing_evidence", "evidence_missing"), ("wrong_usage", "response_identity_invalid")])
+def test_task_packet_rejects_incomplete_observations(mutation, error):
+    result = _task_result()
+    call = result["model_calls"][0]
+    response = json.loads(call["raw_response"])
+    if mutation == "missing_array":
+        del response["candidates"]
+    elif mutation == "missing_evidence":
+        response["candidates"][0]["evidence_ids"] = ["archived"]
+    elif mutation == "wrong_usage":
+        call["usage"]["id"] = "other"
+    call["raw_response"] = "invalid" if mutation == "invalid_json" else json.dumps(response)
+    with pytest.raises(ValueError, match=error):
+        blind_review_packets(result)
+
+
+def test_task_packet_deduplicates_claim_but_preserves_all_response_sources():
+    result = _task_result()
+    result["model_requests"] += [{**result["model_requests"][0], "request_id": "r2"},
+        {"status": "completed", "request_id": "r2", "attempt": 1, "usage": {"id": "u2"}}]
+    result["model_calls"].append({**result["model_calls"][0], "usage": {"id": "u2"}})
+    packets, mapping = blind_review_packets(result)
+    assert len(packets) == 1 and len(mapping) == 2
+    assert {item["request_id"] for item in mapping} == {"r1", "r2"}
+
+
+def test_task_packet_retry_uses_final_attempt_context():
+    result = _task_result()
+    result["model_requests"][0]["attempt"] = 2
+    result["model_requests"][1]["attempt"] = 2
+    failed = {**result["model_requests"][0], "attempt": 1}
+    result["model_requests"].insert(0, failed)
+    result["model_requests"].insert(1, {"status": "failed", "request_id": "r1", "attempt": 1})
+    _, mapping = blind_review_packets(result)
+    assert mapping[0]["wire_attempt"] == 2
+
+
+def test_task_packet_rejects_stale_snapshot():
+    result = _task_result()
+    context = json.loads(result["model_requests"][0]["prompt"])
+    context["snapshot"]["head_sha"] = "stale"
+    result["model_requests"][0]["prompt"] = json.dumps(context)
+    with pytest.raises(ValueError, match="snapshot_mismatch"):
+        blind_review_packets(result)
+
+
+def test_task_runtime_candidate_packet_rejects_missing_response_observation():
+    result = {"engine": "task_review_v1", "sample": {"repository": "org/repo",
+        "base_sha": "b" * 40, "head_sha": "a" * 40}, "model_requests": [], "model_calls": []}
+    with pytest.raises(ValueError, match="observations_missing"):
+        blind_review_packets(result)
+
+
 def test_unknown_usage_is_not_zero_and_invalidates_complete_total():
     result = _result()
     result["model_requests"][1]["usage"] = {"id": "usage-1", "usage_available": False}

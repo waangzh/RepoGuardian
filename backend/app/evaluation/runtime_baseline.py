@@ -138,6 +138,8 @@ def blind_review_packets(result: dict[str, Any]) -> tuple[list[dict], list[dict]
     材料只支持静态语义复核，候选引用自身不是代码事实。完整调用契约
     仍须从冻结 SHA 的源码核验，不能用这个包直接计算 precision/recall。
     """
+    if result.get("engine") == "task_review_v1":
+        return task_review_packets(result)
     packets, mapping = [], []
     seen: set[tuple[str, str]] = set()
     for event in result.get("issue_audit", []):
@@ -185,6 +187,95 @@ def blind_review_packets(result: dict[str, Any]) -> tuple[list[dict], list[dict]
                         )} for entry in stages]})
     # 确定性哈希顺序，避免将原始 stage/终态顺序泄露给评审者。
     return sorted(packets, key=lambda item: item["blind_id"]), mapping
+
+
+def task_review_packets(result: dict[str, Any]) -> tuple[list[dict], list[dict]]:
+    """从实际响应提取所有候选，包括被拒项；管线终态不进入盲审包。
+
+    旧引擎generated审计不适用于新引擎。不能把缺少该事件误解为零候选。
+    非法/丢失响应明确失败，不能给质量门提供一个看似完整的空包。
+    """
+    contexts, responses = {}, {}
+    for request in result.get("model_requests", []):
+        if request.get("status") == "started" and request.get("operation") == "task_review_v1":
+            key = (request.get("request_id"), request.get("attempt"))
+            if not key[0] or key in contexts:
+                raise ValueError("runtime_candidate_request_identity_invalid")
+            try:
+                contexts[key] = json.loads(request["prompt"])
+            except (KeyError, TypeError, json.JSONDecodeError) as exc:
+                raise ValueError("runtime_candidate_context_invalid") from exc
+        elif request.get("status") == "completed":
+            identity = (request.get("usage") or {}).get("id")
+            if not identity or identity in responses:
+                raise ValueError("runtime_candidate_usage_identity_invalid")
+            responses[identity] = (request.get("request_id"), request.get("attempt"))
+    packets, mapping, seen = [], [], set()
+    calls = result.get("model_calls", [])
+    if not contexts or not calls:
+        raise ValueError("runtime_candidate_observations_missing")
+    if len(responses) != len(calls):
+        raise ValueError("runtime_candidate_observations_mismatch")
+    sample = result["sample"]
+    used_responses = set()
+    for call_index, call in enumerate(calls):
+        try:
+            usage_id = (call.get("usage") or {}).get("id")
+            if usage_id not in responses or usage_id in used_responses:
+                raise ValueError("runtime_candidate_response_identity_invalid")
+            used_responses.add(usage_id)
+            context = contexts[responses[usage_id]]
+            snapshot = context["snapshot"]
+            expected_snapshot = result.get("snapshot") or {}
+            if (snapshot["head_sha"] != sample["head_sha"]
+                    or snapshot["head_sha"] != expected_snapshot.get("verified_head")
+                    or snapshot["base_sha"] != expected_snapshot.get("verified_base")):
+                raise ValueError("runtime_candidate_snapshot_mismatch")
+            response = json.loads(call["raw_response"])
+            if response.get("kind") not in {"read", "submit"}:
+                raise ValueError("runtime_candidate_response_kind_invalid")
+            if (response["kind"] == "submit" and context["task"]["kind"] == "inspect"
+                    and "candidates" not in response):
+                raise ValueError("runtime_candidate_array_missing")
+            candidates = response.get("candidates", [])
+            if not isinstance(candidates, list):
+                raise ValueError("runtime_candidate_array_invalid")
+            for candidate_index, candidate in enumerate(candidates):
+                if not isinstance(candidate, dict):
+                    raise ValueError("runtime_candidate_invalid")
+                anchor, ids = candidate.get("primary_anchor"), candidate.get("evidence_ids", [])
+                if not isinstance(anchor, str) or not isinstance(ids, list) or not all(
+                        isinstance(value, str) for value in ids):
+                    raise ValueError("runtime_candidate_identity_invalid")
+                if anchor not in {goal["goal_id"] for goal in context.get("goals", [])}:
+                    raise ValueError("runtime_candidate_context_missing")
+                evidence = {}
+                for value in context["active_evidence"]:
+                    if value["id"] in ids:
+                        evidence[value["id"]] = value
+                if set(ids) != set(evidence):
+                    raise ValueError("runtime_candidate_evidence_missing")
+                def source(value):
+                    return {"file_path": value["file_path"], "existing_code": value["content"],
+                        "expected_side": value.get("side", "head"),
+                        "resolved_start_line": value["start_line"], "resolved_end_line": value["end_line"]}
+                sources = [source(evidence[identity]) for identity in ids if identity in evidence]
+                claim = {"title": candidate.get("claim"),
+                    **{name: candidate.get(name) for name in ("affected_behavior", "failure_scenario", "recommendation")},
+                    "primary_evidence": sources[0] if sources else None, "supporting_evidence": sources[1:]}
+                identity = "blind-" + _identity([sample["head_sha"], claim])[:24]
+                if identity not in seen:
+                    seen.add(identity)
+                    packets.append({"blind_id": identity, "snapshot": {"repository": sample["repository"],
+                        "declared_base_sha": sample["base_sha"], "head_sha": snapshot["head_sha"],
+                        "base_sha": snapshot["base_sha"], "diff_sha256": (result.get("snapshot") or {}).get("diff_sha256")},
+                        "claim": claim, "quality_label": None})
+                mapping.append({"blind_id": identity, "call_index": call_index,
+                    "candidate_index": candidate_index, "primary_anchor": anchor,
+                    "request_id": responses[usage_id][0], "wire_attempt": responses[usage_id][1]})
+        except (KeyError, TypeError, AttributeError, json.JSONDecodeError) as exc:
+            raise ValueError("runtime_candidate_observation_invalid") from exc
+    return sorted(packets, key=lambda value: value["blind_id"]), mapping
 
 
 def quality_summary(packets: list[dict], annotations: list[dict]) -> dict[str, Any]:
