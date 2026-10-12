@@ -71,6 +71,8 @@ def task_runtime_configuration(model=None, *, provider=None):
     profile = resolver(selected_model) if callable(resolver) else settings.resolve_model_profile(selected_model)
     return {"provider": provider_name, "model": selected_model,
         "prompt_version": "task-review-prompt-v5",
+        # 新任务冻结具体关系规划；历史手工配置缺省为 legacy，恢复时不能静默换规划器。
+        "risk_planner_version": "risk-planner-v2",
         "readable_scope_version": "repository-tracked-v1",
         "endpoint": getattr(provider, "_base_url", settings.openai_base_url),
         "limits": settings.run_budget_limits(), "policy_version": settings.repoguardian_review_policy_version,
@@ -182,6 +184,9 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
     configuration = state.get("task_runtime_configuration")
     if not configuration:
         raise ValueError("task runtime frozen configuration missing")
+    risk_planner_version = configuration.get("risk_planner_version", "legacy")
+    if risk_planner_version not in {"legacy", "risk-planner-v2"}:
+        raise ValueError("unsupported risk planner version")
     context = (runtime.context or {}) if runtime else {}
     repository = context.get("coordination_repository") or state.get("_coordination_repository")
     if state.get("_persistence_enabled") and repository is None:
@@ -281,10 +286,13 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
         queue.progress = progress
     if steps:
         TaskReviewDerivation(queue, steps, changed_files=changed,
+            risk_planner_version=risk_planner_version,
             investigations_enabled=experiment.get("investigations_enabled", True),
             rule_ids={unit.id: unit.rule_ids for unit in plan.review_units},
             risk_catalog=build_task_risk_catalog([goal for goal in goals if not goal.unsupported_reason],
-                                               items, state.get("repository_graph") or {}))
+                                               items, state.get("repository_graph") or {},
+                                               planner_version=risk_planner_version,
+                                               max_lines_per_read=configuration["max_lines_per_read"]))
         checkpoint = TaskRuntimeCheckpoint(queue, steps, repository, lease=lease) if repository else None
         if checkpoint:
             await checkpoint.restore()
