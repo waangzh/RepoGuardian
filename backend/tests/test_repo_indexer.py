@@ -332,3 +332,56 @@ def test_repository_graph_preserves_directory_and_java_import_resolution():
         and edge["target"] == "src/shared/account.py"
         for edge in graph["edges"]
     )
+
+
+def test_call_graph_rejects_python_builtins_linked_to_javascript_methods():
+    from app.tools.repository_graph import build_repository_graph
+
+    files = [{"path": "model.py", "language": "python"}, {"path": "web.js", "language": "javascript"}]
+    symbols = [{"file": "model.py", "symbol": "forward", "calls": ["int", "range"]},
+               {"file": "web.js", "symbol": "ZodNumber.int", "calls": []},
+               {"file": "web.js", "symbol": "NodePos.range", "calls": []}]
+    graph = build_repository_graph(files, symbols)
+    assert not [edge for edge in graph["edges"] if edge["type"] == "calls"]
+    assert {symbol["id"] for symbol in graph["symbols"]} == {
+        "model.py::forward", "web.js::ZodNumber.int", "web.js::NodePos.range"}
+    assert symbols[0]["calls"] == ["int", "range"]
+    assert graph["metadata"]["call_resolution_version"] == "language-family-v2"
+
+
+@pytest.mark.parametrize("source_language,target_language", [
+    ("javascript", "typescript"), ("typescript", "javascript"), ("python", "python"), ("go", "go")])
+def test_call_graph_keeps_compatible_language_calls_despite_foreign_name_collision(source_language, target_language):
+    from app.tools.repository_graph import build_repository_graph
+
+    files = [{"path": "caller", "language": source_language}, {"path": "callee", "language": target_language},
+             {"path": "foreign", "language": "rust"}]
+    symbols = [{"file": "caller", "symbol": "caller", "calls": ["load"]},
+               {"file": "callee", "symbol": "load", "calls": []},
+               {"file": "foreign", "symbol": "load", "calls": []}]
+    graph = build_repository_graph(files, symbols)
+    calls = [edge for edge in graph["edges"] if edge["type"] == "calls"]
+    assert [(edge["source"], edge["target"]) for edge in calls] == [("caller::caller", "callee::load")]
+
+
+def test_call_graph_preserves_ambiguity_and_unknown_language_without_claiming_calls():
+    from app.tools.repository_graph import build_repository_graph
+
+    files = [{"path": path, "language": language} for path, language in [
+        ("caller.py", "python"), ("a.py", "python"), ("b.py", "python"), ("unknown", "unknown")]]
+    symbols = [{"file": "caller.py", "symbol": "caller", "calls": ["load"]},
+               {"file": "a.py", "symbol": "load", "calls": []},
+               {"file": "b.py", "symbol": "load", "calls": []},
+               {"file": "unknown", "symbol": "unparsed", "calls": ["caller"]}]
+    graph = build_repository_graph(files, symbols)
+    assert not [edge for edge in graph["edges"] if edge["type"] == "calls"]
+
+
+async def test_indexer_real_mixed_files_keeps_python_calls_out_of_frontend(tmp_path):
+    (tmp_path / "model.py").write_text("def forward(value):\n    return int(value) + len(list(range(3)))\n", encoding="utf-8")
+    (tmp_path / "web.js").write_text("class ZodNumber { int() { return 1; } }\nclass NodePos { range() { return 1; } }\n", encoding="utf-8")
+    index = await RepoIndexer().execute(repo_path=str(tmp_path))
+    assert any(symbol["file"] == "model.py" and "int" in symbol["calls"] for symbol in index["symbol_index"])
+    assert any(symbol["file"] == "web.js" and symbol["symbol"].endswith(".int") for symbol in index["symbol_index"])
+    assert not [edge for edge in index["repository_graph"]["edges"] if edge["type"] == "calls"
+                and edge.get("source_file") == "model.py" and edge.get("target_file") == "web.js"]
