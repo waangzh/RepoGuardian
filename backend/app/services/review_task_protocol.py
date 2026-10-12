@@ -123,9 +123,9 @@ class TaskReviewV1Protocol:
             "Look for concrete regressions in correctness, security and performance with a triggering scenario. "
             "canonical_changes contains fixed diff context, not valid source evidence IDs. "
             "Only mark examined after checking the entire requested range; otherwise report blocked.")
-        if self.spec.prompt_version in {"task-review-prompt-v2", "task-review-prompt-v3", "task-review-prompt-v4"}:
+        if self.spec.prompt_version in {"task-review-prompt-v2", "task-review-prompt-v3", "task-review-prompt-v4", "task-review-prompt-v5"}:
             payload.pop("submit_example")
-            if self.spec.prompt_version in {"task-review-prompt-v3", "task-review-prompt-v4"} and selected and work_item.kind.value == "inspect":
+            if self.spec.prompt_version in {"task-review-prompt-v3", "task-review-prompt-v4", "task-review-prompt-v5"} and selected and work_item.kind.value == "inspect":
                 payload["submit_shape_example"] = {"kind": "submit", "examinations": [{
                     "target_id": selected[0]["goal_id"], "disposition": "blocked",
                     "evidence_ids": [], "reason": "<state the actual evidence gap; replace this example>"}],
@@ -136,7 +136,7 @@ class TaskReviewV1Protocol:
                     "leads": []}
             payload["prompt_version"] = self.spec.prompt_version
             payload["response"] = self.compact_schema(payload["response"])
-            if self.spec.prompt_version in {"task-review-prompt-v3", "task-review-prompt-v4"}:
+            if self.spec.prompt_version in {"task-review-prompt-v3", "task-review-prompt-v4", "task-review-prompt-v5"}:
                 for schema in payload["response"]["one_of"]:
                     schema["required"] = list(dict.fromkeys([*schema.get("required", []), "kind"]))
                     definitions = schema.get("$defs", {})
@@ -144,7 +144,7 @@ class TaskReviewV1Protocol:
                         if name in definitions:
                             definitions[name]["properties"][field]["enum"] = [goal.goal_id for goal in
                                 [*goals, *(related_goals or [])]]
-                    if self.spec.prompt_version == "task-review-prompt-v4":
+                    if self.spec.prompt_version in {"task-review-prompt-v4", "task-review-prompt-v5"}:
                         for name in ("ExaminationSubmission", "CandidateSubmission", "InvestigationSubmission", "VerificationSubmission"):
                             if name in definitions:
                                 definitions[name]["required"] = list(dict.fromkeys([
@@ -179,11 +179,27 @@ class TaskReviewV1Protocol:
                 "Never emit type=json_object or response_format. Do not change task identity, snapshot or goals. "
                 "Use actual goal/evidence IDs; diff context is not a source evidence anchor. "
                 "All explanatory fields must use Simplified Chinese; quote code verbatim.")
-            if self.spec.prompt_version in {"task-review-prompt-v3", "task-review-prompt-v4"}:
+            if self.spec.prompt_version in {"task-review-prompt-v3", "task-review-prompt-v4", "task-review-prompt-v5"}:
                 system += (" The top-level discriminator is exactly kind, never type: use {\"kind\":\"read\",...} "
                     "or {\"kind\":\"submit\",...}. primary_anchor and target_id must equal an actual goal_id, "
                     "never a path, line number or code fragment. Examples describe JSON structure only; "
                     "replace explanatory placeholders and omit absent candidates.")
+            if self.spec.prompt_version == "task-review-prompt-v5":
+                system += " Do not emit fields outside the schema; omit optional fields instead of sending null values."
+                for schema in payload["response"]["one_of"]:
+                    definition = schema.get("$defs", {}).get("ExaminationSubmission")
+                    if definition:
+                        definition["properties"]["target_id"]["enum"] = [goal.goal_id for goal in goals]
+                for change in payload["canonical_changes"]:
+                    change["lines"] = [line for line in change["lines"] if line["kind"] != "context"]
+                    change["presentation"] = "changed_lines_only_full_head_range_in_active_evidence"
+                payload["review_contract"] += (
+                    " Trace the exact branches selected by the stated trigger and the values passed to downstream code. "
+                    "Distinguish guaranteed values from assumptions; check the meaning of operation arguments rather "
+                    "than guessing from their spelling. Compare removed and added operations before drawing conclusions. "
+                    "A nearby alternative branch is not evidence of what the triggered branch does. "
+                    "Read missing local implementations or callers; if a necessary premise remains unknown, "
+                    "report the evidence gap instead of inventing behavior.")
         prompt = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return PreparedModelRequest(
             model=self.spec.model_name, operation="task_review_v1",

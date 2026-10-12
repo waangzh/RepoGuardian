@@ -202,7 +202,7 @@ def task_review_packets(result: dict[str, Any]) -> tuple[list[dict], list[dict]]
             if not key[0] or key in contexts:
                 raise ValueError("runtime_candidate_request_identity_invalid")
             try:
-                contexts[key] = json.loads(request["prompt"])
+                contexts[key] = _decode_recorded_prompt(request["prompt"])
             except (KeyError, TypeError, json.JSONDecodeError) as exc:
                 raise ValueError("runtime_candidate_context_invalid") from exc
         elif request.get("status") == "completed":
@@ -247,7 +247,7 @@ def task_review_packets(result: dict[str, Any]) -> tuple[list[dict], list[dict]]
                 if not isinstance(anchor, str) or not isinstance(ids, list) or not all(
                         isinstance(value, str) for value in ids):
                     raise ValueError("runtime_candidate_identity_invalid")
-                if anchor not in {goal["goal_id"] for goal in context.get("goals", [])}:
+                if anchor not in {goal["goal_id"] for goal in [*context.get("goals", []), *context.get("related_goals", [])]}:
                     raise ValueError("runtime_candidate_context_missing")
                 evidence = {}
                 for value in context["active_evidence"]:
@@ -276,6 +276,21 @@ def task_review_packets(result: dict[str, Any]) -> tuple[list[dict], list[dict]]
         except (KeyError, TypeError, AttributeError, json.JSONDecodeError) as exc:
             raise ValueError("runtime_candidate_observation_invalid") from exc
     return sorted(packets, key=lambda value: value["blind_id"]), mapping
+
+
+def _decode_recorded_prompt(raw: str) -> dict[str, Any]:
+    """解析请求主体和运行时追加的受控观察，不把追加段误当成损坏 JSON。"""
+    decoder = json.JSONDecoder()
+    value, end = decoder.raw_decode(raw.lstrip())
+    if not isinstance(value, dict):
+        raise ValueError("runtime_candidate_context_invalid")
+    suffix = raw.lstrip()[end:].strip()
+    while suffix:
+        extra, end = decoder.raw_decode(suffix)
+        if not isinstance(extra, dict) or set(extra) - {"recent_tool_observations", "correction", "rejected_items", "accepted_target_ids", "instruction"}:
+            raise ValueError("runtime_candidate_prompt_suffix_invalid")
+        suffix = suffix[end:].strip()
+    return value
 
 
 def quality_summary(packets: list[dict], annotations: list[dict]) -> dict[str, Any]:

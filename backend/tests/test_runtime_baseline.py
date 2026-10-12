@@ -134,6 +134,20 @@ def test_task_packet_rejects_stale_snapshot():
         blind_review_packets(result)
 
 
+def test_task_packet_accepts_controlled_appended_observations_and_related_anchor():
+    result = _task_result()
+    request = result["model_requests"][0]
+    context = json.loads(request["prompt"])
+    context["related_goals"] = context["goals"]
+    context["goals"] = []
+    request["prompt"] = json.dumps(context) + '\n{"recent_tool_observations":[]}' + '\n{"correction":[]}'
+    packets, _ = blind_review_packets(result)
+    assert len(packets) == 1
+    request["prompt"] += '\n{"active_evidence":[]}'
+    with pytest.raises(ValueError, match="prompt_suffix_invalid"):
+        blind_review_packets(result)
+
+
 def test_task_runtime_candidate_packet_rejects_missing_response_observation():
     result = {"engine": "task_review_v1", "sample": {"repository": "org/repo",
         "base_sha": "b" * 40, "head_sha": "a" * 40}, "model_requests": [], "model_calls": []}

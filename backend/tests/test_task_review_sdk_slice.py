@@ -9,6 +9,7 @@ from app.models.review import ReviewToolScope
 from app.models.review_runtime import ReviewGoal, ReviewRunSpec, ReviewWorkItem
 from app.services.review_run_budget import ReviewRunBudget
 from app.services.review_task_executor import ReviewTaskExecutor
+from app.services.review_task_protocol import TaskReviewV1Protocol
 from app.services.review_task_step import InspectTaskStep
 from runtime_v1_fixtures import evidence_catalog
 
@@ -121,6 +122,64 @@ async def test_malformed_output_is_billed_and_correction_is_once_for_logical_wor
     assert step.executor.work_item.format_corrections == 1
     assert step.budget.settled_actual == 30 and len(messages) == 2
     assert not step.executor.projection.examinations
+
+
+async def test_correction_keeps_rejected_item_and_does_not_advance_page(tmp_path):
+    step, messages = make_slice(tmp_path, [
+        {"kind": "submit", "examinations": [{"target_id": "t1", "disposition": "examined",
+            "evidence_ids": ["e1"], "reason": "检查"}],
+         "candidates": [{"claim": "候选", "primary_anchor": "t1", "evidence_ids": ["e1"],
+             "evidence_ids_note": None}]},
+        {"kind": "submit", "candidates": [{"claim": "候选", "primary_anchor": "t1",
+            "evidence_ids": ["e1"]}], "leads": []},
+    ])
+    step.executor.spec = step.executor.spec.model_copy(update={"prompt_version": "task-review-prompt-v5"})
+    step.protocol = TaskReviewV1Protocol(step.executor.spec)
+    first = await step.advance()
+    assert first["correction_pending"] and not first["page_advanced"]
+    from app.services.task_runtime_checkpoint import TaskRuntimeCheckpoint
+    saved = TaskRuntimeCheckpoint._session(step)
+    assert saved["rejected_items"][0]["item"]["evidence_ids_note"] is None
+    step.rejected_items = []
+    TaskRuntimeCheckpoint._restore_session(step, saved)
+    second = await step.advance()
+    payload, end = json.JSONDecoder().raw_decode(messages[1][1].content)
+    suffix = json.loads(messages[1][1].content[end:])
+    assert second["correction_pending"] is False
+    assert suffix["rejected_items"][0]["item_type"] == "candidates"
+    assert suffix["accepted_target_ids"] == ["t1"]
+    assert payload["goals"] == [] and step.executor.projection.candidates
+    assert TaskRuntimeCheckpoint._session(step)["rejected_items"] == []
+
+
+async def test_candidate_correction_stays_on_original_evidence_page(tmp_path):
+    import hashlib
+    from app.services.task_context_pages import build_context_pages
+    def submit_page(payload):
+        return {"kind": "submit", "examinations": [{"target_id": "t1", "disposition": "examined",
+            "evidence_ids": payload["active_evidence_ids"], "reason": "已检查当前页"}],
+            "candidates": [{"claim": "候选", "primary_anchor": "t1", "evidence_ids": payload["active_evidence_ids"],
+                            "extra": None}]}
+    def correct(payload):
+        assert payload["goals"] == []
+        return {"kind": "submit", "candidates": [{"claim": "候选", "primary_anchor": "t1",
+                                                   "evidence_ids": payload["active_evidence_ids"]}]}
+    step, _ = make_slice(tmp_path, [submit_page, correct])
+    executor = step.executor
+    executor.spec = executor.spec.model_copy(update={"prompt_version": "task-review-prompt-v5"})
+    step.protocol = TaskReviewV1Protocol(executor.spec)
+    executor.goals["t1"] = executor.goals["t1"].model_copy(update={"end_line": 2})
+    content = "return value\nreturn value"
+    executor.evidence_catalog["e1"].update(content=content, end_line=2,
+        content_hash=hashlib.sha256(content.encode()).hexdigest())
+    pages = build_context_pages(executor.work_item, list(executor.goals.values()), executor.evidence_catalog,
+                                capacity_chars=15, chunk_evidence=True)
+    assert len(pages) == 2
+    executor.bind_pages(pages)
+    assert (await step.advance())["correction_pending"] and executor.page_index == 0
+    assert (await step.advance())["page_advanced"] and executor.page_index == 1
+    candidate = next(iter(executor.projection.candidates.values()))
+    assert set(candidate.supporting_evidence) == set(pages[0].evidence_ids)
 
 
 async def test_budget_denial_never_sends_sdk_request(tmp_path):
