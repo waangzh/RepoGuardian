@@ -94,7 +94,7 @@ class ReviewRunSpec(BaseModel):
     model_name: str = Field(min_length=1, max_length=200)
     policy_version: str = Field(min_length=1, max_length=100)
     protocol_version: Literal["task-review-protocol-v1"] = "task-review-protocol-v1"
-    prompt_version: Literal["task-review-prompt-v1", "task-review-prompt-v2", "task-review-prompt-v3", "task-review-prompt-v4"] = "task-review-prompt-v1"
+    prompt_version: Literal["task-review-prompt-v1", "task-review-prompt-v2", "task-review-prompt-v3", "task-review-prompt-v4", "task-review-prompt-v5"] = "task-review-prompt-v1"
     max_tokens: int = Field(ge=0)
     max_calls: int = Field(ge=0)
     readable_scope_files: tuple[RelativePath, ...] = ()

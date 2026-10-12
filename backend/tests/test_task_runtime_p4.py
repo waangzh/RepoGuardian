@@ -164,7 +164,7 @@ async def test_production_spec_ignores_hot_default_changes(production_input, mon
     assert all("canonical_change" not in value for value in calls[0]["active_evidence"])
 
 
-@pytest.mark.parametrize("version", ["task-review-prompt-v2", "task-review-prompt-v3", "task-review-prompt-v4"])
+@pytest.mark.parametrize("version", ["task-review-prompt-v2", "task-review-prompt-v3", "task-review-prompt-v4", "task-review-prompt-v5"])
 async def test_prompt_version_frozen_in_configuration_and_checkpoint(production_input, persistence, version):
     state, provider, calls = production_input
     state["task_runtime_configuration"]["prompt_version"] = version
@@ -182,7 +182,8 @@ async def test_prompt_version_frozen_in_configuration_and_checkpoint(production_
     assert len(calls) == 1
 
 
-async def test_v4_large_goal_uses_small_anchors_for_independent_verification(production_input):
+@pytest.mark.parametrize("version", ["task-review-prompt-v4", "task-review-prompt-v5"])
+async def test_v4_large_goal_uses_small_anchors_for_independent_verification(production_input, version):
     from pathlib import Path
     state, provider, _ = production_input
     root = state["repo_path"]
@@ -199,7 +200,7 @@ async def test_v4_large_goal_uses_small_anchors_for_independent_verification(pro
     state.update(head_sha=head, changed_files=[value.model_dump(mode="json") for value in changed],
         review_plan=DeterministicReviewPlanner().plan(changed, base_sha=state["base_sha"], head_sha=head,
             model="fixture").model_dump(mode="json"), _provider=provider)
-    state["task_runtime_configuration"]["prompt_version"] = "task-review-prompt-v4"
+    state["task_runtime_configuration"]["prompt_version"] = version
     state["task_runtime_configuration"]["limits"]["max_calls"] = 20
     state["task_runtime_configuration"]["deadline_seconds"] = 60
     requests = []
@@ -207,7 +208,7 @@ async def test_v4_large_goal_uses_small_anchors_for_independent_verification(pro
         async def ainvoke(self, messages):
             payload = json.loads(messages[1].content.split("\n")[0])
             requests.append(payload)
-            assert payload["prompt_version"] == "task-review-prompt-v4"
+            assert payload["prompt_version"] == version
             assert all(len(value["content"]) <= 4_000 for value in payload["active_evidence"])
             if payload["task"]["kind"] == "inspect":
                 anchor = next((value["id"] for value in payload["active_evidence"]
