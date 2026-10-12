@@ -11,7 +11,8 @@ from pathlib import PurePosixPath
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
-from app.models.review import FileReadRequest
+from app.models.review import (FileReadRequest, FileFindRequest, CodeSearchRequest,
+                              FileReadDiffRequest, IssueCategory, Severity)
 
 
 Revision = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$", min_length=40, max_length=40)]
@@ -138,6 +139,14 @@ class ReviewWorkItem(BaseModel):
     last_checked_budget_revision: int = -1
     last_checked_obligation_revision: int = -1
     reason: str | None = None
+    proposition: str | None = Field(default=None, min_length=1, max_length=2_000)
+    related_goal_ids: list[str] = Field(default_factory=list, max_length=40)
+    required_evidence_ids: list[str] = Field(default_factory=list, max_length=20)
+    counter_evidence_ids: list[str] = Field(default_factory=list, max_length=20)
+    evidence_requests: list[RuntimeReadArguments] = Field(default_factory=list, max_length=20)
+    verification_candidate: Candidate | None = None
+    generation: int = Field(default=0, ge=0, le=1)
+    origin_work_item_id: str | None = None
 
     @model_validator(mode="after")
     def validate_scope(self) -> "ReviewWorkItem":
@@ -150,9 +159,29 @@ class ReviewWorkItem(BaseModel):
 class RuntimeReadResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["read"] = "read"
-    tool: Literal["file_read"]
-    arguments: RuntimeReadArguments
+    tool: Literal["file_read", "file_find", "code_search", "file_read_diff"]
+    arguments: RuntimeReadArguments | FileFindRequest | CodeSearchRequest | FileReadDiffRequest
     purpose: str = Field(min_length=1, max_length=1_000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def bind_tool_arguments(cls, value):
+        if not isinstance(value, dict):
+            return value
+        schemas = {"file_read": RuntimeReadArguments, "file_find": FileFindRequest,
+                   "code_search": CodeSearchRequest, "file_read_diff": FileReadDiffRequest}
+        if value.get("tool") in schemas:
+            value = dict(value)
+            value["arguments"] = schemas[value["tool"]].model_validate(value.get("arguments"))
+        return value
+
+    @model_validator(mode="after")
+    def exact_tool_schema(self):
+        expected = {"file_read": RuntimeReadArguments, "file_find": FileFindRequest,
+                    "code_search": CodeSearchRequest, "file_read_diff": FileReadDiffRequest}[self.tool]
+        if not isinstance(self.arguments, expected):
+            raise ValueError("tool arguments schema mismatch")
+        return self
 
 
 class ExaminationSubmission(BaseModel):
@@ -168,6 +197,12 @@ class CandidateSubmission(BaseModel):
     claim: str = Field(min_length=1, max_length=2_000)
     primary_anchor: str = Field(min_length=1, max_length=160)
     evidence_ids: list[str] = Field(min_length=1, max_length=20)
+    affected_behavior: str = Field(default="", max_length=1_000)
+    failure_scenario: str = Field(default="", max_length=2_000)
+    recommendation: str = Field(default="", max_length=2_000)
+    category: IssueCategory = IssueCategory.correctness
+    severity: Severity = Severity.medium
+    evidence_requests: list[RuntimeReadArguments] = Field(default_factory=list, max_length=20)
 
 
 class LeadSubmission(BaseModel):
@@ -175,6 +210,7 @@ class LeadSubmission(BaseModel):
     proposition: str = Field(min_length=1, max_length=2_000)
     related_target_ids: list[str] = Field(min_length=1, max_length=20)
     missing_evidence: list[str] = Field(min_length=1, max_length=20)
+    evidence_requests: list[RuntimeReadArguments] = Field(default_factory=list, max_length=20)
 
 
 class InvestigationSubmission(BaseModel):
@@ -182,6 +218,7 @@ class InvestigationSubmission(BaseModel):
     answer: InvestigationAnswer
     evidence_ids: list[str] = Field(default_factory=list, max_length=20)
     limitations: list[str] = Field(default_factory=list, max_length=20)
+    reason: str = Field(min_length=1, max_length=2_000)
 
 
 class VerificationSubmission(BaseModel):
@@ -199,6 +236,20 @@ class RuntimeSubmitResponse(BaseModel):
     examinations: list[ExaminationSubmission] = Field(default_factory=list, max_length=40)
     candidates: list[CandidateSubmission] = Field(default_factory=list, max_length=20)
     leads: list[LeadSubmission] = Field(default_factory=list, max_length=20)
+
+
+class InvestigationSubmitResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["submit"] = "submit"
+    investigation: InvestigationSubmission
+    candidates: list[CandidateSubmission] = Field(default_factory=list, max_length=20)
+    leads: list[LeadSubmission] = Field(default_factory=list, max_length=20)
+
+
+class VerificationSubmitResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["submit"] = "submit"
+    verification: VerificationSubmission
 
 
 RuntimeResponse = Annotated[RuntimeReadResponse | RuntimeSubmitResponse, Field(discriminator="kind")]
@@ -222,6 +273,12 @@ class Candidate(BaseModel):
     primary_anchor: str
     supporting_evidence: list[str]
     source_result_ids: list[str]
+    affected_behavior: str = ""
+    failure_scenario: str = ""
+    recommendation: str = ""
+    category: IssueCategory = IssueCategory.correctness
+    severity: Severity = Severity.medium
+    evidence_requests: list[RuntimeReadArguments] = Field(default_factory=list)
 
 
 class ProposedLead(BaseModel):
@@ -231,3 +288,22 @@ class ProposedLead(BaseModel):
     related_targets: list[str]
     missing_evidence: list[str]
     origin_result_id: str
+    evidence_requests: list[RuntimeReadArguments] = Field(default_factory=list)
+
+
+class InvestigationResult(InvestigationSubmission):
+    work_item_id: str
+    proposition: str
+    request_id: str
+    attempt_id: str
+    snapshot_head_sha: Revision
+
+
+class VerificationResult(VerificationSubmission):
+    work_item_id: str
+    request_id: str
+    attempt_id: str
+    snapshot_head_sha: Revision
+
+
+ReviewWorkItem.model_rebuild()

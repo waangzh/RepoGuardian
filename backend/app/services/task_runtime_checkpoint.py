@@ -9,11 +9,14 @@ from copy import deepcopy
 from dataclasses import asdict
 
 from app.models.review import UnitEvidenceStore
-from app.models.review_runtime import Candidate, ExaminationResult, ProposedLead, RuntimeReadResponse
+from app.models.review_runtime import (Candidate, ExaminationResult, ProposedLead, RuntimeReadResponse,
+                                      InvestigationResult, VerificationResult)
+from app.models.review_runtime import ReviewGoal, ReviewWorkItem
 from app.services.coordination_runtime import CoordinationLeaseLost
 from app.services.review_run_budget import AttemptState
 from app.services.review_task_executor import TaskProjection
 from app.services.task_context_pages import ContextPage
+from app.services.fingerprints import stable_hash
 
 
 class TaskRuntimeCheckpoint:
@@ -50,6 +53,7 @@ class TaskRuntimeCheckpoint:
                      "goals": goals, "calls": {}, "sessions": {},
                      "pages": {identity: json.loads(json.dumps([asdict(page) for page in step.executor.pages]))
                                for identity, step in steps.items()}}
+        self.data["derivation_config_hash"] = stable_hash(runtime.derivation.frozen_configuration()) if runtime.derivation else None
         self._committed = deepcopy(self.data)
         runtime.checkpoint = self
         for step in steps.values():
@@ -80,6 +84,10 @@ class TaskRuntimeCheckpoint:
                                   for goal, fragments in executor.page_examinations.items()},
             "last_observation": step.last_observation,
             "read_observations": step.read_observations,
+            "tool_observations": step.tool_observations,
+            "investigation": projection.investigation.model_dump(mode="json") if projection.investigation else None,
+            "verification": projection.verification.model_dump(mode="json") if projection.verification else None,
+            "invalidated_results": projection.invalidated_results,
         }
 
     @staticmethod
@@ -90,6 +98,9 @@ class TaskRuntimeCheckpoint:
             candidates={k: Candidate.model_validate(v) for k, v in payload["candidates"].items()},
             leads=[ProposedLead.model_validate(v) for v in payload["leads"]],
             accepted_target_ids=set(payload["accepted"]), pending_target_ids=set(payload["pending"]),
+            investigation=InvestigationResult.model_validate(payload["investigation"]) if payload.get("investigation") else None,
+            verification=VerificationResult.model_validate(payload["verification"]) if payload.get("verification") else None,
+            invalidated_results=payload.get("invalidated_results", []),
         )
         executor.evidence_catalog = payload["evidence"]
         executor.active_evidence_ids = set(payload["active"])
@@ -103,6 +114,7 @@ class TaskRuntimeCheckpoint:
             for goal, fragments in payload["page_examinations"].items()}
         step.last_observation = payload["last_observation"]
         step.read_observations = payload["read_observations"]
+        step.tool_observations = payload.get("tool_observations", [])
 
     async def _put(self, kind, payload):
         content = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -126,11 +138,18 @@ class TaskRuntimeCheckpoint:
             concurrency=runtime.concurrency, cancelled=runtime.cancelled,
             last_unit=runtime._last_unit, class_cursor=deepcopy(runtime._class_cursor),
             obligation_revision=runtime.obligation_revision, served=deepcopy(runtime._served), turn=runtime._turn)
+        payload["derived_goals"] = {key: goal.model_dump(mode="json") for step in self.steps.values()
+                                    for key, goal in step.executor.goals.items() if goal.origin == "derived"}
+        payload["pages"].update({identity: json.loads(json.dumps([asdict(page) for page in step.executor.pages]))
+                                for identity, step in self.steps.items()})
         # 在 await 前冻结；正文只写内容寻址 artifact，不进入 SideEffect CAS。
         sessions = {identity: deepcopy(self._session(step)) for identity, step in self.steps.items()}
+        derivation_data = deepcopy(runtime.derivation.data) if runtime.derivation is not None else None
         try:
             for identity, session in sessions.items():
                 payload["sessions"][identity] = await self._put("session", session)
+            if derivation_data is not None:
+                payload["derivation"] = await self._put("derivation", derivation_data)
             await asyncio.to_thread(self.repository.save_task_review_runtime, self.run_id,
                                     payload, before, self.lease)
         except BaseException:
@@ -191,9 +210,12 @@ class TaskRuntimeCheckpoint:
         if not payload:
             await self.persist()
             return
+        initial_items = {v["work_item_id"] for v in payload["items"] if not v.get("generation")}
+        expected_initial = self.runtime.derivation.initial_ids if self.runtime.derivation else set(self.steps)
         if (payload["version"] != self.version or payload["spec"] != self.spec
                 or payload["goals"] != self.data["goals"]
-                or {v["work_item_id"] for v in payload["items"]} != set(self.steps)):
+                or initial_items != expected_initial
+                or payload.get("derivation_config_hash") != self.data.get("derivation_config_hash")):
             raise ValueError("task runtime frozen manifest mismatch")
         self.data = deepcopy(payload)
         self._committed = deepcopy(payload)
@@ -206,6 +228,14 @@ class TaskRuntimeCheckpoint:
         runtime._turn = payload["turn"]
         runtime.obligation_revision = payload["obligation_revision"]
         runtime._running.clear()
+        derived_goals = {key: ReviewGoal.model_validate(value) for key, value in payload.get("derived_goals", {}).items()}
+        for raw in payload["items"]:
+            if raw["work_item_id"] not in self.steps:
+                if runtime.derivation is None:
+                    raise ValueError("derived runtime requires derivation adapter")
+                runtime.derivation.restore_item(ReviewWorkItem.model_validate(raw), derived_goals)
+        if payload.get("derivation"):
+            runtime.derivation.data = await self._read(payload["derivation"])
         for raw in payload["items"]:
             item = runtime._items[raw["work_item_id"]]
             if any(raw[key] != getattr(item, key) for key in ("goal_ids", "scope_files", "unit_id", "kind")):
@@ -228,6 +258,8 @@ class TaskRuntimeCheckpoint:
                     await self.budget.settle(attempt.attempt_id, actual_tokens=None)
                     item = runtime._items[attempt.task_id]
                     item.state = type(item.state)("unknown")
+        if runtime.derivation is not None and not runtime.cancelled:
+            runtime.derivation.refresh()
         await self.persist()
 
     async def _restore_step(self, identity):

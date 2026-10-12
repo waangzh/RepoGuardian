@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import asdict
 import json
 
-from app.models.review import ReviewToolScope, UnitEvidenceStore
+from app.models.review import ReviewToolScope, UnitEvidenceStore, ContextRetrievalPlan, ChangedFile
 from app.models.review_runtime import RuntimeReadResponse
 from app.services.evidence_store import put_chunks, store_chunks, evidence_snapshot
 from app.services.review_run_budget import (
@@ -18,13 +18,15 @@ from app.services.review_task_executor import ReviewTaskExecutor
 from app.services.review_task_protocol import TaskReviewV1Protocol
 from app.tools.context_files import ScopedContextTool
 from app.tools.git_tool import GitTool
+from app.tools.code_search import CodeSearchTool
 
 
 class InspectTaskStep:
     """仅离线切片入口；复用现有 scope、EvidenceStore 和唯一 RunBudget。"""
 
     def __init__(self, executor: ReviewTaskExecutor, provider, budget: ReviewRunBudget,
-                 scope: ReviewToolScope, *, git_tool=None, context_tool=None):
+                 scope: ReviewToolScope, *, git_tool=None, context_tool=None, search_tool=None,
+                 changed_files=None, file_index=None, symbol_index=None, repository_graph=None):
         spec = executor.spec
         if (budget.run_id != spec.run_id or budget.max_calls != spec.max_calls
                 or budget.max_tokens != spec.max_tokens):
@@ -42,6 +44,11 @@ class InspectTaskStep:
         self.scope = scope
         self.git = git_tool or GitTool()
         self.tools = context_tool or ScopedContextTool()
+        self.search_tool = search_tool or CodeSearchTool()
+        self.changed_files = changed_files or []
+        self.file_index = file_index or []
+        self.symbol_index = symbol_index or []
+        self.repository_graph = repository_graph or {}
         self.protocol = TaskReviewV1Protocol(spec)
         self.store = UnitEvidenceStore(review_unit_id=scope.review_unit_id,
                                       snapshot=evidence_snapshot(spec.snapshot_head_sha,
@@ -54,6 +61,7 @@ class InspectTaskStep:
         self.checkpoint = None
         self.last_observation: dict = {}
         self.runtime = None
+        self.tool_observations: list[dict] = []
         self.read_observations: dict[str, dict] = {}
 
     async def advance(self) -> dict:
@@ -61,26 +69,43 @@ class InspectTaskStep:
             raise RuntimeError("work_item_already_running")
         async with self._lock:
             if self.pending_read is not None:
-                read_key = json.dumps(self.pending_read.arguments.model_dump(), sort_keys=True)
+                read_key = json.dumps([self.pending_read.tool, self.pending_read.arguments.model_dump()], sort_keys=True)
                 observation = await self._read()
                 fingerprint = json.dumps(observation, sort_keys=True)
                 previous = self.read_observations.get(read_key, {})
                 repeats = previous.get("repeats", 0) + 1 if previous.get("fingerprint") == fingerprint else 1
                 self.read_observations[read_key] = {"fingerprint": fingerprint, "repeats": repeats}
                 self.last_observation = observation
+                self.tool_observations.append(observation)
+                self.tool_observations = self.tool_observations[-4:]
+                if observation.get("status") == "completed" and self.executor.work_item.kind.value == "investigate":
+                    from app.services.review_task_derivation import TaskReviewDerivation
+                    request = next((request for request in self.executor.work_item.evidence_requests
+                        if not TaskReviewDerivation._request_covered(request, self.executor.evidence_catalog)), None)
+                    if request is not None:
+                        self.pending_read = RuntimeReadResponse(tool="file_read", arguments=request,
+                                                               purpose="准备尚未读取的明确证据")
                 if self.checkpoint is not None:
                     await self.checkpoint.persist()
                 return observation
             executor = self.executor
             current_goals = executor.current_goals()
+            current_ids = {goal.goal_id for goal in current_goals}
+            related_ids = [identity for identity in executor.goals if identity not in current_ids]
             pending_item = executor.work_item.model_copy(update={
-                "goal_ids": list(dict.fromkeys(goal.goal_id for goal in current_goals))})
+                "goal_ids": list(dict.fromkeys(goal.goal_id for goal in current_goals)),
+                "related_goal_ids": related_ids})
             # 合法历史仅保存在服务端，续查不要求重写已经完成的目标。
             if not pending_item.goal_ids and not self.repair_errors:
                 return {"action": "idle", "pending_goals": []}
             request = self.protocol.prepare(pending_item, current_goals,
                 active_evidence_ids=executor.active_evidence_ids,
-                evidence_catalog=executor.evidence_catalog)
+                evidence_catalog=executor.evidence_catalog,
+                related_goals=[executor.goals[identity] for identity in related_ids])
+            if self.tool_observations:
+                from dataclasses import replace
+                request = replace(request, prompt=request.prompt + "\n" + json.dumps({
+                    "recent_tool_observations": self.tool_observations}, ensure_ascii=False))
             if self.repair_errors:
                 from dataclasses import replace
                 request = replace(request, prompt=request.prompt + "\n" + json.dumps({
@@ -134,7 +159,7 @@ class InspectTaskStep:
         executor = self.executor
         parsed = executor.parse_and_apply(raw)
         if isinstance(parsed.response, RuntimeReadResponse) and not parsed.errors:
-            read_key = json.dumps(parsed.response.arguments.model_dump(), sort_keys=True)
+            read_key = json.dumps([parsed.response.tool, parsed.response.arguments.model_dump()], sort_keys=True)
             if self.read_observations.get(read_key, {}).get("repeats", 0) >= 2:
                 from app.services.review_task_executor import RuntimeParseError
                 parsed.errors.append(RuntimeParseError("read", None, "repeated_read_no_progress"))
@@ -158,6 +183,8 @@ class InspectTaskStep:
         self.pending_read = None
         executor = self.executor
         args = read.arguments
+        if read.tool != "file_read":
+            return await self._other_read(read)
         if args.end_line - args.start_line + 1 > self.scope.max_lines_per_read:
             return {"action": "tool", "status": "rejected", "reason": "read_range_exceeds_scope"}
         actual_head = await asyncio.to_thread(self.git._run,
@@ -185,3 +212,56 @@ class InspectTaskStep:
                    and item["end_line"] == chunk["end_line"] and item["content"] == chunk["content"]}
         executor.active_evidence_ids.update(visible)
         return {"action": "tool", "status": "completed", "evidence_ids": sorted(visible)}
+
+    async def _other_read(self, read):
+        args = read.arguments
+        executor = self.executor
+        actual_head = await asyncio.to_thread(self.git._run,
+            [self.git._git, "-C", self.scope.repository_root, "rev-parse", "HEAD"])
+        if actual_head.strip() != executor.spec.snapshot_head_sha:
+            return {"action": "tool", "status": "rejected", "reason": "stale_repository_snapshot"}
+        try:
+            if read.tool == "file_find":
+                result = await self.tools.file_find_page(scope=self.scope, **args.model_dump())
+                return {"action": "tool", "status": "completed", "tool": read.tool, "result": result}
+            if read.tool == "file_read_diff":
+                if not self.changed_files:
+                    return {"action": "tool", "status": "blocked", "reason": "canonical_diff_unavailable"}
+                chunk = await self.tools.file_read_diff(scope=self.scope, changed_files=self.changed_files,
+                                                       **args.model_dump())
+                return {"action": "tool", "status": "completed", "tool": read.tool, "result": chunk}
+            plan = ContextRetrievalPlan(reason=read.purpose[:500],
+                search_terms=[args.query] if args.relation == "text" else [],
+                target_symbols=[] if args.relation == "text" else [args.query],
+                relevance_types=[args.relation], include_callers=args.relation == "caller",
+                include_callees=args.relation == "callee", include_tests=args.relation == "test",
+                max_results=args.max_results)
+            chunks = await self.search_tool.retrieve_context(changed_files=[
+                value.model_dump(mode="json") if isinstance(value, ChangedFile) else value for value in self.changed_files],
+                file_index=self.file_index, symbol_index=self.symbol_index,
+                repo_path=self.scope.repository_root, plan=plan, scope=self.scope,
+                repository_graph=self.repository_graph)
+            accepted = []
+            for chunk in chunks:
+                if chunk.get("file") not in executor.work_item.scope_files or chunk.get("truncated"):
+                    continue
+                content = await asyncio.to_thread(self.git.get_file_content_at_revision,
+                    self.scope.repository_root, executor.spec.snapshot_head_sha, chunk["file"])
+                if content is None:
+                    continue
+                expected = "\n".join(content.splitlines()[chunk["start_line"] - 1:chunk["end_line"]])
+                if chunk["content"].rstrip("\r\n") == expected:
+                    accepted.append(chunk)
+            put_chunks(self.store, accepted)
+            evidence = store_chunks(self.store)
+            active = []
+            for identity, value in evidence.items():
+                executor.evidence_catalog[identity] = {**value, "file_path": value["file"]}
+                if any(value["file"] == chunk["file"] and value["start_line"] == chunk["start_line"]
+                       and value["end_line"] == chunk["end_line"] for chunk in accepted):
+                    executor.active_evidence_ids.add(identity)
+                    active.append(identity)
+            return {"action": "tool", "status": "completed", "tool": read.tool,
+                    "evidence_ids": sorted(active), "rejected_chunks": len(chunks) - len(accepted)}
+        except (ValueError, OSError):
+            return {"action": "tool", "status": "rejected", "reason": "controlled_read_rejected"}
