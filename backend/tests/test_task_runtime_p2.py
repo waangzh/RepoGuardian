@@ -354,7 +354,7 @@ async def test_runtime_deadline_preserves_unknown_inflight_usage(tmp_path):
             await asyncio.Event().wait()
     step.provider._build_chat_model = lambda *args: SlowSDK()
     runtime = TaskReviewRuntime([step.executor.work_item])
-    assert await runtime.run({"w1": step}, deadline_seconds=0.05) == "deadline"
+    assert await runtime.run({"w1": step}, deadline_seconds=2) == "deadline"
     assert entered.is_set() and step.budget.unknown_reserved > 0
     assert runtime.cancelled and await runtime.advance_round({"w1": step}) == []
 

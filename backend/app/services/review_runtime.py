@@ -139,6 +139,7 @@ class TaskReviewRuntime:
         self.obligation_revision = 0
         self.checkpoint = None
         self._round_lock = asyncio.Lock()
+        self.derivation = None
         for item in work_items or []:
             self.enqueue(item)
 
@@ -258,6 +259,8 @@ class TaskReviewRuntime:
         if state == "ready":
             item.scheduling_class = "continuation"
         self.finish(item.work_item_id, state=state)
+        if self.derivation is not None and not self.cancelled:
+            self.derivation.refresh()
         if self.checkpoint is not None:
             await self.checkpoint.persist()
         return observation
