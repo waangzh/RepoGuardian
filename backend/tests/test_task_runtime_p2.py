@@ -120,6 +120,42 @@ async def test_settled_missing_response_keeps_cost_and_retry_uses_new_admission(
     assert len(set(step.budget.attempts) - old_attempts) == 1 and reference
 
 
+async def test_v5_candidate_correction_survives_database_restore_without_rechecking(tmp_path, persistence):
+    from app.services.review_task_protocol import TaskReviewV1Protocol
+    repository = persistence[0]
+    repository.create_task(ReviewTask(id="run", pr_url="https://github.com/a/b/pull/1", engine="task_review_v1"))
+    invalid = {"kind": "submit", "examinations": [{"target_id": "t1", "disposition": "examined",
+        "evidence_ids": ["e1"], "reason": "已经检查"}],
+        "candidates": [{"claim": "候选", "primary_anchor": "t1", "evidence_ids": ["e1"], "extra": None}]}
+    corrected = {"kind": "submit", "candidates": [{"claim": "候选", "primary_anchor": "t1",
+                                                       "evidence_ids": ["e1"]}]}
+    async def configure(name, responses):
+        folder = tmp_path / name
+        folder.mkdir()
+        step, messages = make_slice(folder, responses)
+        step.executor.spec = step.executor.spec.model_copy(update={"prompt_version": "task-review-prompt-v5"})
+        step.protocol = TaskReviewV1Protocol(step.executor.spec)
+        step.budget = await ReviewRunBudget.load_or_create("run", max_tokens=100_000, max_calls=5,
+            store=ReviewRepositoryRunBudgetStore(repository), recover_running=False)
+        runtime = TaskReviewRuntime([step.executor.work_item])
+        checkpoint = TaskRuntimeCheckpoint(runtime, {"w1": step}, repository)
+        await checkpoint.restore()
+        return runtime, step, messages
+    runtime, step, messages = await configure("first", [invalid])
+    await runtime.advance_one({"w1": step})
+    result_id = step.executor.projection.examinations["t1"].result_id
+    assert step.executor.work_item.format_corrections == 1 and len(messages) == 1
+    restored, restored_step, restored_messages = await configure("second", [corrected])
+    assert restored_step.rejected_items[0]["item"]["extra"] is None
+    assert restored_step.executor.work_item.format_corrections == 1 and not restored_messages
+    await restored.advance_one({"w1": restored_step})
+    assert restored_step.executor.projection.examinations["t1"].result_id == result_id
+    assert len(restored_step.executor.projection.candidates) == 1
+    assert restored_step.budget.calls_consumed == 2 and restored_step.budget.settled_actual == 30
+    assert restored_step.executor.work_item.state.value == "completed"
+    assert len(restored_messages) == 1
+
+
 async def test_real_sdk_budget_deferral_only_wakes_on_revision_and_does_not_split(tmp_path):
     step, messages = make_slice(tmp_path, [submit])
     obligation = await step.budget.create_obligation(owner_task_id="other", token_budget=100_000,
