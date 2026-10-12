@@ -53,6 +53,8 @@ def build_context_pages(work_item, goals, catalog, *, capacity_chars: int) -> li
             chunks.append((start, current))
         for start, fragment in chunks:
             content = "\n".join(fragment)
+            if fragment[-1] == "":
+                content += "\n"
             end = start + len(fragment) - 1
             digest = hashlib.sha256(content.encode()).hexdigest()
             binding = {"goal_id": goal.goal_id, "file_path": goal.target_ref,

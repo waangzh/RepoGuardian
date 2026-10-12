@@ -6,6 +6,11 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Awaitable, Callable
 import asyncio
+import time
+
+
+class ExperimentalUnitDeadline(TimeoutError):
+    """仅用于评测的冻结 Unit 生命周期消融。"""
 
 
 class ReviewTaskStatus(StrEnum):
@@ -125,10 +130,15 @@ class TaskReviewRuntime:
 
     engine_version = "task_review_v1"
 
-    def __init__(self, work_items: list[Any] | None = None, *, concurrency: int = 1) -> None:
+    def __init__(self, work_items: list[Any] | None = None, *, concurrency: int = 1,
+                 unit_timeout_seconds: float | None = None) -> None:
         if not 1 <= concurrency <= 32:
             raise ValueError("invalid runtime concurrency")
         self.concurrency = concurrency
+        if unit_timeout_seconds is not None and unit_timeout_seconds <= 0:
+            raise ValueError("invalid unit deadline")
+        self.unit_timeout_seconds = unit_timeout_seconds
+        self.unit_deadlines: dict[str, float] = {}
         self._items: dict[str, Any] = {}
         self._running: set[str] = set()
         self._last_unit: str | None = None
@@ -219,9 +229,31 @@ class TaskReviewRuntime:
             raise ValueError("work_item_executor_binding_mismatch")
         step.runtime = self
         try:
+            remaining = None
+            if self.unit_timeout_seconds is not None:
+                deadline = self.unit_deadlines.setdefault(self._unit(item), time.time() + self.unit_timeout_seconds)
+                remaining = deadline - time.time()
             if self.checkpoint is not None:
                 await self.checkpoint.persist()
-            observation = await step.advance()
+            if remaining is not None:
+                if remaining <= 0:
+                    raise ExperimentalUnitDeadline()
+                timer = asyncio.timeout(remaining)
+                try:
+                    async with timer:
+                        observation = await step.advance()
+                except TimeoutError:
+                    if timer.expired():
+                        raise ExperimentalUnitDeadline() from None
+                    raise
+            else:
+                observation = await step.advance()
+        except ExperimentalUnitDeadline:
+            self.finish(item.work_item_id, state="cancelled")
+            item.reason = "experiment_unit_deadline"
+            if self.checkpoint is not None:
+                await self.checkpoint.persist()
+            return {"action": "deadline", "reason": item.reason}
         except asyncio.CancelledError:
             self.finish(item.work_item_id, state="cancelled")
             # lease lost 不允许再尝试写回；合法恢复者负责在途请求对账。
@@ -326,6 +358,8 @@ class TaskReviewRuntime:
                     states = {item.state.value for item in self._items.values()}
                     if "deferred_budget" in states:
                         return "budget_exhausted"
+                    if any(item.reason == "experiment_unit_deadline" for item in self._items.values()):
+                        return "experiment_unit_deadline"
                     if states <= {"completed"}:
                         return "plan_exhausted"
                     if states & {"unknown", "result_missing", "failed"}:
