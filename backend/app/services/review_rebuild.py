@@ -53,6 +53,7 @@ def rebuild_task_from_state(state: ReviewState) -> ReviewTask:
         phase=ReviewPhase(state.get("phase") or ReviewPhase.completed),
         pr_url=state.get("pr_url", ""),
         model=state.get("model"),
+        engine=(state.get("engine") or "legacy_units"),
         mode=rebuild_review_mode(state.get("mode")),
         generate_patches=bool(state.get("generate_patches", False)),
         validation_backend=rebuild_validation_backend(state.get("validation_backend")),

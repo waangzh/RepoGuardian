@@ -1,6 +1,7 @@
 import type {
   ReviewCreateResponse,
   ReviewMode,
+  ReviewEngine,
   ReviewPreviewResponse,
   ReviewTask,
   TaskStepProgress,
@@ -39,6 +40,7 @@ export async function createReview(
   mode: ReviewMode = "review",
   generatePatches = false,
   validationBackend: ValidationBackend = "none",
+  engine?: ReviewEngine,
 ): Promise<ReviewCreateResponse> {
   return request<ReviewCreateResponse>("/api/reviews", {
     method: "POST",
@@ -48,6 +50,7 @@ export async function createReview(
       mode,
       generate_patches: generatePatches,
       validation_backend: validationBackend,
+      ...(engine ? { engine } : {}),
     })
   });
 }
@@ -58,6 +61,7 @@ export async function previewReview(
   generatePatches = false,
   validationBackend: ValidationBackend = "none",
   signal?: AbortSignal,
+  engine?: ReviewEngine,
 ): Promise<ReviewPreviewResponse> {
   return request<ReviewPreviewResponse>("/api/reviews/preview", {
     method: "POST",
@@ -67,6 +71,7 @@ export async function previewReview(
       mode,
       generate_patches: generatePatches,
       validation_backend: validationBackend,
+      ...(engine ? { engine } : {}),
     }),
   });
 }

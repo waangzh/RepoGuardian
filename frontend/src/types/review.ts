@@ -15,6 +15,7 @@ export type KnownTaskStatus =
   | "cancelled";
 export type TaskStatus = KnownTaskStatus | (string & {});
 export type ReviewMode = "review" | "review_and_suggest" | "review_suggest_and_validate";
+export type ReviewEngine = "legacy_units" | "task_review_v1";
 export type ValidationBackend = "none" | "user_runner" | "project_ci" | "gvisor";
 export type ValidationStatus =
   | "passed"
@@ -926,6 +927,7 @@ export interface ReviewTask {
   phase: ReviewPhase;
   pr_url: string;
   model?: string | null;
+  engine?: ReviewEngine; // 缺省字段的旧任务属于 legacy_units
   mode: ReviewMode;
   generate_patches: boolean;
   validation_backend: ValidationBackend;

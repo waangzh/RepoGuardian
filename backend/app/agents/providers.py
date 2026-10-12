@@ -164,6 +164,7 @@ class OpenAICompatibleProvider(LLMProvider):
     unit_input_protocol = CANONICAL_UNIT_INPUT_PROTOCOL
     supports_request_admission = True
     supports_review_step = True
+    supports_task_review_v1 = True
     _CONFIDENCE_LABELS = {
         "very_low": 0.15,
         "low": 0.35,
@@ -202,6 +203,14 @@ class OpenAICompatibleProvider(LLMProvider):
         self._issue_adapter = TypeAdapter(list[ReviewIssueInput])
         self._patch_adapter = TypeAdapter(list[PatchResult])
         self._patch_request_adapter = TypeAdapter(list[PatchGenerationRequest])
+
+    async def task_review_step(self, request: PreparedModelRequest) -> ModelCallResult[str]:
+        """新协议只复用准入和发送链，不走旧 Unit 提示或 record 解析。"""
+        if request.operation != "task_review_v1":
+            raise LLMProviderError("task_review_v1_request_required")
+        prepared = self._prepare_json_request(
+            request.prompt, request.model, request.operation, request.system, request.output_tokens)
+        return await self._send_prepared_json_request(prepared)
 
     def resolve_request_profile(self, model: str | None):
         requested = model or self._default_model

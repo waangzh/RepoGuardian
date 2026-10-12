@@ -177,6 +177,7 @@ class ReviewService:
             status=TaskStatus.queued,
             pr_url=str(request.pr_url),
             model=request.model,
+            engine=request.engine,
             mode=request.mode,
             generate_patches=request.generate_patches,
             validation_backend=request.validation_backend,
@@ -423,6 +424,10 @@ class ReviewService:
         task = self.get_task(task_id) or self._tasks[task_id]
         if task.status == TaskStatus.cancelled:
             return
+        if task.engine == "task_review_v1":
+            # P1 的新引擎仅完成离线垂直切片；明确拒绝生产旧图回退。
+            await self._reject_unwired_task_review_v1(task)
+            return
         task.status = TaskStatus.planning
         task.review.status = task.status
         self._touch(task)
@@ -432,6 +437,7 @@ class ReviewService:
 
         initial_state: ReviewState = {
             "task_id": task_id,
+            "engine": task.engine,
             "mode": task.mode.value,
             "status": TaskStatus.planning.value,
             "created_at": task.created_at.isoformat(),
@@ -747,6 +753,8 @@ class ReviewService:
     def _sync_result_to_task(self, task: ReviewTask, result: dict) -> None:
         """将图的扁平字典状态重建为 Pydantic 模型并写回 ReviewTask。"""
         rebuilt = rebuild_task_from_state(result)
+        if rebuilt.engine != task.engine:
+            raise ValueError("graph engine does not match frozen task engine")
         task.status = rebuilt.status
         task.phase = rebuilt.phase
         task.mode = rebuilt.mode
@@ -813,6 +821,8 @@ class ReviewService:
         task = self.get_task(task_id)
         if task is None:
             raise KeyError(task_id)
+        if task.engine == "task_review_v1":
+            raise ValueError("task_review_v1_retry_not_enabled: legacy unit retry is forbidden")
         if task.status not in {
             TaskStatus.completed,
             TaskStatus.completed_with_warnings,
@@ -1020,6 +1030,19 @@ class ReviewService:
             self._touch(task)
             self._persist(task)
             return result
+
+    async def _reject_unwired_task_review_v1(self, task: ReviewTask) -> None:
+        """显式拒绝尚未接入生产快照适配器的新引擎，禁止旧图静默回退。"""
+        task.status = TaskStatus.failed
+        task.phase = ReviewPhase.failed
+        task.review.completed = False
+        task.error = "task_review_v1_production_entry_not_enabled"
+        task.warnings.append(
+            "task_review_v1 已冻结；P1 仅支持离线垂直切片，生产运行尚未接入快照与持久化适配器"
+        )
+        task.review.status = task.status
+        self._touch(task)
+        self._persist(task)
 
     def _touch(self, task: ReviewTask) -> None:
         task.updated_at = datetime.now(timezone.utc)

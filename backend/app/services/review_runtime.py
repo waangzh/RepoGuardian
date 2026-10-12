@@ -118,3 +118,82 @@ class ReviewRuntime:
               obligation_revision: int = 0) -> None:
         self.deferred.defer(task, reason=reason, budget_revision=budget_revision,
                             obligation_revision=obligation_revision)
+
+
+class TaskReviewRuntime:
+    """task_review_v1 的单 writer 运行时。
+
+    P1 只提供确定性的单步 ready/running 投影；预算、lease 和持久化由后续
+    阶段接入现有底座。它不消费旧 ReviewTask，也不创建 Unit 私有循环。
+    """
+
+    engine_version = "task_review_v1"
+
+    def __init__(self, work_items: list[Any] | None = None) -> None:
+        self._items: dict[str, Any] = {}
+        self._running: str | None = None
+        for item in work_items or []:
+            self.enqueue(item)
+
+    def enqueue(self, item: Any) -> None:
+        item_id = getattr(item, "work_item_id", None)
+        if not item_id or item_id in self._items:
+            raise ValueError("duplicate or missing task_review_v1 work item")
+        self._items[item_id] = item
+
+    def ready(self) -> list[Any]:
+        return sorted((item for item in self._items.values()
+                       if getattr(item, "state", None).value == "ready"),
+                      key=lambda item: item.work_item_id)
+
+    def claim_next(self) -> Any | None:
+        if self._running is not None:
+            raise RuntimeError("task_review_v1 single writer already running")
+        items = self.ready()
+        if not items:
+            return None
+        item = items[0]
+        item.state = type(item.state)("running")
+        item.attempt_count += 1
+        self._running = item.work_item_id
+        return item
+
+    def finish(self, work_item_id: str, *, state: str = "completed") -> Any:
+        if self._running != work_item_id:
+            raise RuntimeError("work item is not owned by runtime writer")
+        item = self._items[work_item_id]
+        item.state = type(item.state)(state)
+        item.revision += 1
+        self._running = None
+        return item
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        return [item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
+                for item in sorted(self._items.values(), key=lambda value: value.work_item_id)]
+
+    async def advance_one(self, steps: dict[str, Any]) -> dict[str, Any] | None:
+        """P1 离线路由：一次领取只推进模型或工具，不 drain 私有循环。"""
+        item = self.claim_next()
+        if item is None:
+            return None
+        step = steps.get(item.work_item_id)
+        if step is None or step.executor.work_item is not item:
+            self.finish(item.work_item_id, state="failed")
+            raise ValueError("work_item_executor_binding_mismatch")
+        try:
+            observation = await step.advance()
+        except asyncio.CancelledError:
+            self.finish(item.work_item_id, state="cancelled")
+            raise
+        except Exception:
+            self.finish(item.work_item_id, state="failed")
+            raise
+        pending = bool(step.executor.projection.pending_target_ids)
+        if step.pending_read or step.repair_errors or observation.get("action") == "tool":
+            state = "ready"
+        elif observation.get("errors") or pending:
+            state = "failed"
+        else:
+            state = "completed"
+        self.finish(item.work_item_id, state=state)
+        return observation

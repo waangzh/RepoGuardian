@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     repoguardian_default_review_mode: Literal[
         "review", "review_and_suggest", "review_suggest_and_validate"
     ] = "review"
+    # 创建任务时冻结；运行中不读取此配置切换引擎。
+    repoguardian_review_engine: Literal["legacy_units", "task_review_v1"] = "legacy_units"
     repoguardian_default_validation_backend: Literal[
         "none", "user_runner", "project_ci", "gvisor"
     ] = "none"

@@ -86,6 +86,7 @@ REPOGUARDIAN_MODEL=gpt-4.1-mini # 实际请求的模型名
 
 REPOGUARDIAN_REVIEW_UNIT_CONCURRENCY=4 # Unit 并发数
 REPOGUARDIAN_REVIEW_UNIT_TIMEOUT_SECONDS=180 # 单 Unit 超时，单位秒
+REPOGUARDIAN_REVIEW_ENGINE=legacy_units # 创建任务时冻结；task_review_v1 仅用于离线垂直切片
 
 REPOGUARDIAN_MODEL_REQUEST_PROFILES={} # JSON：实际模型名到窗口配置的映射，优先于通用配置
 # REPOGUARDIAN_MODEL_REQUEST_PROFILE={"context_window":16384,"safety_margin_tokens":512,"input_output_shared":true} # 可选通用覆盖，启用后优先于内置注册表；按供应商实际限制设置

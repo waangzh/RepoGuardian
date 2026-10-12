@@ -18,6 +18,7 @@ class ReviewRunContext(TypedDict, total=False):
 class ReviewState(TypedDict, total=False):
     # ---- 基础标识 ----
     task_id: str
+    engine: str
     mode: str
     status: str
     generate_patches: bool
