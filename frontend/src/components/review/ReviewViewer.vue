@@ -16,6 +16,8 @@ import StatusBadge from "../common/StatusBadge.vue";
 import ReportPanel from "../ReportPanel.vue";
 import ExecutionTimeline from "./ExecutionTimeline.vue";
 import CrossUnitReview from "./CrossUnitReview.vue";
+import TaskRuntimePanel from "./TaskRuntimePanel.vue";
+import { runtimeReport } from "../../utils/taskRuntimePresentation";
 import UnitReviewRecord from "./UnitReviewRecord.vue";
 import { coverageCompletionLabel, crossUnitPresentation, originalIssueUnit, unitFindingLabel } from "../../utils/reviewObservability";
 
@@ -83,6 +85,8 @@ const coverage = computed(() => props.task.coverage || {
 });
 const fileCoveragePercent = computed(() => Math.round(coverage.value.coverage_rate * 1000) / 10);
 const unitCoveragePercent = computed(() => Math.round(coverage.value.unit_coverage_rate * 1000) / 10);
+const taskRuntimeReport = computed(() => runtimeReport(props.task));
+const isTaskRuntime = computed(() => props.task.engine === "task_review_v1");
 const confirmedIssues = computed(() => props.task.issues.filter((issue) => issue.status === "confirmed"));
 const confirmedIssueCount = computed(() => confirmedIssues.value.length);
 const unresolvedIssueCount = computed(() => props.task.issues.filter((issue) => ["candidate", "unresolved", "needs_human"].includes(issue.status)).length);
@@ -398,7 +402,12 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
       </button>
     </nav>
 
-    <section v-if="activeTab === 'overview'" class="review-tab-panel overview-view">
+    <section v-if="isTaskRuntime && (activeTab === 'overview' || activeTab === 'checks')" class="review-tab-panel overview-view">
+      <TaskRuntimePanel v-if="taskRuntimeReport" :report="taskRuntimeReport" :terminal="terminal"
+        :retrying-unit-id="retryingUnitId" @retry="emit('retry', $event)" />
+      <EmptyState v-else icon="context" title="任务级报告尚未生成" description="当前范围与用量仍待记录，旧覆盖结果不能作为本轮成功证据。" />
+    </section>
+    <section v-else-if="activeTab === 'overview'" class="review-tab-panel overview-view">
       <div class="review-overview-metrics">
         <article class="review-metric-card">
           <span class="review-metric-card__icon is-primary"><AppIcon name="context" :size="20" /></span>

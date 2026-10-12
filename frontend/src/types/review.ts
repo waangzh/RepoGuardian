@@ -846,6 +846,9 @@ export type ReviewUnitTerminalReason =
 
 export interface ReviewRunManifest {
   schema_version: "review-run-manifest-v1";
+  engine?: ReviewEngine;
+  coverage_version?: "legacy-units-v1" | "task-goals-v1";
+  usage_integrity?: "complete" | "unknown" | "inconsistent";
   review_id: string;
   repository?: string | null;
   pr_number?: number | null;
@@ -860,7 +863,7 @@ export interface ReviewRunManifest {
   model_calls: number;
   input_tokens: number;
   output_tokens: number;
-  total_tokens: number;
+  total_tokens: number | null;
   confirmed_issues: number;
   coverage: ReviewCoverage;
   coordination_metrics?: CrossUnitRuntimeMetrics | null;
@@ -928,6 +931,9 @@ export interface ReviewTask {
   pr_url: string;
   model?: string | null;
   engine?: ReviewEngine; // 缺省字段的旧任务属于 legacy_units
+  task_runtime_configuration?: Record<string, unknown> | null;
+  task_runtime_report?: TaskRuntimeReport | null;
+  task_runtime_retry_unit_id?: string | null;
   mode: ReviewMode;
   generate_patches: boolean;
   validation_backend: ValidationBackend;
@@ -972,4 +978,29 @@ export interface ReviewTask {
     max_changed_lines: number;
   }>;
   warnings: string[];
+}
+
+export interface TaskRuntimeReport {
+  engine: "task_review_v1";
+  coverage_version: "task-goals-v1";
+  execution_status: "running" | "completed" | "failed" | "cancelled";
+  termination_reason: string;
+  scope_complete: boolean;
+  initial_scope_coverage: Array<Record<string, unknown>>;
+  admitted_investigations: Array<Record<string, unknown>>;
+  unscheduled_leads: Array<Record<string, unknown>>;
+  findings: Array<Record<string, unknown>>;
+  usage_integrity: "complete" | "unknown" | "inconsistent";
+  sent_calls: number;
+  settled_tokens: number;
+  unknown_attempts: number;
+  total_tokens?: number | null;
+  work_items: Array<Record<string, unknown>>;
+}
+
+export interface TaskRuntimeRetryResult {
+  engine: "task_review_v1";
+  unit_id: string;
+  requeued_work_item_ids: string[];
+  task_runtime_report: TaskRuntimeReport;
 }

@@ -44,6 +44,7 @@ from app.models.review import (
     ValidationResult,
     ValidationStatus,
 )
+from app.models.review_runtime import TaskRuntimeRetryResult, TaskRuntimeReport
 from app.services.report_service import ReportService
 from app.services.issue_deduplication import IssueDeduplicationService
 from app.services.model_usage import summarize_model_usage
@@ -98,6 +99,7 @@ _TASK_STATUS_BY_GRAPH_NODE = {
     "project_detection": TaskStatus.planning,
     "review_plan": TaskStatus.reviewing,
     "review_units": TaskStatus.reviewing,
+    "task_review_runtime": TaskStatus.reviewing,
     "resolve_evidence": TaskStatus.resolving_evidence,
     "issue_policy": TaskStatus.verifying_issues,
     "issue_verifier": TaskStatus.verifying_issues,
@@ -172,12 +174,15 @@ class ReviewService:
 
     def create_task(self, request: ReviewCreateRequest) -> ReviewTask:
         """创建审查任务并异步启动图执行。"""
+        from app.graph.nodes.task_review_runtime import task_runtime_configuration
         task = ReviewTask(
             id=uuid4().hex,
             status=TaskStatus.queued,
             pr_url=str(request.pr_url),
             model=request.model,
             engine=request.engine,
+            task_runtime_configuration=(task_runtime_configuration(request.model)
+                                        if request.engine == "task_review_v1" else None),
             mode=request.mode,
             generate_patches=request.generate_patches,
             validation_backend=request.validation_backend,
@@ -424,8 +429,8 @@ class ReviewService:
         task = self.get_task(task_id) or self._tasks[task_id]
         if task.status == TaskStatus.cancelled:
             return
-        if task.engine == "task_review_v1":
-            # P1 的新引擎仅完成离线垂直切片；明确拒绝生产旧图回退。
+        if (task.engine == "task_review_v1" and self._repository is None
+                and self._github_tool is None and self._provider is None):
             await self._reject_unwired_task_review_v1(task)
             return
         task.status = TaskStatus.planning
@@ -438,6 +443,8 @@ class ReviewService:
         initial_state: ReviewState = {
             "task_id": task_id,
             "engine": task.engine,
+            "task_runtime_configuration": task.task_runtime_configuration,
+            "task_runtime_retry_unit_id": task.task_runtime_retry_unit_id,
             "mode": task.mode.value,
             "status": TaskStatus.planning.value,
             "created_at": task.created_at.isoformat(),
@@ -454,7 +461,7 @@ class ReviewService:
                 else []
             ),
             "pr_url": task.pr_url,
-            "model": task.model,
+            "model": (task.task_runtime_configuration or {}).get("model", task.model),
             "execution_budget": ExecutionBudget().model_dump(),
             "agent_events": [],
             "_github_tool": self._github_tool,
@@ -479,7 +486,7 @@ class ReviewService:
         result = None
         interrupted = False
         try:
-            graph = build_review_graph(phase=2)
+            graph = build_review_graph(phase=3 if task.engine == "task_review_v1" else 2)
             checkpointer = await get_checkpointer() if self._repository else None
             compiled = (
                 graph.compile(checkpointer=checkpointer)
@@ -514,16 +521,39 @@ class ReviewService:
             )
             run_budget = await ReviewRunBudget.load_or_create(
                 task_id,
-                **settings.run_budget_limits(),
+                **((task.task_runtime_configuration or {}).get("limits") or settings.run_budget_limits()),
                 store=run_budget_store,
-                recover_running=True,
+                recover_running=task.engine != "task_review_v1",
             )
             with activate_run_budget(run_budget):
                 with tracing:
                     graph_input: Any = initial_state
                     if self._repository:
                         snapshot = await compiled.aget_state(run_config)
-                        if "human_required" in snapshot.next or snapshot.values.get("status") == "waiting_for_human":
+                        if snapshot.values and snapshot.values.get("engine", "legacy_units") != task.engine:
+                            raise ValueError("checkpoint engine differs from frozen task")
+                        if task.engine == "task_review_v1" and snapshot.values.get("review_plan") and (
+                                task.task_runtime_retry_unit_id or snapshot.next):
+                            from app.models.review import PullRequestInfo
+                            frozen_state = dict(snapshot.values)
+                            existing_path = frozen_state.get("repo_path")
+                            if not existing_path or not await asyncio.to_thread(Path(existing_path).is_dir):
+                                pinned_pr = PullRequestInfo.model_validate(frozen_state["pr_info"])
+                                clone, _ = await asyncio.to_thread(self._git_tool.clone_and_diff, pinned_pr)
+                                frozen_state["repo_path"] = str(clone)
+                                if frozen_state.get("effective_base_sha") and frozen_state["effective_base_sha"] != pinned_pr.base.sha:
+                                    actual = await asyncio.to_thread(self._git_tool._run,
+                                        [self._git_tool._git, "-C", str(clone), "rev-parse", frozen_state["effective_base_sha"]])
+                                    if actual.strip() != frozen_state["effective_base_sha"]:
+                                        raise ValueError("frozen effective base unavailable")
+                            self._repo_paths[task_id] = Path(frozen_state["repo_path"])
+                            await compiled.aupdate_state(run_config, {
+                                "repo_path": frozen_state["repo_path"],
+                                "task_runtime_retry_unit_id": task.task_runtime_retry_unit_id,
+                                "task_runtime_configuration": task.task_runtime_configuration,
+                            }, as_node="review_plan")
+                            graph_input = None
+                        elif "human_required" in snapshot.next or snapshot.values.get("status") == "waiting_for_human":
                             await delete_thread_checkpoints(task_id)
                             initial_state["warnings"].append("旧人工暂停流程已移除，本次重新审查当前 PR 快照")
                         elif not snapshot.next and snapshot.values.get("status") in {
@@ -589,7 +619,7 @@ class ReviewService:
                 TaskStatus.completed_with_warnings,
                 TaskStatus.failed,
                 TaskStatus.cancelled,
-            }:
+            } and task.engine != "task_review_v1":
                 try:
                     await delete_thread_checkpoints(task_id)
                 except Exception:
@@ -610,7 +640,8 @@ class ReviewService:
     ) -> dict[str, Any]:
         """流式执行图，并在节点开始、结束时立即更新任务进度。"""
         stream = getattr(compiled, "astream", None)
-        runtime_options = ({"context": {"coordination_repository": self._repository}}
+        runtime_options = ({"context": {"coordination_repository": self._repository,
+                            "task_runtime_provider": self._provider, "task_runtime_git": self._git_tool}}
                            if self._repository is not None else {})
         if not callable(stream):
             # 保留对测试替身以及旧编译器接口的兼容。
@@ -642,6 +673,15 @@ class ReviewService:
                     steps = task.steps
                     self._sync_result_to_task(task, {**(result or {}), **delta})
                     task.steps = steps
+                    await asyncio.to_thread(self._persist, task)
+                elif isinstance(progress, dict) and progress.get("kind") == "task_runtime_progress":
+                    if task.engine != "task_review_v1":
+                        raise ValueError("new runtime progress cannot enter legacy task")
+                    delta = progress.get("state") or {}
+                    task.task_runtime_report = TaskRuntimeReport.model_validate(delta["task_runtime_report"]).model_dump(mode="json")
+                    from app.models.review import ReviewCoverage
+                    task.coverage = ReviewCoverage.model_validate(delta["review_coverage"])
+                    self._touch(task)
                     await asyncio.to_thread(self._persist, task)
                 continue
             if chunk_type != "debug":
@@ -789,6 +829,9 @@ class ReviewService:
         task.agent_events = rebuilt.agent_events
         task.human_request = rebuilt.human_request
         task.report_markdown = rebuilt.report_markdown
+        task.task_runtime_configuration = rebuilt.task_runtime_configuration
+        task.task_runtime_report = rebuilt.task_runtime_report
+        task.task_runtime_retry_unit_id = rebuilt.task_runtime_retry_unit_id
         task.warnings = rebuilt.warnings
         task.steps = [
             TaskStep(
@@ -816,13 +859,45 @@ class ReviewService:
         run_task.cancel()
         return True
 
-    async def retry_unit(self, task_id: str, unit_id: str) -> ReviewUnitResult:
+    async def retry_unit(self, task_id: str, unit_id: str) -> ReviewUnitResult | TaskRuntimeRetryResult:
         """在新的临时 clone 中只重试一个 Unit，并原位替换其聚合结果。"""
         task = self.get_task(task_id)
         if task is None:
             raise KeyError(task_id)
         if task.engine == "task_review_v1":
-            raise ValueError("task_review_v1_retry_not_enabled: legacy unit retry is forbidden")
+            if not task.task_runtime_report:
+                raise ValueError("legacy unit retry is forbidden; task_review_v1 runtime report is missing")
+            report = TaskRuntimeReport.model_validate(task.task_runtime_report)
+            known_units = {item.get("unit_id") for item in report.work_items}
+            if unit_id not in known_units:
+                raise KeyError(unit_id)
+            if task.status not in {TaskStatus.completed, TaskStatus.completed_with_warnings,
+                                   TaskStatus.failed}:
+                raise ValueError("task runtime must be terminal before retrying a unit")
+            if self._repository is None:
+                raise ValueError("task runtime retry requires persisted fixed runtime")
+            gaps = {item["goal_id"] for item in report.initial_scope_coverage
+                    if item.get("unit_id") == unit_id and item.get("status") in {"blocked", "not_examined"}}
+            requeued = [item["work_item_id"] for item in report.work_items
+                        if item.get("unit_id") == unit_id and item.get("state") != "unknown"
+                        and gaps.intersection(item.get("goal_ids", []))]
+            if not requeued:
+                return TaskRuntimeRetryResult(unit_id=unit_id, requeued_work_item_ids=[], task_runtime_report=report)
+            task.task_runtime_retry_unit_id = unit_id
+            task.status = TaskStatus.queued
+            task.phase = ReviewPhase.prepare
+            task.error = None
+            task.warnings.append("task runtime retry only requeued explicit pending/blocked gaps")
+            self._touch(task)
+            self._persist(task)
+            if self._repository and self._task_queue:
+                self._task_queue.enqueue(task_id=task.id,
+                    idempotency_key=f"review:{task.id}:task-runtime-retry:{unit_id}:{task.updated_at.timestamp()}")
+                self._ensure_worker_started()
+            else:
+                self._run_tasks[task.id] = asyncio.create_task(self._run_graph(task.id))
+            return TaskRuntimeRetryResult(unit_id=unit_id, requeued_work_item_ids=requeued,
+                                          task_runtime_report=report)
         if task.status not in {
             TaskStatus.completed,
             TaskStatus.completed_with_warnings,

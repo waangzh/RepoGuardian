@@ -100,6 +100,7 @@ class Settings(BaseSettings):
 
     # ---- Review Unit Planner / 调度 ----
     repoguardian_review_unit_concurrency: int = 4
+    repoguardian_task_review_timeout_seconds: float = Field(default=1800, ge=1, le=86_400)
     repoguardian_review_unit_timeout_seconds: int = 180
     repoguardian_review_unit_small_max_changed_lines: int = 30
     repoguardian_review_unit_large_min_changed_lines: int = 400

@@ -2404,6 +2404,7 @@ class ReviewUnitCoverage(BaseModel):
 
 class ReviewCoverage(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    coverage_version: Literal["legacy-units-v1", "task-goals-v1"] = "legacy-units-v1"
 
     changed_files: int = Field(default=0, ge=0)
     eligible_files: int = Field(default=0, ge=0)
@@ -2431,6 +2432,9 @@ class ReviewRunManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal["review-run-manifest-v1"] = "review-run-manifest-v1"
+    engine: Literal["legacy_units", "task_review_v1"] = "legacy_units"
+    coverage_version: Literal["legacy-units-v1", "task-goals-v1"] = "legacy-units-v1"
+    usage_integrity: Literal["complete", "unknown", "inconsistent"] = "unknown"
     review_id: str
     repository: str | None = None
     pr_number: int | None = Field(default=None, ge=1)
@@ -2445,7 +2449,7 @@ class ReviewRunManifest(BaseModel):
     model_calls: int = Field(default=0, ge=0)
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
-    total_tokens: int = Field(default=0, ge=0)
+    total_tokens: int | None = Field(default=0, ge=0)
     confirmed_issues: int = Field(default=0, ge=0)
     coverage: ReviewCoverage
     coordination_metrics: CrossUnitRuntimeMetrics | None = None
@@ -2505,6 +2509,9 @@ class ReviewTask(BaseModel):
     model: str | None = None
     # 持久化快照中的值优先；缺少字段的旧任务按 legacy_units 恢复。
     engine: Literal["legacy_units", "task_review_v1"] = Field(default="legacy_units", frozen=True)
+    task_runtime_configuration: dict | None = None
+    task_runtime_report: dict | None = None
+    task_runtime_retry_unit_id: str | None = None
     mode: ReviewMode = ReviewMode.review
     generate_patches: bool = False
     validation_backend: ValidationBackend = ValidationBackend.none

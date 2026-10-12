@@ -25,6 +25,7 @@ from app.models.review import (
     ReviewUnitResult,
     TaskStatus,
 )
+from app.models.review_runtime import TaskRuntimeRetryResult
 from app.models.persistence import (
     PatchDetail,
     ReviewIssueDetail,
@@ -116,8 +117,8 @@ async def cancel_review(task_id: str) -> dict[str, str]:
     return {"task_id": task_id, "status": "cancelled"}
 
 
-@router.post("/{task_id}/units/{unit_id}/retry", response_model=ReviewUnitResult)
-async def retry_review_unit(task_id: str, unit_id: str) -> ReviewUnitResult:
+@router.post("/{task_id}/units/{unit_id}/retry", response_model=ReviewUnitResult | TaskRuntimeRetryResult)
+async def retry_review_unit(task_id: str, unit_id: str) -> ReviewUnitResult | TaskRuntimeRetryResult:
     """只重试指定 Review Unit，不重新运行其他成功 Unit。"""
     try:
         return await get_review_service().retry_unit(task_id, unit_id)

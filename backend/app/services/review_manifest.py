@@ -161,27 +161,38 @@ def build_review_manifest(state: dict[str, Any], completed_at: datetime) -> Revi
     )
 
     usages = _all_usages(state)
+    if state.get("engine") == "task_review_v1":
+        coverage = ReviewCoverage.model_validate(state.get("review_coverage") or {
+            "coverage_version": "task-goals-v1"})
     started_at = _as_datetime(state.get("created_at"), completed_at)
     pr = state.get("pr_info") or {}
     issues = state.get("review_issues") or []
     coordination = (CrossUnitCoordinationPlan.model_validate(state["coordination_plan"])
                     if state.get("coordination_plan") else None)
     return ReviewRunManifest(
+        engine=state.get("engine") or "legacy_units",
+        coverage_version=(state.get("review_coverage") or {}).get("coverage_version", "legacy-units-v1"),
+        usage_integrity=((state.get("task_runtime_report") or {}).get("usage_integrity", "unknown")
+                         if state.get("engine") == "task_review_v1" else
+                         "complete" if all(usage.usage_available for usage in usages) else "unknown"),
         review_id=str(state.get("task_id") or ""),
         repository=(f"{pr.get('owner')}/{pr.get('repo')}" if pr.get("owner") and pr.get("repo") else None),
         pr_number=pr.get("number") or None,
         base_sha=state.get("base_sha"),
         head_sha=state.get("head_sha"),
         planner_version=(state.get("review_plan") or {}).get("planner_version"),
-        provider=settings.repoguardian_provider,
-        model=str(state.get("model") or settings.repoguardian_model),
+        provider=(state.get("task_runtime_configuration") or {}).get("provider", settings.repoguardian_provider),
+        model=str((state.get("task_runtime_configuration") or {}).get("model") or state.get("model") or settings.repoguardian_model),
         started_at=started_at,
         completed_at=completed_at,
         duration_ms=max(0, int((completed_at - started_at).total_seconds() * 1000)),
-        model_calls=len(usages),
+        model_calls=(state.get("task_runtime_report", {}).get("sent_calls", 0)
+                     if state.get("engine") == "task_review_v1" else len(usages)),
         input_tokens=sum(usage.actual_input_tokens or 0 for usage in usages),
         output_tokens=sum(usage.actual_output_tokens or 0 for usage in usages),
-        total_tokens=sum(usage.actual_total_tokens or usage.accounted_tokens_estimate or 0 for usage in usages),
+        total_tokens=(state.get("task_runtime_report", {}).get("total_tokens")
+                      if state.get("engine") == "task_review_v1" else
+                      sum(usage.actual_total_tokens or usage.accounted_tokens_estimate or 0 for usage in usages)),
         confirmed_issues=sum(item.get("status") == IssueStatus.confirmed.value for item in issues),
         coverage=coverage,
         coordination_metrics=coordination.runtime_metrics if coordination else None,

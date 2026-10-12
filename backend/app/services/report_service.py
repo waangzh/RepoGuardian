@@ -26,21 +26,59 @@ class ReportService:
     def generate(self, task: ReviewTask, *, purpose_summary: str | None = None) -> str:
         """从 ReviewTask 渲染完整 Markdown 报告，仅展示适用或有结果的章节。"""
         lines: list[str] = ["# RepoGuardian 代码审查报告", ""]
+        if task.engine == "task_review_v1" and task.task_runtime_report:
+            _append_task_runtime_report(lines, task.task_runtime_report)
         _append_pr_summary(lines, task)
-        _append_pr_purpose(lines, task, purpose_summary=purpose_summary)
-        _append_issue_summary(lines, task)
-        _append_coverage(lines, task)
-        _append_cross_unit_risk(lines, task)
-        _append_unit_review_records(lines, task)
-        _append_change_summary(lines, task)
-        _append_issue_details(lines, task)
-        _append_static_results(lines, task)
-        _append_validation_results(lines, task)
-        _append_patch_results(lines, task)
-        _append_test_results(lines, task)
-        _append_limitations(lines, task)
-        _append_execution_details(lines, task)
+        if task.engine == "task_review_v1":
+            _append_change_summary(lines, task)
+            _append_task_runtime_findings(lines, task.task_runtime_report or {})
+            _append_execution_details(lines, task)
+        else:
+            _append_pr_purpose(lines, task, purpose_summary=purpose_summary)
+            _append_issue_summary(lines, task)
+            _append_coverage(lines, task)
+            _append_cross_unit_risk(lines, task)
+            _append_unit_review_records(lines, task)
+            _append_change_summary(lines, task)
+            _append_issue_details(lines, task)
+            _append_static_results(lines, task)
+            _append_validation_results(lines, task)
+            _append_patch_results(lines, task)
+            _append_test_results(lines, task)
+            _append_limitations(lines, task)
+            _append_execution_details(lines, task)
         return "\n".join(lines)
+
+
+def _append_task_runtime_report(lines: list[str], report: dict) -> None:
+    lines.extend(["## task-goals-v1 运行结果", "",
+        f"- 执行状态：{report.get('execution_status', 'unknown')}",
+        f"- 终止原因：{report.get('termination_reason', 'unknown')}",
+        f"- 初始范围覆盖：{'完整' if report.get('scope_complete') else '存在未检查范围'}",
+        f"- 计量完整性：{report.get('usage_integrity', 'unknown')}",
+        f"- 已发送调用：{report.get('sent_calls', 0)}；结算 Tokens：{report.get('settled_tokens', 0)}；未知用量：{report.get('unknown_attempts', 0)}", ""])
+    unresolved = [item for item in report.get("findings", []) if item.get("status") not in {"confirmed", "dismissed"}]
+    lines.append(f"- 新引擎发现：{len(report.get('findings', []))}；未确认/未决：{len(unresolved)}")
+
+
+def _append_task_runtime_findings(lines: list[str], report: dict) -> None:
+    lines.extend(["", "### 新引擎发现明细", ""])
+    for finding in report.get("findings", []):
+        lines.append(f"- [{finding.get('status', 'unresolved')}] {finding.get('candidate', {}).get('claim', '未命名候选')}：{finding.get('reason') or '已保留服务端证据与验证结果'}")
+    if not report.get("findings"):
+        lines.append("- 当前没有可发布的候选发现。")
+    if report.get("unscheduled_leads"):
+        lines.extend(["", "### 未调度线索", ""])
+        for lead in report["unscheduled_leads"]:
+            lines.append(f"- {lead.get('proposition', '未命名线索')}：{lead.get('reason', '未调度')}")
+    lines.extend(["", "### 初始范围", ""])
+    for goal in report.get("initial_scope_coverage", []):
+        position = f"{goal.get('target_ref')}:{goal.get('start_line')}–{goal.get('end_line')}"
+        lines.append(f"- {position}：{goal.get('status')}；{goal.get('reason') or '未记录说明'}")
+    if report.get("admitted_investigations"):
+        lines.extend(["", "### 已准入调查", ""])
+        for investigation in report["admitted_investigations"]:
+            lines.append(f"- {investigation.get('proposition')}：{investigation.get('status')} / {investigation.get('answer') or '尚无答案'}")
 
 
 def _append_unit_review_records(lines: list[str], task: ReviewTask) -> None:

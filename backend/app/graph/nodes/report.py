@@ -35,7 +35,7 @@ async def report_node(state: ReviewState) -> ReviewState:
     task = rebuild_task_from_state(report_state)
     purpose_summary = None
     model_usages = append_usage(state.get("model_usages") or [], None)
-    if task.pr:
+    if task.pr and task.engine != "task_review_v1":
         provider = state.get("_provider")
         if provider is None and state.get("_report_purpose_model_enabled"):
             provider = build_provider(
@@ -75,6 +75,19 @@ async def report_node(state: ReviewState) -> ReviewState:
     markdown = ReportService().generate(task, purpose_summary=purpose_summary)
     logger.info("📝 [报告] 报告生成完成（%d 字符 Markdown）", len(markdown))
     return ReviewState(
+        engine=report_state.get("engine"),
+        task_runtime_configuration=report_state.get("task_runtime_configuration"),
+        task_runtime_report=report_state.get("task_runtime_report"),
+        review_issues=report_state.get("review_issues") or [],
+        issue_metrics=report_state.get("issue_metrics") or {},
+        review_units=report_state.get("review_units") or [],
+        review_unit_results=report_state.get("review_unit_results") or [],
+        changed_files=report_state.get("changed_files") or [],
+        pr_info=report_state.get("pr_info"),
+        pr_url=report_state.get("pr_url"),
+        task_id=report_state.get("task_id"),
+        model=report_state.get("model"),
+        mode=report_state.get("mode"),
         report_markdown=markdown,
         status=final_status,
         phase=final_phase,
@@ -99,6 +112,21 @@ async def complete_node(state: ReviewState) -> ReviewState:
 
 
 def _final_status(state: ReviewState) -> str:
+    if state.get("engine") == "task_review_v1":
+        runtime = state.get("task_runtime_report") or {}
+        execution = runtime.get("execution_status")
+        if execution == "failed":
+            return "failed"
+        if execution == "cancelled":
+            return "cancelled"
+        if (runtime.get("termination_reason") != "plan_exhausted"
+                or not runtime.get("scope_complete")
+                or runtime.get("usage_integrity") != "complete"
+                or any(item.get("status") != "answered" for item in runtime.get("admitted_investigations", []))
+                or any(item.get("status") in {"candidate", "unresolved", "not_scheduled"}
+                       for item in runtime.get("findings", []) + runtime.get("unscheduled_leads", []))):
+            return "completed_with_warnings"
+        return "completed"
     if state.get("status") == "failed":
         return "failed"
     coordination_status, _ = coordination_coverage(state)
