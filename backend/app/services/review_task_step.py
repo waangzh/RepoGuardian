@@ -9,6 +9,7 @@ import json
 from app.models.review import ReviewToolScope, UnitEvidenceStore, ContextRetrievalPlan, ChangedFile
 from app.models.review_runtime import RuntimeReadResponse
 from app.services.evidence_store import put_chunks, store_chunks, evidence_snapshot
+from app.services.review_input_context import build_context_evidence
 from app.services.review_run_budget import (
     ReviewRunBudget, activate_run_budget, run_budget_attempt_observer,
     run_budget_dispatch_guard, run_budget_response_observer,
@@ -19,6 +20,7 @@ from app.services.review_task_protocol import TaskReviewV1Protocol
 from app.tools.context_files import ScopedContextTool
 from app.tools.git_tool import GitTool
 from app.tools.code_search import CodeSearchTool
+from app.review.run_audit import emit_run_audit
 
 
 class InspectTaskStep:
@@ -36,7 +38,7 @@ class InspectTaskStep:
             raise ValueError("task_review_v1_provider_unavailable")
         if scope.review_unit_id != executor.work_item.work_item_id:
             raise ValueError("work_item_scope_identity_mismatch")
-        if set(executor.work_item.scope_files) != set(scope.readable_files):
+        if executor.readable_files != set(scope.readable_files):
             raise ValueError("work_item_scope_mismatch")
         self.executor = executor
         self.provider = provider
@@ -69,8 +71,11 @@ class InspectTaskStep:
             raise RuntimeError("work_item_already_running")
         async with self._lock:
             if self.pending_read is not None:
+                read = self.pending_read
                 read_key = json.dumps([self.pending_read.tool, self.pending_read.arguments.model_dump()], sort_keys=True)
                 observation = await self._read()
+                emit_run_audit("tool", operation=read.tool, work_item_id=self.executor.work_item.work_item_id,
+                    arguments=read.arguments.model_dump(mode="json"), observation=observation)
                 fingerprint = json.dumps(observation, sort_keys=True)
                 previous = self.read_observations.get(read_key, {})
                 repeats = previous.get("repeats", 0) + 1 if previous.get("fingerprint") == fingerprint else 1
@@ -203,13 +208,13 @@ class InspectTaskStep:
         expected = "\n".join(content.splitlines()[chunk["start_line"] - 1:chunk["end_line"]])
         if chunk["content"].rstrip("\r\n") != expected:
             return {"action": "tool", "status": "rejected", "reason": "snapshot_text_mismatch"}
-        put_chunks(self.store, [chunk])
+        canonical, _ = build_context_evidence([chunk], executor.spec.snapshot_head_sha,
+                                             executor.spec.snapshot_base_sha)
+        put_chunks(self.store, canonical)
         chunks = store_chunks(self.store)
         for identity, item in chunks.items():
             executor.evidence_catalog[identity] = {**item, "file_path": item["file"]}
-        visible = {identity for identity, item in chunks.items()
-                   if item["file"] == args.file_path and item["start_line"] == chunk["start_line"]
-                   and item["end_line"] == chunk["end_line"] and item["content"] == chunk["content"]}
+        visible = {item["evidence_id"] for item in canonical}
         executor.active_evidence_ids.update(visible)
         return {"action": "tool", "status": "completed", "evidence_ids": sorted(visible)}
 
@@ -243,7 +248,7 @@ class InspectTaskStep:
                 repository_graph=self.repository_graph)
             accepted = []
             for chunk in chunks:
-                if chunk.get("file") not in executor.work_item.scope_files or chunk.get("truncated"):
+                if chunk.get("file") not in executor.readable_files or chunk.get("truncated"):
                     continue
                 content = await asyncio.to_thread(self.git.get_file_content_at_revision,
                     self.scope.repository_root, executor.spec.snapshot_head_sha, chunk["file"])
@@ -252,13 +257,14 @@ class InspectTaskStep:
                 expected = "\n".join(content.splitlines()[chunk["start_line"] - 1:chunk["end_line"]])
                 if chunk["content"].rstrip("\r\n") == expected:
                     accepted.append(chunk)
-            put_chunks(self.store, accepted)
+            canonical, _ = build_context_evidence(accepted, executor.spec.snapshot_head_sha,
+                                                 executor.spec.snapshot_base_sha)
+            put_chunks(self.store, canonical)
             evidence = store_chunks(self.store)
             active = []
             for identity, value in evidence.items():
                 executor.evidence_catalog[identity] = {**value, "file_path": value["file"]}
-                if any(value["file"] == chunk["file"] and value["start_line"] == chunk["start_line"]
-                       and value["end_line"] == chunk["end_line"] for chunk in accepted):
+                if identity in {chunk["evidence_id"] for chunk in canonical}:
                     executor.active_evidence_ids.add(identity)
                     active.append(identity)
             return {"action": "tool", "status": "completed", "tool": read.tool,

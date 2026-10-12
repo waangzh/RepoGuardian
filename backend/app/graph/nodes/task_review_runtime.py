@@ -17,7 +17,7 @@ from app.graph.state import ReviewState, ReviewRunContext
 from app.models.review import ChangedFile, ReviewPlan, ReviewToolScope
 from app.models.review_runtime import ReviewGoal, ReviewRunSpec, ReviewWorkItem
 from app.review.diff_base import review_diff_base
-from app.review.tool_scope import validate_repository_file, is_sensitive_repository_path
+from app.review.tool_scope import validate_repository_file, is_sensitive_repository_path, list_git_tracked_files
 from app.services.fingerprints import stable_hash
 from app.services.model_request_budgeter import ModelRequestProfile, RequestAdmissionError
 from app.services.review_run_budget import current_run_budget, ReviewRepositoryRunBudgetStore, ReviewRunBudget
@@ -69,6 +69,7 @@ def task_runtime_configuration(model=None, *, provider=None):
     resolver = getattr(provider, "resolve_request_profile", None)
     profile = resolver(selected_model) if callable(resolver) else settings.resolve_model_profile(selected_model)
     return {"provider": provider_name, "model": selected_model,
+        "readable_scope_version": "repository-tracked-v1",
         "endpoint": getattr(provider, "_base_url", settings.openai_base_url),
         "limits": settings.run_budget_limits(), "policy_version": settings.repoguardian_review_policy_version,
         "concurrency": min(32, max(1, settings.repoguardian_review_unit_concurrency)),
@@ -112,17 +113,23 @@ def plan_runtime_goals(changed, plan):
     return goals
 
 
-def frozen_runtime_spec(state, configuration, budget):
+def frozen_runtime_spec(state, configuration, budget, *, readable_files=()):
     return ReviewRunSpec(run_id=state["task_id"], snapshot_head_sha=state["head_sha"],
         snapshot_base_sha=review_diff_base(state), diff_manifest_hash=stable_hash({
             "changed_files": state.get("changed_files") or [], "plan": state.get("review_plan") or {}}),
         model_provider=configuration["provider"], model_name=configuration["model"],
-        policy_version=configuration["policy_version"], max_tokens=budget.max_tokens, max_calls=budget.max_calls)
+        policy_version=configuration["policy_version"], max_tokens=budget.max_tokens, max_calls=budget.max_calls,
+        readable_scope_files=tuple(sorted(readable_files)))
 
 
-async def source_catalog(goals, spec, root, git):
+async def source_catalog(goals, spec, root, git, changed_files=None):
     catalog = {}
     bodies = {}
+    changes = {}
+    for file in changed_files or []:
+        for index, hunk in enumerate(file.hunks):
+            identity = DeterministicReviewPlanner.hunk_id(file.file_path, index, hunk.model_dump(mode="json"))
+            changes[(file.file_path, identity)] = hunk
     for goal in goals:
         if goal.unsupported_reason:
             continue
@@ -138,10 +145,20 @@ async def source_catalog(goals, spec, root, git):
         if goal.end_line > len(lines):
             continue
         content = "\n".join(lines[goal.start_line - 1:goal.end_line])
+        if lines[goal.end_line - 1] == "":
+            content += "\n"  # 保留末尾空白物理行，splitlines 不能少算一行。
         value = {"file_path": goal.target_ref, "start_line": goal.start_line, "end_line": goal.end_line,
             "head_sha": spec.snapshot_head_sha, "base_sha": spec.snapshot_base_sha,
             "content": content, "content_hash": hashlib.sha256(content.encode()).hexdigest(),
             "source": "fixed_snapshot", "hunk_id": goal.goal_id}
+        for (path, identity), hunk in changes.items():
+            if path == goal.target_ref and goal.goal_id == "goal-" + stable_hash([goal.unit_id, identity])[:32]:
+                value["canonical_change"] = {"goal_id": goal.goal_id, "hunk_id": identity,
+                    "hunk_hash": stable_hash(hunk.model_dump(mode="json")),
+                    "old_start": hunk.old_start, "old_length": hunk.old_length,
+                    "new_start": hunk.new_start, "new_length": hunk.new_length,
+                    "lines": [line.model_dump(mode="json") for line in hunk.lines]}
+                break
         catalog["evidence-" + stable_hash(value)[:32]] = value
     return catalog
 
@@ -163,7 +180,20 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
         budget = await ReviewRunBudget.load_or_create(state["task_id"], **configuration["limits"],
             store=ReviewRepositoryRunBudgetStore(repository, lease) if repository else None,
             recover_running=False)
-    spec = frozen_runtime_spec(state, configuration, budget)
+    expanded_scope = configuration.get("readable_scope_version") == "repository-tracked-v1"
+    if expanded_scope:
+        tracked = await asyncio.to_thread(list_git_tracked_files, state["repo_path"])
+        readable = {path for path in tracked if not is_sensitive_repository_path(path)}
+    else:
+        # 已创建的 P4 任务继续使用原权限，不在恢复时静默扩权。
+        readable = set(sorted({value["path"] for value in state.get("file_index") or []
+            if value.get("path") and not is_sensitive_repository_path(value["path"])})[:40])
+    spec = frozen_runtime_spec(state, configuration, budget, readable_files=readable)
+    if not expanded_scope:
+        spec = spec.model_copy(update={"readable_scope_files": ()})
+    if (configuration.get("experiment_expected_scope_hash") is not None
+            and spec.readable_scope_hash != configuration["experiment_expected_scope_hash"]):
+        raise ValueError("experiment_readable_scope_mismatch_before_dispatch")
     git = context.get("task_runtime_git") or state.get("_git_tool") or GitTool()
     actual_head = await asyncio.to_thread(git._run, [git._git, "-C", state["repo_path"], "rev-parse", "HEAD"])
     if actual_head.strip() != spec.snapshot_head_sha:
@@ -191,28 +221,30 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
     changed = [ChangedFile.model_validate(value) for value in state.get("changed_files") or []]
     plan = ReviewPlan.model_validate(state["review_plan"])
     goals = plan_runtime_goals(changed, plan)
-    catalog = await source_catalog(goals, spec, state["repo_path"], git)
-    readable = sorted({value["path"] for value in state.get("file_index") or []
-                       if value.get("path") and not is_sensitive_repository_path(value["path"])})[:40]
+    catalog = await source_catalog(goals, spec, state["repo_path"], git,
+                                   changed_files=changed if expanded_scope else None)
     steps, items = {}, []
     for unit in plan.review_units:
         assigned = [goal for goal in goals if goal.unit_id == unit.id and not goal.unsupported_reason]
         for start in range(0, len(assigned), 40):
             selected = assigned[start:start + 40]
             paths = sorted({goal.target_ref for goal in selected})
-            paths += [path for path in sorted(unit.related_files) if path not in paths][:max(0, 40 - len(paths))]
-            paths += [path for path in readable if path not in paths][:max(0, 40 - len(paths))]
+            paths += [path for path in sorted(unit.related_files)
+                      if (not expanded_scope or path in readable) and path not in paths][:max(0, 40 - len(paths))]
+            if not expanded_scope:
+                paths += [path for path in sorted(readable) if path not in paths][:max(0, 40 - len(paths))]
             paths = paths[:40]
             identity = "inspect-" + stable_hash([unit.id, [goal.goal_id for goal in selected]])[:32]
             item = ReviewWorkItem(work_item_id=identity, unit_id=unit.id, kind="inspect",
-                goal_ids=[goal.goal_id for goal in selected], scope_files=paths, sequence=len(items))
+                goal_ids=[goal.goal_id for goal in selected], scope_files=paths, sequence=len(items),
+                readable_scope_hash=spec.readable_scope_hash if expanded_scope else None)
             initial = {key: deepcopy(value) for key, value in catalog.items()
                        if any(value["file_path"] == goal.target_ref and value["start_line"] == goal.start_line
                               and value["end_line"] == goal.end_line for goal in selected)}
             executor = ReviewTaskExecutor(spec, item, selected, active_evidence_ids=set(initial),
                                           evidence_catalog=initial, request_id="not-dispatched")
             scope = ReviewToolScope(review_unit_id=identity, commentable_files={goal.target_ref for goal in selected},
-                readable_files=set(paths), seed_files=set(paths), repository_root=state["repo_path"],
+                readable_files=readable if expanded_scope else set(paths), seed_files=set(paths), repository_root=state["repo_path"],
                 max_lines_per_read=configuration["max_lines_per_read"],
                 max_search_results=configuration["max_search_results"])
             steps[identity] = InspectTaskStep(executor, provider, budget, scope, git_tool=git,
@@ -222,7 +254,9 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
             if len(initial) == len(selected):
                 fit_context_pages(executor, steps[identity], configuration)
             items.append(item)
-    queue = TaskReviewRuntime(items, concurrency=configuration["concurrency"])
+    experiment = configuration.get("experiment") or {}
+    queue = TaskReviewRuntime(items, concurrency=configuration["concurrency"],
+                             unit_timeout_seconds=experiment.get("unit_timeout_seconds"))
     try:
         writer = get_stream_writer()
     except RuntimeError:
@@ -236,6 +270,7 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
         queue.progress = progress
     if steps:
         TaskReviewDerivation(queue, steps, changed_files=changed,
+            investigations_enabled=experiment.get("investigations_enabled", True),
             rule_ids={unit.id: unit.rule_ids for unit in plan.review_units},
             risk_catalog=build_task_risk_catalog([goal for goal in goals if not goal.unsupported_reason],
                                                items, state.get("repository_graph") or {}))

@@ -25,7 +25,13 @@ class TaskRuntimeCheckpoint:
     def __init__(self, runtime, steps, repository, *, lease=None):
         if not steps or set(runtime._items) != set(steps):
             raise ValueError("runtime step identities mismatch")
-        specs = [step.executor.spec.model_dump(mode="json") for step in steps.values()]
+        specs = []
+        for step in steps.values():
+            spec = step.executor.spec.model_dump(mode="json", exclude={"readable_scope_files"})
+            if step.executor.work_item.readable_scope_hash is not None:
+                spec.update(readable_scope_hash=step.executor.spec.readable_scope_hash,
+                            readable_file_count=len(step.executor.spec.readable_scope_files))
+            specs.append(spec)
         if any(spec != specs[0] for spec in specs):
             raise ValueError("runtime requires one frozen run spec")
         budgets = {id(step.budget) for step in steps.values()}
@@ -137,8 +143,9 @@ class TaskRuntimeCheckpoint:
         before = self.data["revision"]
         payload = deepcopy(self.data)
         runtime = self.runtime
-        payload.update(revision=before + 1, items=runtime.snapshot(),
+        payload.update(revision=before + 1, spec=self.spec, items=runtime.snapshot(),
             concurrency=runtime.concurrency, cancelled=runtime.cancelled,
+            unit_timeout_seconds=runtime.unit_timeout_seconds, unit_deadlines=deepcopy(runtime.unit_deadlines),
             last_unit=runtime._last_unit, class_cursor=deepcopy(runtime._class_cursor),
             obligation_revision=runtime.obligation_revision, served=deepcopy(runtime._served), turn=runtime._turn)
         payload["derived_goals"] = {key: goal.model_dump(mode="json") for step in self.steps.values()
@@ -149,6 +156,9 @@ class TaskRuntimeCheckpoint:
         sessions = {identity: deepcopy(self._session(step)) for identity, step in self.steps.items()}
         derivation_data = deepcopy(runtime.derivation.data) if runtime.derivation is not None else None
         try:
+            first = next(iter(self.steps.values())).executor
+            if first.work_item.readable_scope_hash is not None and not payload.get("readable_scope"):
+                payload["readable_scope"] = await self._put("readable-scope", list(first.spec.readable_scope_files))
             for identity, session in sessions.items():
                 payload["sessions"][identity] = await self._put("session", session)
             if derivation_data is not None:
@@ -218,13 +228,19 @@ class TaskRuntimeCheckpoint:
         if (payload["version"] != self.version or payload["spec"] != self.spec
                 or payload["goals"] != self.data["goals"]
                 or initial_items != expected_initial
+                or payload.get("unit_timeout_seconds") != self.runtime.unit_timeout_seconds
                 or payload.get("derivation_config_hash") != self.data.get("derivation_config_hash")):
             raise ValueError("task runtime frozen manifest mismatch")
         self.data = deepcopy(payload)
+        if payload.get("readable_scope"):
+            paths = await self._read(payload["readable_scope"])
+            if paths != list(next(iter(self.steps.values())).executor.spec.readable_scope_files):
+                raise ValueError("task runtime frozen readable scope artifact mismatch")
         self._committed = deepcopy(payload)
         runtime = self.runtime
         runtime.cancelled = payload["cancelled"]
         runtime.concurrency = payload["concurrency"]
+        runtime.unit_deadlines = payload.get("unit_deadlines", {})
         runtime._last_unit = payload["last_unit"]
         runtime._class_cursor = payload["class_cursor"]
         runtime._served = payload["served"]
@@ -241,7 +257,8 @@ class TaskRuntimeCheckpoint:
             runtime.derivation.data = await self._read(payload["derivation"])
         for raw in payload["items"]:
             item = runtime._items[raw["work_item_id"]]
-            if any(raw[key] != getattr(item, key) for key in ("goal_ids", "scope_files", "unit_id", "kind")):
+            if any(raw.get(key) != getattr(item, key) for key in
+                   ("goal_ids", "scope_files", "readable_scope_hash", "unit_id", "kind")):
                 raise ValueError("task runtime frozen work item mismatch")
             restored = type(item).model_validate(raw)
             for name in type(item).model_fields:
