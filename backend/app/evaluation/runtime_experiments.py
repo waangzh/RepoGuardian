@@ -147,11 +147,14 @@ def freeze_experiment_plan(lock_path, diff_path, selection_path, baseline_runs, 
     if set(baselines) != set(ids):
         raise ValueError("missing baseline sample")
     from app.evaluation.runner import implementation_digest
+    from app.graph.nodes.task_review_runtime import task_runtime_configuration
+    configuration = task_runtime_configuration("deepseek-flash")
     payload = {"version": "runtime-experiments-v1", "lock_sha256": sha256(lock_bytes),
         "diff_lock_sha256": sha256(diff_bytes), "first_sample_id": ids[0], "sample_ids": ids,
         "groups": GROUPS, "settings": FIXED_SETTINGS, "request_profile": expected_profile,
         "effective_model_profile": effective_profile,
         "implementation_sha256": implementation_digest(),
+        "runtime_versions": {key: configuration[key] for key in ("prompt_version", "risk_planner_version")},
         "timeout_seconds": 1800, "output_tokens": 4096, "samples": baselines,
         "baseline_artifacts": artifacts, "maximum_new_samples": 15,
         "maximum_new_wire_attempts": 3_000, "maximum_new_tokens": 15_000_000,
@@ -169,6 +172,12 @@ def validate_experiment_plan(plan, lock_bytes, diff_bytes, group, stage, sample_
             or plan["groups"] != GROUPS or plan["settings"] != FIXED_SETTINGS
             or plan["lock_sha256"] != sha256(lock_bytes) or plan["diff_lock_sha256"] != sha256(diff_bytes)):
         raise ValueError("experiment frozen plan mismatch")
+    versions = plan.get("runtime_versions")
+    if versions is not None:
+        if (not isinstance(versions, dict) or set(versions) != {"prompt_version", "risk_planner_version"}
+                or versions.get("prompt_version") not in {f"task-review-prompt-v{index}" for index in range(1, 6)}
+                or versions.get("risk_planner_version") not in {"legacy", "risk-planner-v2", "risk-planner-v3"}):
+            raise ValueError("experiment runtime versions invalid")
     if group not in GROUPS or stage not in {"first", "remaining"}:
         raise ValueError("unknown experiment group or stage")
     expected = [plan["first_sample_id"]] if stage == "first" else plan["sample_ids"][1:]
@@ -238,6 +247,9 @@ def first_sample_gate(result, plan, group):
         errors.append("fixed_scope_targets_missing")
     if configuration.get("experiment") != GROUPS[group]:
         errors.append("experiment_group_changed")
+    if plan.get("runtime_versions") is not None and any(
+            configuration.get(key) != value for key, value in plan["runtime_versions"].items()):
+        errors.append("runtime_versions_changed")
     if configuration.get("provider") != "deepseek" or configuration.get("model") != "deepseek-flash":
         errors.append("provider_or_model_changed")
     if accounting["integrity"] != "complete" or accounting["wire_attempts"] < 1:
@@ -293,6 +305,10 @@ def compare_group_run(plan, run_path, group):
             output.append({"sample_id": item["instance_id"], "status": "not_run"})
             continue
         result = read_json(Path(run_path) / item["result_file"])
+        if plan.get("runtime_versions") is not None and any(
+                (result.get("task_runtime_configuration") or {}).get(key) != value
+                for key, value in plan["runtime_versions"].items()):
+            raise ValueError("experiment result runtime versions mismatch")
         accounting = reconcile_wire_usage(result)
         scope = compare_fixed_scope(result, plan["samples"][item["instance_id"]])
         baseline = plan["samples"][item["instance_id"]]
