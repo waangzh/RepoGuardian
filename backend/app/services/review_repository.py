@@ -90,6 +90,7 @@ class ReviewRepository:
                 pr_url=task.pr_url,
                 pr_number=None,
                 mode=task.mode.value,
+                # engine is persisted in the immutable task snapshot; old rows default on read.
                 status=task.status.value,
                 current_phase=task.phase.value,
                 model=task.model or settings.repoguardian_model,
@@ -122,6 +123,10 @@ class ReviewRepository:
             row = session.get(ReviewTaskOrm, task.id)
             if row is None:
                 raise KeyError(task.id)
+            persisted_snapshot = self._load_task_snapshot(row)
+            persisted_engine = persisted_snapshot.get("engine", "legacy_units")
+            if task.engine != persisted_engine:
+                raise ValueError("review engine is frozen for the lifetime of a task")
             if row.status == TaskStatus.cancelled.value and task.status != TaskStatus.cancelled:
                 return  # 迟到的进度/worker 结果不能覆盖用户取消。
             row.status = task.status.value

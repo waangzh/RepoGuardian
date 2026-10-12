@@ -655,6 +655,13 @@ def _default_review_mode() -> ReviewMode:
     return ReviewMode(settings.repoguardian_default_review_mode)
 
 
+def _default_review_engine() -> Literal["legacy_units", "task_review_v1"]:
+    """只在创建请求构造时读取默认引擎，任务随后保存冻结值。"""
+    from app.core.config import settings
+
+    return settings.repoguardian_review_engine
+
+
 def _default_validation_backend() -> ValidationBackend:
     from app.core.config import settings
 
@@ -671,6 +678,7 @@ class ReviewCreateRequest(BaseModel):
     """POST /api/reviews 请求体。"""
     pr_url: HttpUrl
     model: str | None = None
+    engine: Literal["legacy_units", "task_review_v1"] = Field(default_factory=_default_review_engine)
     mode: ReviewMode = Field(default_factory=_default_review_mode)
     generate_patches: bool = False
     validation_backend: ValidationBackend = Field(default_factory=_default_validation_backend)
@@ -680,6 +688,10 @@ class ReviewCreateRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_product_policy(self) -> "ReviewCreateRequest":
+        if self.engine == "task_review_v1" and (
+                self.generate_patches or self.validation_backend != ValidationBackend.none
+        ):
+            raise ValueError("task_review_v1 P1 only supports read-only inspect tasks")
         if self.mode == ReviewMode.review:
             if self.generate_patches:
                 raise ValueError("mode=review does not allow generate_patches=true")
@@ -704,6 +716,7 @@ class ReviewPreviewRequest(BaseModel):
     """仅执行确定性 PR 分析，不创建任务或调用模型。"""
 
     pr_url: HttpUrl
+    engine: Literal["legacy_units", "task_review_v1"] = Field(default_factory=_default_review_engine)
     mode: ReviewMode = Field(default_factory=_default_review_mode)
     generate_patches: bool = False
     validation_backend: ValidationBackend = Field(default_factory=_default_validation_backend)
@@ -714,6 +727,7 @@ class ReviewPreviewRequest(BaseModel):
     def validate_product_policy(self) -> "ReviewPreviewRequest":
         normalized = ReviewCreateRequest(
             pr_url=self.pr_url,
+            engine=self.engine,
             mode=self.mode,
             generate_patches=self.generate_patches,
             validation_backend=self.validation_backend,
@@ -2489,6 +2503,8 @@ class ReviewTask(BaseModel):
     phase: ReviewPhase = ReviewPhase.prepare
     pr_url: str
     model: str | None = None
+    # 持久化快照中的值优先；缺少字段的旧任务按 legacy_units 恢复。
+    engine: Literal["legacy_units", "task_review_v1"] = Field(default="legacy_units", frozen=True)
     mode: ReviewMode = ReviewMode.review
     generate_patches: bool = False
     validation_backend: ValidationBackend = ValidationBackend.none
