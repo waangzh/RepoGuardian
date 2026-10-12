@@ -145,6 +145,7 @@ async def test_production_node_reuses_budget_and_database_restores_without_resen
     assert repeated["run_manifest"]["model_calls"] == 1
     assert repeated["run_manifest"]["total_tokens"] == 15
     assert len(repeated["model_usages"]) == 1
+    assert "prompt_version" not in repository.load_task_review_runtime("run")["spec"]
 
 
 async def test_production_spec_ignores_hot_default_changes(production_input, monkeypatch):
@@ -161,6 +162,77 @@ async def test_production_spec_ignores_hot_default_changes(production_input, mon
     assert {line["content"] for line in change["lines"] if line["kind"] == "deleted"} == {"    return 1"}
     assert {line["content"] for line in change["lines"] if line["kind"] == "added"} == {"    return 2"}
     assert all("canonical_change" not in value for value in calls[0]["active_evidence"])
+
+
+@pytest.mark.parametrize("version", ["task-review-prompt-v2", "task-review-prompt-v3", "task-review-prompt-v4"])
+async def test_prompt_version_frozen_in_configuration_and_checkpoint(production_input, persistence, version):
+    state, provider, calls = production_input
+    state["task_runtime_configuration"]["prompt_version"] = version
+    state["_provider"] = provider
+    repository = persistence[0]
+    repository.create_task(ReviewTask(id="run", pr_url=state["pr_url"], engine="task_review_v1",
+        task_runtime_configuration=state["task_runtime_configuration"]))
+    state["_coordination_repository"] = repository
+    await task_review_runtime_node(state)
+    assert calls[0]["prompt_version"] == version
+    assert repository.load_task_review_runtime("run")["spec"]["prompt_version"] == version
+    state["task_runtime_configuration"]["prompt_version"] = "task-review-prompt-v1"
+    with pytest.raises(ValueError, match="frozen manifest mismatch"):
+        await task_review_runtime_node(state)
+    assert len(calls) == 1
+
+
+async def test_v4_large_goal_uses_small_anchors_for_independent_verification(production_input):
+    from pathlib import Path
+    state, provider, _ = production_input
+    root = state["repo_path"]
+    body = "def first(values):\n    return values[0]\n" + "# implementation context " * 3 + "\n"
+    body += ("# " + "context " * 12 + "\n") * 175
+    Path(root, "a.py").write_text(body, encoding="utf-8")
+    subprocess.run(["git", "-C", root, "add", "."], check=True, capture_output=True)
+    subprocess.run(["git", "-C", root, "commit", "-m", "large-goal"], check=True, capture_output=True)
+    head = subprocess.run(["git", "-C", root, "rev-parse", "HEAD"], check=True, capture_output=True,
+                          encoding="utf-8").stdout.strip()
+    diff = subprocess.run(["git", "-C", root, "diff", "--unified=80", state["base_sha"], head],
+                          check=True, capture_output=True, encoding="utf-8").stdout
+    changed = DiffParser().parse(diff)
+    state.update(head_sha=head, changed_files=[value.model_dump(mode="json") for value in changed],
+        review_plan=DeterministicReviewPlanner().plan(changed, base_sha=state["base_sha"], head_sha=head,
+            model="fixture").model_dump(mode="json"), _provider=provider)
+    state["task_runtime_configuration"]["prompt_version"] = "task-review-prompt-v4"
+    state["task_runtime_configuration"]["limits"]["max_calls"] = 20
+    state["task_runtime_configuration"]["deadline_seconds"] = 60
+    requests = []
+    class SDK:
+        async def ainvoke(self, messages):
+            payload = json.loads(messages[1].content.split("\n")[0])
+            requests.append(payload)
+            assert payload["prompt_version"] == "task-review-prompt-v4"
+            assert all(len(value["content"]) <= 4_000 for value in payload["active_evidence"])
+            if payload["task"]["kind"] == "inspect":
+                anchor = next((value["id"] for value in payload["active_evidence"]
+                    if "return values[0]" in value["content"]), None)
+                raw = {"kind": "submit", "examinations": [{"target_id": value["goal_id"],
+                    "disposition": "examined", "evidence_ids": payload["active_evidence_ids"], "reason": "检查完整范围"}
+                    for value in payload["goals"]], "candidates": [{"claim": "空列表访问首项抛错",
+                    "primary_anchor": payload["goals"][0]["goal_id"], "evidence_ids": [anchor],
+                    "affected_behavior": "空列表调用失败", "failure_scenario": "传入空列表时 values[0] 抛出 IndexError",
+                    "recommendation": "访问前检查列表非空"}] if anchor else []}
+            else:
+                assert payload["task"]["kind"] == "verify"
+                assert set(payload["active_evidence_ids"]) == set(payload["required_evidence_ids"])
+                raw = {"kind": "submit", "verification": {"candidate_id": payload["candidate"]["candidate_id"],
+                    "decision": "supported", "evidence_ids": payload["required_evidence_ids"],
+                    "reason": "固定原文证实首项访问没有空列表保护"}}
+            return AIMessage(content=json.dumps(raw), usage_metadata={"input_tokens": 10,
+                "output_tokens": 5, "total_tokens": 15})
+    provider._build_chat_model = lambda *args: SDK()
+    result = await task_review_runtime_node(state)
+    report = result["task_runtime_report"]
+    assert report["scope_complete"] and report["findings"][0]["status"] == "confirmed", report
+    kinds = [request["task"]["kind"] for request in requests]
+    assert kinds.count("inspect") > 1 and kinds.count("verify") == 1
+    assert report["sent_calls"] == len(requests) and report["settled_tokens"] == 15 * len(requests)
 
 
 async def test_frozen_repository_scope_reads_caller_beyond_first_forty(production_input):
