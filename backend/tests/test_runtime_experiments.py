@@ -1,12 +1,13 @@
 import asyncio
 import time
+import json
 from copy import deepcopy
 
 import pytest
 
 from app.evaluation.runtime_experiments import (GROUPS, FIXED_SETTINGS, validate_experiment_plan,
                                               first_sample_gate, claim_experiment_slot, compare_fixed_scope,
-                                              screen_empty_candidate_regression)
+                                              screen_empty_candidate_regression, compare_group_run)
 from app.evaluation.data import sha256
 from app.services.fingerprints import stable_hash
 from app.services.review_runtime import TaskReviewRuntime
@@ -88,6 +89,50 @@ def test_missing_usage_or_scope_does_not_admit_expansion():
     assert not gate["admitted"] and "wire_usage_incomplete" in gate["errors"]
     assert "readable_scope_changed" in gate["errors"]
     assert not gate["quality_proven"] and not gate["default_switch_allowed"]
+
+
+@pytest.mark.parametrize("versions", [None, {}, {"risk_planner_version": "unknown", "prompt_version": "task-review-prompt-v5"},
+                                     {"risk_planner_version": "risk-planner-v3", "prompt_version": "unknown"}])
+def test_invalid_explicit_runtime_versions_rejected_in_plan(versions):
+    plan = frozen_plan()
+    plan["runtime_versions"] = versions
+    plan["plan_sha256"] = stable_hash({key: value for key, value in plan.items() if key != "plan_sha256"})
+    if versions is None:
+        # 历史计划依旧可离线验收；派发入口另行拒绝缺少版本的新运行。
+        validate_experiment_plan(plan, b"lock", b"diff", "full_180", "first", ["first"])
+    else:
+        with pytest.raises(ValueError, match="runtime versions invalid"):
+            validate_experiment_plan(plan, b"lock", b"diff", "full_180", "first", ["first"])
+
+
+@pytest.mark.parametrize("field", ["prompt_version", "risk_planner_version"])
+def test_first_gate_rejects_changed_runtime_versions(monkeypatch, field):
+    plan = frozen_plan()
+    plan["runtime_versions"] = {"prompt_version": "task-review-prompt-v5", "risk_planner_version": "risk-planner-v3"}
+    plan["samples"] = {"first": {"sample": {}, "diff_input": {}, "readable_scope_hash": "scope", "fixed_scope": []}}
+    result = {"sample": {}, "diff_input": {}, "task_runtime_report": {
+        "execution_status": "completed", "readable_scope_hash": "scope", "scope_complete": True, "work_items": []},
+        "task_runtime_configuration": {**plan["runtime_versions"], "experiment": GROUPS["full_180"],
+                                       "provider": "deepseek", "model": "deepseek-flash"}}
+    monkeypatch.setattr("app.evaluation.runtime_experiments.reconcile_wire_usage",
+                        lambda value: {"integrity": "complete", "wire_attempts": 1})
+    assert first_sample_gate(result, plan, "full_180")["admitted"]
+    result["task_runtime_configuration"][field] = "old-version"
+    assert first_sample_gate(result, plan, "full_180")["errors"] == ["runtime_versions_changed"]
+    result["task_runtime_configuration"].pop(field)
+    assert not first_sample_gate(result, plan, "full_180")["admitted"]
+
+
+def test_group_comparison_rejects_changed_runtime_before_computing_savings(tmp_path):
+    plan = frozen_plan()
+    plan["runtime_versions"] = {"prompt_version": "task-review-prompt-v5", "risk_planner_version": "risk-planner-v3"}
+    summary = {"experiment": {"plan_sha256": plan["plan_sha256"], "group": "full_180", "stage": "first"},
+               "samples": [{"instance_id": "first", "status": "completed", "result_file": "0000.json"}]}
+    (tmp_path / "run.json").write_text(json.dumps(summary), encoding="utf-8")
+    (tmp_path / "0000.json").write_text(json.dumps({"task_runtime_configuration": {
+        "prompt_version": "task-review-prompt-v5", "risk_planner_version": "risk-planner-v2"}}), encoding="utf-8")
+    with pytest.raises(ValueError, match="result runtime versions mismatch"):
+        compare_group_run(plan, tmp_path, "full_180")
 
 
 def test_fresh_output_cannot_reset_a_reserved_group_budget(tmp_path):
