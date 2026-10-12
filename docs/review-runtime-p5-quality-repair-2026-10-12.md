@@ -144,3 +144,5 @@ P5 实验计划也冻结 `prompt_version` 与 `risk_planner_version`，并把二
 只读索引 v13 的 ComfyUI 固定 Head，并以原来的 3 个覆盖目标重建目录：legacy 为 3 项可调度；v2 为 3 项可调度、1 项未绑定；v3 为 21 项可调度、92 项未绑定。v3 可调度项含 44 个读取请求、累计 1642 行，所有请求都在冻结 tracked 安全范围内且未超过固定 Head 原文行数。这是目录诊断，不是新模型审查或独立质量标签，也不能把请求增加当收益。审计同时发现静态图将 Python 的 int/range 关联到前端 JavaScript 同名符号，后续需处理索引误关联与无效调查成本；当前命题仍要求核对实际调用。
 
 本地只读冻结 v14 计划 `runtime-p5-plan-20261013-v14.json`，哈希 `da2b4a20a22f91f2fe8c51f27ea0cd6099bdcc85e6d96b91af6cac74d108c7b6`，显式绑定 prompt v5、risk-planner v3 与当前实现摘要，未派发样本。目录诊断保存于 `runtime-p5-v3-catalog-audit-20261013/catalog-audit.json`，原评测结果与旧计划未覆盖。P5 未通过，默认仍为 legacy_units，未进入留出集、未追加付费调用。
+
+随后修复静态调用图的语言域：符号名称匹配现在按源文件语言族进行，JavaScript 与 TypeScript 可互通，Python、Java、Go、Rust 等只在各自语言族内匹配；未知语言不生成 calls 边，但仍保留原始 CallRef 和符号索引。图版本升为 2，并公开 `call_resolution_version=language-family-v2`。固定 ComfyUI 快照重跑显示 3 条 Python→前端 JavaScript 误关联被移除，图边从 24389 降为 24218；v3 目录总量仍为 113（21 可调度、92 未绑定），因此这只是误关联修复和取证边界改进，不是质量收益证明。新增混合语言与真实索引回归后，完整后端 **1269 passed、2 skipped**（273.50 秒），Ruff 通过。

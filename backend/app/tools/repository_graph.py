@@ -53,6 +53,10 @@ def build_repository_graph(
         by_name[name].append(symbol)
         by_name[name.rsplit(".", 1)[-1]].append(symbol)
     for caller in symbols:
+        caller_language = str(files[str(caller["file"])].get("language", "unknown"))
+        caller_family = _call_language_family(files[str(caller["file"])])
+        if caller_language not in _SOURCE_EXTENSIONS:
+            continue  # 未知语言没有可证明的名称解析域，原 CallRef 仍保留在符号索引。
         call_refs = caller.get("call_refs") or [
             {"callee": call, "simple_name": str(call).rsplit(".", 1)[-1], "confidence": 0.88}
             for call in caller.get("calls", [])
@@ -63,7 +67,7 @@ def build_repository_graph(
             candidates = {
                 (str(item["file"]), str(item["symbol"])): item
                 for item in by_name.get(simple, [])
-                if item is not caller
+                if item is not caller and _call_language_family(files[str(item["file"])]) == caller_family
             }
             if len(candidates) != 1:
                 continue
@@ -101,7 +105,7 @@ def build_repository_graph(
 
     deduped_edges = _dedupe_edges(edges)
     return {
-        "version": 1,
+        "version": 2,
         "files": [
             {
                 "id": path,
@@ -130,6 +134,7 @@ def build_repository_graph(
             "symbol_count": len(symbols),
             "edge_count": len(deduped_edges),
             "supported_edges": ["imports", "calls", "test_of", "configures"],
+            "call_resolution_version": "language-family-v2",
         },
     }
 
@@ -371,6 +376,11 @@ def _edge(
 
 def _symbol_id(symbol: dict[str, Any]) -> str:
     return f"{symbol.get('file')}::{symbol.get('symbol')}"
+
+
+def _call_language_family(file: dict[str, Any]) -> str:
+    language = str(file.get("language", "unknown"))
+    return "ecmascript" if language in {"javascript", "typescript"} else language
 
 
 def _is_test(path: str) -> bool:
