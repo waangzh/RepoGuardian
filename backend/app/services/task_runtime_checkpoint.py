@@ -84,6 +84,7 @@ class TaskRuntimeCheckpoint:
                                   for goal, fragments in executor.page_examinations.items()},
             "last_observation": step.last_observation,
             "read_observations": step.read_observations,
+            "usages": [usage.model_dump(mode="json") for usage in step.usages],
             "tool_observations": step.tool_observations,
             "investigation": projection.investigation.model_dump(mode="json") if projection.investigation else None,
             "verification": projection.verification.model_dump(mode="json") if projection.verification else None,
@@ -114,6 +115,8 @@ class TaskRuntimeCheckpoint:
             for goal, fragments in payload["page_examinations"].items()}
         step.last_observation = payload["last_observation"]
         step.read_observations = payload["read_observations"]
+        from app.models.review import ModelUsage
+        step.usages = [ModelUsage.model_validate(value) for value in payload.get("usages", [])]
         step.tool_observations = payload.get("tool_observations", [])
 
     async def _put(self, kind, payload):
@@ -296,6 +299,8 @@ class TaskRuntimeCheckpoint:
                 actual = parsed_usage.actual_total_tokens
                 await self.budget.reconcile_unknown(record.attempt_id, actual_tokens=actual,
                                                     cost_microusd=parsed_usage.cost_microusd)
+                if not any(value.id == parsed_usage.id for value in step.usages):
+                    step.usages.append(parsed_usage)
                 if not call["applied"]:
                     step.executor.request_id, step.executor.attempt_id = record.request_id, record.attempt_id
                     step.last_response = response["raw"]

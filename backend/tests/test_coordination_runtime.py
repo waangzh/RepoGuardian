@@ -284,6 +284,12 @@ async def test_real_checkpoint_resume_after_worker_shutdown(tmp_path, persistenc
         service = ReviewService(None, None, None, provider, None, repository=repository, task_queue=queue)
         running = asyncio.create_task(service._run_graph("task"))
         await asyncio.wait_for(entered.wait(), 5)
+        async def wait_for_saved_progress():
+            # SDK 进入在途不保证 stream 消费者已经持久化前一条进度。
+            # 本测试明确注入“已有计划进度、请求仍在途”的 worker shutdown。
+            while repository.get_task("task").coordination_plan is None:
+                await asyncio.sleep(0.01)
+        await asyncio.wait_for(wait_for_saved_progress(), 5)
         running.cancel()
         with pytest.raises(asyncio.CancelledError):
             await running

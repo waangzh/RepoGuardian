@@ -126,6 +126,8 @@ class ReviewRepository:
             persisted_engine = persisted_snapshot.get("engine", "legacy_units")
             if task.engine != persisted_engine:
                 raise ValueError("review engine is frozen for the lifetime of a task")
+            if persisted_snapshot.get("task_runtime_configuration") != task.task_runtime_configuration:
+                raise ValueError("task runtime configuration is frozen for the lifetime of a task")
             if row.status == TaskStatus.cancelled.value and task.status != TaskStatus.cancelled:
                 return  # 迟到的进度/worker 结果不能覆盖用户取消。
             row.status = task.status.value
@@ -449,6 +451,9 @@ class ReviewRepository:
             task.completed_at = now
             task.retention_until = now + timedelta(days=settings.repoguardian_retention_days)
             task.updated_at = now
+            payload = self._load_task_snapshot(task)
+            if payload.get("engine") == "task_review_v1":
+                self._cancel_task_runtime(session, task, payload)
             session.execute(update(WorkerJobOrm).where(
                 WorkerJobOrm.task_id == task_id,
                 WorkerJobOrm.status.in_(["queued", "retry", "leased"]),
@@ -458,6 +463,70 @@ class ReviewRepository:
                 HumanRequestOrm.status == HumanRequestStatus.pending.value,
             ).values(status=HumanRequestStatus.cancelled.value, updated_at=now))
             return True
+
+    def _cancel_task_runtime(self, session: Session, task: ReviewTaskOrm, payload: dict) -> None:
+        """用户取消事务持有写权限；旧 worker 此后只能被拒绝，不能免费释放在途。"""
+        from app.services.review_run_budget import ReviewRunBudget, ObligationState
+        from app.models.review_runtime import TaskRuntimeReport
+        budget_row = session.get(SideEffectOrm, f"run-budget:{task.id}")
+        budget = ReviewRunBudget.restore(budget_row.result) if budget_row and budget_row.result else None
+        if budget:
+            for obligation in budget.obligations.values():
+                if obligation.state == ObligationState.ACTIVE:
+                    obligation.state = ObligationState.ABANDONED
+            budget.revision += 1
+            budget_row.result = budget.snapshot()
+        runtime_row = session.get(SideEffectOrm, f"task-review-v1:{task.id}")
+        runtime = dict(runtime_row.result) if runtime_row and runtime_row.result else {}
+        from copy import deepcopy
+        runtime = deepcopy(runtime)
+        examinations, investigations, findings, leads = {}, [], [], []
+        def read_reference(ref):
+            content = self._artifacts.read_text(ref["uri"])
+            if hashlib.sha256(content.encode()).hexdigest() != ref["sha256"]:
+                raise ValueError("cancelled runtime artifact invalid")
+            return json.loads(content)
+        for reference in runtime.get("sessions", {}).values():
+            try:
+                saved = read_reference(reference)
+            except (OSError, ValueError, KeyError):
+                continue
+            examinations.update(saved.get("examinations", {}))
+            if saved.get("investigation"):
+                answer = saved["investigation"]
+                investigations.append({**answer, "status": "answered" if answer["answer"] != "insufficient_evidence"
+                                       else "insufficient_evidence"})
+        if runtime.get("derivation"):
+            try:
+                derived = read_reference(runtime["derivation"])
+                findings = list(derived.get("candidates", {}).values())
+                leads = [{"lead_id": key, **value} for key, value in derived.get("leads", {}).items()
+                         if value.get("status") == "not_scheduled"]
+            except (OSError, ValueError, KeyError):
+                pass
+        outcomes = [{**goal, "status": "unsupported" if goal.get("unsupported_reason") else
+                     examinations[key]["disposition"] if key in examinations else "not_examined"}
+                    for key, goal in runtime.get("goals", {}).items() if goal.get("origin") == "initial"]
+        attempts = list(budget.attempts.values()) if budget else []
+        unknown = sum(attempt.sent and not attempt.usage_available for attempt in attempts)
+        for item in runtime.get("items", []):
+            if item["state"] != "completed":
+                item["state"] = "unknown" if item["state"] == "running" else "cancelled"
+        report = TaskRuntimeReport(execution_status="cancelled", termination_reason="cancelled",
+            scope_complete=bool(outcomes) and all(value["status"] == "examined" for value in outcomes),
+            initial_scope_coverage=outcomes, admitted_investigations=investigations, findings=findings,
+            unscheduled_leads=leads, usage_integrity="unknown" if unknown else "complete",
+            sent_calls=sum(attempt.sent for attempt in attempts), settled_tokens=budget.settled_actual if budget else 0,
+            unknown_attempts=unknown, total_tokens=None if unknown else budget.settled_actual if budget else 0,
+            work_items=runtime.get("items", []))
+        payload["task_runtime_report"] = report.model_dump(mode="json")
+        snapshot, uri = self._serialize_task_snapshot(ReviewTask.model_validate(payload))
+        task.task_snapshot, task.task_snapshot_artifact_uri = snapshot, uri
+        self._record_artifact(session, task.id, "task-snapshot", uri)
+        if runtime_row:
+            runtime.update(cancelled=True, revision=runtime["revision"] + 1)
+            runtime_row.result = runtime
+            runtime_row.status = "cancelled"
 
     def delete_task_if_retention_elapsed(
         self, task_id: str, *, now: datetime | None = None

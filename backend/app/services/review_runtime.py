@@ -140,6 +140,7 @@ class TaskReviewRuntime:
         self.checkpoint = None
         self._round_lock = asyncio.Lock()
         self.derivation = None
+        self.progress = None
         for item in work_items or []:
             self.enqueue(item)
 
@@ -263,6 +264,8 @@ class TaskReviewRuntime:
             self.derivation.refresh()
         if self.checkpoint is not None:
             await self.checkpoint.persist()
+        if self.progress is not None:
+            self.progress()
         return observation
 
     def wake_deferred(self, budget_revision: int) -> int:

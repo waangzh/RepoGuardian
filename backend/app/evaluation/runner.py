@@ -99,7 +99,10 @@ class ObservedProvider:
         self.calls = []
 
     def __getattr__(self, name):
-        method = getattr(self.provider, name)
+        provider = self.__dict__.get("provider")
+        if provider is None:
+            raise AttributeError(name)
+        method = getattr(provider, name)
         if not inspect.iscoroutinefunction(method):
             return method
 
@@ -249,11 +252,15 @@ async def run_sample(sample: FrozenSample, provider, workdir: Path, *, timeout_s
     model_requests, tool_reads = [], []
     selected_git = git_tool or SnapshotGitTool(workdir, prepared_diff=prepared_diff)
     state = {"task_id": uuid4().hex, "mode": "review", "pr_url": sample.pr_url,
+             "engine": settings.repoguardian_review_engine,
              "model": settings.repoguardian_model, "created_at": datetime.now(timezone.utc).isoformat(),
              "generate_patches": False, "validation_backend": "none",
              "_persistence_enabled": False,
              "_github_tool": FrozenGitHubTool(sample), "_git_tool": selected_git,
              "_provider": observed}
+    if state["engine"] == "task_review_v1":
+        from app.graph.nodes.task_review_runtime import task_runtime_configuration
+        state["task_runtime_configuration"] = task_runtime_configuration(state["model"], provider=provider)
     if prepared_diff:
         state.update(effective_base_sha=prepared_diff.effective_base_sha, diff_policy="merge_base")
     started = time.monotonic()
@@ -268,7 +275,7 @@ async def run_sample(sample: FrozenSample, provider, workdir: Path, *, timeout_s
             model_sink=model_requests.append, tool_sink=tool_reads.append,
         ):
             async with asyncio.timeout(timeout_seconds):
-                graph = build_review_graph(phase=2).compile()
+                graph = build_review_graph(phase=3 if state["engine"] == "task_review_v1" else 2).compile()
                 async for delta in graph.astream(state, stream_mode="updates"):
                     for node, update in delta.items():
                         last_node = node
@@ -283,7 +290,12 @@ async def run_sample(sample: FrozenSample, provider, workdir: Path, *, timeout_s
         error_type = type(exc).__name__
     results = [ReviewUnitResult.model_validate(x) for x in state.get("review_unit_results") or []]
     if run_status == "completed":
-        if (state.get("status") == "failed" or len(results) != len(state.get("review_units") or [])
+        if state["engine"] == "task_review_v1":
+            report = state.get("task_runtime_report") or {}
+            run_status = ("failed" if report.get("execution_status") == "failed" else
+                          "cancelled" if report.get("execution_status") == "cancelled" else
+                          "partial" if not report.get("scope_complete") else state.get("status", "completed"))
+        elif (state.get("status") == "failed" or len(results) != len(state.get("review_units") or [])
               or any(not is_review_unit_complete(x) for x in results)):
             run_status = "partial" if any(is_review_unit_complete(x) for x in results) else "failed"
         elif (state.get("review_coverage") or {}).get("review_complete") is False:
@@ -297,6 +309,8 @@ async def run_sample(sample: FrozenSample, provider, workdir: Path, *, timeout_s
     usages = [c["usage"] for c in observed.calls]
     actual = [u.get("actual_total_tokens") if u else None for u in usages]
     output = {"schema_version": "evaluation-result-v1", "sample": sample.model_dump(),
+              "engine": state["engine"], "task_runtime_report": state.get("task_runtime_report"),
+              "task_runtime_configuration": state.get("task_runtime_configuration"),
               "status": run_status, "error_type": error_type, "last_completed_node": last_node,
               "duration_ms": round((time.monotonic() - started) * 1000),
               "confirmed": confirmed, "unresolved": unresolved, "needs_human": human,
