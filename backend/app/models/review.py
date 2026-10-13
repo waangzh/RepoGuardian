@@ -2186,8 +2186,11 @@ class UnitInputCoverage(BaseModel):
     evidence_coverage: Literal["complete", "partial", "unknown"] = "unknown"
     target_coverage: Literal["complete", "partial", "unknown"] = "unknown"
     contract_coverage: Literal["complete", "partial", "unknown"] = "unknown"
+    contract_evidence_coverage: Literal["complete", "partial", "unknown"] = "unknown"
+    contract_verification_status: Literal["complete", "unresolved", "conflicting", "unknown"] = "unknown"
     unresolved_questions: list[str] = Field(default_factory=list)
     unresolved_dependencies: list[str] = Field(default_factory=list)
+    blocking_dependencies: list[str] = Field(default_factory=list)
     reason: str | None = None
     omitted_components: list[str] = Field(default_factory=list)
     omitted_targets: list[str] = Field(default_factory=list)
@@ -2358,7 +2361,9 @@ class ReviewUnitResult(BaseModel):
     review_unit_id: str
     input_fingerprint: str | None = None
     status: ReviewUnitStatus = ReviewUnitStatus.pending
-    unit_completion_status: Literal["complete", "incomplete", "unknown"] = "unknown"
+    unit_completion_status: Literal[
+        "complete", "complete_with_unresolved_contracts", "incomplete", "unknown"
+    ] = "unknown"
     terminal_reason: ReviewUnitTerminalReason | None = None
     plan_skipped: bool = False
     plan: UnitReviewPlan | None = None

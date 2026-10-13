@@ -18,6 +18,7 @@ from app.review.unit_completion import (
     is_reusable_review_unit_result,
     is_review_unit_complete,
     is_review_unit_execution_complete,
+    is_review_unit_execution_complete_with_warnings,
     review_unit_coverage_warning,
 )
 
@@ -150,6 +151,14 @@ async def review_units_node(state: ReviewState) -> ReviewState:
     if incomplete:
         warnings.append(
             (
+                f"{len(incomplete)} 个 Review Unit 已执行完成但存在未决契约，"
+                "本次没有 Unit 可复用"
+            )
+            if not successful and all(
+                is_review_unit_execution_complete_with_warnings(item)
+                for item in incomplete
+            )
+            else (
                 f"{len(incomplete)} 个 Review Unit 未完整完成，"
                 f"其他 {len(successful)} 个 Unit 已完成"
             )
