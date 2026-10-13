@@ -102,6 +102,22 @@ def is_review_unit_execution_complete(result: ReviewUnitResult) -> bool:
     )
 
 
+def has_unresolved_contracts(result: ReviewUnitResult) -> bool:
+    coverage = review_unit_input_coverage(result)
+    return bool(
+        coverage
+        and coverage.contract_verification_status in {"unresolved", "conflicting"}
+    )
+
+
+def is_review_unit_execution_complete_with_warnings(result: ReviewUnitResult) -> bool:
+    """执行已完成，但仍有未决契约；不等于严格完成或可复用。"""
+    return (
+        is_review_unit_execution_complete(result)
+        and result.unit_completion_status == "complete_with_unresolved_contracts"
+    )
+
+
 def is_review_unit_complete(result: ReviewUnitResult) -> bool:
     summary = result.review_summary
     if (summary.status != "reported" or summary.record is None
@@ -146,9 +162,18 @@ def review_unit_coverage_warning(result: ReviewUnitResult) -> str | None:
     ):
         return None
     targets = "；".join(coverage.omitted_targets) or "未记录具体省略目标"
+    contract_detail = (
+        f"；契约证据 {coverage.contract_evidence_coverage}"
+        f"；契约核验 {coverage.contract_verification_status}"
+    )
+    blocking = (
+        f"；阻塞依赖 {len(coverage.blocking_dependencies)} 项"
+        if coverage.blocking_dependencies
+        else ""
+    )
     return (
         f"Unit {result.review_unit_id}：目标覆盖 {coverage.target_coverage}；"
-        f"契约闭合 {coverage.contract_coverage}；"
+        f"契约闭合 {coverage.contract_coverage}{contract_detail}{blocking}；"
         f"批次状态 {','.join(batch_states) or 'completed'}；"
         f"原因 {coverage.reason or 'diagnosis_input_incomplete'}；"
         f"省略目标：{targets}"

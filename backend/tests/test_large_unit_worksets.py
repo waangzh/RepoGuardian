@@ -78,6 +78,14 @@ class WorksetProvider(OpenAICompatibleProvider):
             record = UnitReviewRecord.model_validate({**record.model_dump(), "unresolved_questions": [{
                 "question": "其他批次的约束仍待核验", "affected_files": ["a.py"],
                 "evidence_ids": [record_input["evidence"][0]["id"]]}]})
+        if self.failure == "dependency":
+            record = UnitReviewRecord.model_validate({**record.model_dump(), "contract_dependencies": [{
+                "file_path": "a.py",
+                "symbol": "weighted_point",
+                "assumption": "返回值边界与调用方兜底逻辑一致",
+                "status": "unresolved",
+                "evidence_ids": [record_input["evidence"][0]["id"]],
+            }]})
         issues = []
         if len(self.requests) == 1 and self.failure in {"error", "missing", "timeout"}:
             issues = [ReviewIssue(review_unit_id="large", title="候选缺陷", category="correctness", severity="high",
@@ -226,6 +234,21 @@ async def test_unresolved_cross_batch_contracts_do_not_claim_complete_review():
     assert result.input_coverage.unresolved_questions or result.input_coverage.unresolved_dependencies
     assert result.review_summary.status == "reported"
     assert result.review_summary.last_valid_record.unresolved_questions
+    assert not is_review_unit_complete(result)
+
+
+@pytest.mark.asyncio
+async def test_evidence_covered_intra_unit_dependency_is_not_misreported_as_missing_execution():
+    runner, state = runner_and_state(WorksetProvider("dependency"))
+    result = await runner.execute_unit(review_unit(), state)
+
+    assert all(batch.status == "completed" for batch in result.diff_batches)
+    assert result.status == "completed"
+    assert result.input_coverage.target_coverage == "complete"
+    assert result.input_coverage.contract_evidence_coverage == "complete"
+    assert result.input_coverage.contract_verification_status == "unresolved"
+    assert result.input_coverage.blocking_dependencies == []
+    assert result.unit_completion_status == "complete_with_unresolved_contracts"
     assert not is_review_unit_complete(result)
 
 

@@ -286,6 +286,18 @@ def classified_coverage_gaps(manifest, ledger, active=None, plan=None):
             "questions": questions, "dependencies": dependencies}
 
 
+def contract_dependency_scope(dependency, unit, manifest=None) -> str:
+    """按可验证输入范围分类依赖；分类不等于自动验证。"""
+    unit_files = set(unit.primary_files) | set(unit.related_files)
+    manifest_files = {
+        item["file_path"]
+        for item in (manifest.files if manifest is not None else [])
+    }
+    if dependency.file_path in unit_files or dependency.file_path in manifest_files:
+        return "intra_unit"
+    return "cross_boundary"
+
+
 def rebuild_coverage(manifest, entries):
     ledger = new_coverage_ledger(manifest)
     for entry in entries:
