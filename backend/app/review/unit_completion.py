@@ -2,6 +2,7 @@
 
 from app.models.review import (
     IssueStatus,
+    UnitDiffBatch,
     ReviewUnitResult,
     ReviewUnitStatus,
     ReviewUnitTerminalReason,
@@ -27,6 +28,52 @@ def is_review_unit_budget_exhausted(result: ReviewUnitResult) -> bool:
 
 
 DIAGNOSIS_BACKGROUND_DEGRADED = "diagnosis_background_budget_degraded"
+
+
+def batch_execution_status(batch: UnitDiffBatch) -> str:
+    """返回批次执行状态；不把它当作目标覆盖结论。"""
+    if batch.batch_execution_status != "pending":
+        return batch.batch_execution_status
+    if batch.status == "partial" and batch.reason == "review_step_no_evidence_progress":
+        return "no_new_context"
+    return batch.status
+
+
+def batch_target_coverage(batch: UnitDiffBatch) -> str:
+    """只判断当前批次负责的 hunk/目标，不判断整个父 Unit 是否完成。"""
+    result = batch.result
+    if result is None:
+        return "unknown"
+    coverage = review_unit_input_coverage(result)
+    if coverage is not None and coverage.target_coverage == "unknown":
+        return "unknown"
+    if result.diff_manifest is not None and result.coverage_ledger is not None:
+        from app.services.unit_coverage import coverage_gaps
+
+        active = (
+            result.active_evidence_set
+            if result.diff_manifest.review_unit_id != result.review_unit_id
+            else None
+        )
+        if coverage_gaps(result.diff_manifest, result.coverage_ledger, active, result.plan):
+            return "partial"
+    return "complete" if coverage is None or coverage.target_coverage == "complete" else "partial"
+
+
+def batch_contract_coverage(batch: UnitDiffBatch) -> str:
+    """根据批次最近有效记录判断未决问题/依赖，不推断跨批次证据。"""
+    result = batch.result
+    if result is None:
+        return "unknown"
+    summary = result.review_summary
+    record = summary.record or summary.last_valid_record
+    if record is None:
+        return "unknown"
+    if record.unresolved_questions or any(
+        dependency.status != "verified" for dependency in record.contract_dependencies
+    ):
+        return "pending"
+    return "complete"
 
 
 def review_unit_input_coverage(result: ReviewUnitResult) -> UnitInputCoverage | None:
