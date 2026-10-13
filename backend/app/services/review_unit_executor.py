@@ -65,8 +65,8 @@ from app.services.evidence_store import (ContextAdmission, evidence_snapshot, re
 from app.services.unit_coverage import (build_diff_manifest, new_coverage_ledger, active_evidence_set,
     update_coverage, rebuild_coverage, coverage_gaps, active_body_chars, MAX_ACTIVE_HUNKS, MAX_ACTIVE_DIFF_CHARS,
     unsupported_hunk_ids, NO_HUNK_CHANGE_REASON, BATCH_NO_EVIDENCE_PROGRESS,
-    TARGET_HUNK_UNCOVERED, CONTRACT_DEPENDENCY_UNRESOLVED, contract_dependency_scope)
-from app.services.unit_coverage import classified_coverage_gaps
+    TARGET_HUNK_UNCOVERED, CONTRACT_DEPENDENCY_UNRESOLVED)
+from app.services.unit_coverage import classified_coverage_gaps, contract_coverage_state
 from app.services.review_planner import DeterministicReviewPlanner
 from app.services.unit_review_summary import build_record_input, merge_review_summaries, validate_record
 from app.tools.code_search import CodeSearchTool
@@ -1076,44 +1076,19 @@ class ReviewUnitExecutor:
             details["dependencies"] = list(dict.fromkeys(check.file_path for record in records
                 for check in record.contract_dependencies if check.status != "verified"))
         targets_complete = target_complete and not details["targets"]
-        evidence_catalog = {
-            evidence.id
-            for result in results
-            for evidence in result.review_summary.evidence
-        }
-        dependencies = {
-            (dependency.file_path, dependency.symbol, dependency.assumption): dependency
-            for record in records
-            for dependency in record.contract_dependencies
-        }
-        unresolved_dependencies = [
-            dependency
-            for dependency in dependencies.values()
-            if dependency.status != "verified"
-        ]
-        contract_evidence_complete = bool(records) and all(
-            dependency.evidence_ids
-            and set(dependency.evidence_ids) <= evidence_catalog
-            for dependency in unresolved_dependencies
+        contract_state = contract_coverage_state(
+            records,
+            [
+                evidence.id
+                for result in results
+                for evidence in result.review_summary.evidence
+            ],
+            unit,
+            manifest,
         )
-        if not unresolved_dependencies:
-            contract_evidence_complete = bool(records)
-        if any(dependency.status == "conflicting" for dependency in unresolved_dependencies):
-            contract_verification_status = "conflicting"
-        elif unresolved_dependencies:
-            contract_verification_status = "unresolved"
-        elif records:
-            contract_verification_status = "complete"
-        else:
-            contract_verification_status = "unknown"
-        blocking_dependencies = []
-        for dependency in unresolved_dependencies:
-            covered = bool(dependency.evidence_ids) and set(dependency.evidence_ids) <= evidence_catalog
-            scope = contract_dependency_scope(dependency, unit, manifest)
-            if dependency.status == "conflicting" or not covered or scope != "intra_file":
-                blocking_dependencies.append(
-                    f"{dependency.file_path}:{dependency.symbol or '*'}:{dependency.assumption}"
-                )
+        contract_evidence_complete = contract_state["evidence_coverage"] == "complete"
+        contract_verification_status = contract_state["verification_status"]
+        blocking_dependencies = contract_state["blocking_dependencies"]
         contract_gate_complete = not details["questions"] and not blocking_dependencies
         coverage_reason = (
             CONTRACT_DEPENDENCY_UNRESOLVED
@@ -2506,10 +2481,21 @@ class ReviewUnitExecutor:
                     return {**update, "done": False, "next_action": AgentAction(action="report_issue",
                         reason="覆盖门拒绝提前结束，先检查当前活动证据")}
                 previous = state.get("input_coverage")
+                summary = state.get("review_summary") or UnitReviewSummary()
+                record = summary.record or summary.last_valid_record
+                contract_state = contract_coverage_state(
+                    [record] if record is not None else [],
+                    [item.id for item in summary.evidence],
+                    state["unit"],
+                    state["diff_manifest"],
+                )
                 coverage = (previous or UnitInputCoverage()).model_copy(update={"target_coverage":
                     "unknown" if previous and previous.target_coverage == "unknown" else "partial" if details["targets"] else "complete",
                     "contract_coverage": "partial" if details["questions"] or details["dependencies"] else "complete",
+                    "contract_evidence_coverage": contract_state["evidence_coverage"],
+                    "contract_verification_status": contract_state["verification_status"],
                     "unresolved_questions": details["questions"], "unresolved_dependencies": details["dependencies"],
+                    "blocking_dependencies": contract_state["blocking_dependencies"],
                     "reason": previous.reason if previous and previous.reason else "unit_coverage_gate_incomplete", "omitted_targets": list(dict.fromkeys([
                         *(previous.omitted_targets if previous else []), *details["targets"]]))})
                 if unsupported:
