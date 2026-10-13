@@ -374,8 +374,8 @@ async def run_dataset(lock_path: Path, output: Path, provider, *, sample_ids: li
         samples = [s for s in samples if s.instance_id in diff_inputs]
     if experiment_plan is not None:
         from app.evaluation.runtime_experiments import validate_experiment_plan, GROUPS, FIXED_SETTINGS
-        validate_experiment_plan(experiment_plan, data, diff_data or b"", experiment_group,
-                                 experiment_stage, sample_ids, first_gate, quality_gate)
+        await asyncio.to_thread(validate_experiment_plan, experiment_plan, data, diff_data or b"", experiment_group,
+                                experiment_stage, sample_ids, first_gate, quality_gate)
         if await asyncio.to_thread(implementation_digest) != experiment_plan["implementation_sha256"]:
             raise ValueError("experiment implementation changed; new frozen audit plan required")
         from app.graph.nodes.task_review_runtime import task_runtime_configuration

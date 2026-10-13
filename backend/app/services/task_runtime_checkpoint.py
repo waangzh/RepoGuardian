@@ -299,6 +299,11 @@ class TaskRuntimeCheckpoint:
             item.reason = "session_artifact_missing_or_invalid"
             raise ValueError(item.reason)
         calls = [call for call in self.data["calls"].values() if call["work_item_id"] == identity]
+        # 检查点 JSON 会按键排序；UUID 字典次序不是 attempt 的执行次序。
+        calls.sort(key=lambda call: (self.budget.attempts[call["attempt_id"]].created_at
+                                    if call["attempt_id"] in self.budget.attempts else "", call["attempt_id"]))
+        missing_results = []
+        available_applied = []
         for call in calls:
             record = self.budget.attempts.get(call["attempt_id"])
             if record is None or record.request_id != call["request_id"]:
@@ -330,6 +335,8 @@ class TaskRuntimeCheckpoint:
                     step.repair_errors = []
                     step.apply_response(response["raw"])
                     call.update(applied=True, state="applied")
+                if call["applied"]:
+                    available_applied.append(call)
             elif record.sent and not record.usage_available:
                 if not record.settled:
                     await self.budget.settle(record.attempt_id, actual_tokens=None)
@@ -339,9 +346,30 @@ class TaskRuntimeCheckpoint:
                     item.reason = "usage_unknown"
                     return
             elif record.sent and record.usage_available and not call["applied"]:
-                item.state = type(item.state)("result_missing")
-                item.reason = "response_artifact_missing"
-                return
+                missing_results.append(call)
+        if missing_results:
+            # 只有同一工作项后续已应用且可读取的成功结果覆盖全部缺口，才替代旧结果缺失。
+            # 旧请求保持 applied=false 和原费用；不是把历史失败改为成功。
+            projection = step.executor.projection
+            complete = (not projection.pending_target_ids and not step.pending_read and not step.repair_errors
+                        and not step.last_observation.get("errors"))
+            if item.kind.value == "inspect":
+                complete = complete and all(key in projection.accepted_target_ids for key in item.goal_ids)
+            elif item.kind.value == "investigate":
+                complete = complete and projection.investigation is not None
+            elif item.kind.value == "verify":
+                complete = complete and projection.verification is not None
+            replacement = available_applied[-1] if available_applied else None
+            for missing in missing_results:
+                if (not complete or replacement is None
+                        or calls.index(replacement) <= calls.index(missing)):
+                    item.state = type(item.state)("result_missing")
+                    item.reason = "response_artifact_missing"
+                    return
+                missing["superseded_by_attempt_id"] = replacement["attempt_id"]
+            if item.reason == "response_artifact_missing":
+                item.reason = None
+                item.state = type(item.state)("completed")
         if item.state.value == "running":
             pending = bool(step.executor.projection.pending_target_ids)
             if (step.pending_read or step.repair_errors or step.last_observation.get("page_advanced")
