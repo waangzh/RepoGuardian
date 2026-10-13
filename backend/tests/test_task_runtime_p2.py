@@ -118,6 +118,18 @@ async def test_settled_missing_response_keeps_cost_and_retry_uses_new_admission(
     await runtime.advance_one({"w1": step})
     assert step.budget.settled_actual == 30 and len(messages) == 1
     assert len(set(step.budget.attempts) - old_attempts) == 1 and reference
+    again, again_checkpoint, again_step, again_messages = await configured(tmp_path / "third", persistence, restore=True)
+    assert again_step.executor.work_item.state.value == "completed"
+    assert not again_step.executor.projection.pending_target_ids
+    assert len(again_step.executor.projection.accepted_target_ids) == 1
+    assert again_step.budget.settled_actual == 30 and not again_messages
+    assert await again.advance_one({"w1": again_step}) is None
+    old_call = next(call for key, call in again_checkpoint.data["calls"].items() if key in old_attempts)
+    assert old_call["applied"] is False and old_call.get("lost_response")
+    assert old_call["superseded_by_attempt_id"] in set(again_step.budget.attempts) - old_attempts
+    final, _, final_step, final_messages = await configured(tmp_path / "fourth", persistence, restore=True)
+    assert final_step.executor.work_item.state.value == "completed" and not final_messages
+    assert final_step.budget.settled_actual == 30 and not final.ready()
 
 
 async def test_v5_candidate_correction_survives_database_restore_without_rechecking(tmp_path, persistence):

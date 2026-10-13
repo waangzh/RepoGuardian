@@ -185,6 +185,7 @@ class InspectTaskStep:
         self.rejected_items = self._rejected_items(raw, schema_errors) if self.repair_errors else []
         page_advanced = executor.advance_page() if not self.repair_errors else False
         self.last_observation = {"action": "model", "errors": [asdict(error) for error in parsed.errors],
+                "response_kind": parsed.response.kind if parsed.response is not None else None,
                 "pending_goals": sorted(executor.projection.pending_target_ids),
                 "correction_pending": bool(self.repair_errors), "page_advanced": page_advanced}
         return self.last_observation
