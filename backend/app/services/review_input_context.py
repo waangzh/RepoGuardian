@@ -101,13 +101,24 @@ def complete_line_prefix(content: str, limit: int) -> str:
     return "".join(selected)
 
 
-def make_evidence(path, source, start, end, content, head_sha, base_sha):
+def make_evidence(
+    path,
+    source,
+    start,
+    end,
+    content,
+    head_sha,
+    base_sha,
+    *,
+    derived_from_evidence_id: str | None = None,
+):
     digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
     identity = [EVIDENCE_INPUT_VERSION, base_sha, head_sha, path, source, start, end, digest]
     reference = UnitEvidenceReference(
         id="evidence-" + stable_hash(identity)[:24], file_path=path, source=source,
         start_line=max(0, start), end_line=max(0, start, end), head_sha=head_sha,
         base_sha=base_sha, content_hash=digest,
+        derived_from_evidence_id=derived_from_evidence_id,
     )
     return {**reference.model_dump(mode="json"), "content": content}
 
@@ -141,8 +152,16 @@ def build_context_evidence(context, head_sha, base_sha):
                 selected.append(line)
                 size += len(line)
             body = "".join(selected)
-            ref = make_evidence(str(snippet["file"]), "context", start + offset,
-                                start + offset + len(selected) - 1, body, head_sha, base_sha)
+            ref = make_evidence(
+                str(snippet["file"]),
+                "context",
+                start + offset,
+                start + offset + len(selected) - 1,
+                body,
+                head_sha,
+                base_sha,
+                derived_from_evidence_id=snippet.get("derived_from_evidence_id"),
+            )
             if ref["id"] not in seen:
                 seen.add(ref["id"])
                 evidence.append(ref)

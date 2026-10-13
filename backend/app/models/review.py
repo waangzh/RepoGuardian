@@ -1780,6 +1780,7 @@ class ContextSnippet(BaseModel):
     symbol: str | None = None
     review_unit_id: str | None = None
     source: str | None = None
+    derived_from_evidence_id: str | None = None
     distance: int | None = Field(default=None, ge=0, le=2)
     confidence: float | None = Field(default=None, ge=0, le=1)
     why_retrieved: str | None = None
@@ -1825,6 +1826,7 @@ class UnitEvidenceReference(BaseModel):
     head_sha: str
     base_sha: str = ""
     content_hash: str
+    derived_from_evidence_id: str | None = None
     file_change: FileChangeEvidence | None = None
 
     @model_serializer(mode="wrap")
