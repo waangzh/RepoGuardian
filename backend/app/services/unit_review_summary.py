@@ -83,6 +83,11 @@ def validate_record(
         if len(record.contract_dependencies) > 20 or len(record.unresolved_questions) > 20:
             raise ValueError("one diagnosis record exceeds its 20-item limit")
         by_id = {item.id: item for item in catalog}
+        prior_bindings = {
+            item["id"]: UnitEvidenceReference.model_validate(item)
+            for item in record_input.get("prior_evidence_bindings") or []
+            if isinstance(item, dict) and item.get("id")
+        }
         allowed_targets = set(record_input["targets"])
         allowed_hypotheses = {item["id"] for item in record_input["hypotheses"]}
         if any(item.target not in allowed_targets for item in record.target_checks):
@@ -111,7 +116,22 @@ def validate_record(
             if dependency.file_path not in readable_files:
                 raise ValueError("contract dependency outside readable scope")
             if dependency.status != "unresolved" and not any(
-                by_id[identity].file_path == dependency.file_path for identity in dependency.evidence_ids
+                by_id[identity].file_path == dependency.file_path
+                and (
+                    by_id[identity].derived_from_evidence_id is None
+                    or (
+                        by_id[identity].derived_from_evidence_id in prior_bindings
+                        and prior_bindings[by_id[identity].derived_from_evidence_id].file_path
+                        == dependency.file_path
+                        and prior_bindings[by_id[identity].derived_from_evidence_id].head_sha
+                        == by_id[identity].head_sha
+                        and prior_bindings[by_id[identity].derived_from_evidence_id].base_sha
+                        == by_id[identity].base_sha
+                        and prior_bindings[by_id[identity].derived_from_evidence_id].content_hash
+                        == by_id[identity].content_hash
+                    )
+                )
+                for identity in dependency.evidence_ids
             ):
                 raise ValueError("contract evidence does not cover dependency file")
         for question in record.unresolved_questions:
