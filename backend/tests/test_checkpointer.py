@@ -1,6 +1,8 @@
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
+from langgraph.graph import END, START, StateGraph
 
 from app.core.config import settings
 from app.graph import checkpointer as checkpointer_module
@@ -12,6 +14,8 @@ from app.graph.checkpointer import (
     delete_thread_checkpoints,
     get_checkpointer,
     list_checkpoint_thread_ids,
+    review_thread_config,
+    unit_thread_config,
 )
 from app.models.review import ReviewPhase
 
@@ -41,6 +45,9 @@ async def test_delete_thread_removes_all_namespaces_and_writes(
             ("task-1", "review", "cp-1", "msgpack", b"one", b"{}"),
             ("task-1", "unit:1", "cp-2", "msgpack", b"two", b"{}"),
             ("task-2", "review", "cp-3", "msgpack", b"three", b"{}"),
+            (unit_thread_config("task-1", "batch-1")["configurable"]["thread_id"],
+             "", "cp-4", "msgpack", b"four", b"{}"),
+            ("task-10", "", "cp-5", "msgpack", b"five", b"{}"),
         ],
     )
     await connection.execute(
@@ -51,12 +58,13 @@ async def test_delete_thread_removes_all_namespaces_and_writes(
     )
     await connection.commit()
 
-    assert set(await list_checkpoint_thread_ids()) == {"task-1", "task-2"}
+    assert set(await list_checkpoint_thread_ids()) == {"task-1", "task-2", "task-10"}
 
     await delete_thread_checkpoints("task-1")
 
     async with connection.execute(
-        "SELECT COUNT(*) FROM checkpoints WHERE thread_id = 'task-1'"
+        "SELECT COUNT(*) FROM checkpoints WHERE thread_id = 'task-1' "
+        "OR thread_id LIKE 'task-1:unit:%'"
     ) as cursor:
         assert (await cursor.fetchone())[0] == 0
     async with connection.execute(
@@ -67,8 +75,63 @@ async def test_delete_thread_removes_all_namespaces_and_writes(
         "SELECT COUNT(*) FROM checkpoints WHERE thread_id = 'task-2'"
     ) as cursor:
         assert (await cursor.fetchone())[0] == 1
+    assert set(await list_checkpoint_thread_ids()) == {"task-2", "task-10"}
     del saver
     await close_checkpointer()
+
+
+class _IsolationState(TypedDict, total=False):
+    marker: str
+    inherited: str
+
+
+@pytest.mark.asyncio
+async def test_unit_batches_isolate_nested_state_and_resume_from_sqlite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await close_checkpointer()
+    monkeypatch.setattr(settings, "repoguardian_checkpoint_db", tmp_path / "isolation.db")
+    saver = await get_checkpointer()
+    observations = []
+
+    async def inspect_batch(state):
+        observations.append(dict(state))
+        return {"inherited": state["marker"]}
+
+    builder = StateGraph(_IsolationState)
+    builder.add_node("inspect", inspect_batch)
+    builder.add_edge(START, "inspect")
+    builder.add_edge("inspect", END)
+    child = builder.compile(checkpointer=saver)
+
+    async def run_batches(_state):
+        for batch in ("first", "second"):
+            await child.ainvoke({"marker": batch}, unit_thread_config("task", batch))
+        return {"inherited": "parent"}
+
+    parent_builder = StateGraph(_IsolationState)
+    parent_builder.add_node("batches", run_batches)
+    parent_builder.add_edge(START, "batches")
+    parent_builder.add_edge("batches", END)
+    parent = parent_builder.compile(checkpointer=saver)
+    try:
+        await parent.ainvoke({"marker": "parent"}, review_thread_config("task"))
+        assert observations == [{"marker": "first"}, {"marker": "second"}]
+        parent_state = await parent.aget_state(review_thread_config("task"))
+        assert parent_state.values == {"marker": "parent", "inherited": "parent"}
+        assert await list_checkpoint_thread_ids() == ["task"]
+
+        await close_checkpointer()
+        reopened = builder.compile(checkpointer=await get_checkpointer())
+        first = await reopened.aget_state(unit_thread_config("task", "first"))
+        second = await reopened.aget_state(unit_thread_config("task", "second"))
+        assert first.values == {"marker": "first", "inherited": "first"}
+        assert second.values == {"marker": "second", "inherited": "second"}
+        assert not (await reopened.aget_state(unit_thread_config("task", "third"))).values
+        await delete_thread_checkpoints("task")
+        assert await list_checkpoint_thread_ids() == []
+    finally:
+        await close_checkpointer()
 
 
 @pytest.mark.asyncio

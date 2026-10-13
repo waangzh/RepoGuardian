@@ -1,12 +1,13 @@
 """LangGraph SQLite checkpointer 的进程生命周期管理。
 
 业务状态由 SQLAlchemy 数据库负责，LangGraph saver 专门保存节点级恢复状态。每个 task 使用稳定
-``thread_id``，Unit 子图使用独立 ``checkpoint_ns``。
+``thread_id``，独立调用的 Unit 图使用派生 thread，避免根图重置 namespace 后共享状态。
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -79,13 +80,22 @@ async def close_checkpointer() -> None:
 
 
 async def delete_thread_checkpoints(thread_id: str) -> None:
-    """删除一个任务在所有 checkpoint namespace 下的恢复状态。"""
+    """删除任务根图及其所有 Unit/批次的恢复状态。"""
     checkpointer = await get_checkpointer()
-    await checkpointer.adelete_thread(thread_id)
+    assert _connection is not None
+    prefix = f"{thread_id}:unit:"
+    async with checkpointer.lock:
+        async with _connection.execute(
+            "SELECT thread_id FROM checkpoints UNION SELECT thread_id FROM writes"
+        ) as cursor:
+            rows = await cursor.fetchall()
+    owned = {thread_id, *(str(row[0]) for row in rows if str(row[0]).startswith(prefix))}
+    for owned_thread in owned:
+        await checkpointer.adelete_thread(owned_thread)
 
 
 async def list_checkpoint_thread_ids() -> list[str]:
-    """列出 checkpoint 数据库中实际仍有恢复状态的 thread。"""
+    """列出仍有根图或 Unit 恢复状态的任务 thread，供任务保留期 GC 使用。"""
     checkpointer = await get_checkpointer()
     assert _connection is not None
     async with checkpointer.lock:
@@ -93,7 +103,7 @@ async def list_checkpoint_thread_ids() -> list[str]:
             "SELECT thread_id FROM checkpoints UNION SELECT thread_id FROM writes"
         ) as cursor:
             rows = await cursor.fetchall()
-    return [str(row[0]) for row in rows]
+    return list(dict.fromkeys(str(row[0]).split(":unit:", 1)[0] for row in rows))
 
 
 async def checkpoint_storage_stats() -> CheckpointStorageStats:
@@ -148,9 +158,11 @@ def review_thread_config(task_id: str, *, checkpoint_id: str | None = None) -> d
 
 
 def unit_thread_config(task_id: str, unit_id: str) -> dict:
+    # 独立 ainvoke 的根图会清空 checkpoint_ns；隔离必须建立在 thread_id 上。
+    identity = hashlib.sha256(f"{unit_id}:{DIAGNOSIS_INPUT_VERSION}".encode()).hexdigest()
     return {
         "configurable": {
-            "thread_id": task_id,
-            "checkpoint_ns": f"unit:{unit_id}:{DIAGNOSIS_INPUT_VERSION}",
+            "thread_id": f"{task_id}:unit:{identity}",
+            "checkpoint_ns": "",
         }
     }
