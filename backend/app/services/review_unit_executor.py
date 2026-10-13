@@ -242,7 +242,14 @@ class ReviewUnitExecutor:
         try:
             self._check_provider_protocol()
             async with asyncio.timeout(self.timeout_seconds):
-                return await self._execute_unit(unit, state)
+                result = await self._execute_unit(unit, state)
+                from app.review.unit_completion import is_review_unit_complete
+
+                return result.model_copy(update={
+                    "unit_completion_status": (
+                        "complete" if is_review_unit_complete(result) else "incomplete"
+                    )
+                })
         except TimeoutError:
             if snapshot.get("diff_batches"):
                 return self._aggregate_diff_batches(unit, snapshot["diff_batches"], snapshot["budget"],
@@ -645,7 +652,10 @@ class ReviewUnitExecutor:
     async def _execute_diff_batches(self, unit, files, state, budget):
         from app.services.unit_worksets import build_unit_worksets
         from app.services.model_request_budgeter import unit_budget_snapshot
-        from app.review.unit_completion import is_review_unit_complete, is_reusable_review_unit_result
+        from app.review.unit_completion import (
+            is_review_unit_complete,
+            is_reusable_review_unit_result,
+        )
 
         manifest = UnitDiffManifest.model_validate(state["diff_manifest"])
         from app.services.review_runtime import ReviewRuntime, ReviewTask
@@ -868,13 +878,36 @@ class ReviewUnitExecutor:
 
     @staticmethod
     def _aggregate_diff_batches(unit, entries, budget, binding, reason=None, manifest=None, evidence_store=None):
-        """只聚合已验证记录；任何未执行批次或记录缺口保留 partial。"""
+        """聚合批次执行、目标覆盖和契约覆盖；三者不再共用一个状态。"""
+        from app.review.unit_completion import (
+            batch_contract_coverage,
+            batch_execution_status,
+            batch_target_coverage,
+        )
+
+        for entry in entries:
+            entry.batch_execution_status = batch_execution_status(entry)
+            entry.target_coverage = batch_target_coverage(entry)
+            entry.contract_coverage = batch_contract_coverage(entry)
         results = [entry.result for entry in entries if entry.result is not None]
         explicit_failure = reason is not None
-        batches_complete = all(entry.status == "completed" and entry.result is not None
-            and entry.result.review_summary.status == "reported" and entry.result.review_summary.record is not None
-            and entry.result.review_summary.latest_attempt_status in (None, "reported") for entry in entries)
-        complete = batches_complete and not reason
+        execution_complete = all(
+            entry.batch_execution_status == "completed" for entry in entries
+        )
+        records_complete = all(
+            entry.result is not None
+            and entry.result.review_summary.status == "reported"
+            and entry.result.review_summary.record is not None
+            and entry.target_coverage == "complete"
+            for entry in entries
+        )
+        target_complete = bool(entries) and all(
+            entry.target_coverage == "complete" for entry in entries
+        )
+        contract_complete = bool(entries) and all(
+            entry.contract_coverage == "complete" for entry in entries
+        )
+        complete = execution_complete and records_complete and contract_complete and not reason
         ledger = rebuild_coverage(manifest, entries) if manifest else None
         if manifest and unsupported_hunk_ids(manifest):
             reason = reason or NO_HUNK_CHANGE_REASON
@@ -882,14 +915,11 @@ class ReviewUnitExecutor:
         if manifest and coverage_gaps(manifest, ledger):
             complete, reason = False, reason or "unit_coverage_gate_incomplete"
         records = [result.review_summary.record for result in results if result.review_summary.record]
-        if complete and not ledger and any(record.unresolved_questions or any(check.status == "unresolved"
-                for check in record.contract_dependencies) for record in records):
-            complete, reason = False, "unit_batch_dependencies_unresolved"
         evidence = {item.id: item for result in results for item in result.review_summary.evidence}
         summary = UnitReviewSummary(input_protocol=CANONICAL_UNIT_INPUT_PROTOCOL,
             evidence=list(evidence.values()), reason=reason or "unit_diff_batches_incomplete",
             latest_attempt_status="unknown")
-        if batches_complete and len(records) == len(entries):
+        if records_complete and len(records) == len(entries):
             try:
                 record = UnitReviewRecord(change_summary="逐批审查记录聚合；结论与输入范围详见批次账本。",
                     target_checks=[check.model_copy(update={"target": f"{entry.id}: {check.target}"})
@@ -916,8 +946,11 @@ class ReviewUnitExecutor:
                     "reason": "batch_references_validated_not_correctness_proof" if complete else reason or "unit_diff_batches_incomplete"})
             except ValueError:
                 complete, reason = False, "unit_batch_record_aggregate_limit_exceeded"
-        evidence_complete = batches_complete and all(not result.input_coverage or
-            result.input_coverage.evidence_coverage == "complete" for result in results)
+        evidence_complete = bool(results) and len(results) == len(entries) and all(
+            not result.input_coverage
+            or result.input_coverage.evidence_coverage == "complete"
+            for result in results
+        )
         from app.services.unit_coverage import classified_coverage_gaps
         details = classified_coverage_gaps(manifest, ledger) if manifest else {"targets": [], "questions": [], "dependencies": []}
         if not ledger and records:
@@ -925,13 +958,15 @@ class ReviewUnitExecutor:
                                                      for question in record.unresolved_questions))
             details["dependencies"] = list(dict.fromkeys(check.file_path for record in records
                 for check in record.contract_dependencies if check.status != "verified"))
-        targets_complete = batches_complete and summary.status == "reported" and not details["targets"]
+        targets_complete = target_complete and not details["targets"]
         coverage = UnitInputCoverage(evidence_coverage="complete" if evidence_complete else "partial",
             target_coverage="complete" if targets_complete else "partial",
             contract_coverage=("partial" if details["questions"] or details["dependencies"] else "complete") if ledger or records else "unknown",
             unresolved_questions=details["questions"], unresolved_dependencies=details["dependencies"], reason=reason or (
                 "unit_diff_batches_complete" if complete else "unit_diff_batches_incomplete"),
-            omitted_targets=list(dict.fromkeys([*[entry.id for entry in entries if entry.status != "completed"],
+            omitted_targets=list(dict.fromkeys([*[
+                entry.id for entry in entries if entry.target_coverage != "complete"
+            ],
                 *details["targets"]])),
             omitted_context=[item for result in results if result.input_coverage
                              for item in result.input_coverage.omitted_context])
@@ -939,6 +974,7 @@ class ReviewUnitExecutor:
         return ReviewUnitResult(review_unit_id=unit.id, input_fingerprint=binding,
             status=(ReviewUnitStatus.completed
                     if has_progress else ReviewUnitStatus.timed_out if reason == "review_unit_timed_out" else ReviewUnitStatus.failed),
+            unit_completion_status="complete" if complete else "incomplete",
             terminal_reason=(ReviewUnitTerminalReason.completed
                 if has_progress else ReviewUnitTerminalReason.timed_out if reason == "review_unit_timed_out" else ReviewUnitTerminalReason.provider_error),
             error=None if has_progress else reason or "unit_diff_batches_not_executed",

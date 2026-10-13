@@ -2322,8 +2322,24 @@ class UnitDiffBatch(BaseModel):
     ranges: list[dict[str, Any]]
     admission: dict[str, Any]
     status: Literal["pending", "completed", "partial", "skipped", "deferred_budget", "failed"] = "pending"
+    batch_execution_status: Literal[
+        "pending", "completed", "no_new_context", "partial", "skipped", "deferred_budget", "failed"
+    ] = "pending"
+    target_coverage: Literal["complete", "partial", "unknown"] = "unknown"
+    contract_coverage: Literal["complete", "pending", "unknown"] = "unknown"
     reason: str | None = None
     result: ReviewUnitResult | None = None
+
+    @model_validator(mode="after")
+    def normalize_execution_status(self) -> "UnitDiffBatch":
+        """兼容旧快照，并将无进展终止与目标覆盖分开保存。"""
+        if self.batch_execution_status == "pending" and self.status != "pending":
+            self.batch_execution_status = (
+                "no_new_context"
+                if self.status == "partial" and self.reason == "review_step_no_evidence_progress"
+                else self.status
+            )
+        return self
 
 
 class UnitBudgetRejection(BaseModel):
@@ -2340,6 +2356,7 @@ class ReviewUnitResult(BaseModel):
     review_unit_id: str
     input_fingerprint: str | None = None
     status: ReviewUnitStatus = ReviewUnitStatus.pending
+    unit_completion_status: Literal["complete", "incomplete", "unknown"] = "unknown"
     terminal_reason: ReviewUnitTerminalReason | None = None
     plan_skipped: bool = False
     plan: UnitReviewPlan | None = None

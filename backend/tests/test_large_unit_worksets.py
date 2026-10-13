@@ -4,7 +4,8 @@ import pytest
 
 from app.agents.providers import LLMProviderError, OpenAICompatibleProvider
 from app.models.review import (AgentAction, ChangedFile, ChangedLine, DiffHunk, DiffLine,
-    ExecutionBudget, ReviewIssue, ReviewUnit, ReviewUnitResult, UnitReviewRecord, UnitReviewResponse)
+    ExecutionBudget, ReviewIssue, ReviewUnit, ReviewUnitResult, UnitDiffBatch,
+    UnitReviewRecord, UnitReviewResponse)
 from app.review.unit_completion import is_review_unit_complete, is_reusable_review_unit_result
 from app.services.model_request_budgeter import ModelRequestProfile, request_budget_reserver
 from app.services.review_unit_executor import ReviewUnitExecutor
@@ -27,6 +28,25 @@ def large_file(kind="added", count=100, width=800):
 def review_unit():
     return ReviewUnit(id="large", primary_files=["a.py"], estimated_tokens=300000,
         complexity="large", fingerprint="large-fp", grouping_reason="synthetic-large")
+
+
+def test_batch_execution_status_is_separate_from_target_coverage():
+    batch = UnitDiffBatch(
+        id="batch-1",
+        parent_unit_id="large",
+        input_hash="hash",
+        version="unit-diff-worksets-v1",
+        ranges=[],
+        admission={},
+        status="partial",
+        reason="review_step_no_evidence_progress",
+        target_coverage="complete",
+        contract_coverage="pending",
+    )
+
+    assert batch.batch_execution_status == "no_new_context"
+    assert batch.target_coverage == "complete"
+    assert batch.contract_coverage == "pending"
 
 
 class WorksetProvider(OpenAICompatibleProvider):
@@ -200,6 +220,9 @@ async def test_unresolved_cross_batch_contracts_do_not_claim_complete_review():
     assert result.input_coverage.evidence_coverage == "complete"
     assert result.input_coverage.target_coverage == "complete"
     assert result.input_coverage.contract_coverage == "partial"
+    assert all(batch.target_coverage == "complete" for batch in result.diff_batches)
+    assert all(batch.contract_coverage == "pending" for batch in result.diff_batches)
+    assert result.unit_completion_status == "incomplete"
     assert result.input_coverage.unresolved_questions or result.input_coverage.unresolved_dependencies
     assert result.review_summary.status == "reported"
     assert result.review_summary.last_valid_record.unresolved_questions
