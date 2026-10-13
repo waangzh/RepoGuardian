@@ -77,6 +77,9 @@ export function unitFindingLabel(result: ReviewUnitResult | undefined, count: nu
     return "存在未覆盖变更，需人工复核";
   }
   if (result.status !== "completed") return "检查未完成";
+  if (result.unit_completion_status === "complete_with_unresolved_contracts") {
+    return "审查执行完成，存在未决契约";
+  }
   if ((result.input_coverage && result.input_coverage.target_coverage !== "complete")
       || result.plan_skip_reason === "diagnosis_background_budget_degraded"
       || result.review_summary?.reason === "diagnosis_background_budget_degraded"
@@ -97,7 +100,13 @@ export function unitCoverageWarning(result: ReviewUnitResult | undefined): strin
       && incompleteBatches.length === 0) return null;
   const batchLabel = incompleteBatches.length ? `；批次状态 ${incompleteBatches.join("、")}` : "";
   const reason = coverage.reason ? `；原因 ${coverage.reason}` : "";
-  return `目标覆盖 ${coverage.target_coverage}；契约闭合 ${coverage.contract_coverage || "unknown"}${batchLabel}${reason}`;
+  const evidence = coverage.contract_evidence_coverage
+    ? `；契约证据 ${coverage.contract_evidence_coverage}` : "";
+  const verification = coverage.contract_verification_status
+    ? `；契约核验 ${coverage.contract_verification_status}` : "";
+  const blocking = coverage.blocking_dependencies?.length
+    ? `；阻塞依赖 ${coverage.blocking_dependencies.length} 项` : "";
+  return `目标覆盖 ${coverage.target_coverage}；契约闭合 ${coverage.contract_coverage || "unknown"}${evidence}${verification}${blocking}${batchLabel}${reason}`;
 }
 
 export function coordinationDecisionLabel(plan: CrossUnitCoordinationPlan): string {

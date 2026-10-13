@@ -184,10 +184,16 @@ def _append_coverage(lines: list[str], task: ReviewTask) -> None:
         lines.append("")
     for unit in coverage.units:
         gap = unit.input_coverage
-        if gap is None or (gap.target_coverage == "complete" and gap.contract_coverage == "complete"):
+        if gap is None or (
+            gap.target_coverage == "complete"
+            and gap.contract_coverage == "complete"
+            and getattr(gap, "contract_verification_status", "complete") == "complete"
+        ):
             continue
         lines.append(f"- Unit {_inline_text(unit.review_unit_id)}：执行状态 {unit.status.value}；"
-                     f"证据输入展示 {gap.evidence_coverage}；目标覆盖 {gap.target_coverage}；契约闭合 {gap.contract_coverage}；"
+                     f"证据输入展示 {gap.evidence_coverage}；目标覆盖 {gap.target_coverage}；"
+                     f"契约闭合 {gap.contract_coverage}；契约证据 {gap.contract_evidence_coverage}；"
+                     f"契约核验 {gap.contract_verification_status}；"
                      f"原因 {_inline_text(gap.reason or '未记录')}")
         for target in gap.omitted_targets:
             lines.append(f"  - 省略目标：{_inline_text(target)}")
@@ -195,6 +201,8 @@ def _append_coverage(lines: list[str], task: ReviewTask) -> None:
             lines.append(f"  - 未决问题：{_inline_text(question)}")
         for dependency in gap.unresolved_dependencies:
             lines.append(f"  - 未验证依赖：{_inline_text(dependency)}")
+        for dependency in gap.blocking_dependencies:
+            lines.append(f"  - 阻塞性依赖：{_inline_text(dependency)}")
     lines.append("")
 
 
