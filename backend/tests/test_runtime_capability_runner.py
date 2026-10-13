@@ -1,4 +1,5 @@
 import json
+import hashlib
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -81,3 +82,32 @@ def test_decision_changes_count_unique_judgments_and_preserve_unknown_unchanged_
     assert report["unchanged_total_tokens"] is None and report["unchanged_unknown_costs"] == ["i2"]
     with pytest.raises(ValueError, match="contradicts"):
         investigation_decision_changes([{**item, "effect": "unchanged"}])
+
+
+def test_owned_fixture_and_official_contracts_are_frozen_without_execution(tmp_path, monkeypatch):
+    stage, _, provider = setup_stage(tmp_path, monkeypatch)
+    case = read_json(stage / "case.json")
+    case["question"] = "review fixed source"
+    sources = {"base": {"src/a.py": "return 1"}, "head": {"src/a.py": "return None"}}
+    for side in ("base", "head"):
+        case["snapshot"][side + "_sha"] = hashlib.sha1(json.dumps(sources[side], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    case["evidence"][0]["snapshot_sha"] = case["snapshot"]["head_sha"]
+    request = {"system": "fixed task", "prompt": json.dumps(case)}
+    manifest = read_json(stage / "manifest.json")
+    manifest.update(input_sha256=stable_hash(case), prompt_sha256=stable_hash(request["prompt"]))
+    for name, value in (("case", case), ("request", request), ("manifest", manifest)):
+        (stage / (name + ".json")).write_text(json.dumps(value), encoding="utf-8")
+    fixture = tmp_path / "sources.json"
+    write_new(fixture, {"version": "owned-diagnostic-source-v1", "repository": "repo", "sources": sources})
+    write_new(stage / "dependency-symbols.json", ["sequence.slicing"])
+    contract = tmp_path / "contract.json"
+    write_new(contract, [{"symbols": ["sequence.slicing"], "version": "3.12",
+        "source_url": "https://docs.python.org/3.12/library/stdtypes.html", "text": "Generic API contract"}])
+    result = freeze_diagnostic(stage, tmp_path / "docs", provider=provider, source_fixture=fixture, dependency_contracts=contract)
+    assert result["variable"] == "dependency_contracts" and result["source_owner"] == "owned_diagnostic_fixture"
+    assert result["evidence_verification"] == "fixed_sha_text_verified_not_semantic_proof"
+    assert json.loads(result["request"]["prompt"])["dependency_contracts"][0]["text"] == "Generic API contract"
+    sources["head"]["src/a.py"] = "altered body"
+    fixture.write_text(json.dumps({"version": "owned-diagnostic-source-v1", "repository": "repo", "sources": sources}), encoding="utf-8")
+    with pytest.raises(ValueError, match="source hash mismatch"):
+        freeze_diagnostic(stage, tmp_path / "tampered", provider=provider, source_fixture=fixture)

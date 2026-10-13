@@ -95,6 +95,7 @@ class ReviewRunSpec(BaseModel):
     policy_version: str = Field(min_length=1, max_length=100)
     protocol_version: Literal["task-review-protocol-v1"] = "task-review-protocol-v1"
     prompt_version: Literal["task-review-prompt-v1", "task-review-prompt-v2", "task-review-prompt-v3", "task-review-prompt-v4", "task-review-prompt-v5"] = "task-review-prompt-v1"
+    publication_contract: Literal["legacy", "claim-publication-v1"] = "legacy"
     max_tokens: int = Field(ge=0)
     max_calls: int = Field(ge=0)
     readable_scope_files: tuple[RelativePath, ...] = ()
@@ -244,6 +245,37 @@ class VerificationSubmission(BaseModel):
     reason: str = Field(min_length=1, max_length=2_000)
 
 
+class PublicationTextNarrowing(BaseModel):
+    """只能收窄非核心展示字段；claim 与 failure_scenario 保持服务器原文。"""
+    model_config = ConfigDict(extra="forbid")
+    affected_behavior: str | None = Field(default=None, min_length=3, max_length=1_000)
+    recommendation: str | None = Field(default=None, min_length=3, max_length=2_000)
+    basis: str = Field(min_length=1, max_length=2_000)
+
+    @model_validator(mode="after")
+    def needs_change(self):
+        if self.affected_behavior is None and self.recommendation is None:
+            raise ValueError("narrowing requires a non-core text change")
+        return self
+
+
+class PublicationVerificationSubmission(VerificationSubmission):
+    subject_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    publication_action: Literal["retain", "narrow", "none"]
+    narrowing: PublicationTextNarrowing | None = None
+
+    @model_validator(mode="after")
+    def bind_publication_decision(self):
+        if self.decision == VerificationDecision.supported:
+            if self.publication_action == "none":
+                raise ValueError("supported requires retain or narrow")
+        elif self.publication_action != "none":
+            raise ValueError("refuted or unknown premises cannot inherit publication")
+        if (self.publication_action == "narrow") != (self.narrowing is not None):
+            raise ValueError("narrowing must match publication action")
+        return self
+
+
 class RuntimeSubmitResponse(BaseModel):
     """inspect 专用提交；调查与核验使用各自的小型 schema。"""
     model_config = ConfigDict(extra="forbid")
@@ -265,6 +297,11 @@ class VerificationSubmitResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["submit"] = "submit"
     verification: VerificationSubmission
+
+
+class PublicationVerificationSubmitResponse(VerificationSubmitResponse):
+    verification: PublicationVerificationSubmission
+    candidates: list[CandidateSubmission] = Field(default_factory=list, max_length=20)
 
 
 RuntimeResponse = Annotated[RuntimeReadResponse | RuntimeSubmitResponse, Field(discriminator="kind")]
@@ -319,6 +356,9 @@ class VerificationResult(VerificationSubmission):
     request_id: str
     attempt_id: str
     snapshot_head_sha: Revision
+    subject_hash: str | None = None
+    publication_action: Literal["retain", "narrow", "none"] | None = None
+    narrowing: PublicationTextNarrowing | None = None
 
 
 ReviewWorkItem.model_rebuild()

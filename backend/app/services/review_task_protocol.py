@@ -13,6 +13,7 @@ from typing import Any, Protocol
 from app.models.review_runtime import (
     ReviewGoal, ReviewRunSpec, ReviewWorkItem, RuntimeReadResponse, RuntimeSubmitResponse,
     InvestigationSubmitResponse, VerificationSubmitResponse,
+    PublicationVerificationSubmitResponse,
 )
 from app.services.model_request_budgeter import PreparedModelRequest
 from app.services.review_task_executor import ParsedRuntimeResponse, ReviewTaskExecutor
@@ -102,7 +103,9 @@ class TaskReviewV1Protocol:
             "canonical_changes": self.change_context(goals, active_evidence_ids, evidence_catalog),
             "response": {"one_of": [RuntimeReadResponse.model_json_schema(),
                                       {"inspect": RuntimeSubmitResponse, "investigate": InvestigationSubmitResponse,
-                                       "verify": VerificationSubmitResponse}[work_item.kind.value].model_json_schema()]},
+                                       "verify": (PublicationVerificationSubmitResponse
+                                           if self.spec.publication_contract == "claim-publication-v1" else
+                                           VerificationSubmitResponse)}[work_item.kind.value].model_json_schema()]},
             "read_example": {"kind": "read", "tool": "file_read",
                 "arguments": {"file_path": selected[0]["target_ref"], "start_line": 1, "end_line": 40},
                 "purpose": "Read the implementation needed for the current task"} if selected else None,
@@ -145,7 +148,7 @@ class TaskReviewV1Protocol:
                             definitions[name]["properties"][field]["enum"] = [goal.goal_id for goal in
                                 [*goals, *(related_goals or [])]]
                     if self.spec.prompt_version in {"task-review-prompt-v4", "task-review-prompt-v5"}:
-                        for name in ("ExaminationSubmission", "CandidateSubmission", "InvestigationSubmission", "VerificationSubmission"):
+                        for name in ("ExaminationSubmission", "CandidateSubmission", "InvestigationSubmission", "VerificationSubmission", "PublicationVerificationSubmission"):
                             if name in definitions:
                                 definitions[name]["required"] = list(dict.fromkeys([
                                     *definitions[name].get("required", []), "evidence_ids"]))
@@ -200,6 +203,21 @@ class TaskReviewV1Protocol:
                     "A nearby alternative branch is not evidence of what the triggered branch does. "
                     "Read missing local implementations or callers; if a necessary premise remains unknown, "
                     "report the evidence gap instead of inventing behavior.")
+        if work_item.kind.value == "verify" and self.spec.publication_contract == "claim-publication-v1":
+            from app.services.review_publication import verification_subject_hash
+            payload["publication_contract"] = self.spec.publication_contract
+            payload["verification_subject_hash"] = verification_subject_hash(work_item.verification_candidate, self.spec)
+            payload["publication_rules"] = (
+                "decision evaluates the original claim AND its original failure_scenario. Check version, triggered "
+                "branch, value source, actual result and impact scope of the text to be displayed. retain is allowed "
+                "only if all material original statements hold. narrow may only remove overstatement or narrow "
+                "affected_behavior/recommendation; it cannot change the original claim or failure_scenario. "
+                "If a core premise is false, use refuted + none; never replace it with a different true mechanism. "
+                "An erroneous causal premise inside affected_behavior is still a core premise, not a removable detail. "
+                "If necessary premises are unknown, use insufficient_evidence + none. Copy verification_subject_hash. "
+                "A different mechanism may be submitted in candidates with its own evidence and triggering scenario; "
+                "it is a NEW candidate and receives a separate verification, never inherits this decision. "
+                "For narrow, provide the exact narrowed non-core text and a source-based basis; do not merely polish style.")
         prompt = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return PreparedModelRequest(
             model=self.spec.model_name, operation="task_review_v1",

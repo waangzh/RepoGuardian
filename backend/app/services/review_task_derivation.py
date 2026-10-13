@@ -6,13 +6,14 @@ from copy import deepcopy
 
 from app.evidence import DiffIndex, EvidenceResolver
 from app.models.review import EvidenceAnchor, ReviewIssue, ReviewUnit, ReviewUnitComplexity
-from app.models.review_runtime import (Candidate, ReviewWorkItem, RuntimeReadArguments, WorkItemKind,
+from app.models.review_runtime import (Candidate, VerificationResult, ReviewWorkItem, RuntimeReadArguments, WorkItemKind,
                                       RuntimeReadResponse)
 from app.review.tool_scope import is_sensitive_repository_path
 from app.services.fingerprints import stable_hash
 from app.services.issue_policy import IssuePolicyService
 from app.services.review_task_executor import ReviewTaskExecutor
 from app.services.review_task_step import InspectTaskStep
+from app.services.review_publication import verification_subject_hash, publication_view
 
 
 def evidence_key(value):
@@ -22,14 +23,18 @@ def evidence_key(value):
 
 def strict_candidate_key(candidate, goal, catalog, spec, scope):
     """仅精确等价；忽略服务端来源 ID，保留代码大小写、条件和证据区间。"""
-    return stable_hash({"head": spec.snapshot_head_sha, "base": spec.snapshot_base_sha,
+    value = {"head": spec.snapshot_head_sha, "base": spec.snapshot_base_sha,
         "claim": candidate.claim.strip(), "behavior": candidate.affected_behavior.strip(),
         "failure": candidate.failure_scenario.strip(),
         "position": [goal.target_ref, goal.start_line, goal.end_line],
         "evidence": sorted((evidence_key(catalog[e]) for e in candidate.supporting_evidence),
                            key=stable_hash),
         "scope": sorted(scope), "category": candidate.category.value,
-        "evidence_requests": [request.model_dump(mode="json") for request in candidate.evidence_requests]})
+        "evidence_requests": [request.model_dump(mode="json") for request in candidate.evidence_requests]}
+    if spec.publication_contract != "legacy":
+        value.update(recommendation=candidate.recommendation.strip(), severity=candidate.severity.value,
+                     publication_contract=spec.publication_contract)
+    return stable_hash(value)
 
 
 class TaskReviewDerivation:
@@ -195,6 +200,10 @@ class TaskReviewDerivation:
             "status": "unresolved" if reasons else "candidate", "reason": ";".join(reasons) if reasons else None,
             "issue": issue.model_dump(mode="json") if issue else None, "origin": origin,
             "verification_work_item_id": None, "investigation_work_item_id": None}
+        if source.executor.work_item.kind.value == "verify":
+            record["discovery_origin"] = {"kind": "verify", "work_item_id": origin,
+                "original_candidate_id": source.executor.work_item.verification_candidate.candidate_id,
+                "request_id": source.executor.request_id, "attempt_id": source.executor.attempt_id}
         self.data["candidates"][key] = record
         if reasons:
             return
@@ -259,11 +268,16 @@ class TaskReviewDerivation:
                    "endpoint": getattr(root.provider, "_base_url", None),
                    "policy": root.executor.spec.policy_version, "output_tokens": 4096,
                    "rules": self.rule_ids.get(goal.unit_id, [])}
+        if root.executor.spec.publication_contract != "legacy":
+            premise.update(publication_contract=root.executor.spec.publication_contract,
+                           subject_hash=verification_subject_hash(candidate, root.executor.spec))
         cache_key = stable_hash(premise)
         record["verification_key"] = cache_key
         if cache_key in self.data["verification_cache"]:
             cached = self.data["verification_cache"][cache_key]
-            record.update(status=cached["status"], verification=deepcopy(cached["result"]), reason="strict_verified_input_reuse")
+            self._apply_verified_record(record, VerificationResult.model_validate(cached["result"]), known=True)
+            if record["status"] != "unresolved":
+                record["reason"] = "strict_verified_input_reuse"
             return
         identity = "verify-" + cache_key[:32]
         derived = goal.model_copy(update={"goal_id": "verify-goal-" + cache_key[:32],
@@ -335,6 +349,34 @@ class TaskReviewDerivation:
         if missing:
             step.pending_read = RuntimeReadResponse(tool="file_read", arguments=missing, purpose="准备明确缺失证据")
         return step
+
+    def _apply_verified_record(self, record, result, *, known):
+        status = {"supported": "confirmed", "refuted": "dismissed", "insufficient_evidence": "unresolved"}[result.decision.value]
+        record.update(status=status if known else "unresolved", verification=result.model_dump(mode="json"),
+                      reason=None if known else "verification_usage_unknown")
+        source = self.steps[record["origin"]]
+        if source.executor.spec.publication_contract == "legacy":
+            return
+        candidate = Candidate.model_validate(record["candidate"])
+        try:
+            view = publication_view(candidate, result, source.executor.spec, usage_known=known)
+        except ValueError as exc:
+            record.update(status="unresolved", reason=str(exc))
+            record.pop("publication", None)
+            return
+        record.setdefault("original_issue", deepcopy(record.get("issue")))
+        record["publication"] = view
+        if view["published_text"] is not None:
+            narrowed = candidate.model_copy(update=view["published_text"])
+            goal = source.executor.goals[candidate.primary_anchor]
+            issue, reasons = self._policy_issue(narrowed, goal, self._all_evidence(), source)
+            if reasons:
+                record.update(status="unresolved", reason="publication_policy:" + ";".join(reasons))
+                view["published_text"] = None
+            else:
+                record["issue"] = issue.model_dump(mode="json")
+        else:
+            record["issue"] = deepcopy(record["original_issue"])
 
     def refresh(self):
         # 拷贝工作项视图，派生项进入同一队列，下一轮调度才执行。
@@ -410,14 +452,10 @@ class TaskReviewDerivation:
             if result:
                 attempt = step.budget.attempts.get(result.attempt_id)
                 known = attempt is not None and attempt.usage_available and attempt.settled
-                status = {"supported": "confirmed", "refuted": "dismissed", "insufficient_evidence": "unresolved"}[result.decision.value]
-                if not known:
-                    status = "unresolved"
-                record.update(status=status, verification=result.model_dump(mode="json"),
-                              reason=None if known else "verification_usage_unknown")
-                if known and result.decision.value != "insufficient_evidence":
+                self._apply_verified_record(record, result, known=known)
+                if known and result.decision.value != "insufficient_evidence" and record["status"] != "unresolved":
                     self.data["verification_cache"][record["verification_key"]] = {
-                        "status": status, "result": result.model_dump(mode="json")}
+                        "status": record["status"], "result": result.model_dump(mode="json")}
             elif step.executor.work_item.state.value in {"failed", "cancelled", "unknown", "result_missing", "waiting_evidence"}:
                 record.update(status="unresolved", reason="verification_" + step.executor.work_item.state.value)
 
@@ -458,6 +496,9 @@ class TaskReviewDerivation:
             if affected & {*candidate.supporting_evidence, *verification.get("evidence_ids", [])}:
                 record.update(status="unresolved", reason=reason, verification_work_item_id=None)
                 record.pop("verification", None)
+                if record.get("publication"):
+                    record.setdefault("invalidated_publications", []).append(record.pop("publication"))
+                    record["issue"] = deepcopy(record.get("original_issue"))
                 self.data["verification_cache"].pop(record.get("verification_key"), None)
 
     def revalidate_candidate(self, key):

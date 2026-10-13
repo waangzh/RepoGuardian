@@ -30,6 +30,8 @@ class TaskRuntimeCheckpoint:
             spec = step.executor.spec.model_dump(mode="json", exclude={"readable_scope_files"})
             if spec["prompt_version"] == "task-review-prompt-v1":
                 spec.pop("prompt_version")  # 既有检查点没有这个字段，按原模板恢复。
+            if spec["publication_contract"] == "legacy":
+                spec.pop("publication_contract")  # 旧检查点不升级发布契约。
             if step.executor.work_item.readable_scope_hash is not None:
                 spec.update(readable_scope_hash=step.executor.spec.readable_scope_hash,
                             readable_file_count=len(step.executor.spec.readable_scope_files))
