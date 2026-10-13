@@ -64,7 +64,8 @@ from app.services.evidence_store import (ContextAdmission, evidence_snapshot, re
     store_chunks, evidence_priorities, archived_request_chunks, merge_stores, store_catalog, tool_result_metadata)
 from app.services.unit_coverage import (build_diff_manifest, new_coverage_ledger, active_evidence_set,
     update_coverage, rebuild_coverage, coverage_gaps, active_body_chars, MAX_ACTIVE_HUNKS, MAX_ACTIVE_DIFF_CHARS,
-    unsupported_hunk_ids, NO_HUNK_CHANGE_REASON)
+    unsupported_hunk_ids, NO_HUNK_CHANGE_REASON, BATCH_NO_EVIDENCE_PROGRESS,
+    TARGET_HUNK_UNCOVERED, CONTRACT_DEPENDENCY_UNRESOLVED)
 from app.services.review_planner import DeterministicReviewPlanner
 from app.services.unit_review_summary import build_record_input, merge_review_summaries, validate_record
 from app.tools.code_search import CodeSearchTool
@@ -792,17 +793,28 @@ class ReviewUnitExecutor:
                 if item.result and item.result.review_summary.status == "reported"
                 for snippet in item.result.context_snippets
             ]
-            batch_state["batch_supporting_context"].extend(
-                self._batch_supporting_context(
-                    worksets,
-                    entries,
-                    index,
-                    manifest,
-                    selected,
-                    str(state.get("head_sha") or ""),
-                    review_diff_base(state),
-                )
+            prior_support = self._batch_supporting_context(
+                worksets,
+                entries,
+                index,
+                manifest,
+                selected,
+                str(state.get("head_sha") or ""),
+                review_diff_base(state),
             )
+            batch_state["batch_supporting_context"].extend(prior_support)
+            prior_ids = {
+                item["derived_from_evidence_id"]
+                for item in prior_support
+                if item.get("derived_from_evidence_id")
+            }
+            batch_state["batch_prior_evidence_bindings"] = [
+                reference.model_dump(mode="json")
+                for item in entries[:index]
+                if item.result
+                for reference in item.result.review_summary.evidence
+                if reference.source == "diff" and reference.id in prior_ids
+            ]
             batch_state["batch_evidence_store"] = merge_stores([item.result.evidence_store for item in entries[:index] if item.result])
             batch_state["batch_review_issues"] = [issue for item in entries[:index] if item.result for issue in item.result.issues]
             child_snapshot = {"budget": local, "input_fingerprint": unit_execution_fingerprint(
@@ -894,7 +906,13 @@ class ReviewUnitExecutor:
             return memory.model_copy(update={"last_valid_record": memory.last_valid_record.model_copy(update={
                 "unresolved_questions": [UnitUnresolvedQuestion(id=key, question=item.question,
                     affected_files=item.affected_files, evidence_ids=item.evidence_ids)
-                    for key, item in ledger.questions.items() if item.status == "pending"]}), "record": None})
+                    for key, item in ledger.questions.items() if item.status == "pending"],
+                "contract_dependencies": [
+                    item.model_copy()
+                    for item in memory.last_valid_record.contract_dependencies
+                    if item.status != "verified"
+                ],
+            }), "record": None})
         return None
 
     @staticmethod
@@ -992,7 +1010,7 @@ class ReviewUnitExecutor:
             reason = reason or NO_HUNK_CHANGE_REASON
             complete = False
         if manifest and coverage_gaps(manifest, ledger):
-            complete, reason = False, reason or "unit_coverage_gate_incomplete"
+            complete, reason = False, reason or TARGET_HUNK_UNCOVERED
         records = [result.review_summary.record for result in results if result.review_summary.record]
         evidence = {item.id: item for result in results for item in result.review_summary.evidence}
         summary = UnitReviewSummary(input_protocol=CANONICAL_UNIT_INPUT_PROTOCOL,
@@ -1038,11 +1056,17 @@ class ReviewUnitExecutor:
             details["dependencies"] = list(dict.fromkeys(check.file_path for record in records
                 for check in record.contract_dependencies if check.status != "verified"))
         targets_complete = target_complete and not details["targets"]
+        coverage_reason = (
+            CONTRACT_DEPENDENCY_UNRESOLVED
+            if details["dependencies"]
+            else BATCH_NO_EVIDENCE_PROGRESS
+            if any(entry.batch_execution_status == "no_new_context" for entry in entries)
+            else reason or ("unit_diff_batches_complete" if complete else "unit_diff_batches_incomplete")
+        )
         coverage = UnitInputCoverage(evidence_coverage="complete" if evidence_complete else "partial",
             target_coverage="complete" if targets_complete else "partial",
             contract_coverage=("partial" if details["questions"] or details["dependencies"] else "complete") if ledger or records else "unknown",
-            unresolved_questions=details["questions"], unresolved_dependencies=details["dependencies"], reason=reason or (
-                "unit_diff_batches_complete" if complete else "unit_diff_batches_incomplete"),
+            unresolved_questions=details["questions"], unresolved_dependencies=details["dependencies"], reason=coverage_reason,
             omitted_targets=list(dict.fromkeys([*[
                 entry.id for entry in entries if entry.target_coverage != "complete"
             ],
@@ -2165,6 +2189,8 @@ class ReviewUnitExecutor:
             record_input["target_catalog"] = review_target_catalog(record_input["targets"])
         if state["parent_state"].get("origin_obligations"):
             record_input["origin_obligations"] = state["parent_state"]["origin_obligations"]
+        if state["parent_state"].get("batch_prior_evidence_bindings"):
+            record_input["prior_evidence_bindings"] = state["parent_state"]["batch_prior_evidence_bindings"]
         if state.get("diff_manifest"):
             record_input.update(diff_manifest=state["diff_manifest"].model_dump(mode="json"),
                 coverage_ledger=state["coverage_ledger"].model_dump(mode="json"),

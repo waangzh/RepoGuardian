@@ -15,6 +15,10 @@ from app.services.review_input_context import question_identity
 MAX_ACTIVE_HUNKS = 4
 MAX_ACTIVE_DIFF_CHARS = 32_000
 NO_HUNK_CHANGE_REASON = "file_change_without_text_hunks"
+BATCH_NO_EVIDENCE_PROGRESS = "batch_no_evidence_progress"
+TARGET_HUNK_UNCOVERED = "target_hunk_uncovered"
+CONTRACT_DEPENDENCY_UNRESOLVED = "contract_dependency_unresolved"
+EVIDENCE_NOT_CARRIED = "evidence_not_carried_to_next_batch"
 
 
 def unsupported_hunk_ids(manifest, active=None):
