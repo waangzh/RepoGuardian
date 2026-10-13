@@ -132,7 +132,15 @@ def update_coverage(ledger, manifest, active, summary, plan=None):
             result.targets.setdefault(target, UnitCoverageCheck())
         for hypothesis in plan.risk_hypotheses:
             result.hypotheses.setdefault(hypothesis.id, UnitCoverageCheck(required=hypothesis.priority == "high"))
-    current = summary.record if summary.status == "reported" and summary.latest_attempt_status in (None, "reported") else None
+    # 保留最近一次有效记录：后续取证无进展只表示本轮未闭合，不能抹掉之前
+    # 已验证的目标和未决问题，否则后续批次无法承接这些义务。
+    current = (
+        summary.record
+        if summary.status == "reported" and summary.latest_attempt_status in (None, "reported")
+        else summary.last_valid_record
+        if summary.last_valid_record is not None
+        else None
+    )
     trusted = {item.id for item in summary.evidence}
     checked = set()
     changes = manifest_file_changes(manifest)
