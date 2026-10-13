@@ -60,6 +60,7 @@ from app.review.unit_completion import (
     is_review_unit_budget_exhausted,
     is_review_unit_complete,
     is_review_unit_execution_complete,
+    is_review_unit_execution_complete_with_warnings,
     review_unit_coverage_warning,
 )
 from app.services.review_manifest import build_review_manifest
@@ -1063,6 +1064,14 @@ class ReviewService:
                 task.status = TaskStatus.completed_with_warnings
                 task.warnings.append(
                     (
+                        f"{len(incomplete)} 个 Review Unit 已执行完成但存在未决契约，"
+                        "本次没有 Unit 可复用"
+                    )
+                    if not completed and all(
+                        is_review_unit_execution_complete_with_warnings(item)
+                        for item in incomplete
+                    )
+                    else (
                         f"{len(incomplete)} 个 Review Unit 未完整完成，"
                         f"其他 {completed} 个 Unit 已完成"
                     )

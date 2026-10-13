@@ -65,7 +65,8 @@ from app.services.evidence_store import (ContextAdmission, evidence_snapshot, re
 from app.services.unit_coverage import (build_diff_manifest, new_coverage_ledger, active_evidence_set,
     update_coverage, rebuild_coverage, coverage_gaps, active_body_chars, MAX_ACTIVE_HUNKS, MAX_ACTIVE_DIFF_CHARS,
     unsupported_hunk_ids, NO_HUNK_CHANGE_REASON, BATCH_NO_EVIDENCE_PROGRESS,
-    TARGET_HUNK_UNCOVERED, CONTRACT_DEPENDENCY_UNRESOLVED)
+    TARGET_HUNK_UNCOVERED, CONTRACT_DEPENDENCY_UNRESOLVED, contract_dependency_scope)
+from app.services.unit_coverage import classified_coverage_gaps
 from app.services.review_planner import DeterministicReviewPlanner
 from app.services.unit_review_summary import build_record_input, merge_review_summaries, validate_record
 from app.tools.code_search import CodeSearchTool
@@ -254,7 +255,11 @@ class ReviewUnitExecutor:
 
                 return result.model_copy(update={
                     "unit_completion_status": (
-                        "complete" if is_review_unit_complete(result) else "incomplete"
+                        "complete"
+                        if is_review_unit_complete(result)
+                        else result.unit_completion_status
+                        if result.unit_completion_status == "complete_with_unresolved_contracts"
+                        else "incomplete"
                     )
                 })
         except TimeoutError:
@@ -1009,7 +1014,12 @@ class ReviewUnitExecutor:
         if manifest and unsupported_hunk_ids(manifest):
             reason = reason or NO_HUNK_CHANGE_REASON
             complete = False
-        if manifest and coverage_gaps(manifest, ledger):
+        manifest_gaps = (
+            classified_coverage_gaps(manifest, ledger)
+            if manifest and ledger
+            else {"targets": [], "questions": [], "dependencies": []}
+        )
+        if manifest and manifest_gaps["targets"]:
             complete, reason = False, reason or TARGET_HUNK_UNCOVERED
         records = [result.review_summary.record for result in results if result.review_summary.record]
         evidence = {item.id: item for result in results for item in result.review_summary.evidence}
@@ -1048,7 +1058,6 @@ class ReviewUnitExecutor:
             or result.input_coverage.evidence_coverage == "complete"
             for result in results
         )
-        from app.services.unit_coverage import classified_coverage_gaps
         details = classified_coverage_gaps(manifest, ledger) if manifest else {"targets": [], "questions": [], "dependencies": []}
         if not ledger and records:
             details["questions"] = list(dict.fromkeys(question.id or question.question for record in records
@@ -1056,9 +1065,48 @@ class ReviewUnitExecutor:
             details["dependencies"] = list(dict.fromkeys(check.file_path for record in records
                 for check in record.contract_dependencies if check.status != "verified"))
         targets_complete = target_complete and not details["targets"]
+        evidence_catalog = {
+            evidence.id
+            for result in results
+            for evidence in result.review_summary.evidence
+        }
+        dependencies = {
+            (dependency.file_path, dependency.symbol, dependency.assumption): dependency
+            for record in records
+            for dependency in record.contract_dependencies
+        }
+        unresolved_dependencies = [
+            dependency
+            for dependency in dependencies.values()
+            if dependency.status != "verified"
+        ]
+        contract_evidence_complete = bool(records) and all(
+            dependency.evidence_ids
+            and set(dependency.evidence_ids) <= evidence_catalog
+            for dependency in unresolved_dependencies
+        )
+        if not unresolved_dependencies:
+            contract_evidence_complete = bool(records)
+        if any(dependency.status == "conflicting" for dependency in unresolved_dependencies):
+            contract_verification_status = "conflicting"
+        elif unresolved_dependencies:
+            contract_verification_status = "unresolved"
+        elif records:
+            contract_verification_status = "complete"
+        else:
+            contract_verification_status = "unknown"
+        blocking_dependencies = []
+        for dependency in unresolved_dependencies:
+            covered = bool(dependency.evidence_ids) and set(dependency.evidence_ids) <= evidence_catalog
+            scope = contract_dependency_scope(dependency, unit, manifest)
+            if dependency.status == "conflicting" or not covered or scope == "cross_boundary":
+                blocking_dependencies.append(
+                    f"{dependency.file_path}:{dependency.symbol or '*'}:{dependency.assumption}"
+                )
+        contract_gate_complete = not details["questions"] and not blocking_dependencies
         coverage_reason = (
             CONTRACT_DEPENDENCY_UNRESOLVED
-            if details["dependencies"]
+            if blocking_dependencies or details["questions"]
             else BATCH_NO_EVIDENCE_PROGRESS
             if any(entry.batch_execution_status == "no_new_context" for entry in entries)
             else reason or ("unit_diff_batches_complete" if complete else "unit_diff_batches_incomplete")
@@ -1066,7 +1114,14 @@ class ReviewUnitExecutor:
         coverage = UnitInputCoverage(evidence_coverage="complete" if evidence_complete else "partial",
             target_coverage="complete" if targets_complete else "partial",
             contract_coverage=("partial" if details["questions"] or details["dependencies"] else "complete") if ledger or records else "unknown",
-            unresolved_questions=details["questions"], unresolved_dependencies=details["dependencies"], reason=coverage_reason,
+            contract_evidence_coverage=(
+                "complete" if contract_evidence_complete else "partial"
+            ) if ledger or records else "unknown",
+            contract_verification_status=contract_verification_status,
+            unresolved_questions=details["questions"],
+            unresolved_dependencies=details["dependencies"],
+            blocking_dependencies=blocking_dependencies,
+            reason=coverage_reason,
             omitted_targets=list(dict.fromkeys([*[
                 entry.id for entry in entries if entry.target_coverage != "complete"
             ],
@@ -1074,10 +1129,17 @@ class ReviewUnitExecutor:
             omitted_context=[item for result in results if result.input_coverage
                              for item in result.input_coverage.omitted_context])
         has_progress = any(result.status == ReviewUnitStatus.completed for result in results)
+        execution_ready = execution_complete and records_complete and targets_complete and not reason
+        if execution_ready and contract_gate_complete and contract_verification_status == "complete":
+            completion_status = "complete"
+        elif execution_ready and contract_gate_complete:
+            completion_status = "complete_with_unresolved_contracts"
+        else:
+            completion_status = "incomplete"
         return ReviewUnitResult(review_unit_id=unit.id, input_fingerprint=binding,
             status=(ReviewUnitStatus.completed
                     if has_progress else ReviewUnitStatus.timed_out if reason == "review_unit_timed_out" else ReviewUnitStatus.failed),
-            unit_completion_status="complete" if complete else "incomplete",
+            unit_completion_status=completion_status,
             terminal_reason=(ReviewUnitTerminalReason.completed
                 if has_progress else ReviewUnitTerminalReason.timed_out if reason == "review_unit_timed_out" else ReviewUnitTerminalReason.provider_error),
             error=None if has_progress else reason or "unit_diff_batches_not_executed",
