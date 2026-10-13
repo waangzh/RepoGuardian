@@ -206,6 +206,12 @@ class TaskRuntimeCheckpoint:
             # lease/CAS check immediately precedes budget mark_dispatching and SDK send.
             await self._persist_locked()
             if self.runtime.cancelled:
+                # cancel() 可能在持久化 await 期间先设置标记，再等待检查点锁。
+                # 发送标记之前可释放；发送标记之后不能证明未发送，保留 unknown。
+                if self.budget.attempts[attempt.attempt_id].sent:
+                    await self.budget.settle(attempt.attempt_id, actual_tokens=None)
+                else:
+                    await self.budget.release_unsent(attempt.attempt_id, reason="runtime_cancelled")
                 raise asyncio.CancelledError()
 
     async def save_response(self, step, attempt, raw, usage):
