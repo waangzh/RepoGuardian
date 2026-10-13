@@ -75,6 +75,53 @@ def investigation_increment(baseline, investigated):
         "default_switch_allowed": False}
 
 
+def investigation_decision_changes(reviews):
+    """独立轨迹裁决的判断变化；没有变化的成本单独保留。"""
+    effects = {"new_valid_defect", "correct_false_positive_rejection", "resolved_evidence_gap", "unchanged"}
+    seen, counts, unchanged_tokens, unknown_costs = set(), {key: 0 for key in effects}, 0, []
+    transitions = set()
+    for review in reviews:
+        identity = review.get("investigation_id")
+        if (not isinstance(identity, str) or not identity or identity in seen
+                or review.get("adjudication_status") != "complete" or review.get("blind") is not True
+                or not review.get("reason") or not review.get("trace_material_sha256")):
+            raise ValueError("unique independent investigation trace adjudication required")
+        seen.add(identity)
+        before, after, effect = review.get("before"), review.get("after"), review.get("effect")
+        if not isinstance(before, dict) or not isinstance(after, dict) or effect not in effects:
+            raise ValueError("explicit before/after decisions and effect required")
+        decisions = {"not_reported", "candidate", "valid_defect", "false_positive", "insufficient_evidence"}
+        for value in (before, after):
+            if (set(value) != {"decision", "evidence_status"} or value["decision"] not in decisions
+                    or value["evidence_status"] not in {"missing", "sufficient"}):
+                raise ValueError("normalized semantic decisions required")
+        judgment = review.get("judgment_id")
+        if not isinstance(judgment, str) or not judgment:
+            raise ValueError("final judgment identity required")
+        changed = before != after
+        if changed == (effect == "unchanged"):
+            raise ValueError("investigation effect contradicts decision change")
+        if (effect == "new_valid_defect" and (after["decision"] != "valid_defect" or before["decision"] == "valid_defect")
+                or effect == "correct_false_positive_rejection" and (after["decision"] != "false_positive" or before["decision"] == "false_positive")
+                or effect == "resolved_evidence_gap" and not (before["evidence_status"] == "missing" and after["evidence_status"] == "sufficient")):
+            raise ValueError("investigation effect lacks corresponding semantic transition")
+        counts[effect] += 1
+        if changed:
+            transitions.add(judgment)
+        tokens = review.get("tokens")
+        if effect == "unchanged":
+            if type(tokens) is int and tokens >= 0 and review.get("usage_integrity") == "complete":
+                unchanged_tokens += tokens
+            else:
+                unknown_costs.append(identity)
+    return {"version": "investigation-decision-changes-v1", "reviews_sha256": stable_hash(reviews),
+        "investigations": len(seen), "changed_final_judgments": len(transitions), "effects": counts,
+        "unchanged_known_tokens": unchanged_tokens,
+        "unchanged_total_tokens": None if unknown_costs else unchanged_tokens,
+        "unchanged_unknown_costs": unknown_costs,
+        "quality_basis": "independent_trace_adjudication_not_answered_status"}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["freeze", "increment"])
