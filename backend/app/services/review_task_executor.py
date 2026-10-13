@@ -28,6 +28,7 @@ from app.models.review_runtime import (
     RuntimeReadResponse,
     RuntimeSubmitResponse,
     VerificationSubmission, VerificationResult, VerificationSubmitResponse,
+    PublicationVerificationSubmission, PublicationVerificationSubmitResponse,
 )
 from app.services.fingerprints import stable_hash
 from app.review.tool_scope import is_sensitive_repository_path
@@ -64,7 +65,7 @@ class RuntimeResponseParser:
 
     _read_adapter = TypeAdapter(RuntimeReadResponse)
 
-    def parse(self, raw: Any, *, task_kind: str = "inspect") -> ParsedRuntimeResponse:
+    def parse(self, raw: Any, *, task_kind: str = "inspect", publication_contract: str = "legacy") -> ParsedRuntimeResponse:
         if isinstance(raw, str):
             def unique_object(pairs):
                 obj = {}
@@ -85,12 +86,14 @@ class RuntimeResponseParser:
                 return ParsedRuntimeResponse(self._read_adapter.validate_python(raw))
             except ValidationError as exc:
                 return ParsedRuntimeResponse(None, [RuntimeParseError("read", None, str(exc))])
-        return self._parse_submit(raw, task_kind)
+        return self._parse_submit(raw, task_kind, publication_contract)
 
-    def _parse_submit(self, raw: dict[str, Any], task_kind: str) -> ParsedRuntimeResponse:
+    def _parse_submit(self, raw: dict[str, Any], task_kind: str, publication_contract: str) -> ParsedRuntimeResponse:
         schemas = {"inspect": RuntimeSubmitResponse, "investigate": InvestigationSubmitResponse,
                    "verify": VerificationSubmitResponse}
         response_schema = schemas[task_kind]
+        if task_kind == "verify" and publication_contract == "claim-publication-v1":
+            response_schema = PublicationVerificationSubmitResponse
         if set(raw) - set(response_schema.model_fields):
             return ParsedRuntimeResponse(None, [RuntimeParseError("top_level", None, "unknown_submit_field")])
         errors: list[RuntimeParseError] = []
@@ -126,6 +129,8 @@ class RuntimeResponseParser:
             if key not in response_schema.model_fields:
                 continue
             try:
+                if key == "verification" and publication_contract == "claim-publication-v1":
+                    schema = PublicationVerificationSubmission
                 values[key] = schema.model_validate(raw.get(key))
             except ValidationError as exc:
                 errors.append(RuntimeParseError(key, None, str(exc)))
@@ -239,7 +244,8 @@ class ReviewTaskExecutor:
         return True
 
     def parse_and_apply(self, raw: Any) -> ParsedRuntimeResponse:
-        parsed = self.parser.parse(raw, task_kind=self.work_item.kind.value)
+        parsed = self.parser.parse(raw, task_kind=self.work_item.kind.value,
+                                   publication_contract=self.spec.publication_contract)
         if parsed.response is None:
             return parsed
         if isinstance(parsed.response, RuntimeReadResponse):
@@ -250,6 +256,8 @@ class ReviewTaskExecutor:
             return parsed
         if isinstance(parsed.response, VerificationSubmitResponse):
             self._apply_verification(getattr(parsed.response, "verification", None), parsed.errors)
+            if isinstance(parsed.response, PublicationVerificationSubmitResponse):
+                self._apply_submit(parsed.response, parsed.errors, parsed.item_indices)
         else:
             if isinstance(parsed.response, InvestigationSubmitResponse):
                 self._apply_investigation(getattr(parsed.response, "investigation", None), parsed.errors)
@@ -287,6 +295,14 @@ class ReviewTaskExecutor:
         error = self.evidence_error(item.evidence_ids)
         if item.candidate_id != self.work_item.verification_candidate.candidate_id:
             error = "verification_candidate_identity_mismatch"
+        if self.spec.publication_contract == "claim-publication-v1":
+            from app.services.review_publication import verification_subject_hash
+            if item.subject_hash != verification_subject_hash(self.work_item.verification_candidate, self.spec):
+                error = "verification_subject_hash_mismatch"
+            if item.narrowing is not None and all(getattr(item.narrowing, key) in
+                    {None, getattr(self.work_item.verification_candidate, key)}
+                    for key in ("affected_behavior", "recommendation")):
+                error = "publication_narrowing_has_no_change"
         required = {*self.work_item.required_evidence_ids, *self.work_item.counter_evidence_ids}
         if error is None and item.decision.value != "insufficient_evidence":
             if not item.evidence_ids or required - set(item.evidence_ids):
@@ -377,7 +393,7 @@ class ReviewTaskExecutor:
                 recommendation=item.recommendation, category=item.category, severity=item.severity,
                 evidence_requests=item.evidence_requests,
             )
-        for index, item in enumerate(response.leads):
+        for index, item in enumerate(getattr(response, "leads", [])):
             index = item_indices.get("leads", list(range(len(response.leads))))[index]
             if set(item.related_target_ids) - set(self.goals):
                 errors.append(RuntimeParseError("leads", index, "unknown_related_target"))
