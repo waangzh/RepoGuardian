@@ -7,6 +7,29 @@ const source = readFileSync(new URL("../src/utils/reviewObservability.ts", impor
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
 const ui = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputText).toString("base64")}`);
 
+test("缺失无效失败尝试保留旧记录时不会展示为本轮成功", () => {
+  const record = { change_summary: "上次有效记录", target_checks: [{ status: "checked" }] };
+  for (const status of ["missing", "invalid", "failed", "unknown"]) {
+    const view = ui.unitRecordPresentation({ status: "unknown", record: null,
+      last_valid_record: record, latest_attempt_status: status });
+    assert.equal(view.record, record);
+    assert.equal(view.retained, true);
+    assert.equal(view.tone, "inconclusive");
+    assert.match(view.label, /保留上次有效记录/);
+  }
+});
+
+test("旧响应与尚无有效记录保持可读，新的有效记录替换历史投影", () => {
+  assert.equal(ui.unitRecordPresentation(undefined).record, null);
+  assert.equal(ui.unitRecordPresentation({ status: "unknown" }).label, "记录未知");
+  const record = { target_checks: [{ status: "checked" }, { status: "not_checked" }] };
+  assert.equal(ui.unitRecordPresentation({ status: "reported", record }).label, "1 / 2 个目标已检查");
+  const current = ui.unitRecordPresentation({ status: "reported", record,
+    last_valid_record: { target_checks: [] }, latest_attempt_status: "reported" });
+  assert.equal(current.record, record);
+  assert.equal(current.retained, false);
+});
+
 test("风险判定与执行状态分开，required不被描述为已确认缺陷", () => {
   const task = { status: "verifying_issues", cross_unit_risk: { decision: "required", execution_status: "not_implemented" }, coordination_plan: null };
   assert.equal(ui.crossUnitPresentation(task).decisionLabel, "需要跨组检查");
@@ -22,6 +45,15 @@ test("旧记录缺失不显示跳过，零问题不显示清洁", () => {
   assert.equal(ui.unitFindingLabel(undefined, 0), "等待审查");
   assert.equal(ui.unitFindingLabel({ status: "failed" }, 0), "检查未完成");
   assert.equal(ui.unitFindingLabel({ status: "completed" }, 0), "未报告问题");
+});
+
+test("无Hunk变更明确显示未覆盖与人工复核，保留文本候选计数", () => {
+  const summary = { status: "unknown", latest_attempt_status: "not_executed", reason: "file_change_without_text_hunks" };
+  assert.equal(ui.unitRecordPresentation(summary).label, "不支持自动审查，需人工复核");
+  assert.equal(ui.unitFindingLabel({ status: "failed", terminal_reason: "unsupported_change" }, 0), "存在未覆盖变更，需人工复核");
+  const mixed = { status: "completed", input_coverage: { reason: "file_change_without_text_hunks", target_coverage: "partial" } };
+  assert.equal(ui.unitFindingLabel(mixed, 0), "存在未覆盖变更，需人工复核");
+  assert.equal(ui.unitFindingLabel(mixed, 1), "1 条问题记录");
 });
 
 test("普通覆盖100%不能掩盖协调失败或整体完成情况未知", () => {
@@ -64,10 +96,21 @@ test("Base与Head分别校验，缺少绑定保持未知", () => {
 });
 
 test("待核验、定位、确认、发布、过滤等状态计数覆盖整个候选批次", () => {
-  const statuses = ["candidate", "evidence_resolved", "confirmed", "published", "needs_human", "dismissed"];
+  const statuses = ["candidate", "evidence_resolved", "confirmed", "published", "unresolved", "needs_human", "dismissed"];
   const items = ui.issueStatusBreakdown({ unit_result: { issues: statuses.map((status) => ({ status })) } });
-  assert.equal(items.reduce((sum, item) => sum + item.count, 0), 6);
+  assert.equal(items.reduce((sum, item) => sum + item.count, 0), 7);
+  assert.equal(items.find((item) => item.label === "未确认").count, 1);
+  assert.ok(!items.some((item) => item.label === "状态未记录"));
   assert.equal(items[0].label, "候选待核验");
+});
+
+test("未确认补查可打开证据，历史人工暂停记录不会继续等待", () => {
+  const unresolved = { id: "uncertain", status: "unresolved" };
+  const candidate = { id: "pending", status: "candidate" };
+  const dismissed = { id: "filtered", status: "dismissed" };
+  const followup = { unit_result: { issues: [unresolved, candidate, dismissed] } };
+  assert.deepEqual(ui.publishedFollowupIssues(followup, [unresolved, candidate, dismissed]), [unresolved, candidate]);
+  assert.equal(ui.isTerminal("waiting_for_human"), true);
 });
 
 test("零预算、实际用量超出预算和缺失成本保留正确语义", () => {
