@@ -673,8 +673,11 @@ export interface UnitInputCoverage {
   evidence_coverage: "complete" | "partial" | "unknown";
   target_coverage: "complete" | "partial" | "unknown";
   contract_coverage?: "complete" | "partial" | "unknown";
+  contract_evidence_coverage?: "complete" | "partial" | "unknown";
+  contract_verification_status?: "complete" | "unresolved" | "conflicting" | "unknown";
   unresolved_questions?: string[];
   unresolved_dependencies?: string[];
+  blocking_dependencies?: string[];
   reason?: string | null;
   omitted_components: string[];
   omitted_targets: string[];
@@ -729,7 +732,7 @@ export interface ReviewUnitResult {
   review_unit_id: string;
   input_fingerprint?: string | null;
   status: ReviewUnitStatus;
-  unit_completion_status?: "complete" | "incomplete" | "unknown";
+  unit_completion_status?: "complete" | "complete_with_unresolved_contracts" | "incomplete" | "unknown";
   terminal_reason?: ReviewUnitTerminalReason | null;
   plan_skipped: boolean;
   plan?: UnitReviewPlan | null;

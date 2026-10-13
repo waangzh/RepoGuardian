@@ -16,6 +16,7 @@ const props = defineProps<{
 const emit = defineEmits<{ retry: [unitId: string] }>();
 const resultMap = computed(() => new Map(props.results.map((item) => [item.review_unit_id, item])));
 const completed = computed(() => props.results.filter(unitCoverageComplete).length);
+const executed = computed(() => props.results.filter((item) => item.status === "completed").length);
 const progress = computed(() => props.units.length ? Math.round((completed.value / props.units.length) * 100) : 0);
 const terminal = computed(() => ["completed", "completed_with_warnings", "failed", "cancelled"].includes(props.taskStatus || ""));
 const planStatusLabel: Record<string, string> = {
@@ -34,7 +35,7 @@ const skipReasonLabel: Record<string, string> = {
 <template>
   <section class="panel review-units-panel">
     <PanelHeader icon="units" title="审查单元" subtitle="Review Units">
-      <div class="panel-progress"><span>{{ completed }} / {{ units.length }} 完成</span><i><b :style="{ width: `${progress}%` }" /></i></div>
+      <div class="panel-progress"><span>{{ completed }} / {{ units.length }} 严格完成 · {{ executed }} 已执行</span><i><b :style="{ width: `${progress}%` }" /></i></div>
     </PanelHeader>
     <EmptyState v-if="!units.length" icon="units" title="正在规划审查单元" description="系统会根据文件、Hunk、符号与风险拆分可独立审查的单元。" />
     <div v-else class="unit-list">
@@ -67,8 +68,9 @@ const skipReasonLabel: Record<string, string> = {
           </details>
         </div>
         <div class="unit-item__status">
-          <StatusBadge :status="resultMap.get(unit.id)?.status === 'completed' && !unitCoverageComplete(resultMap.get(unit.id)!) ? 'warning' : resultMap.get(unit.id)?.status || 'pending'"
-            :label="resultMap.get(unit.id)?.status === 'completed' && !unitCoverageComplete(resultMap.get(unit.id)!) ? '覆盖未完成' : undefined" />
+          <StatusBadge
+            :status="resultMap.get(unit.id)?.unit_completion_status === 'complete_with_unresolved_contracts' ? 'warning' : resultMap.get(unit.id)?.status === 'completed' && !unitCoverageComplete(resultMap.get(unit.id)!) ? 'warning' : resultMap.get(unit.id)?.status || 'pending'"
+            :label="resultMap.get(unit.id)?.unit_completion_status === 'complete_with_unresolved_contracts' ? '执行完成，契约未决' : resultMap.get(unit.id)?.status === 'completed' && !unitCoverageComplete(resultMap.get(unit.id)!) ? '覆盖未完成' : undefined" />
           <small>{{ resultMap.get(unit.id)?.issues.length || 0 }} Issues</small>
           <button
             v-if="terminal && ['failed', 'timed_out'].includes(resultMap.get(unit.id)?.status || '')"
