@@ -2659,7 +2659,11 @@ class ReviewUnitExecutor:
             "unit_plan": unit_plan.model_dump(mode="json") if unit_plan else None,
             "pr_intent": record_input["pr_intent"],
             "working_memory": memory,
-            "prior_contract_dependencies": memory.get("contract_dependencies", []),
+            **(
+                {"prior_contract_dependencies": memory["contract_dependencies"]}
+                if memory.get("contract_dependencies")
+                else {}
+            ),
             "memory_evidence": restored,
             "evidence_snapshot": record_input["snapshot"],
             "evidence_catalog": [{key: value for key, value in item.items() if key != "content"}
