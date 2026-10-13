@@ -131,11 +131,28 @@ def review_unit_coverage_warning(result: ReviewUnitResult) -> str | None:
     if not is_review_unit_execution_complete(result) and result.input_coverage is None:
         return None
     coverage = review_unit_input_coverage(result)
-    if coverage is None or coverage.target_coverage == "complete":
+    batch_states = [
+        f"{batch.id}:{batch_execution_status(batch)}"
+        for batch in result.diff_batches
+        if batch_execution_status(batch) not in {"completed", "pending"}
+    ]
+    if (
+        coverage is None
+        or (
+            coverage.target_coverage == "complete"
+            and coverage.contract_coverage == "complete"
+            and not batch_states
+        )
+    ):
         return None
     targets = "；".join(coverage.omitted_targets) or "未记录具体省略目标"
-    return (f"Unit {result.review_unit_id} 目标覆盖 {coverage.target_coverage}："
-            f"{coverage.reason or 'diagnosis_input_incomplete'}；省略目标：{targets}")
+    return (
+        f"Unit {result.review_unit_id}：目标覆盖 {coverage.target_coverage}；"
+        f"契约闭合 {coverage.contract_coverage}；"
+        f"批次状态 {','.join(batch_states) or 'completed'}；"
+        f"原因 {coverage.reason or 'diagnosis_input_incomplete'}；"
+        f"省略目标：{targets}"
+    )
 
 
 def is_reusable_review_unit_result(result: ReviewUnitResult) -> bool:
