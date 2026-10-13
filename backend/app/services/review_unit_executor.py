@@ -665,7 +665,7 @@ class ReviewUnitExecutor:
         from app.services.unit_worksets import build_unit_worksets
         from app.services.model_request_budgeter import unit_budget_snapshot
         from app.review.unit_completion import (
-            is_review_unit_complete,
+            is_review_unit_execution_complete,
             is_reusable_review_unit_result,
         )
 
@@ -834,9 +834,20 @@ class ReviewUnitExecutor:
             token = unit_budget_snapshot.set(child_snapshot)
             try:
                 entry.result = await self._execute_unit(child, batch_state)
-                entry.status = "completed" if (is_review_unit_complete(entry.result)
+                batch_execution_complete = (
+                    is_review_unit_execution_complete(entry.result)
                     and entry.result.review_summary.status == "reported"
-                    and all(check.status == "checked" for check in entry.result.review_summary.record.target_checks)) else "partial"
+                    and entry.result.review_summary.record is not None
+                    and all(
+                        check.status == "checked"
+                        for check in entry.result.review_summary.record.target_checks
+                    )
+                    and (
+                        entry.result.input_coverage is None
+                        or entry.result.input_coverage.target_coverage == "complete"
+                    )
+                )
+                entry.status = "completed" if batch_execution_complete else "partial"
                 entry.reason = entry.result.error or entry.result.review_summary.reason
                 if entry.result.error and entry.result.error.startswith((
                         "run_budget_admission_rejected", "run_budget_cost_rejected")):
