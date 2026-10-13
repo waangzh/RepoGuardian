@@ -11,7 +11,13 @@ from typing import Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from app.agents.providers import LLMProvider
-from app.services.review_input_context import build_pr_intent, build_working_memory, complete_line_prefix, build_context_evidence
+from app.services.review_input_context import (
+    build_context_evidence,
+    build_pr_intent,
+    build_working_memory,
+    complete_line_prefix,
+    make_evidence,
+)
 from app.review.input_protocol import CANONICAL_UNIT_INPUT_PROTOCOL, legacy_unit_input_allowed
 from app.review.unit_completion import DIAGNOSIS_BACKGROUND_DEGRADED
 from app.services.fingerprints import unit_execution_fingerprint
@@ -780,8 +786,23 @@ class ReviewUnitExecutor:
             memory = self._batch_memory(entries[:index], ledger)
             if memory:
                 batch_state["batch_memory_summary"] = memory
-            batch_state["batch_supporting_context"] = [snippet.model_dump(mode="json") for item in entries[:index]
-                if item.result and item.result.review_summary.status == "reported" for snippet in item.result.context_snippets]
+            batch_state["batch_supporting_context"] = [
+                snippet.model_dump(mode="json")
+                for item in entries[:index]
+                if item.result and item.result.review_summary.status == "reported"
+                for snippet in item.result.context_snippets
+            ]
+            batch_state["batch_supporting_context"].extend(
+                self._batch_supporting_context(
+                    worksets,
+                    entries,
+                    index,
+                    manifest,
+                    selected,
+                    str(state.get("head_sha") or ""),
+                    review_diff_base(state),
+                )
+            )
             batch_state["batch_evidence_store"] = merge_stores([item.result.evidence_store for item in entries[:index] if item.result])
             batch_state["batch_review_issues"] = [issue for item in entries[:index] if item.result for issue in item.result.issues]
             child_snapshot = {"budget": local, "input_fingerprint": unit_execution_fingerprint(
@@ -875,6 +896,64 @@ class ReviewUnitExecutor:
                     affected_files=item.affected_files, evidence_ids=item.evidence_ids)
                     for key, item in ledger.questions.items() if item.status == "pending"]}), "record": None})
         return None
+
+    @staticmethod
+    def _batch_supporting_context(
+        worksets, entries, index, manifest, current_files, head_sha, base_sha
+    ):
+        """为后续批次提供同快照的前序 hunk 正文，并绑定原始 evidence ID。"""
+        support = []
+        current_paths = {item.file_path for item in current_files}
+        for prior_index in range(index):
+            entry = entries[prior_index]
+            result = entry.result
+            if result is None or result.diff_manifest is None or result.active_evidence_set is None:
+                continue
+            if (
+                result.diff_manifest.input_hash != manifest.input_hash
+                or result.diff_manifest.snapshot != manifest.snapshot
+                or result.active_evidence_set.manifest_hash != manifest.input_hash
+            ):
+                continue
+            active_ids = {
+                item.evidence_id
+                for item in result.active_evidence_set.hunks
+                if item.evidence_id
+            }
+            references = {
+                item.id: item
+                for item in result.review_summary.evidence
+                if item.source == "diff" and item.id in active_ids
+            }
+            for changed_file in worksets[prior_index][1]:
+                if changed_file.file_path in current_paths:
+                    continue
+                for hunk in changed_file.hunks:
+                    content = json.dumps(
+                        hunk.model_dump(), ensure_ascii=False, sort_keys=True
+                    )
+                    original = make_evidence(
+                        changed_file.file_path,
+                        "diff",
+                        hunk.new_start,
+                        hunk.new_start + max(0, hunk.new_length - 1),
+                        content,
+                        head_sha,
+                        base_sha,
+                    )
+                    if original["id"] not in references:
+                        continue
+                    support.append({
+                        "file": changed_file.file_path,
+                        "start_line": max(1, hunk.new_start),
+                        "end_line": max(1, hunk.new_start + max(0, hunk.new_length - 1)),
+                        "content": content,
+                        "relevance": "contract",
+                        "source": "batch_diff_support",
+                        "derived_from_evidence_id": original["id"],
+                        "review_unit_id": manifest.review_unit_id,
+                    })
+        return support
 
     @staticmethod
     def _aggregate_diff_batches(unit, entries, budget, binding, reason=None, manifest=None, evidence_store=None):
