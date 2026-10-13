@@ -8,14 +8,18 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import logging
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 import aiosqlite
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from pydantic import BaseModel
 
+import app.models.review as review_models
 from app.core.config import settings
 from app.services.fingerprints import DIAGNOSIS_INPUT_VERSION
 
@@ -47,9 +51,15 @@ class CheckpointStorageStats:
 
 
 def _checkpoint_serializer() -> JsonPlusSerializer:
-    """仅允许恢复审查状态中确实使用的自定义枚举类型。"""
+    """仅允许恢复本项目 review 模型，拒绝任意外部模块构造器。"""
+    allowed = [
+        (review_models.__name__, name)
+        for name, value in inspect.getmembers(review_models, inspect.isclass)
+        if value.__module__ == review_models.__name__
+        and (issubclass(value, BaseModel) or issubclass(value, Enum))
+    ]
     return JsonPlusSerializer(
-        allowed_msgpack_modules=[("app.models.review", "ReviewPhase")]
+        allowed_msgpack_modules=allowed
     )
 
 
