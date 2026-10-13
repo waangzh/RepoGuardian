@@ -1003,16 +1003,18 @@ class ReviewUnitExecutor:
     def _build_unit_graph(self) -> StateGraph:
         """构造每个 Review Unit 独立运行的有界 LangGraph 子图。"""
         graph = StateGraph(_ReviewUnitGraphState)
-        async def normalized_node(handler, state):
-            return await handler(self._normalize_graph_state(state))
+        def normalized_node(handler):
+            async def run(state):
+                return await handler(self._normalize_graph_state(state))
+            return run
 
-        graph.add_node("prepare_unit", lambda state: normalized_node(self._prepare_unit_node, state))
-        graph.add_node("plan_unit", lambda state: normalized_node(self._plan_unit_node, state))
-        graph.add_node("agent_decide", lambda state: normalized_node(self._agent_decide_node, state))
-        graph.add_node("execute_read_tool", lambda state: normalized_node(self._execute_read_tool_node, state))
-        graph.add_node("report_issue", lambda state: normalized_node(self._report_issue_node, state))
-        graph.add_node("collect_issue", lambda state: normalized_node(self._collect_issue_node, state))
-        graph.add_node("finish_unit", lambda state: normalized_node(self._finish_unit_node, state))
+        graph.add_node("prepare_unit", normalized_node(self._prepare_unit_node))
+        graph.add_node("plan_unit", normalized_node(self._plan_unit_node))
+        graph.add_node("agent_decide", normalized_node(self._agent_decide_node))
+        graph.add_node("execute_read_tool", normalized_node(self._execute_read_tool_node))
+        graph.add_node("report_issue", normalized_node(self._report_issue_node))
+        graph.add_node("collect_issue", normalized_node(self._collect_issue_node))
+        graph.add_node("finish_unit", normalized_node(self._finish_unit_node))
         graph.add_edge(START, "prepare_unit")
         graph.add_conditional_edges(
             "prepare_unit",
