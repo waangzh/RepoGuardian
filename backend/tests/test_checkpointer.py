@@ -17,7 +17,8 @@ from app.graph.checkpointer import (
     review_thread_config,
     unit_thread_config,
 )
-from app.models.review import ReviewPhase
+from app.models.review import ReviewPhase, UnitInputCoverage
+from app.services.review_unit_executor import ReviewUnitExecutor
 
 
 def test_checkpoint_serializer_allows_review_phase_explicitly() -> None:
@@ -26,6 +27,37 @@ def test_checkpoint_serializer_allows_review_phase_explicitly() -> None:
     encoded = serializer.dumps_typed(ReviewPhase.prepare)
 
     assert serializer.loads_typed(encoded) == ReviewPhase.prepare
+
+
+def test_checkpoint_serializer_restores_review_models() -> None:
+    serializer = _checkpoint_serializer()
+    original = UnitInputCoverage(
+        evidence_coverage="complete",
+        target_coverage="partial",
+        contract_coverage="complete",
+        omitted_targets=["tests/test_stats.py"],
+    )
+
+    restored = serializer.loads_typed(serializer.dumps_typed(original))
+
+    assert isinstance(restored, UnitInputCoverage)
+    assert restored.target_coverage == "partial"
+    assert restored.omitted_targets == ["tests/test_stats.py"]
+
+
+def test_unit_graph_state_normalizes_legacy_checkpoint_dicts() -> None:
+    state = ReviewUnitExecutor._normalize_graph_state({
+        "input_coverage": {
+            "evidence_coverage": "complete",
+            "target_coverage": "partial",
+            "contract_coverage": "complete",
+        },
+        "plan_status": "skipped",
+        "model_usages": [],
+    })
+
+    assert isinstance(state["input_coverage"], UnitInputCoverage)
+    assert state["input_coverage"].target_coverage == "partial"
 
 
 @pytest.mark.asyncio

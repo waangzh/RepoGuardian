@@ -25,6 +25,7 @@ from app.models.review import (
     CodeSearchRequest,
     ContextSnippet,
     ExecutionBudget,
+    ModelUsage,
     FileFindRequest,
     FileReadDiffRequest,
     FileReadRequest,
@@ -774,7 +775,8 @@ class ReviewUnitExecutor:
             batch_state["batch_evidence_store"] = merge_stores([item.result.evidence_store for item in entries[:index] if item.result])
             batch_state["batch_review_issues"] = [issue for item in entries[:index] if item.result for issue in item.result.issues]
             child_snapshot = {"budget": local, "input_fingerprint": unit_execution_fingerprint(
-                child.fingerprint, batch_state, self.provider, self.input_mode)}
+                child.fingerprint, batch_state, self.provider, self.input_mode),
+                "model_usages": batch_state.get("model_usages") or []}
             cached = saved.get(entry.id)
             if (cached and cached.result and cached.result.input_fingerprint == child_snapshot["input_fingerprint"]
                     and cached.result.diff_manifest == manifest
@@ -801,7 +803,7 @@ class ReviewUnitExecutor:
                 entry.status, entry.reason = "failed", f"{type(exc).__name__}: {exc}"
                 entry.result = ReviewUnitResult(review_unit_id=child.id,
                     input_fingerprint=child_snapshot["input_fingerprint"], status=ReviewUnitStatus.failed,
-                    terminal_reason=ReviewUnitTerminalReason.provider_error, error=entry.reason,
+                    terminal_reason=ReviewUnitTerminalReason.execution_error, error=entry.reason,
                     execution_budget=child_snapshot["budget"],
                     review_summary=self._failure_summary(child_snapshot, entry.reason),
                     evidence_store=child_snapshot.get("evidence_store"), context_selection=child_snapshot.get("context_selection"),
@@ -953,16 +955,64 @@ class ReviewUnitExecutor:
             model_usages=[usage.model_copy(update={"review_unit_id": unit.id}) for result in results for usage in result.model_usages],
             )
 
+    @staticmethod
+    def _normalize_graph_state(state: "_ReviewUnitGraphState") -> "_ReviewUnitGraphState":
+        """兼容旧 checkpoint：恢复后的 JSON 字典必须回到业务模型。"""
+        model_fields = {
+            "unit": ReviewUnit,
+            "scope": ReviewToolScope,
+            "budget": ExecutionBudget,
+            "unit_plan": UnitReviewPlan,
+            "review_summary": UnitReviewSummary,
+            "last_valid_review_summary": UnitReviewSummary,
+            "input_coverage": UnitInputCoverage,
+            "diff_manifest": UnitDiffManifest,
+            "coverage_ledger": UnitCoverageLedger,
+            "active_evidence_set": UnitActiveEvidenceSet,
+            "evidence_store": UnitEvidenceStore,
+            "context_selection": UnitContextSelection,
+            "next_action": AgentAction,
+        }
+        list_fields = {
+            "messages": AgentEvent,
+            "tool_events": ReviewUnitToolEvent,
+            "issues": ReviewIssue,
+            "model_usages": ModelUsage,
+        }
+        normalized = dict(state)
+        for key, model in model_fields.items():
+            value = normalized.get(key)
+            if isinstance(value, dict):
+                normalized[key] = model.model_validate(value)
+        for key, model in list_fields.items():
+            value = normalized.get(key)
+            if isinstance(value, list):
+                normalized[key] = [
+                    item if isinstance(item, model) else model.model_validate(item)
+                    for item in value
+                ]
+        for key, enum_type in (
+            ("plan_status", UnitPlanStatus),
+            ("terminal_reason", ReviewUnitTerminalReason),
+        ):
+            value = normalized.get(key)
+            if isinstance(value, str):
+                normalized[key] = enum_type(value)
+        return normalized
+
     def _build_unit_graph(self) -> StateGraph:
         """构造每个 Review Unit 独立运行的有界 LangGraph 子图。"""
         graph = StateGraph(_ReviewUnitGraphState)
-        graph.add_node("prepare_unit", self._prepare_unit_node)
-        graph.add_node("plan_unit", self._plan_unit_node)
-        graph.add_node("agent_decide", self._agent_decide_node)
-        graph.add_node("execute_read_tool", self._execute_read_tool_node)
-        graph.add_node("report_issue", self._report_issue_node)
-        graph.add_node("collect_issue", self._collect_issue_node)
-        graph.add_node("finish_unit", self._finish_unit_node)
+        async def normalized_node(handler, state):
+            return await handler(self._normalize_graph_state(state))
+
+        graph.add_node("prepare_unit", lambda state: normalized_node(self._prepare_unit_node, state))
+        graph.add_node("plan_unit", lambda state: normalized_node(self._plan_unit_node, state))
+        graph.add_node("agent_decide", lambda state: normalized_node(self._agent_decide_node, state))
+        graph.add_node("execute_read_tool", lambda state: normalized_node(self._execute_read_tool_node, state))
+        graph.add_node("report_issue", lambda state: normalized_node(self._report_issue_node, state))
+        graph.add_node("collect_issue", lambda state: normalized_node(self._collect_issue_node, state))
+        graph.add_node("finish_unit", lambda state: normalized_node(self._finish_unit_node, state))
         graph.add_edge(START, "prepare_unit")
         graph.add_conditional_edges(
             "prepare_unit",
