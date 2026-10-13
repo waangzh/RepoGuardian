@@ -19,7 +19,7 @@ import CrossUnitReview from "./CrossUnitReview.vue";
 import TaskRuntimePanel from "./TaskRuntimePanel.vue";
 import { runtimeReport } from "../../utils/taskRuntimePresentation";
 import UnitReviewRecord from "./UnitReviewRecord.vue";
-import { coverageCompletionLabel, crossUnitPresentation, originalIssueUnit, unitFindingLabel } from "../../utils/reviewObservability";
+import { coverageCompletionLabel, crossUnitPresentation, originalIssueUnit, unitCoverageWarning, unitFindingLabel } from "../../utils/reviewObservability";
 
 type ReviewTab = "overview" | "review" | "checks" | "files" | "activity";
 type SeverityFilter = "all" | ReviewIssue["severity"];
@@ -194,6 +194,12 @@ function issueCountForUnit(unitId: string): number {
 
 const selectedUnit = computed(() => props.task.review_units.find((unit) => unit.id === selectedUnitId.value) || props.task.review_units[0] || null);
 const selectedUnitResult = computed(() => selectedUnit.value ? unitResult(selectedUnit.value.id) : undefined);
+const reviewUnitWarnings = computed(() => props.task.review_unit_results
+  .map((result) => {
+    const warning = unitCoverageWarning(result);
+    return warning ? `Unit ${result.review_unit_id}：${warning}` : null;
+  })
+  .filter((warning): warning is string => Boolean(warning)));
 
 const filteredIssues = computed(() => {
   const issues = [...props.task.issues].filter((issue) => {
@@ -462,7 +468,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
           <div class="health-row"><span>可审查文件</span><i><b :style="{ width: `${fileCoveragePercent}%` }" /></i><strong>{{ coverage.reviewed_files }}/{{ coverage.eligible_files }}</strong></div>
           <div class="health-row"><span>变更组完成</span><i><b :style="{ width: `${unitCoveragePercent}%` }" /></i><strong>{{ coverage.completed_units }}/{{ coverage.total_units }}</strong></div>
           <div class="health-row"><span>证据链已定位</span><i><b :style="{ width: `${task.issues.length ? (resolvedEvidenceCount / task.issues.length) * 100 : 100}%` }" /></i><strong>{{ resolvedEvidenceCount }}/{{ task.issues.length }}</strong></div>
-          <div v-if="task.warnings.length" class="health-warning"><AppIcon name="alert" :size="16" /><span><strong>{{ task.warnings.length }} 条运行警告</strong>{{ task.warnings[0] }}</span></div>
+          <div v-if="task.warnings.length || reviewUnitWarnings.length" class="health-warning"><AppIcon name="alert" :size="16" /><span><strong>{{ task.warnings.length + reviewUnitWarnings.length }} 条运行警告</strong>{{ task.warnings[0] || reviewUnitWarnings[0] }}</span></div>
           <div class="health-usage"><span>已保存用量记录</span><code>{{ task.model_usage_summary.overall.calls }} 条 · {{ formatTokens(task.model_usage_summary.overall.actual_total_tokens || task.model_usage_summary.overall.accounted_tokens_estimate) }} tokens · {{ formatDuration(task.model_usage_summary.overall.latency_ms_p50 || 0) }} p50</code></div>
         </article>
       </div>
