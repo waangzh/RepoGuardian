@@ -137,7 +137,7 @@ async def test_unknown_planner_version_rejected_before_any_dispatch(production_i
 
 
 def test_new_task_configuration_freezes_v3():
-    assert task_runtime_configuration()["risk_planner_version"] == "risk-planner-v3"
+    assert task_runtime_configuration()["risk_planner_version"] == "risk-planner-v4"
 
 
 @pytest.mark.parametrize("changed_side", ["caller", "callee", "both"])

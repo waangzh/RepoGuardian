@@ -176,7 +176,7 @@ def validate_experiment_plan(plan, lock_bytes, diff_bytes, group, stage, sample_
     if versions is not None:
         if (not isinstance(versions, dict) or set(versions) != {"prompt_version", "risk_planner_version"}
                 or versions.get("prompt_version") not in {f"task-review-prompt-v{index}" for index in range(1, 6)}
-                or versions.get("risk_planner_version") not in {"legacy", "risk-planner-v2", "risk-planner-v3"}):
+                or versions.get("risk_planner_version") not in {"legacy", "risk-planner-v2", "risk-planner-v3", "risk-planner-v4"}):
             raise ValueError("experiment runtime versions invalid")
     if group not in GROUPS or stage not in {"first", "remaining"}:
         raise ValueError("unknown experiment group or stage")
@@ -189,7 +189,9 @@ def validate_experiment_plan(plan, lock_bytes, diff_bytes, group, stage, sample_
                 or not isinstance(first_gate.get("result_sha256"), str)
                 or len(first_gate["result_sha256"]) != 64):
             raise ValueError("remaining samples require a successful same-group first gate")
-        if (not quality_gate or quality_gate.get("version") != "runtime-quality-gate-v1"
+        from app.evaluation.runtime_quality_gate import validate_material_quality_gate
+        validate_material_quality_gate(plan, group, first_gate, quality_gate)
+        if (not quality_gate or quality_gate.get("version") != "runtime-quality-gate-v2"
                 or quality_gate.get("gate_sha256") != stable_hash({key: value for key, value in quality_gate.items()
                                                                    if key != "gate_sha256"})
                 or quality_gate.get("plan_sha256") != plan["plan_sha256"]
@@ -346,17 +348,34 @@ def screen_empty_candidate_regression(result, baseline_packets, independent_adju
     raw = [call.get("raw_response") for call in result.get("model_calls", [])]
     unknown = False
     generated = 0
+    submits = 0
     for response in raw:
         try:
             value = json.loads(response)
-            candidates = value.get("candidates", [])
+            if not isinstance(value, dict) or value.get("kind") not in {"read", "submit"}:
+                unknown = True
+                continue
+            if value["kind"] == "read":
+                continue
+            submits += 1
+            candidates = value.get("candidates")
             if not isinstance(candidates, list):
                 unknown = True
                 continue
             generated += len(candidates)
         except (ValueError, TypeError, AttributeError):
             unknown = True
-    empty = isinstance(findings, list) and not findings and bool(raw) and not unknown and generated == 0
+    report = result.get("task_runtime_report") or {}
+    inspections = [item for item in report.get("work_items", []) if item.get("kind") == "inspect"]
+    completed = (report.get("execution_status") == "completed" and not result.get("error_type")
+        and report.get("scope_complete") is True and bool(inspections)
+        and all(item.get("state") == "completed"
+                and item.get("last_observation", {}).get("response_kind") == "submit"
+                and not item["last_observation"].get("errors")
+                and not item["last_observation"].get("pending_goals")
+                and not item["last_observation"].get("correction_pending") for item in inspections))
+    empty = (isinstance(findings, list) and not findings and submits > 0
+             and completed and not unknown and generated == 0)
     failed = complete and bool(baseline_ids) and valid > 0 and empty
     return {"sample_id": result["sample"]["instance_id"], "status": "failed" if failed else "not_established",
         "reason": "independent_valid_defects_lost" if failed else "requires_general_independent_quality_scoring",

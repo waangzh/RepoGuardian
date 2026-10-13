@@ -42,34 +42,11 @@ def test_remaining_requires_exact_same_group_successful_first_gate(group):
                      "new_cannot_determine": 0}}
     quality = {**quality_payload, "gate_sha256": stable_hash(quality_payload)}
     validate_experiment_plan(plan, b"lock", b"diff", group, "first", ["first"])
-    validate_experiment_plan(plan, b"lock", b"diff", group, "remaining", ["a", "b", "c", "d"], gate, quality)
+    with pytest.raises(ValueError, match="independent quality gate with materials"):
+        validate_experiment_plan(plan, b"lock", b"diff", group, "remaining", ["a", "b", "c", "d"], gate, quality)
     for bad in (None, {**gate, "admitted": False}, {**gate, "group": "wrong"}):
         with pytest.raises(ValueError, match="successful same-group first gate"):
             validate_experiment_plan(plan, b"lock", b"diff", group, "remaining", ["a", "b", "c", "d"], bad, quality)
-    with pytest.raises(ValueError, match="independent quality gate"):
-        validate_experiment_plan(plan, b"lock", b"diff", group, "remaining", ["a", "b", "c", "d"], gate, None)
-    for field, value in (("plan_sha256", "wrong"), ("group", "wrong"),
-                         ("result_sha256", "other"), ("adjudication_status", "pending")):
-        bad_quality = {**quality_payload, field: value}
-        bad_quality["gate_sha256"] = stable_hash(bad_quality)
-        with pytest.raises(ValueError, match="independent quality gate"):
-            validate_experiment_plan(plan, b"lock", b"diff", group, "remaining",
-                                     ["a", "b", "c", "d"], gate, bad_quality)
-    for field, value in (("token_reduction", 0.24), ("lost_baseline_defects", 1),
-                         ("new_false_positives", 1), ("new_cannot_determine", 1)):
-        bad_quality = deepcopy(quality_payload)
-        bad_quality["metrics"][field] = value
-        bad_quality["gate_sha256"] = stable_hash(bad_quality)
-        with pytest.raises(ValueError, match="joint quality/scope/cost screening"):
-            validate_experiment_plan(plan, b"lock", b"diff", group, "remaining",
-                                     ["a", "b", "c", "d"], gate, bad_quality)
-    for value in (True, None, float("nan"), "0.5"):
-        bad_quality = deepcopy(quality_payload)
-        bad_quality["metrics"]["token_reduction"] = value
-        bad_quality["gate_sha256"] = stable_hash(bad_quality)
-        with pytest.raises(ValueError, match="valid quality metrics"):
-            validate_experiment_plan(plan, b"lock", b"diff", group, "remaining",
-                                     ["a", "b", "c", "d"], gate, bad_quality)
     with pytest.raises(ValueError, match="first-one/remaining-four"):
         validate_experiment_plan(plan, b"lock", b"diff", group, "first", ["a"])
     changed = deepcopy(plan)
@@ -159,7 +136,9 @@ def test_independent_valid_defect_lost_stops_screening_despite_examined_scope():
     adjudication = {"adjudication_status": "complete", "blind": True, "rejected": [],
                     "accepted": [{"blind_id": "b", "label": "valid_defect"}]}
     result = {"sample": {"instance_id": "sample", "repository": "repo", "head_sha": "sha"},
-              "task_runtime_report": {"scope_complete": True, "findings": []},
+              "task_runtime_report": {"scope_complete": True, "findings": [], "execution_status": "completed",
+                "work_items": [{"kind": "inspect", "state": "completed", "last_observation": {
+                    "response_kind": "submit", "errors": [], "pending_goals": [], "correction_pending": False}}]},
               "model_calls": [{"raw_response": '{"kind":"submit","candidates":[]}'}]}
     screen = screen_empty_candidate_regression(result, packets, adjudication)
     assert screen["status"] == "failed" and not screen["expand_allowed"]

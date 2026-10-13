@@ -72,12 +72,22 @@ def build_repository_graph(
             if len(candidates) != 1:
                 continue
             callee = next(iter(candidates.values()))
+            # 唯一同名只是检索线索。只有完整模块名和实际导入同时匹配才准入调查；
+            # alias、from-import、实例接收者与动态绑定尚未解析，保持不确定。
+            prefix, _, member = call.rpartition(".")
+            imported_modules = {str(ref.get("module", "")) for ref in files[str(caller["file"])].get("import_refs", [])}
+            bound = (bool(prefix) and prefix in imported_modules
+                     and member == str(callee.get("symbol"))
+                     and (str(callee["file"]), 0.99) in resolve_import(str(caller["file"]), prefix, files, lookup))
             edges.append(_edge(
                 "symbol", _symbol_id(caller), "symbol", _symbol_id(callee),
                 "calls", min(0.92, float(call_ref.get("confidence", 0.7))),
                 f"{caller.get('symbol')} calls {call}",
                 source_file=str(caller["file"]), target_file=str(callee["file"]),
                 parser_id=call_ref.get("parser_id"),
+                resolution_status="resolved" if bound else "unresolved",
+                resolution_basis="qualified_import_module" if bound else "unique_name",
+                call_expression=call,
             ))
 
     for test_path in sorted(lookup["test_files"]):
@@ -134,7 +144,7 @@ def build_repository_graph(
             "symbol_count": len(symbols),
             "edge_count": len(deduped_edges),
             "supported_edges": ["imports", "calls", "test_of", "configures"],
-            "call_resolution_version": "language-family-v2",
+            "call_resolution_version": "import-evidence-v3",
         },
     }
 
