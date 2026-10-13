@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import hashlib
 from dataclasses import asdict
 import json
 from pathlib import Path
@@ -41,7 +42,8 @@ def provider_configuration(provider):
         "profile_source": resolved.source, "profile": resolved.profile.model_dump(mode="json")}
 
 
-def freeze_diagnostic(stage, output, *, task_expression=None, provider=None, source_roots=None):
+def freeze_diagnostic(stage, output, *, task_expression=None, provider=None, source_roots=None, source_layout=False,
+                      source_fixture=None, dependency_contracts=None):
     stage, output = Path(stage), Path(output)
     baseline = read_json(stage / "manifest.json")
     case, request = read_json(stage / "case.json"), read_json(stage / "request.json")
@@ -51,6 +53,8 @@ def freeze_diagnostic(stage, output, *, task_expression=None, provider=None, sou
     if stable_hash(read_json(stage / "rubric.json")) != baseline["rubric_sha256"]:
         raise ValueError("diagnostic rubric changed")
     verification = "not_checked"
+    if source_roots is not None and source_fixture is not None:
+        raise ValueError("choose one diagnostic source owner")
     if source_roots is not None:
         from app.evaluation.runtime_adjudication import _validate_evidence
         from app.evaluation.runtime_adjudication_cli import make_source_reader
@@ -60,8 +64,47 @@ def freeze_diagnostic(stage, output, *, task_expression=None, provider=None, sou
                 "start_line": item["start_line"], "end_line": item["end_line"], "code": item["content"]},
                 {"snapshot": case["snapshot"]}, reader)
         verification = "fixed_sha_text_verified_not_semantic_proof"
+    if source_fixture is not None:
+        from app.evaluation.runtime_adjudication import _validate_evidence
+        fixture = read_json(source_fixture)
+        if fixture.get("version") != "owned-diagnostic-source-v1" or fixture["repository"] != case["snapshot"]["repository"]:
+            raise ValueError("owned diagnostic source identity mismatch")
+        by_sha = {}
+        for side in ("base", "head"):
+            digest = hashlib.sha1(json.dumps(fixture["sources"][side], sort_keys=True,
+                                            ensure_ascii=False).encode()).hexdigest()
+            if digest != case["snapshot"][side + "_sha"]:
+                raise ValueError("owned diagnostic source hash mismatch")
+            by_sha[digest] = fixture["sources"][side]
+        def reader(repository, sha, path):
+            return by_sha.get(sha, {}).get(path) if repository == fixture["repository"] else None
+        for item in case["evidence"]:
+            _validate_evidence({"path": item["path"], "side": item["side"], "snapshot_sha": item["snapshot_sha"],
+                "start_line": item["start_line"], "end_line": item["end_line"], "code": item["content"]},
+                {"snapshot": case["snapshot"]}, reader)
+        verification = "fixed_sha_text_verified_not_semantic_proof"
     if task_expression is not None:
         request["system"] = task_expression
+    if source_layout:
+        if task_expression is not None:
+            raise ValueError("source layout comparison cannot also change task expression")
+        from app.evaluation.runtime_source_layout import source_layout_prompt, layout_inventory
+        organized = json.loads(source_layout_prompt(case))
+        if layout_inventory(organized) != sorted(case["evidence"], key=stable_hash):
+            raise ValueError("source layout changed fixed evidence")
+        request["prompt"] = json.dumps(organized, ensure_ascii=False, sort_keys=True)
+    if dependency_contracts is not None:
+        if source_layout or task_expression is not None:
+            raise ValueError("dependency contracts must be the only changed variable")
+        contracts = read_json(dependency_contracts)
+        expected_symbols = set(read_json(stage / "dependency-symbols.json"))
+        actual_symbols = {symbol for item in contracts for symbol in item["symbols"]}
+        if actual_symbols != expected_symbols or any(item["version"] != "3.12" or
+                not item["source_url"].startswith("https://docs.python.org/3.12/") for item in contracts):
+            raise ValueError("dependency contracts symbol or version mismatch")
+        payload = json.loads(request["prompt"])
+        payload["dependency_contracts"] = contracts
+        request["prompt"] = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     provider = provider or current_provider()
     configuration = provider_configuration(provider)
     expected = baseline["configuration"]
@@ -77,7 +120,9 @@ def freeze_diagnostic(stage, output, *, task_expression=None, provider=None, sou
         "implementation_sha256": implementation_digest(), "input_sha256": stable_hash(case),
         "rubric_sha256": baseline["rubric_sha256"], "configuration": configuration,
         "request": asdict(prepared), "admission": admission,
-        "variable": "task_expression" if task_expression is not None else "baseline",
+        "variable": ("dependency_contracts" if dependency_contracts is not None else
+            "source_layout" if source_layout else "task_expression" if task_expression is not None else "baseline"),
+        "source_owner": "owned_diagnostic_fixture" if source_fixture is not None else "git_snapshot",
         "evidence_verification": verification, "limits": {"max_calls": provider._request_attempts, "max_tokens": 50_000},
         "quality_status": "not_run", "default_switch_allowed": False}
     write_new(output / "manifest.json", {**manifest, "manifest_sha256": stable_hash(manifest)})
@@ -160,12 +205,17 @@ def main():
     parser.add_argument("--stage", type=Path)
     parser.add_argument("--source-roots", type=Path)
     parser.add_argument("--task-expression", type=Path)
+    parser.add_argument("--source-layout", action="store_true")
+    parser.add_argument("--source-fixture", type=Path)
+    parser.add_argument("--dependency-contracts", type=Path)
     args = parser.parse_args()
     if args.action == "freeze":
         if not args.stage:
             parser.error("freeze requires --stage")
         freeze_diagnostic(args.stage, args.output, source_roots=args.source_roots,
-            task_expression=args.task_expression.read_text(encoding="utf-8") if args.task_expression else None)
+            task_expression=args.task_expression.read_text(encoding="utf-8") if args.task_expression else None,
+            source_layout=args.source_layout, source_fixture=args.source_fixture,
+            dependency_contracts=args.dependency_contracts)
         print("diagnostic frozen; no request sent")
     else:
         result = asyncio.run(run_diagnostic(args.output))

@@ -71,6 +71,7 @@ def task_runtime_configuration(model=None, *, provider=None):
     profile = resolver(selected_model) if callable(resolver) else settings.resolve_model_profile(selected_model)
     return {"provider": provider_name, "model": selected_model,
         "prompt_version": "task-review-prompt-v5",
+        "publication_contract": "claim-publication-v1",
         # 新任务冻结具体关系规划；历史手工配置缺省为 legacy，恢复时不能静默换规划器。
         "risk_planner_version": "risk-planner-v4",
         "readable_scope_version": "repository-tracked-v1",
@@ -124,6 +125,7 @@ def frozen_runtime_spec(state, configuration, budget, *, readable_files=()):
         model_provider=configuration["provider"], model_name=configuration["model"],
         policy_version=configuration["policy_version"], max_tokens=budget.max_tokens, max_calls=budget.max_calls,
         prompt_version=configuration.get("prompt_version", "task-review-prompt-v1"),
+        publication_contract=configuration.get("publication_contract", "legacy"),
         readable_scope_files=tuple(sorted(readable_files)))
 
 

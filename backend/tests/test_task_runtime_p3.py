@@ -29,8 +29,12 @@ def verification(payload, decision="supported"):
     assert payload["task"]["kind"] == "verify"
     assert "confidence" not in payload["candidate"]
     assert not {"question_updates", "obligation_updates", "review_record"} & set(payload)
-    return {"kind": "submit", "verification": {"candidate_id": payload["candidate"]["candidate_id"],
+    result = {"kind": "submit", "verification": {"candidate_id": payload["candidate"]["candidate_id"],
         "decision": decision, "evidence_ids": payload["active_evidence_ids"], "reason": "独立核对主张及必要反证"}}
+    if payload.get("publication_contract") == "claim-publication-v1":
+        result["verification"].update(subject_hash=payload["verification_subject_hash"],
+            publication_action="retain" if decision == "supported" else "none")
+    return result
 
 
 def investigation(payload, answer="refuted", candidates=(), leads=()):
