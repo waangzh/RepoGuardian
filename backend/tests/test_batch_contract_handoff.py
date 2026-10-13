@@ -1,10 +1,13 @@
 from app.models.review import (
     ContextSnippet,
+    ReviewUnit,
+    ReviewUnitComplexity,
     UnitContractDependency,
     UnitReviewRecord,
 )
 from app.services.review_input_context import build_context_evidence, make_evidence
 from app.services.unit_review_summary import build_record_input, validate_record
+from app.services.unit_coverage import contract_dependency_scope
 from test_unit_review_summary import _file
 
 
@@ -50,3 +53,27 @@ def test_derived_prior_diff_evidence_can_verify_cross_batch_dependency() -> None
 
     assert summary.status == "reported", summary.reason
     assert summary.record.contract_dependencies[0].status == "verified"
+
+
+def test_contract_dependency_scope_only_relaxes_same_primary_file() -> None:
+    unit = ReviewUnit(
+        id="u",
+        primary_files=["a.py"],
+        related_files=["b.py"],
+        estimated_tokens=1,
+        complexity=ReviewUnitComplexity.small,
+        fingerprint="fp",
+        grouping_reason="fixture",
+    )
+    assert contract_dependency_scope(
+        UnitContractDependency(file_path="a.py", assumption="same", status="unresolved"),
+        unit,
+    ) == "intra_file"
+    assert contract_dependency_scope(
+        UnitContractDependency(file_path="b.py", assumption="related", status="unresolved"),
+        unit,
+    ) == "cross_file"
+    assert contract_dependency_scope(
+        UnitContractDependency(file_path="c.py", assumption="external", status="unresolved"),
+        unit,
+    ) == "cross_boundary"

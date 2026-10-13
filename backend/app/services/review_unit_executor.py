@@ -1110,7 +1110,7 @@ class ReviewUnitExecutor:
         for dependency in unresolved_dependencies:
             covered = bool(dependency.evidence_ids) and set(dependency.evidence_ids) <= evidence_catalog
             scope = contract_dependency_scope(dependency, unit, manifest)
-            if dependency.status == "conflicting" or not covered or scope == "cross_boundary":
+            if dependency.status == "conflicting" or not covered or scope != "intra_file":
                 blocking_dependencies.append(
                     f"{dependency.file_path}:{dependency.symbol or '*'}:{dependency.assumption}"
                 )
