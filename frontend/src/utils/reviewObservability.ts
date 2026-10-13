@@ -86,6 +86,20 @@ export function unitFindingLabel(result: ReviewUnitResult | undefined, count: nu
   return "未报告问题";
 }
 
+export function unitCoverageWarning(result: ReviewUnitResult | undefined): string | null {
+  const coverage = result?.input_coverage;
+  if (!result || !coverage) return null;
+  const incompleteBatches = (result.diff_batches || [])
+    .filter((batch) => !["completed", "pending"].includes(batch.batch_execution_status || batch.status))
+    .map((batch) => `${batch.id}:${batch.batch_execution_status || batch.status}`);
+  if (coverage.target_coverage === "complete"
+      && (coverage.contract_coverage || "complete") === "complete"
+      && incompleteBatches.length === 0) return null;
+  const batchLabel = incompleteBatches.length ? `；批次状态 ${incompleteBatches.join("、")}` : "";
+  const reason = coverage.reason ? `；原因 ${coverage.reason}` : "";
+  return `目标覆盖 ${coverage.target_coverage}；契约闭合 ${coverage.contract_coverage || "unknown"}${batchLabel}${reason}`;
+}
+
 export function coordinationDecisionLabel(plan: CrossUnitCoordinationPlan): string {
   if (plan.status === "proposed") return "判别尚未完成";
   if (plan.status === "failed") return "未形成完整协调结论";

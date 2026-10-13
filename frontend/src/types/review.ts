@@ -729,6 +729,7 @@ export interface ReviewUnitResult {
   review_unit_id: string;
   input_fingerprint?: string | null;
   status: ReviewUnitStatus;
+  unit_completion_status?: "complete" | "incomplete" | "unknown";
   terminal_reason?: ReviewUnitTerminalReason | null;
   plan_skipped: boolean;
   plan?: UnitReviewPlan | null;
@@ -756,6 +757,9 @@ export interface ReviewUnitResult {
     ranges: Array<{file_path: string; hunk_id: string; start_offset: number; end_offset: number; content_hash: string}>;
     admission: Record<string, unknown>;
     status: "pending" | "completed" | "partial" | "skipped" | "failed";
+    batch_execution_status?: "pending" | "completed" | "no_new_context" | "partial" | "skipped" | "deferred_budget" | "failed";
+    target_coverage?: "complete" | "partial" | "unknown";
+    contract_coverage?: "complete" | "pending" | "unknown";
     reason?: string | null;
     result?: ReviewUnitResult | null;
   }>;
