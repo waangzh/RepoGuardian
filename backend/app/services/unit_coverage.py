@@ -298,6 +298,50 @@ def contract_dependency_scope(dependency, unit, manifest=None) -> str:
     return "cross_boundary"
 
 
+def contract_coverage_state(records, evidence_ids, unit, manifest=None):
+    """统一计算契约证据覆盖、核验状态和阻塞依赖。"""
+    dependencies = {
+        (dependency.file_path, dependency.symbol, dependency.assumption): dependency
+        for record in records
+        for dependency in record.contract_dependencies
+    }
+    unresolved = [
+        dependency
+        for dependency in dependencies.values()
+        if dependency.status != "verified"
+    ]
+    evidence_catalog = set(evidence_ids)
+    evidence_complete = bool(records) and all(
+        dependency.evidence_ids
+        and set(dependency.evidence_ids) <= evidence_catalog
+        for dependency in unresolved
+    )
+    if not unresolved:
+        evidence_complete = bool(records)
+    if any(dependency.status == "conflicting" for dependency in unresolved):
+        verification_status = "conflicting"
+    elif unresolved:
+        verification_status = "unresolved"
+    elif records:
+        verification_status = "complete"
+    else:
+        verification_status = "unknown"
+    blocking = []
+    for dependency in unresolved:
+        covered = bool(dependency.evidence_ids) and set(dependency.evidence_ids) <= evidence_catalog
+        if dependency.status == "conflicting" or not covered or contract_dependency_scope(
+            dependency, unit, manifest
+        ) != "intra_file":
+            blocking.append(
+                f"{dependency.file_path}:{dependency.symbol or '*'}:{dependency.assumption}"
+            )
+    return {
+        "evidence_coverage": "complete" if evidence_complete else "partial",
+        "verification_status": verification_status,
+        "blocking_dependencies": blocking,
+    }
+
+
 def rebuild_coverage(manifest, entries):
     ledger = new_coverage_ledger(manifest)
     for entry in entries:
