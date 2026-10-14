@@ -955,6 +955,8 @@ class ReviewUnitExecutor:
 
         返回 (support, handoff)：support 是本批次实际携带的正文；handoff 记录本次交接的
         未决义务与“可携带但未携带”的依赖，供聚合阶段判断证据是否确实漏传。
+        单条序列化正文超过整段上限时按行分块携带，不整段丢弃；窗口容量由
+        _admit_retrieved_context 在到达批次内分批准入。
         """
         support = []
         max_support_chars = 16_000
@@ -1020,7 +1022,7 @@ class ReviewUnitExecutor:
                         continue
                     if dependency_paths and changed_file.file_path not in dependency_paths:
                         continue
-                    candidates.append({
+                    snippet = {
                         "file": changed_file.file_path,
                         "start_line": max(1, hunk.new_start),
                         "end_line": max(1, hunk.new_start + max(0, hunk.new_length - 1)),
@@ -1029,18 +1031,29 @@ class ReviewUnitExecutor:
                         "source": "batch_diff_support",
                         "derived_from_evidence_id": original["id"],
                         "review_unit_id": manifest.review_unit_id,
-                    })
-        for item in reversed(candidates):
+                    }
+                    chunked = (ReviewUnitExecutor._chunked_hunk_body(hunk)
+                               if len(content) > max_support_chars and hunk.lines else None)
+                    candidates.append((snippet, chunked))
+        carried_chars = 0
+        for snippet, chunked in reversed(candidates):
             if len(support) >= max_support_hunks:
                 break
-            size = len(item["content"])
-            if not support and size > max_support_chars:
+            size = len(snippet["content"])
+            if size > max_support_chars:
+                if not chunked or not dependency_paths:
+                    # 非义务依赖的背景正文维持原上限：可携带但未携带，由 handoff 记录。
+                    continue
+                # 分块携带保留原证据绑定、快照与行结构；容量准入交给后续批次。
+                support.insert(0, {**snippet, "content": chunked,
+                                   "end_line": snippet["start_line"] + chunked.count("\n")})
                 continue
-            if sum(len(existing["content"]) for existing in support) + size > max_support_chars:
+            if carried_chars + size > max_support_chars:
                 continue
-            support.insert(0, item)
+            carried_chars += size
+            support.insert(0, snippet)
         carried_paths = {item["file"] for item in support}
-        carryable_paths = {item["file"] for item in candidates}
+        carryable_paths = {snippet["file"] for snippet, _ in candidates}
         handoff = {
             "obligations": [contract_dependency_key(item) for item in obligations],
             "carryable_paths": sorted(carryable_paths),
@@ -1051,6 +1064,14 @@ class ReviewUnitExecutor:
             ],
         }
         return support, handoff
+
+    @staticmethod
+    def _chunked_hunk_body(hunk):
+        """按行拆开 hunk 正文；每行沿用 canonical diff 证据的行 JSON 结构。"""
+        return "\n".join(
+            json.dumps(line.model_dump(mode="json"), ensure_ascii=False, sort_keys=True)
+            for line in hunk.lines
+        )
 
     @staticmethod
     def _aggregate_diff_batches(unit, entries, budget, binding, reason=None, manifest=None, evidence_store=None):
