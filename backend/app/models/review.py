@@ -2334,6 +2334,8 @@ class UnitDiffBatch(BaseModel):
     contract_coverage: Literal["complete", "pending", "unknown"] = "unknown"
     reason: str | None = None
     result: ReviewUnitResult | None = None
+    # 本批次交接时的未决义务与“可携带但未携带”的证据路径；旧快照没有该字段。
+    contract_handoff: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def normalize_execution_status(self) -> "UnitDiffBatch":
