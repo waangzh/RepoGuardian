@@ -395,3 +395,27 @@ def test_domain_output_errors_only_repair_known_protocol_conflicts() -> None:
     assert domain_output_errors("invalid_review_record: unknown or stale evidence reference") == []
     assert domain_output_errors("missing_review_record") == []
     assert domain_output_errors(None) == []
+
+
+def test_aggregate_reports_handoff_and_invalid_record_separately() -> None:
+    dependency = _dependency()
+    key = contract_dependency_key(dependency)
+    unit = review_unit().model_copy(update={"primary_files": ["a.py"], "related_files": ["b.py"]})
+    invalid = _empty_batch("batch-2", dependency)
+    invalid.result.review_summary = invalid.result.review_summary.model_copy(update={
+        "latest_attempt_status": "invalid",
+        "latest_attempt_reason": "invalid_review_record: prior question identity cannot name "
+                                 "a different question; use superseded"})
+
+    result = ReviewUnitExecutor._aggregate_diff_batches(unit, [
+        _empty_batch("batch-1", dependency, handoff={"obligations": [key],
+            "carryable_paths": ["a.py"], "dropped_obligations": [key]}),
+        invalid,
+    ], ExecutionBudget(), "binding")
+
+    coverage = result.input_coverage
+    assert coverage.reason == "evidence_not_carried_to_next_batch"
+    assert "evidence_not_carried_to_next_batch" in coverage.gap_reasons
+    assert "invalid_review_record" in coverage.gap_reasons
+    assert "target_hunk_uncovered" in coverage.gap_reasons
+    assert coverage.invalid_record_batches == ["batch-2"]

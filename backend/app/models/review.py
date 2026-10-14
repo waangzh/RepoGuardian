@@ -2196,6 +2196,10 @@ class UnitInputCoverage(BaseModel):
     omitted_targets: list[str] = Field(default_factory=list)
     omitted_plan: UnitReviewPlan | None = None
     omitted_context: list[UnitContextOmission] = Field(default_factory=list)
+    # 汇总缺口分别保留：运行停止、记录无效、目标未覆盖、证据交接失败互不掩盖。
+    gap_reasons: list[str] = Field(default_factory=list)
+    invalid_record_batches: list[str] = Field(default_factory=list)
+    stopped_batches: list[str] = Field(default_factory=list)
 
 
 class DiffManifestHunk(BaseModel):

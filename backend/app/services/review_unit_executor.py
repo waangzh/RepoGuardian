@@ -1248,6 +1248,30 @@ class ReviewUnitExecutor:
             if any(entry.batch_execution_status == "no_new_context" for entry in entries)
             else reason or ("unit_diff_batches_complete" if complete else "unit_diff_batches_incomplete")
         )
+        gap_reasons: list[str] = []
+        if set(blocking_dependencies) & dropped_obligations:
+            gap_reasons.append(EVIDENCE_NOT_CARRIED)
+        if blocking_dependencies or details["questions"] or details["dependencies"]:
+            gap_reasons.append(CONTRACT_DEPENDENCY_UNRESOLVED)
+        if any(entry.batch_execution_status == "no_new_context" for entry in entries):
+            gap_reasons.append(BATCH_NO_EVIDENCE_PROGRESS)
+        invalid_record_batches = [
+            entry.id for entry in entries
+            if entry.result is None
+            or entry.result.review_summary.latest_attempt_status == "invalid"
+        ]
+        if invalid_record_batches:
+            gap_reasons.append("invalid_review_record")
+        if details["targets"] or any(entry.target_coverage != "complete" for entry in entries):
+            gap_reasons.append(TARGET_HUNK_UNCOVERED)
+        if manifest and unsupported_hunk_ids(manifest):
+            gap_reasons.append(NO_HUNK_CHANGE_REASON)
+        if not gap_reasons and coverage_reason not in {"unit_diff_batches_complete"}:
+            gap_reasons.append(coverage_reason)
+        stopped_batches = [
+            f"{entry.id}:{entry.batch_execution_status}" for entry in entries
+            if entry.batch_execution_status != "completed"
+        ]
         coverage = UnitInputCoverage(evidence_coverage="complete" if evidence_complete else "partial",
             target_coverage="complete" if targets_complete else "partial",
             contract_coverage=("partial" if details["questions"] or details["dependencies"] else "complete") if ledger or records else "unknown",
@@ -1259,6 +1283,9 @@ class ReviewUnitExecutor:
             unresolved_dependencies=details["dependencies"],
             blocking_dependencies=blocking_dependencies,
             reason=coverage_reason,
+            gap_reasons=gap_reasons,
+            invalid_record_batches=invalid_record_batches,
+            stopped_batches=stopped_batches,
             omitted_targets=list(dict.fromkeys([*[
                 entry.id for entry in entries if entry.target_coverage != "complete"
             ],
