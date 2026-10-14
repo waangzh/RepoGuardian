@@ -991,8 +991,11 @@ class ReviewUnitExecutor:
             if result is None or result.diff_manifest is None or result.active_evidence_set is None:
                 continue
             if (
-                result.diff_manifest.input_hash != manifest.input_hash
+                result.diff_manifest.review_unit_id != manifest.review_unit_id
+                or result.diff_manifest.input_hash != manifest.input_hash
                 or result.diff_manifest.snapshot != manifest.snapshot
+                or manifest.snapshot.get("head_sha") != head_sha
+                or manifest.snapshot.get("base_sha") != base_sha
                 or result.active_evidence_set.manifest_hash != manifest.input_hash
             ):
                 continue
@@ -1053,8 +1056,8 @@ class ReviewUnitExecutor:
                 break
             size = len(snippet["content"])
             if size > max_support_chars:
-                if not chunked or not dependency_paths:
-                    # 同文件片段或非义务依赖的背景正文维持原上限：可携带但未携带，由 handoff 记录。
+                if not chunked:
+                    # 同文件片段维持原上限，跨文件正文不要求前序提前发现依赖。
                     continue
                 # 分块携带保留原证据绑定、快照与行结构；容量准入交给后续批次。
                 support.insert(0, {**snippet, "content": chunked,
