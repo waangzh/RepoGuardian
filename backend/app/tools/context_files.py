@@ -144,6 +144,26 @@ class ScopedContextTool:
             next_cursor=_file_find_cursor((scope_id, normalized, version, index)) if index < len(matched) else None)
         return page
 
+    @staticmethod
+    def normalize_diff_hunk_ids(target, hunk_ids):
+        """只转换当前授权文件正文可重建的原始 ID 与 manifest ID。"""
+        from app.services.review_planner import DeterministicReviewPlanner
+        from app.services.fingerprints import stable_hash
+
+        aliases = {}
+        for index, hunk in enumerate(target.hunks):
+            identity = DeterministicReviewPlanner.hunk_id(target.file_path, index, hunk.model_dump(mode="json"))
+            for alias in {identity, hunk.hunk_id, "hunk-" + stable_hash([target.file_path, identity])[:24]} - {None}:
+                aliases.setdefault(alias, set()).add(identity)
+        unknown = set(hunk_ids or ()) - set(aliases)
+        ambiguous = [item for item in hunk_ids or () if len(aliases.get(item, ())) > 1]
+        if unknown or ambiguous:
+            raise ScopedContextToolError("file_read_diff references an unknown hunk_id; " + json.dumps({
+                "file_path": target.file_path, "unknown_hunk_ids": sorted(unknown),
+                "ambiguous_hunk_ids": ambiguous,
+                "accepted_hunk_ids": sorted(key for key, values in aliases.items() if len(values) == 1)}, ensure_ascii=False))
+        return list(dict.fromkeys(next(iter(aliases[item])) for item in hunk_ids or ()))
+
     async def file_read_diff(
         self,
         *,
@@ -157,6 +177,7 @@ class ScopedContextTool:
 
         支持性读取不授予评论权限、目标覆盖或引用权限：是否可引用仍由证据目录决定。
         """
+        self._require_readable(scope, file_path)
         current = [
             item if isinstance(item, ChangedFile) else ChangedFile.model_validate(item)
             for item in changed_files
@@ -186,16 +207,17 @@ class ScopedContextTool:
                 "sensitive repository change is not readable: "
                 f"{target.old_file_path or target.file_path} -> {target.file_path}"
             )
-        selected = set(hunk_ids or ())
-        known = {hunk.hunk_id for hunk in target.hunks if hunk.hunk_id}
-        if selected - known:
-            raise ScopedContextToolError("file_read_diff references an unknown hunk_id")
+        selected = set(self.normalize_diff_hunk_ids(target, hunk_ids))
+        from app.services.review_planner import DeterministicReviewPlanner
 
         rendered: list[str] = [f"--- a/{target.old_file_path or file_path}", f"+++ b/{file_path}"]
         included = 0
-        for hunk in target.hunks:
-            if selected and hunk.hunk_id not in selected:
+        selected_hunks = []
+        for index, hunk in enumerate(target.hunks):
+            identity = DeterministicReviewPlanner.hunk_id(file_path, index, hunk.model_dump(mode="json"))
+            if selected and identity not in selected:
                 continue
+            selected_hunks.append(hunk)
             included += 1
             rendered.append(
                 f"@@ -{hunk.old_start},{hunk.old_length} +{hunk.new_start},{hunk.new_length} @@"
@@ -207,8 +229,8 @@ class ScopedContextTool:
         rendered = rendered[:scope.max_lines_per_read]
         if truncated:
             rendered.append("...(truncated)")
-        start = min((hunk.new_start for hunk in target.hunks), default=1)
-        end = max((hunk.new_start + max(hunk.new_length - 1, 0) for hunk in target.hunks), default=start)
+        start = min((hunk.new_start for hunk in selected_hunks), default=1)
+        end = max((hunk.new_start + max(hunk.new_length - 1, 0) for hunk in selected_hunks), default=start)
         content = self._truncate_content("\n".join(rendered))
         return {
             "file": file_path,
