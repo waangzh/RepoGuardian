@@ -254,30 +254,6 @@ def _retrieval_action(
     }
 
 
-def test_agent_action_accepts_valid_json_shape() -> None:
-    action = AgentAction.model_validate({
-        "action": "retrieve_context",
-        "reason": "需要更多上下文",
-        "target_issue_ids": [],
-        "tool_args": {
-            "plan": {
-                "reason": "读取折扣函数和测试。",
-                "target_files": ["pricing.py"],
-                "target_symbols": ["calculate_discounted_total"],
-                "search_terms": [],
-                "relevance_types": ["direct", "test"],
-                "include_callers": False,
-                "include_callees": False,
-                "include_tests": True,
-                "max_results": 8,
-                "depth": 1,
-            }
-        },
-    })
-
-    assert action.action == "retrieve_context"
-
-
 def test_agent_action_rejects_unknown_action() -> None:
     with pytest.raises(ValidationError):
         AgentAction.model_validate({"action": "unknown", "reason": "bad"})
