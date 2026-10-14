@@ -31,7 +31,6 @@ def fixture():
     ledger = update_coverage(new_coverage_ledger(manifest), manifest, active, summary)
     parent = {**_state(), "head_sha": "head-a", "unit_diff_batch": {"id": "batch-2"},
         "batch_parent_diff_files": [prior.model_dump(mode="json")],
-        "batch_prior_active_evidence_ids": [item.evidence_id for item in active_evidence_set(manifest, [prior], "batch-1").hunks],
         "unit_metadata": unit.model_dump(mode="json")}
     state = {"unit": unit, "unit_files": current, "unit_diff": "", "unit_plan": None,
         "scope": _scope({"tests.py"}, {"tests.py", "a.py"}), "parent_state": parent,
