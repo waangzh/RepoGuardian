@@ -215,6 +215,8 @@ def test_handoff_marks_dropped_obligation_only_when_carryable_body_was_left_out(
     assert huge_support == []
     assert huge_handoff["carryable_paths"] == ["a.py"]
     assert huge_handoff["dropped_obligations"] == [contract_dependency_key(dependency)]
+    assert huge_handoff["candidate_evidence"] and huge_handoff["selected_evidence_ids"] == []
+    assert huge_handoff["omitted_evidence"][0]["reason"] == "same_file_support_char_limit"
 
 
 @pytest.mark.parametrize("prior_dependency", [False, True])
@@ -293,6 +295,11 @@ def test_evidence_not_carried_requires_a_confirmed_dropped_handoff() -> None:
     ], ExecutionBudget(), "binding")
     assert late.input_coverage.blocking_dependencies == [key]
     assert late.input_coverage.reason == "contract_dependency_unresolved"
+    late.diff_batches[-1].contract_handoff = {"omitted_evidence": [
+        {"file_path": "a.py", "evidence_id": "candidate", "reason": "support_char_budget_exhausted"}]}
+    diagnosed = ReviewUnitExecutor._aggregate_diff_batches(unit, late.diff_batches, ExecutionBudget(), "binding")
+    assert diagnosed.input_coverage.reason == "contract_dependency_unresolved"
+    assert "supporting_evidence_omitted" in diagnosed.input_coverage.gap_reasons
 
 
 def test_diagnosis_input_carries_obligation_without_bound_support() -> None:

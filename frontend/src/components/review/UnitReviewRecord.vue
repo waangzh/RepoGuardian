@@ -40,6 +40,7 @@ function tone(status: string): string {
         <p v-for="hunk in result.diff_manifest.hunks" :key="hunk.id">{{ hunk.file_path }} · {{ hunk.hunk_id }} · {{ checkLabels[ledger.diff_hunks[hunk.id]?.status || 'pending'] }}</p>
       </details>
       <p class="muted">待解决问题 {{ Object.values(ledger.questions).filter((item) => item.status === 'pending').length }} 个</p>
+      <p class="muted">未核验依赖 {{ Object.values(ledger.dependencies).filter((item) => item.status !== 'verified').length }} 个 · 阻塞依赖 {{ result.input_coverage?.blocking_dependencies?.length ?? 0 }} 个</p>
       <article v-for="(check, identity) in ledger.file_changes" :key="identity" class="check-row">
         <p>元数据{{ check.metadata_verified ? '已核验' : '未核验' }} · 影响检查{{ checkLabels[check.impact_status] }}</p>
         <p>{{ check.reason || '尚未提供影响检查记录' }}</p>
@@ -52,6 +53,12 @@ function tone(status: string): string {
         <summary>第 {{ index + 1 }} 批 · {{ batch.status === 'completed' ? '已检查' : '覆盖未完成' }}</summary>
         <p v-for="(range, rangeIndex) in batch.ranges" :key="rangeIndex">{{ range.file_path }} · Diff 行偏移 {{ range.start_offset }}–{{ range.end_offset }}</p>
         <p>{{ batch.reason }}</p>
+        <template v-if="batch.contract_handoff?.candidate_evidence">
+          <p>支持证据：候选 {{ batch.contract_handoff.candidate_evidence.length }} 项 · 策略选入 {{ batch.contract_handoff.selected_evidence_ids?.length ?? 0 }} 项 · 正文已准入 {{ batch.contract_handoff.carried_evidence_ids?.length ?? 0 }} 项</p>
+          <p>已准入表示至少一块正文进入活动输入，不表示全文携带或契约已核验。</p>
+          <p v-for="item in batch.contract_handoff.omitted_evidence" :key="item.evidence_id">策略省略 {{ item.file_path }} · {{ item.reason === 'same_file_support_char_limit' ? '同文件正文超过交接上限' : item.reason === 'support_hunk_limit' ? '超过交接 Hunk 数量上限' : item.reason === 'support_char_budget_exhausted' ? '交接字符预算不足' : item.reason }}</p>
+          <p v-for="(item, omissionIndex) in batch.contract_handoff.admission_omissions" :key="omissionIndex">输入准入省略 {{ item.file_path }} · {{ item.reason }}</p>
+        </template>
         <p v-if="batch.result?.review_summary.record">{{ batch.result.review_summary.record.change_summary }}</p>
       </details>
     </section>
