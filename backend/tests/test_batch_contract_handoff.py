@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 from app.models.review import (
     ContextSnippet,
     ExecutionBudget,
@@ -132,7 +134,7 @@ def _reported_summary(files, manifest, active, dependency) -> UnitReviewSummary:
         target_checks=[{"target": target, "status": "checked",
             "evidence_ids": [item.evidence_id for item in active.hunks if item.evidence_id],
             "reason": "逐个核对当前活动 Hunk"} for target in request["targets"]],
-        contract_dependencies=[dependency]), request, {file.file_path for file in files})
+        contract_dependencies=[dependency] if dependency else []), request, {file.file_path for file in files})
     assert summary.status == "reported", summary.reason
     return summary
 
@@ -215,14 +217,15 @@ def test_handoff_marks_dropped_obligation_only_when_carryable_body_was_left_out(
     assert huge_handoff["dropped_obligations"] == [contract_dependency_key(dependency)]
 
 
-def test_cross_file_oversize_dependency_is_carried_as_chunks_and_citable() -> None:
+@pytest.mark.parametrize("prior_dependency", [False, True])
+def test_cross_file_oversize_dependency_is_carried_as_chunks_and_citable(prior_dependency) -> None:
     dependency = _dependency().model_copy(update={"file_path": "b.py"})
     unit = review_unit().model_copy(update={"primary_files": ["a.py"], "related_files": ["b.py"]})
     huge = [large_file(count=40, width=800).model_copy(update={"file_path": "b.py"})]
     manifest = build_diff_manifest(unit, huge, "head-a", "base-a")
     active = active_evidence_set(manifest, huge, "batch-1")
     current = [_file()]
-    entries = [_batch(unit, "batch-1", huge, manifest, active, dependency),
+    entries = [_batch(unit, "batch-1", huge, manifest, active, dependency if prior_dependency else None),
         UnitDiffBatch(id="batch-2", parent_unit_id=unit.id, input_hash="two",
             version="unit-diff-worksets-v1", ranges=[], admission={})]
 
@@ -250,6 +253,13 @@ def test_cross_file_oversize_dependency_is_carried_as_chunks_and_citable() -> No
 
     assert summary.status == "reported", summary.reason
     assert summary.record.contract_dependencies[0].status == "checked"
+
+    # 相同正文不允许跨快照交接，也不能用相同 hash 冒充另一个父 Unit。
+    assert ReviewUnitExecutor._batch_supporting_context(
+        [(unit, huge, {}), (unit, current, {})], entries, 1, manifest, current, "stale", "base-a")[0] == []
+    foreign = manifest.model_copy(update={"review_unit_id": "other-unit"})
+    assert ReviewUnitExecutor._batch_supporting_context(
+        [(unit, huge, {}), (unit, current, {})], entries, 1, foreign, current, "head-a", "base-a")[0] == []
 
 
 def _empty_batch(batch_id, dependency=None, *, handoff=None):
