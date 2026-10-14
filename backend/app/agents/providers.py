@@ -436,6 +436,8 @@ class OpenAICompatibleProvider(LLMProvider):
             prompt = ("Correct only the reported output structure using the same evidence. Return issues: []; "
                 "previous validated candidates are retained by the server. Never invent replacement IDs, evidence or checks. "
                 "If a transition cannot be justified, omit it and keep the question unresolved. "
+                "A repeated question id must keep its exact prior text and affected_files; to change wording or scope, "
+                "add a question_update with status superseded and a distinct active replacement_id. "
                 "Use target_catalog IDs exactly and the separate target/hypothesis status enums.\n") + prompt
         prompt += ('\n本次调用是 review_step。Return issues, review_record and next_need (null if absent). '
                    'next_need has only action, reason, target_issue_ids, tool_args; no top-level type, file_path, symbol or command. '

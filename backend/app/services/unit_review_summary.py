@@ -84,6 +84,30 @@ def _dependency_evidence_covers(
     )
 
 
+_QUESTION_IDENTITY_ERRORS = {
+    "prior question identity cannot name a different question; use superseded":
+        "question_identity_conflict",
+    "closed question identity cannot be reused": "closed_question_reuse",
+    "question update requires a visible prior question": "unknown_question_update",
+    "superseded question requires an active replacement": "missing_question_replacement",
+}
+
+
+def domain_output_errors(reason: str | None) -> list[dict[str, Any]]:
+    """把可修复的领域校验错误翻译成有界纠错反馈；不认识的错误保持拒绝。"""
+    prefix = "invalid_review_record: "
+    if not reason or not reason.startswith(prefix):
+        return []
+    detail = reason[len(prefix):]
+    if detail == "unknown review target":
+        return [{"type": "unknown_target", "loc": ["review_record", "target_checks"]}]
+    kind = _QUESTION_IDENTITY_ERRORS.get(detail)
+    if kind:
+        return [{"type": kind, "loc": ["review_record", "unresolved_questions"],
+                 "message": detail}]
+    return []
+
+
 def validate_record(
     record: UnitReviewRecord | None, record_input: dict[str, Any],
     readable_files: set[str], error: str | None = None,
