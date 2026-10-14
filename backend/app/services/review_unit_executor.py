@@ -19,7 +19,7 @@ from app.services.review_input_context import (
     make_evidence,
 )
 from app.review.input_protocol import CANONICAL_UNIT_INPUT_PROTOCOL, legacy_unit_input_allowed
-from app.review.unit_completion import DIAGNOSIS_BACKGROUND_DEGRADED
+from app.review.unit_completion import DIAGNOSIS_BACKGROUND_DEGRADED, INCOMPLETE_ATTEMPT_STATUSES
 from app.services.fingerprints import unit_execution_fingerprint
 from app.review.diff_base import review_diff_base
 from app.models.review import (
@@ -1176,10 +1176,13 @@ class ReviewUnitExecutor:
         execution_complete = all(
             entry.batch_execution_status == "completed" for entry in entries
         )
+        # 与严格完成使用同一记录判定：最近一次尝试无可用记录的批次不能被聚合
+        # 声称为完整，否则“覆盖无缺口”与“严格未完成”会同时成立且无法解释。
         records_complete = all(
             entry.result is not None
             and entry.result.review_summary.status == "reported"
             and entry.result.review_summary.record is not None
+            and entry.result.review_summary.latest_attempt_status not in INCOMPLETE_ATTEMPT_STATUSES
             and entry.target_coverage == "complete"
             for entry in entries
         )
@@ -1838,6 +1841,29 @@ class ReviewUnitExecutor:
         fingerprint = plan.model_dump_json()
         cached = self._cached_context(state, fingerprint)
         if any(item.get("plan") == fingerprint for item in history) and not cached:
+            if self._satisfied_duplicate_request(state, fingerprint):
+                # 同证据集重复检索且正文完整在活动中：按已满足处理，不降级有效记录。
+                events.append(ReviewUnitToolEvent(
+                    review_unit_id=state["unit"].id,
+                    tool="code_search",
+                    status="rejected",
+                    detail="duplicate retrieval plan already satisfied: requested body is displayed and unchanged",
+                ))
+                history.append({
+                    "plan": fingerprint,
+                    "result_count": 0,
+                    "new_snippet_count": 0,
+                    "status": "rejected",
+                })
+                return {
+                    "next_action": AgentAction(action=AgentActionName.task_done,
+                        reason="重复检索请求已满足，当前检查与契约已完成，正常结束本轮"),
+                    "issue_round_completed": True,
+                    "last_review_requires_context": False,
+                    "terminal_reason": ReviewUnitTerminalReason.completed,
+                    "retrieval_history": history,
+                    "tool_events": events,
+                }
             events.append(ReviewUnitToolEvent(
                 review_unit_id=state["unit"].id,
                 tool="code_search",
@@ -1907,6 +1933,30 @@ class ReviewUnitExecutor:
             fingerprint in item.request_fingerprints and item.snippet.truncated
             for item in store.entries.values()))
         if any(item.get("plan") == fingerprint for item in history) and not restart_find and not cached and not incomplete_read:
+            if self._satisfied_duplicate_request(state, fingerprint):
+                # 已完整交付且仍在活动证据中的重复请求不是取证失败：消解“仍要求取证”
+                # 标记后按正常完成收敛，不把有效审查记录降级为无进展。
+                observe("rejected", reason="duplicate read request already satisfied")
+                events.append(ReviewUnitToolEvent(
+                    review_unit_id=state["unit"].id,
+                    tool=tool_name,
+                    status="rejected",
+                    detail="duplicate read request already satisfied: requested body is displayed and unchanged",
+                ))
+                return {
+                    "next_action": AgentAction(action=AgentActionName.task_done,
+                        reason="重复取证请求已满足，当前检查与契约已完成，正常结束本轮"),
+                    "issue_round_completed": True,
+                    "last_review_requires_context": False,
+                    "terminal_reason": ReviewUnitTerminalReason.completed,
+                    "retrieval_history": [*history, {
+                        "plan": fingerprint,
+                        "result_count": 0,
+                        "new_snippet_count": 0,
+                        "status": "rejected",
+                    }],
+                    "tool_events": events,
+                }
             observe("rejected", reason="duplicate read request")
             events.append(ReviewUnitToolEvent(
                 review_unit_id=state["unit"].id,
@@ -2204,9 +2254,9 @@ class ReviewUnitExecutor:
                         return await self.provider.review_step(*args)
                     return await self.provider.review_unit(*args)
                 from app.review.review_policy import REVIEW_STEP_OUTPUT_TOKENS
-                repair_usages, repair_attempted, diagnosis_calls = [], False, 1
+                repair_usages, repair_attempted = [], False
                 if self._supports_native_review_step():
-                    raw_result, budget, repair_usages, repair_attempted, diagnosis_calls = await self._review_with_output_repair(
+                    raw_result, budget, repair_usages, repair_attempted, _diagnosis_calls = await self._review_with_output_repair(
                         state, args, budget, REVIEW_STEP_OUTPUT_TOKENS)
                 else:
                     raw_result, budget = await self._call_unit_model(budget, record_input, REVIEW_STEP_OUTPUT_TOKENS, invoke)
@@ -2241,7 +2291,9 @@ class ReviewUnitExecutor:
         if self._supports_native_review_step():
             key = self._native_evidence_key(state)
             counts = dict(state.get("native_review_counts") or {})
-            counts[key] = counts.get(key, 0) + diagnosis_calls
+            # 输出修复调用已计入总调用与 token 预算，但不作为“同证据重复推理”次数：
+            # 它是对同一轮输出的格式纠正，不是新一轮无进展审查。
+            counts[key] = counts.get(key, 0) + 1
             native_update = {"native_review_counts": counts, "last_review_evidence_key": key,
                 "last_review_requires_context": bool(response.next_need_error or (response.next_need
                     and response.next_need.action not in {AgentActionName.report_issue, AgentActionName.task_done}))}
@@ -2420,10 +2472,40 @@ class ReviewUnitExecutor:
             current_args = corrective_args
             emit_run_audit("output_repair", review_unit_id=state["unit"].id, status="started", diagnostics=feedback)
 
+    def _satisfied_duplicate_request(self, state, fingerprint):
+        """重复取证请求是否已被完整满足。
+
+        只有同快照、同请求范围、正文完整且仍在活动证据中，并且当前检查记录已闭合时，
+        重复请求才算已满足。真实缺失、截断、失效或未核验证据返回 False，仍按无进展
+        保护保留未完成状态。
+        """
+        if not self._supports_native_review_step() or not self._current_checks_complete(
+                state, require_context=False):
+            return False
+        store = state.get("evidence_store")
+        if store is None:
+            return False
+        parent = state["parent_state"]
+        manifest = state.get("diff_manifest")
+        snapshot = evidence_snapshot(str(parent.get("head_sha") or ""), review_diff_base(parent))
+        restored = restore_store(store, manifest.review_unit_id if manifest else state["unit"].id,
+            snapshot, state["scope"].readable_files)
+        if any(warning in {"invalid_evidence_store_schema", "evidence_store_snapshot_mismatch"}
+               for warning in restored.validation_warnings):
+            return False
+        group = restored.request_groups.get(fingerprint)
+        if not group or any(identity not in restored.entries for identity in group):
+            return False
+        if any(restored.entries[identity].snippet.truncated for identity in group):
+            return False
+        active = {item["evidence_id"] for item in build_context_evidence(
+            state["context"], snapshot["head_sha"], snapshot["base_sha"])[0]}
+        return set(group) <= active
+
     @staticmethod
-    def _current_checks_complete(state):
+    def _current_checks_complete(state, *, require_context=True):
         summary = state.get("review_summary")
-        if (state.get("last_review_requires_context", True)
+        if ((require_context and state.get("last_review_requires_context", True))
                 or not summary or summary.status != "reported" or summary.latest_attempt_status != "reported"
                 or not summary.record or state.get("last_review_evidence_key") != ReviewUnitExecutor._native_evidence_key(state)
                 or summary.last_valid_snapshot.get("head_sha") != state["parent_state"].get("head_sha")
@@ -2709,12 +2791,19 @@ class ReviewUnitExecutor:
         question_attempts = sum(count for key, count in attempts.items() if key.startswith("question:"))
         if not state["budget"].can_consume(diagnosis_attempts=1, model_calls=1):
             return None, "contract_recovery_budget_exhausted", None
-        for dependency in record.contract_dependencies if dependency_attempts < 2 else ():
+        # 存在阻塞义务但补审通道用尽或正文不可达：记录为“无法补审”，
+        # 与“没有待补审事项”区分，避免正常完成事件携带失败式原因。
+        blocked = False
+        for dependency in record.contract_dependencies:
             key = contract_dependency_key(dependency)
-            if key not in blocking or attempts.get(key):
+            if key not in blocking:
+                continue
+            if dependency_attempts >= 2 or attempts.get(key):
+                blocked = True
                 continue
             path = dependency.file_path
             if path not in state["scope"].readable_files or is_sensitive_repository_change(path):
+                blocked = True
                 continue
             focus = {"target_key": key, "kind": "dependency", "file_path": path,
                      "symbol": dependency.symbol, "assumption": dependency.assumption}
@@ -2730,10 +2819,12 @@ class ReviewUnitExecutor:
             parent_files = {item.get("file_path")
                             for item in state["parent_state"].get("batch_parent_diff_files") or []}
             if path not in parent_files or path in {file.file_path for file in state["unit_files"]}:
+                blocked = True
                 continue
             identities = [item.hunk_id for item in state["diff_manifest"].hunks
                 if item.file_path == path and item.evidence_id is not None]
             if not identities:
+                blocked = True
                 continue
             if not state["budget"].can_consume(context_retrievals=1):
                 return None, "contract_recovery_budget_exhausted", None
@@ -2744,20 +2835,23 @@ class ReviewUnitExecutor:
         ledger = state.get("coverage_ledger")
         questions = (ledger.get("questions") if isinstance(ledger, dict)
                      else getattr(ledger, "questions", None)) or {}
-        if question_attempts < 1:
-            for question_id, question in questions.items():
-                status = question.get("status") if isinstance(question, dict) else question.status
-                affected = question.get("affected_files") if isinstance(question, dict) else question.affected_files
-                text = question.get("question") if isinstance(question, dict) else question.question
-                key = "question:" + question_id
-                if status != "pending" or attempts.get(key):
-                    continue
-                if set(affected or []) - state["scope"].readable_files:
-                    continue
-                focus = {"target_key": key, "kind": "question", "question_id": question_id,
-                         "question": text, "affected_files": list(affected or [])}
-                return AgentAction(action="report_issue", reason="定向复核未闭合的既有问题"), key, focus
-        return None, "contract_recovery_evidence_unavailable_or_no_progress", None
+        for question_id, question in questions.items():
+            status = question.get("status") if isinstance(question, dict) else question.status
+            if status != "pending":
+                continue
+            key = "question:" + question_id
+            if question_attempts >= 1 or attempts.get(key):
+                blocked = True
+                continue
+            affected = question.get("affected_files") if isinstance(question, dict) else question.affected_files
+            text = question.get("question") if isinstance(question, dict) else question.question
+            if set(affected or []) - state["scope"].readable_files:
+                blocked = True
+                continue
+            focus = {"target_key": key, "kind": "question", "question_id": question_id,
+                     "question": text, "affected_files": list(affected or [])}
+            return AgentAction(action="report_issue", reason="定向复核未闭合的既有问题"), key, focus
+        return None, "contract_recovery_evidence_unavailable_or_no_progress" if blocked else None, None
 
     async def _collect_issue_node(
         self, state: "_ReviewUnitGraphState"
@@ -2836,6 +2930,9 @@ class ReviewUnitExecutor:
                 "recovery_focus": recovery_focus, "issue_round_completed": False,
                 "messages": [*state["messages"], AgentEvent(action=recovery.action, status="selected",
                     reason=recovery.reason, message=recovery_key, review_unit_id=state["unit"].id)]}
+        # 无待办补审是正常收敛，不能作为失败式原因写入完成事件。
+        message = (f"本轮报告 {len(accepted)} 个问题"
+                   if recovery_key is None else recovery_key)
         return {
             "next_action": None,
             "pending_issues": [],
@@ -2845,7 +2942,7 @@ class ReviewUnitExecutor:
                 action=AgentActionName.report_issue,
                 reason="执行 Unit 独立审查并收集结构化问题",
                 status="completed",
-                message=recovery_key or f"本轮报告 {len(accepted)} 个问题",
+                message=message,
                 review_unit_id=state["unit"].id,
             )],
         }
