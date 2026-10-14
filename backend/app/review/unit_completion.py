@@ -21,6 +21,8 @@ _COMPLETE_TERMINAL_REASONS = frozenset({
     ReviewUnitTerminalReason.no_issue,
     ReviewUnitTerminalReason.no_new_context,
 })
+# 这些尝试状态表示最近一次审查没有可用记录；聚合、严格完成与警告解释共用同一定义。
+INCOMPLETE_ATTEMPT_STATUSES = frozenset({"missing", "invalid", "failed", "not_executed", "unknown"})
 
 
 def is_review_unit_budget_exhausted(result: ReviewUnitResult) -> bool:
@@ -82,7 +84,7 @@ def review_unit_input_coverage(result: ReviewUnitResult) -> UnitInputCoverage | 
         return result.input_coverage
     summary = result.review_summary
     if (summary.status != "reported" or summary.record is None
-            or summary.latest_attempt_status in {"missing", "invalid", "failed", "not_executed", "unknown"}):
+            or summary.latest_attempt_status in INCOMPLETE_ATTEMPT_STATUSES):
         return UnitInputCoverage(reason=summary.latest_attempt_reason or summary.reason or "missing_review_record",
                                  evidence_coverage="unknown", target_coverage="unknown")
     if DIAGNOSIS_BACKGROUND_DEGRADED in (
@@ -143,6 +145,19 @@ def is_review_unit_complete(result: ReviewUnitResult) -> bool:
     )
 
 
+def review_unit_record_gaps(result: ReviewUnitResult) -> list[str]:
+    """自身或子批次最近一次审查尝试没有可用记录；与覆盖缺口分开解释。"""
+    gaps: list[str] = []
+    summary = result.review_summary
+    if (summary.status != "reported" or summary.record is None
+            or summary.latest_attempt_status in INCOMPLETE_ATTEMPT_STATUSES):
+        gaps.append(f"{result.review_unit_id}:{summary.latest_attempt_status or summary.status}")
+    for batch in result.diff_batches:
+        if batch.result is not None:
+            gaps.extend(review_unit_record_gaps(batch.result))
+    return gaps
+
+
 def review_unit_coverage_warning(result: ReviewUnitResult) -> str | None:
     if not is_review_unit_execution_complete(result) and result.input_coverage is None:
         return None
@@ -160,7 +175,15 @@ def review_unit_coverage_warning(result: ReviewUnitResult) -> str | None:
             and not batch_states
         )
     ):
-        return None
+        # 覆盖字段没有缺口时，严格完成仍可能被记录状态阻断；必须解释原因，
+        # 不能同时给出“没有缺口”和“未完成”而不说明阻断来源。
+        record_gaps = review_unit_record_gaps(result)
+        return (
+            f"Unit {result.review_unit_id}：覆盖字段无缺口，但审查记录不可用；"
+            f"尝试状态 {'；'.join(record_gaps)}"
+            if record_gaps
+            else None
+        )
     contract_detail = (
         f"；契约证据 {coverage.contract_evidence_coverage}"
         f"；契约核验 {coverage.contract_verification_status}"
