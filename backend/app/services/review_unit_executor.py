@@ -125,6 +125,7 @@ class _ReviewUnitGraphState(TypedDict, total=False):
     last_review_evidence_key: str
     last_review_requires_context: bool
     output_repair_attempted: bool
+    contract_recovery_attempts: dict[str, int]
 
 
 class ReviewUnitExecutor:
@@ -1109,7 +1110,7 @@ class ReviewUnitExecutor:
         if source is None or not authorized:
             return [], []
         by_hunk = {(item.file_path, item.hunk_id): item for item in manifest.hunks}
-        requested = set(request.hunk_ids or ())
+        requested = set(ScopedContextTool.normalize_diff_hunk_ids(source, request.hunk_ids))
         snippets, bindings = [], []
         for index, hunk in enumerate(source.hunks):
             identity = DeterministicReviewPlanner.hunk_id(
@@ -1953,7 +1954,7 @@ class ReviewUnitExecutor:
                 )]
                 support_evidence, bindings = self._supporting_diff_evidence(state, request)
                 if support_evidence:
-                    snippets.extend(support_evidence)
+                    snippets = support_evidence  # 同一支持正文只携带可引用的分块版本
                     registered = {item["id"] for item in parent_state.get("batch_prior_evidence_bindings") or []}
                     parent_state["batch_prior_evidence_bindings"] = [
                         *(parent_state.get("batch_prior_evidence_bindings") or []),
@@ -2429,6 +2430,7 @@ class ReviewUnitExecutor:
         available = {item["id"] for item in record_input["evidence"]}
         sources = [
             state.get("prior_contract_dependencies"),
+            getattr(state.get("last_valid_review_summary"), "last_valid_record", None),
             state["parent_state"].get("prior_contract_dependencies"),
             getattr(state["parent_state"].get("batch_memory_summary"), "last_valid_record", None),
         ]
@@ -2602,6 +2604,43 @@ class ReviewUnitExecutor:
                 "latest_attempt_status": "failed", "latest_attempt_reason": reason, "reason": reason})
         return summary
 
+    def _contract_recovery_action(self, state):
+        """每批最多两次补审；不扩张读取范围、不绕过正文和模型预算。"""
+        summary = state.get("review_summary")
+        if (not self._supports_native_review_step() or not state.get("diff_manifest")
+                or not state["parent_state"].get("unit_diff_batch")
+                or not summary or summary.latest_attempt_status != "reported" or not summary.record):
+            return None, None
+        record = summary.record
+        blocking = set(contract_coverage_state([record], [item.id for item in summary.evidence],
+            state["unit"], state["diff_manifest"])["blocking_dependencies"])
+        if not blocking:
+            return None, None
+        attempts = state.get("contract_recovery_attempts") or {}
+        if sum(attempts.values()) >= 2:
+            return None, "contract_recovery_limit_reached"
+        if not state["budget"].can_consume(diagnosis_attempts=1, model_calls=1):
+            return None, "contract_recovery_budget_exhausted"
+        for dependency in record.contract_dependencies:
+            key = contract_dependency_key(dependency)
+            if key not in blocking or attempts.get(key):
+                continue
+            path = dependency.file_path
+            if path not in state["scope"].readable_files or is_sensitive_repository_change(path):
+                continue
+            if any(item.get("file") == path for item in state.get("context", [])):
+                return AgentAction(action="report_issue", reason="显式复核新产生的阻塞契约依赖"), key
+            authorized = set(state["parent_state"].get("batch_prior_active_evidence_ids") or [])
+            identities = [item.hunk_id for item in state["diff_manifest"].hunks
+                if item.file_path == path and item.evidence_id in authorized]
+            if not identities or path in {file.file_path for file in state["unit_files"]}:
+                continue
+            if not state["budget"].can_consume(context_retrievals=1):
+                return None, "contract_recovery_budget_exhausted"
+            return AgentAction(action="file_read_diff", reason="读取前序实现以核验新产生的阻塞契约依赖",
+                tool_args={"request": {"file_path": path, "hunk_ids": identities[:20]}}), key
+        return None, "contract_recovery_evidence_unavailable_or_no_progress"
+
     async def _collect_issue_node(
         self, state: "_ReviewUnitGraphState"
     ) -> "_ReviewUnitGraphState":
@@ -2671,6 +2710,14 @@ class ReviewUnitExecutor:
                     review_unit_id=state["unit"].id,
                 )],
             }
+        recovery, recovery_key = self._contract_recovery_action(state)
+        if recovery is not None:
+            attempts = dict(state.get("contract_recovery_attempts") or {})
+            attempts[recovery_key] = attempts.get(recovery_key, 0) + 1
+            return {"next_action": recovery, "pending_issues": [], "issues": [*prior_issues, *accepted],
+                "contract_recovery_attempts": attempts, "issue_round_completed": False,
+                "messages": [*state["messages"], AgentEvent(action=recovery.action, status="selected",
+                    reason=recovery.reason, message=recovery_key, review_unit_id=state["unit"].id)]}
         return {
             "next_action": None,
             "pending_issues": [],
@@ -2680,7 +2727,7 @@ class ReviewUnitExecutor:
                 action=AgentActionName.report_issue,
                 reason="执行 Unit 独立审查并收集结构化问题",
                 status="completed",
-                message=f"本轮报告 {len(accepted)} 个问题",
+                message=recovery_key or f"本轮报告 {len(accepted)} 个问题",
                 review_unit_id=state["unit"].id,
             )],
         }
@@ -2713,7 +2760,6 @@ class ReviewUnitExecutor:
             update = {"coverage_ledger": ledger, "active_evidence_set": active}
             self._remember_unit_state(update)
             if gaps:
-                from app.services.unit_coverage import classified_coverage_gaps
                 details = classified_coverage_gaps(state["diff_manifest"], ledger,
                     active if state["diff_manifest"].review_unit_id != state["unit"].id else None, state.get("unit_plan"))
                 unsupported = set(unsupported_hunk_ids(state["diff_manifest"], active))
@@ -2749,12 +2795,20 @@ class ReviewUnitExecutor:
                     "messages": [*state["messages"], AgentEvent(action="task_done", reason=action.reason,
                         status="failed", message="覆盖门未通过；保留未覆盖项与当前有效记录", review_unit_id=state["unit"].id)]}
             previous = state.get("input_coverage")
+            summary = state.get("review_summary") or UnitReviewSummary()
+            record = summary.record or summary.last_valid_record
+            contracts = contract_coverage_state([record] if record else [], [item.id for item in summary.evidence],
+                state["unit"], state["diff_manifest"])
             coverage = (previous or UnitInputCoverage(evidence_coverage="complete", target_coverage="complete")).model_copy(
+                # 活动批次完成度只覆盖当前目标；父 Unit 聚合门保留跨批契约义务。
                 update={"contract_coverage": "complete", "unresolved_questions": [], "unresolved_dependencies": []})
+            blocked = bool(contracts["blocking_dependencies"]) or state.get("terminal_reason") == ReviewUnitTerminalReason.no_new_context
             return {**update, "done": True, "input_coverage": coverage,
                 "terminal_reason": state.get("terminal_reason") or (ReviewUnitTerminalReason.completed if state["issues"] else ReviewUnitTerminalReason.no_issue),
-                "messages": [*state["messages"], AgentEvent(action="task_done", reason=action.reason, status="completed",
-                    message="活动范围覆盖门通过；检查记录不表示正确性证明", review_unit_id=state["unit"].id)]}
+                "messages": [*state["messages"], AgentEvent(action="task_done", reason=action.reason,
+                    status="failed" if blocked else "completed",
+                    message="活动目标检查完成；契约未闭合或取证已停止" if blocked else
+                        "活动范围覆盖门通过；检查记录不表示正确性证明", review_unit_id=state["unit"].id)]}
         return {
             "done": True,
             "terminal_reason": (
