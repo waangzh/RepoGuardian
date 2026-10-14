@@ -151,18 +151,36 @@ class ScopedContextTool:
         file_path: str,
         changed_files: list[ChangedFile | dict[str, Any]],
         hunk_ids: list[str] | None = None,
+        supporting_files: list[ChangedFile | dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        if file_path not in scope.commentable_files:
-            raise ScopedContextToolError(
-                "file_read_diff accepts commentable changed files in the current Unit only"
-            )
-        changed = [
+        """读取当前批次可评论 Diff；或父 Unit 同一清单内的支持性 Diff。
+
+        支持性读取不授予评论权限、目标覆盖或引用权限：是否可引用仍由证据目录决定。
+        """
+        current = [
             item if isinstance(item, ChangedFile) else ChangedFile.model_validate(item)
             for item in changed_files
         ]
-        target = next((item for item in changed if item.file_path == file_path), None)
+        target = next((item for item in current if item.file_path == file_path), None)
+        if target is not None and file_path not in scope.commentable_files:
+            target = None  # 当前批次正文仅在评论范围内可读
+        supporting = False
+        if target is None and file_path not in scope.commentable_files:
+            support = [
+                item if isinstance(item, ChangedFile) else ChangedFile.model_validate(item)
+                for item in supporting_files or []
+            ]
+            target = next((item for item in support if item.file_path == file_path), None)
+            supporting = target is not None
         if target is None:
-            raise ScopedContextToolError("file_read_diff accepts changed files in the current Unit only")
+            raise ScopedContextToolError(
+                "file_read_diff accepts changed files in the current Unit only"
+                if file_path in scope.commentable_files else
+                "file_read_diff accepts commentable changed files in the current Unit only"
+                if supporting_files is None else
+                "file_read_diff accepts current Unit commentable files or same-manifest "
+                "supporting diffs only"
+            )
         if is_sensitive_repository_change(target.file_path, target.old_file_path):
             raise ScopedContextToolError(
                 "sensitive repository change is not readable: "
@@ -197,12 +215,14 @@ class ScopedContextTool:
             "start_line": start,
             "end_line": end,
             "content": content,
-            "relevance": "direct",
+            "relevance": "contract" if supporting else "direct",
             "review_unit_id": scope.review_unit_id,
             "source": "file_read_diff",
             "distance": 0,
             "confidence": 1.0,
-            "why_retrieved": f"读取当前 Review Unit 的 {included} 个 diff hunk",
+            "why_retrieved": (
+                f"读取父 Unit 同一清单内的 {included} 个支持性 diff hunk"
+                if supporting else f"读取当前 Review Unit 的 {included} 个 diff hunk"),
         }
 
     @staticmethod
