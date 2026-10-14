@@ -164,18 +164,22 @@ def test_missing_hunk_cannot_be_silently_omitted_from_canonical_input():
 
 def test_diagnosis_contract_invalidates_unit_cache_and_old_checkpoint_namespace(monkeypatch):
     from app.services import fingerprints
+    from app.graph import checkpointer
     from app.graph.checkpointer import unit_thread_config
     kwargs = dict(base_sha="b", head_sha="h", normalized_unit_diff="diff", primary_files=["a.py"],
         related_files=[], rule_ids=[], rule_version="r", prompt_version="unchanged",
         tool_schema_version="t", planner_version="p", review_policy_version="policy",
         model="model", provider="provider")
     current = fingerprints.unit_fingerprint(**kwargs)
-    contract_version = fingerprints.DIAGNOSIS_INPUT_VERSION
+    config = unit_thread_config("task", "u")["configurable"]
+    # 独立 ainvoke 的根图会清空 checkpoint_ns，隔离必须建立在派生 thread_id 上。
+    assert config["checkpoint_ns"] == ""
+    assert config["thread_id"] != "task"
     monkeypatch.setattr(fingerprints, "DIAGNOSIS_INPUT_VERSION", "old-contract")
     assert fingerprints.unit_fingerprint(**kwargs) != current
-    namespace = unit_thread_config("task", "u")["configurable"]["checkpoint_ns"]
-    assert namespace != "unit:u"
-    assert namespace == f"unit:u:{contract_version}"
+    # 契约版本变化必须同时使 Unit 恢复身份失效。
+    monkeypatch.setattr(checkpointer, "DIAGNOSIS_INPUT_VERSION", "old-contract")
+    assert unit_thread_config("task", "u")["configurable"]["thread_id"] != config["thread_id"]
 
 
 def test_verifier_sends_primary_and_supporting_anchors_once():

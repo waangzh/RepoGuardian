@@ -66,9 +66,10 @@ class WorksetProvider(OpenAICompatibleProvider):
         if len(self.requests) == 2 and self.failure == "timeout":
             await asyncio.sleep(1)
         self._unit_evidence_payload(files, record_input)
+        # 夹具在 schema 上限内引用证据；跨批次支持性证据使总数可超过单次检查上限。
         record = UnitReviewRecord(change_summary="检查当前批次", target_checks=[{
             "target": target, "status": "checked", "reason": "核对当前完整证据",
-            "evidence_ids": [item["id"] for item in record_input["evidence"]],
+            "evidence_ids": [item["id"] for item in record_input["evidence"]][:12],
         } for target in record_input["targets"]])
         if len(self.requests) == 2 and self.failure == "missing":
             record = None
