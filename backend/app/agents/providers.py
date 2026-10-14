@@ -535,6 +535,11 @@ class OpenAICompatibleProvider(LLMProvider):
             + ("For origin_obligations, report obligation_updates with the exact obligation_id, status verified for dependencies "
                "or resolved for questions, current evidence_ids covering all bound files, and reason. Omit unproven closures.\n"
                if record_input.get("origin_obligations") else "")
+            + ("recovery_focus names one unresolved obligation this call is specifically for. "
+               "Use only displayed evidence: return its explicit status update with current evidence IDs, "
+               "or state what evidence is still missing. Do not close it without evidence and do not "
+               "repeat unrelated conclusions.\n"
+               if record_input.get("recovery_focus") else "")
             + ("Copy target_catalog IDs into target (exact legacy names accepted). "
                "Target status: checked/unresolved/not_checked; hypothesis status: supported/refuted/unresolved.\n"
                if record_input.get("target_catalog") else "")

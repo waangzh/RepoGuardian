@@ -68,7 +68,8 @@ async def test_recovery_failure_preserves_unresolved_dependency(failure):
     if failure == "budget":
         state["budget"] = state["budget"].model_copy(update={"max_model_calls": 0})
     elif failure == "unavailable":
-        state["parent_state"]["batch_prior_active_evidence_ids"] = []
+        # 可达性不再按批次授权受限；不可用改为父清单中根本没有该文件。
+        state["parent_state"]["batch_parent_diff_files"] = []
     else:
         from app.services.unit_coverage import contract_dependency_key
         state["contract_recovery_attempts"] = {contract_dependency_key(_dependency()): 2 if failure == "limit" else 1}
