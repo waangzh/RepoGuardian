@@ -550,6 +550,12 @@ class OpenAICompatibleProvider(LLMProvider):
     def _unit_evidence_payload(changed_files, record_input) -> dict:
         """单份正文，复用原证据 ID/哈希；绝不提供未展示正文的可引用证据。"""
         payload = {key: value for key, value in record_input.items() if key not in {"evidence", "memory_evidence"}}
+        if payload.get("prior_contract_dependencies") and payload.get("working_memory"):
+            payload["working_memory"] = {
+                key: value
+                for key, value in payload["working_memory"].items()
+                if key != "contract_dependencies"
+            }
         if record_input.get("target_catalog"):
             payload["targets"] = [item["id"] for item in record_input["target_catalog"]]
         snapshot = record_input.get("snapshot") or {}
