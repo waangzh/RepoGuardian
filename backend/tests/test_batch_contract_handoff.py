@@ -381,3 +381,17 @@ def test_supporting_diff_evidence_binds_prior_active_hunk() -> None:
         {**state, "parent_state": {**state["parent_state"],
                                    "batch_prior_active_evidence_ids": []}},
         FileReadDiffRequest(file_path="b.py")) == ([], [])
+
+
+def test_domain_output_errors_only_repair_known_protocol_conflicts() -> None:
+    from app.services.unit_review_summary import domain_output_errors
+
+    assert domain_output_errors(
+        "invalid_review_record: prior question identity cannot name a different question; use superseded"
+    ) == [{"type": "question_identity_conflict", "loc": ["review_record", "unresolved_questions"],
+           "message": "prior question identity cannot name a different question; use superseded"}]
+    assert domain_output_errors("invalid_review_record: closed question identity cannot be reused")[0]["type"] == \
+        "closed_question_reuse"
+    assert domain_output_errors("invalid_review_record: unknown or stale evidence reference") == []
+    assert domain_output_errors("missing_review_record") == []
+    assert domain_output_errors(None) == []
