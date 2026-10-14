@@ -795,11 +795,15 @@ class ReviewUnitExecutor:
             memory = self._batch_memory(entries[:index], ledger)
             if memory:
                 batch_state["batch_memory_summary"] = memory
+            # 只向前传递前序批次自行读取的正文；支持性交接片段由
+            # _batch_supporting_context 按当前批次重新选定并限额，逐批累积会
+            # 复合增长并挤占后续批次的到达窗口。
             batch_state["batch_supporting_context"] = [
                 snippet.model_dump(mode="json")
                 for item in entries[:index]
                 if item.result and item.result.review_summary.status == "reported"
                 for snippet in item.result.context_snippets
+                if snippet.source != "batch_diff_support"
             ]
             prior_support, contract_handoff = self._batch_supporting_context(
                 worksets,
