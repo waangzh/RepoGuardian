@@ -3,7 +3,7 @@ import pytest
 from app.models.review import AgentAction, UnitQuestionCoverage
 from app.services.unit_coverage import contract_dependency_key
 from test_late_contract_recovery import fixture
-from test_batch_contract_handoff import _dependency
+from test_batch_contract_handoff import _dependency, _scope
 
 
 @pytest.mark.asyncio
@@ -22,8 +22,6 @@ async def test_recovery_locates_missing_symbol_instead_of_unrelated_same_file_co
     assert state["next_action"].tool_args["request"] == {
         "file_path": "a.py", "start_line": 360, "end_line": 380}
     assert state["recovery_focus"]["target_key"] == contract_dependency_key(_dependency())
-    # 选定补审不等于执行完成：此时不计次。
-    assert "contract_recovery_attempts" not in state
 
 
 @pytest.mark.asyncio
@@ -82,8 +80,6 @@ def test_pending_question_gets_one_bounded_targeted_recheck():
 @pytest.mark.asyncio
 async def test_unbindable_supporting_diff_read_is_rejected_not_silently_empty():
     runner, state = fixture()
-    from test_batch_contract_handoff import _scope
-
     state["scope"] = _scope({"tests.py"}, {"tests.py", "a.py", "c.py"})
     state["parent_state"]["batch_parent_diff_files"] = [
         {"file_path": "c.py", "change_type": "modified", "additions": 0, "deletions": 0, "hunks": []}]

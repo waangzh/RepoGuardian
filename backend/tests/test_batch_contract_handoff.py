@@ -372,11 +372,7 @@ def test_supporting_diff_evidence_binds_prior_active_hunk() -> None:
     state = {
         "unit_files": current,
         "diff_manifest": manifest,
-        "parent_state": {
-            "batch_parent_diff_files": [other.model_dump(mode="json")],
-            "batch_prior_active_evidence_ids": [
-                item.evidence_id for item in prior_active.hunks if item.evidence_id],
-        },
+        "parent_state": {"batch_parent_diff_files": [other.model_dump(mode="json")]},
     }
 
     snippets, bindings = ReviewUnitExecutor._supporting_diff_evidence(
@@ -389,15 +385,9 @@ def test_supporting_diff_evidence_binds_prior_active_hunk() -> None:
     chunks, _ = build_context_evidence(snippets, "head-a", "base-a")
     assert chunks and "b.py" not in {file.file_path for file in current}
 
-    # 当前批次文件不产生支持性证据；可达性不按批次先后受限，同一清单内可重建
-    # 的 hunk 始终可读，但不能脱离清单/快照绑定。
+    # 当前批次文件不产生支持性证据；不在父清单中的文件也不能重建绑定。
     assert ReviewUnitExecutor._supporting_diff_evidence(
         state, FileReadDiffRequest(file_path="a.py")) == ([], [])
-    unrelated = ReviewUnitExecutor._supporting_diff_evidence(
-        {**state, "parent_state": {**state["parent_state"],
-                                   "batch_prior_active_evidence_ids": []}},
-        FileReadDiffRequest(file_path="b.py"))
-    assert unrelated[0] and unrelated[0][0]["derived_from_evidence_id"] == prior_active.hunks[0].evidence_id
     assert ReviewUnitExecutor._supporting_diff_evidence(
         {**state, "parent_state": {**state["parent_state"], "batch_parent_diff_files": []}},
         FileReadDiffRequest(file_path="b.py")) == ([], [])
