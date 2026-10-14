@@ -824,6 +824,14 @@ class ReviewUnitExecutor:
             ]
             batch_state["batch_evidence_store"] = merge_stores([item.result.evidence_store for item in entries[:index] if item.result])
             batch_state["batch_review_issues"] = [issue for item in entries[:index] if item.result for issue in item.result.issues]
+            batch_state["batch_parent_diff_files"] = [item.model_dump(mode="json") for item in files]
+            batch_state["batch_prior_active_evidence_ids"] = sorted({
+                item.evidence_id
+                for prior_entry in entries[:index]
+                if prior_entry.result and prior_entry.result.active_evidence_set
+                for item in prior_entry.result.active_evidence_set.hunks
+                if item.evidence_id
+            })
             child_snapshot = {"budget": local, "input_fingerprint": unit_execution_fingerprint(
                 child.fingerprint, batch_state, self.provider, self.input_mode),
                 "model_usages": batch_state.get("model_usages") or []}
@@ -1072,6 +1080,56 @@ class ReviewUnitExecutor:
             json.dumps(line.model_dump(mode="json"), ensure_ascii=False, sort_keys=True)
             for line in hunk.lines
         )
+
+    @staticmethod
+    def _supporting_diff_evidence(state, request):
+        """父 Unit 同一 manifest、同一快照内已授权 hunk 的支持性证据。
+
+        只产出绑定原 diff 证据的支持性正文；不改变评论范围、目标覆盖或账本状态。
+        """
+        from app.models.review import ChangedFile
+        from app.services.review_planner import DeterministicReviewPlanner
+
+        parent = state["parent_state"]
+        manifest = state.get("diff_manifest")
+        current_paths = {file.file_path for file in state["unit_files"]}
+        if manifest is None or request.file_path in current_paths:
+            return [], []
+        source = next((ChangedFile.model_validate(item)
+                       for item in parent.get("batch_parent_diff_files") or []
+                       if item.get("file_path") == request.file_path), None)
+        authorized = set(parent.get("batch_prior_active_evidence_ids") or [])
+        if source is None or not authorized:
+            return [], []
+        by_hunk = {(item.file_path, item.hunk_id): item for item in manifest.hunks}
+        requested = set(request.hunk_ids or ())
+        snippets, bindings = [], []
+        for index, hunk in enumerate(source.hunks):
+            identity = DeterministicReviewPlanner.hunk_id(
+                request.file_path, index, hunk.model_dump(mode="json"))
+            entry = by_hunk.get((request.file_path, identity))
+            if (entry is None or entry.evidence_id not in authorized or not hunk.lines
+                    or (requested and identity not in requested)):
+                continue
+            content = json.dumps(hunk.model_dump(), ensure_ascii=False, sort_keys=True)
+            reference = make_evidence(request.file_path, "diff", hunk.new_start,
+                hunk.new_start + max(0, hunk.new_length - 1), content,
+                manifest.snapshot["head_sha"], manifest.snapshot["base_sha"])
+            if reference["id"] != entry.evidence_id:
+                continue  # 无法重建原绑定时不发出不可核验的证据
+            start = max(1, hunk.new_start)
+            snippets.append({
+                "file": request.file_path,
+                "start_line": start,
+                "end_line": start + len(hunk.lines) - 1,
+                "content": ReviewUnitExecutor._chunked_hunk_body(hunk),
+                "relevance": "contract",
+                "source": "batch_diff_support",
+                "derived_from_evidence_id": reference["id"],
+                "review_unit_id": manifest.review_unit_id,
+            })
+            bindings.append({key: value for key, value in reference.items() if key != "content"})
+        return snippets, bindings
 
     @staticmethod
     def _aggregate_diff_batches(unit, entries, budget, binding, reason=None, manifest=None, evidence_store=None):
@@ -1851,12 +1909,22 @@ class ReviewUnitExecutor:
                 )
             elif action.action == AgentActionName.file_read_diff:
                 request = FileReadDiffRequest.model_validate(request_payload)
+                parent_state = state["parent_state"]
                 snippets = [await context_tool.file_read_diff(
                     scope=state["scope"],
                     file_path=request.file_path,
                     changed_files=state["unit_files"],
                     hunk_ids=request.hunk_ids,
+                    supporting_files=parent_state.get("batch_parent_diff_files") or [],
                 )]
+                support_evidence, bindings = self._supporting_diff_evidence(state, request)
+                if support_evidence:
+                    snippets.extend(support_evidence)
+                    registered = {item["id"] for item in parent_state.get("batch_prior_evidence_bindings") or []}
+                    parent_state["batch_prior_evidence_bindings"] = [
+                        *(parent_state.get("batch_prior_evidence_bindings") or []),
+                        *[item for item in bindings if item["id"] not in registered],
+                    ]
             else:
                 raise ValueError(f"unsupported Unit read action: {tool_name}")
 
@@ -2399,6 +2467,16 @@ class ReviewUnitExecutor:
             record_input["readonly_tool_scope"] = {"file_read_diff": {
                 file.file_path: [self.planner.hunk_id(file.file_path, index, hunk.model_dump(mode="json"))
                                  for index, hunk in enumerate(file.hunks)] for file in state["unit_files"]}}
+            parent_files = state["parent_state"].get("batch_parent_diff_files")
+            if parent_files and state.get("diff_manifest") is not None:
+                current_paths = {file.file_path for file in state["unit_files"]}
+                authorized = set(state["parent_state"].get("batch_prior_active_evidence_ids") or [])
+                supporting_scope: dict[str, list[str]] = {}
+                for item in state["diff_manifest"].hunks:
+                    if item.evidence_id in authorized and item.file_path not in current_paths:
+                        supporting_scope.setdefault(item.file_path, []).append(item.hunk_id)
+                if supporting_scope:
+                    record_input["supporting_diff_scope"] = supporting_scope
         language = build_language_context((item.file_path for item in state["unit_files"]),
             state["parent_state"].get("file_index") or [], state["parent_state"].get("project_meta") or {})
         record_input["review_guidance"] = render_language_rule_context(language)

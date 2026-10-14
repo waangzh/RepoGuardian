@@ -1,10 +1,14 @@
+import asyncio
+
 from app.models.review import (
     ContextSnippet,
     ExecutionBudget,
+    FileReadDiffRequest,
     PullRequestInfo,
     ReviewUnit,
     ReviewUnitComplexity,
     ReviewUnitResult,
+    ReviewToolScope,
     UnitDiffBatch,
     UnitContractDependency,
     UnitReviewRecord,
@@ -21,6 +25,7 @@ from app.services.unit_coverage import (
 )
 from app.services.unit_review_summary import build_record_input, validate_record
 from app.services.unit_coverage import contract_dependency_scope
+from app.tools.context_files import ScopedContextTool, ScopedContextToolError
 from test_large_unit_worksets import WorksetProvider, large_file, review_unit
 from test_unit_review_summary import _file, _state
 
@@ -304,3 +309,75 @@ def test_diagnosis_input_carries_obligation_without_bound_support() -> None:
         record_input,
     )
     assert "prior_contract_dependencies" in prompt
+
+
+def _scope(commentable, readable):
+    return ReviewToolScope(
+        review_unit_id="unit",
+        commentable_files=set(commentable),
+        seed_files=set(commentable),
+        readable_files=set(readable),
+        max_lines_per_read=200,
+        max_search_results=50,
+    )
+
+
+def test_file_read_diff_allows_same_manifest_supporting_files_only() -> None:
+    tool = ScopedContextTool()
+    current = [_file()]
+    other = large_file(count=2, width=16).model_copy(update={"file_path": "b.py"})
+    scope = _scope({"a.py"}, {"a.py", "b.py"})
+
+    direct = asyncio.run(tool.file_read_diff(
+        scope=scope, file_path="a.py", changed_files=current, supporting_files=[other]))
+    assert direct["relevance"] == "direct"
+
+    supporting = asyncio.run(tool.file_read_diff(
+        scope=scope, file_path="b.py", changed_files=current, supporting_files=[other]))
+    assert supporting["relevance"] == "contract"
+    assert supporting["source"] == "file_read_diff"
+    assert "支持性" in supporting["why_retrieved"]
+
+    # 既不在当前批次评论范围、也不在支持清单内的文件仍被拒绝。
+    for kwargs in ({"supporting_files": [other]}, {"supporting_files": None}):
+        try:
+            asyncio.run(tool.file_read_diff(
+                scope=scope, file_path="c.py", changed_files=current, **kwargs))
+        except ScopedContextToolError:
+            continue
+        raise AssertionError("file_read_diff accepted an unauthorized file")
+
+
+def test_supporting_diff_evidence_binds_prior_active_hunk() -> None:
+    unit = review_unit().model_copy(update={"primary_files": ["a.py"]})
+    current = [_file()]
+    other = large_file(count=2, width=16).model_copy(update={"file_path": "b.py"})
+    manifest = build_diff_manifest(unit, [*current, other], "head-a", "base-a")
+    prior_active = active_evidence_set(manifest, [other], "batch-1")
+    state = {
+        "unit_files": current,
+        "diff_manifest": manifest,
+        "parent_state": {
+            "batch_parent_diff_files": [other.model_dump(mode="json")],
+            "batch_prior_active_evidence_ids": [
+                item.evidence_id for item in prior_active.hunks if item.evidence_id],
+        },
+    }
+
+    snippets, bindings = ReviewUnitExecutor._supporting_diff_evidence(
+        state, FileReadDiffRequest(file_path="b.py"))
+
+    assert snippets and bindings
+    assert snippets[0]["derived_from_evidence_id"] == prior_active.hunks[0].evidence_id
+    assert bindings[0]["id"] == prior_active.hunks[0].evidence_id
+    assert snippets[0]["source"] == "batch_diff_support"
+    chunks, _ = build_context_evidence(snippets, "head-a", "base-a")
+    assert chunks and "b.py" not in {file.file_path for file in current}
+
+    # 当前批次文件与未授权 hunk 不产生支持性证据。
+    assert ReviewUnitExecutor._supporting_diff_evidence(
+        state, FileReadDiffRequest(file_path="a.py")) == ([], [])
+    assert ReviewUnitExecutor._supporting_diff_evidence(
+        {**state, "parent_state": {**state["parent_state"],
+                                   "batch_prior_active_evidence_ids": []}},
+        FileReadDiffRequest(file_path="b.py")) == ([], [])
