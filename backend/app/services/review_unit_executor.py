@@ -1033,8 +1033,6 @@ class ReviewUnitExecutor:
                     )
                     if original["id"] not in references:
                         continue
-                    if dependency_paths and changed_file.file_path not in dependency_paths:
-                        continue
                     snippet = {
                         "file": changed_file.file_path,
                         "start_line": max(1, hunk.new_start),
@@ -1052,25 +1050,36 @@ class ReviewUnitExecutor:
                                and changed_file.file_path not in current_paths else None)
                     candidates.append((snippet, chunked))
         carried_chars = 0
+        omitted_evidence = []
         for snippet, chunked in reversed(candidates):
             if len(support) >= max_support_hunks:
-                break
+                omitted_evidence.append({"evidence_id": snippet["derived_from_evidence_id"],
+                    "file_path": snippet["file"], "reason": "support_hunk_limit"})
+                continue
             size = len(snippet["content"])
             if size > max_support_chars:
                 if not chunked:
                     # 同文件片段维持原上限，跨文件正文不要求前序提前发现依赖。
+                    omitted_evidence.append({"evidence_id": snippet["derived_from_evidence_id"],
+                        "file_path": snippet["file"], "reason": "same_file_support_char_limit"})
                     continue
                 # 分块携带保留原证据绑定、快照与行结构；容量准入交给后续批次。
                 support.insert(0, {**snippet, "content": chunked,
                                    "end_line": snippet["start_line"] + chunked.count("\n")})
                 continue
             if carried_chars + size > max_support_chars:
+                omitted_evidence.append({"evidence_id": snippet["derived_from_evidence_id"],
+                    "file_path": snippet["file"], "reason": "support_char_budget_exhausted"})
                 continue
             carried_chars += size
             support.insert(0, snippet)
         carried_paths = {item["file"] for item in support}
         carryable_paths = {snippet["file"] for snippet, _ in candidates}
         handoff = {
+            "candidate_evidence": [{"evidence_id": snippet["derived_from_evidence_id"],
+                "file_path": snippet["file"]} for snippet, _ in candidates],
+            "selected_evidence_ids": [item["derived_from_evidence_id"] for item in support],
+            "omitted_evidence": omitted_evidence,
             "obligations": [contract_dependency_key(item) for item in obligations],
             "carryable_paths": sorted(carryable_paths),
             "dropped_obligations": [
@@ -1149,6 +1158,14 @@ class ReviewUnitExecutor:
         )
 
         for entry in entries:
+            if entry.contract_handoff is not None and entry.result is not None:
+                # 选入交接不等于到达模型输入；按实际活动块分别记录，允许部分准入。
+                entry.contract_handoff["carried_evidence_ids"] = sorted({snippet.derived_from_evidence_id
+                    for snippet in entry.result.context_snippets
+                    if snippet.source == "batch_diff_support" and snippet.derived_from_evidence_id})
+                entry.contract_handoff["admission_omissions"] = [item.model_dump(mode="json")
+                    for item in (entry.result.input_coverage.omitted_context if entry.result.input_coverage else [])
+                    if item.supporting]
             entry.batch_execution_status = batch_execution_status(entry)
             entry.target_coverage = batch_target_coverage(entry)
             entry.contract_coverage = batch_contract_coverage(entry)
@@ -1261,6 +1278,11 @@ class ReviewUnitExecutor:
             gap_reasons.append(EVIDENCE_NOT_CARRIED)
         if blocking_dependencies or details["questions"] or details["dependencies"]:
             gap_reasons.append(CONTRACT_DEPENDENCY_UNRESOLVED)
+        unresolved_paths = {dependency.file_path for record in records
+            for dependency in record.contract_dependencies if dependency.status != "verified"}
+        if any(item.get("file_path") in unresolved_paths
+               for entry in entries for item in (entry.contract_handoff or {}).get("omitted_evidence", [])):
+            gap_reasons.append("supporting_evidence_omitted")
         if any(entry.batch_execution_status == "no_new_context" for entry in entries):
             gap_reasons.append(BATCH_NO_EVIDENCE_PROGRESS)
         invalid_record_batches = [
