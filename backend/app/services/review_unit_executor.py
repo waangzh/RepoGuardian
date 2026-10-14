@@ -126,6 +126,7 @@ class _ReviewUnitGraphState(TypedDict, total=False):
     last_review_requires_context: bool
     output_repair_attempted: bool
     contract_recovery_attempts: dict[str, int]
+    recovery_focus: dict[str, Any] | None
 
 
 class ReviewUnitExecutor:
@@ -1100,9 +1101,11 @@ class ReviewUnitExecutor:
 
     @staticmethod
     def _supporting_diff_evidence(state, request):
-        """父 Unit 同一 manifest、同一快照内已授权 hunk 的支持性证据。
+        """父 Unit 同一 manifest、同一快照内可重建 hunk 的支持性证据。
 
         只产出绑定原 diff 证据的支持性正文；不改变评论范围、目标覆盖或账本状态。
+        可达性不按批次先后受限：同一清单内的 hunk 都可被读取，但正文必须能重建为
+        清单登记的 canonical evidence，否则不发出不可核验的证据。
         """
         from app.models.review import ChangedFile
         from app.services.review_planner import DeterministicReviewPlanner
@@ -1115,8 +1118,7 @@ class ReviewUnitExecutor:
         source = next((ChangedFile.model_validate(item)
                        for item in parent.get("batch_parent_diff_files") or []
                        if item.get("file_path") == request.file_path), None)
-        authorized = set(parent.get("batch_prior_active_evidence_ids") or [])
-        if source is None or not authorized:
+        if source is None:
             return [], []
         by_hunk = {(item.file_path, item.hunk_id): item for item in manifest.hunks}
         requested = set(ScopedContextTool.normalize_diff_hunk_ids(source, request.hunk_ids))
@@ -1125,7 +1127,7 @@ class ReviewUnitExecutor:
             identity = DeterministicReviewPlanner.hunk_id(
                 request.file_path, index, hunk.model_dump(mode="json"))
             entry = by_hunk.get((request.file_path, identity))
-            if (entry is None or entry.evidence_id not in authorized or not hunk.lines
+            if (entry is None or entry.evidence_id is None or not hunk.lines
                     or (requested and identity not in requested)):
                 continue
             content = json.dumps(hunk.model_dump(), ensure_ascii=False, sort_keys=True)
@@ -1529,7 +1531,10 @@ class ReviewUnitExecutor:
     ) -> "_ReviewUnitGraphState":
         pending = state.get("next_action")
         from app.review.review_policy import REVIEW_STEP_MAX_SAME_EVIDENCE_CALLS
-        if self._supports_native_review_step() and not state.get("issue_round_completed") and (
+        # 服务端选定的定向补审是独立的有界通道：其总次数由 contract_recovery_attempts
+        # 限制，不占用也不受同证据重复上限约束，避免选定后被无进展保护截断。
+        if self._supports_native_review_step() and not state.get("issue_round_completed") \
+                and not state.get("recovery_focus") and (
             pending is None or pending.action != AgentActionName.task_done
         ):
             count = state.get("native_review_counts", {}).get(self._native_evidence_key(state), 0)
@@ -1982,6 +1987,19 @@ class ReviewUnitExecutor:
                         *(parent_state.get("batch_prior_evidence_bindings") or []),
                         *[item for item in bindings if item["id"] not in registered],
                     ]
+                elif request.file_path in {file.file_path for file in state["unit_files"]}:
+                    # 当前批次的渲染 diff 不能转成可引用证据，其 canonical hunk 已经
+                    # 在本次输入中展示；显式拒绝并给出可执行的替代方案。
+                    raise ValueError(
+                        "file_read_diff for a current-batch file cannot produce citable evidence; "
+                        "its canonical diff evidence is already displayed — reference those "
+                        "evidence IDs directly")
+                else:
+                    # 同一清单内无法重建绑定时必须显式拒绝，不能返回“成功、零证据”。
+                    raise ValueError(
+                        "file_read_diff cannot bind citable evidence for this file in the current "
+                        "manifest snapshot; read the source with file_read or use an already "
+                        "displayed diff evidence ID instead")
             else:
                 raise ValueError(f"unsupported Unit read action: {tool_name}")
 
@@ -2227,6 +2245,12 @@ class ReviewUnitExecutor:
             native_update = {"native_review_counts": counts, "last_review_evidence_key": key,
                 "last_review_requires_context": bool(response.next_need_error or (response.next_need
                     and response.next_need.action not in {AgentActionName.report_issue, AgentActionName.task_done}))}
+        # 补审计次在本次定向复核真正执行完成后结算，并结束本轮焦点。
+        focus = state.get("recovery_focus")
+        if focus is not None:
+            attempts = dict(state.get("contract_recovery_attempts") or {})
+            attempts[focus["target_key"]] = attempts.get(focus["target_key"], 0) + 1
+            native_update.update(recovery_focus=None, contract_recovery_attempts=attempts)
         if self.input_mode == "legacy":
             response = response.model_copy(update={"review_record": None,
                 "record_error": "legacy_provider_without_canonical_evidence_protocol"})
@@ -2492,6 +2516,9 @@ class ReviewUnitExecutor:
                 unit_metadata=state["parent_state"]["unit_metadata"],
                 active_evidence_set=active_evidence_set(state["diff_manifest"], state["unit_files"], state["unit"].id,
                     (state["parent_state"].get("unit_diff_batch") or {}).get("ranges"), state["context"]).model_dump(mode="json"))
+        # 定向补审只改变本轮的检查焦点，不改变证据目录、覆盖状态或引用权限。
+        if state.get("recovery_focus"):
+            record_input["recovery_focus"] = dict(state["recovery_focus"])
         if state["parent_state"].get("unit_diff_batch"):
             record_input["diff_workset"] = state["parent_state"]["unit_diff_batch"]
         record_input["input_protocol"] = CANONICAL_UNIT_INPUT_PROTOCOL if self.input_mode == "canonical" else "legacy"
@@ -2529,10 +2556,10 @@ class ReviewUnitExecutor:
             parent_files = state["parent_state"].get("batch_parent_diff_files")
             if parent_files and state.get("diff_manifest") is not None:
                 current_paths = {file.file_path for file in state["unit_files"]}
-                authorized = set(state["parent_state"].get("batch_prior_active_evidence_ids") or [])
                 supporting_scope: dict[str, list[str]] = {}
+                # 同一清单内可重建正文的 hunk 都可读；可达性不再按批次先后受限。
                 for item in state["diff_manifest"].hunks:
-                    if item.evidence_id in authorized and item.file_path not in current_paths:
+                    if item.evidence_id and item.file_path not in current_paths:
                         supporting_scope.setdefault(item.file_path, []).append(item.hunk_id)
                 if supporting_scope:
                     record_input["supporting_diff_scope"] = supporting_scope
@@ -2626,42 +2653,111 @@ class ReviewUnitExecutor:
                 "latest_attempt_status": "failed", "latest_attempt_reason": reason, "reason": reason})
         return summary
 
+    @staticmethod
+    def _recovery_evidence_covers(state, path, symbol):
+        """依赖涉及的正文是否已展示；同文件出现无关片段不算证据已具备。"""
+        spans = sorted((int(item.get("start_line") or 1), int(item.get("end_line") or 0))
+                       for item in state.get("context", []) if item.get("file") == path)
+        if not spans:
+            return False
+        if not symbol:
+            return True
+        definition = next((item for item in state["parent_state"].get("symbol_index") or []
+                           if item.get("file") == path and item.get("symbol") == symbol), None)
+        if definition is None:
+            return False
+        start = int(definition.get("start_line") or 1)
+        end = max(start, int(definition.get("end_line") or start))
+        cursor = start
+        for left, right in spans:
+            if left > cursor:
+                return False
+            cursor = max(cursor, right + 1)
+            if cursor > end:
+                return True
+        return cursor > end
+
+    @staticmethod
+    def _recovery_symbol_request(state, path, symbol):
+        """按仓库符号索引定位缺失符号的有界读取请求；未索引时返回 None。"""
+        if not symbol:
+            return None
+        definition = next((item for item in state["parent_state"].get("symbol_index") or []
+                           if item.get("file") == path and item.get("symbol") == symbol), None)
+        if definition is None:
+            return None
+        start = max(1, int(definition.get("start_line") or 1))
+        end = max(start, int(definition.get("end_line") or start))
+        limit = max(1, int(state["scope"].max_lines_per_read))
+        return {"file_path": path, "start_line": start, "end_line": min(end, start + limit - 1)}
+
     def _contract_recovery_action(self, state):
-        """每批最多两次补审；不扩张读取范围、不绕过正文和模型预算。"""
+        """每批最多两次补审；不扩张读取范围、不绕过正文和模型预算。
+
+        补审的证据判断精确到依赖涉及的符号：同文件出现无关片段不等于必要正文已具备。
+        """
         summary = state.get("review_summary")
         if (not self._supports_native_review_step() or not state.get("diff_manifest")
                 or not state["parent_state"].get("unit_diff_batch")
                 or not summary or summary.latest_attempt_status != "reported" or not summary.record):
-            return None, None
+            return None, None, None
         record = summary.record
         blocking = set(contract_coverage_state([record], [item.id for item in summary.evidence],
             state["unit"], state["diff_manifest"])["blocking_dependencies"])
-        if not blocking:
-            return None, None
         attempts = state.get("contract_recovery_attempts") or {}
-        if sum(attempts.values()) >= 2:
-            return None, "contract_recovery_limit_reached"
+        dependency_attempts = sum(count for key, count in attempts.items() if not key.startswith("question:"))
+        question_attempts = sum(count for key, count in attempts.items() if key.startswith("question:"))
         if not state["budget"].can_consume(diagnosis_attempts=1, model_calls=1):
-            return None, "contract_recovery_budget_exhausted"
-        for dependency in record.contract_dependencies:
+            return None, "contract_recovery_budget_exhausted", None
+        for dependency in record.contract_dependencies if dependency_attempts < 2 else ():
             key = contract_dependency_key(dependency)
             if key not in blocking or attempts.get(key):
                 continue
             path = dependency.file_path
             if path not in state["scope"].readable_files or is_sensitive_repository_change(path):
                 continue
-            if any(item.get("file") == path for item in state.get("context", [])):
-                return AgentAction(action="report_issue", reason="显式复核新产生的阻塞契约依赖"), key
-            authorized = set(state["parent_state"].get("batch_prior_active_evidence_ids") or [])
+            focus = {"target_key": key, "kind": "dependency", "file_path": path,
+                     "symbol": dependency.symbol, "assumption": dependency.assumption}
+            if self._recovery_evidence_covers(state, path, dependency.symbol):
+                return AgentAction(action="report_issue", reason="显式复核新产生的阻塞契约依赖"), key, focus
+            request = self._recovery_symbol_request(state, path, dependency.symbol)
+            if request is not None:
+                if not state["budget"].can_consume(context_retrievals=1):
+                    return None, "contract_recovery_budget_exhausted", None
+                return AgentAction(action=AgentActionName.file_read,
+                    reason="定位并读取缺失符号，再核验阻塞契约依赖",
+                    tool_args={"request": request}), key, focus
+            parent_files = {item.get("file_path")
+                            for item in state["parent_state"].get("batch_parent_diff_files") or []}
+            if path not in parent_files or path in {file.file_path for file in state["unit_files"]}:
+                continue
             identities = [item.hunk_id for item in state["diff_manifest"].hunks
-                if item.file_path == path and item.evidence_id in authorized]
-            if not identities or path in {file.file_path for file in state["unit_files"]}:
+                if item.file_path == path and item.evidence_id is not None]
+            if not identities:
                 continue
             if not state["budget"].can_consume(context_retrievals=1):
-                return None, "contract_recovery_budget_exhausted"
+                return None, "contract_recovery_budget_exhausted", None
             return AgentAction(action="file_read_diff", reason="读取前序实现以核验新产生的阻塞契约依赖",
-                tool_args={"request": {"file_path": path, "hunk_ids": identities[:20]}}), key
-        return None, "contract_recovery_evidence_unavailable_or_no_progress"
+                tool_args={"request": {"file_path": path, "hunk_ids": identities[:20]}}), key, focus
+        # 已有结论但未完成显式更新协议的既有问题：每批一次定向复核，独立于依赖通道，
+        # 不代替证据核验，也不能借它关闭没有证据支持的问题。
+        ledger = state.get("coverage_ledger")
+        questions = (ledger.get("questions") if isinstance(ledger, dict)
+                     else getattr(ledger, "questions", None)) or {}
+        if question_attempts < 1:
+            for question_id, question in questions.items():
+                status = question.get("status") if isinstance(question, dict) else question.status
+                affected = question.get("affected_files") if isinstance(question, dict) else question.affected_files
+                text = question.get("question") if isinstance(question, dict) else question.question
+                key = "question:" + question_id
+                if status != "pending" or attempts.get(key):
+                    continue
+                if set(affected or []) - state["scope"].readable_files:
+                    continue
+                focus = {"target_key": key, "kind": "question", "question_id": question_id,
+                         "question": text, "affected_files": list(affected or [])}
+                return AgentAction(action="report_issue", reason="定向复核未闭合的既有问题"), key, focus
+        return None, "contract_recovery_evidence_unavailable_or_no_progress", None
 
     async def _collect_issue_node(
         self, state: "_ReviewUnitGraphState"
@@ -2732,12 +2828,12 @@ class ReviewUnitExecutor:
                     review_unit_id=state["unit"].id,
                 )],
             }
-        recovery, recovery_key = self._contract_recovery_action(state)
+        recovery, recovery_key, recovery_focus = self._contract_recovery_action(state)
         if recovery is not None:
-            attempts = dict(state.get("contract_recovery_attempts") or {})
-            attempts[recovery_key] = attempts.get(recovery_key, 0) + 1
+            # 选择补审不等于执行完成；计次在执行完成后结算，避免选定动作被
+            # 无进展保护截断却仍占用限额。
             return {"next_action": recovery, "pending_issues": [], "issues": [*prior_issues, *accepted],
-                "contract_recovery_attempts": attempts, "issue_round_completed": False,
+                "recovery_focus": recovery_focus, "issue_round_completed": False,
                 "messages": [*state["messages"], AgentEvent(action=recovery.action, status="selected",
                     reason=recovery.reason, message=recovery_key, review_unit_id=state["unit"].id)]}
         return {
