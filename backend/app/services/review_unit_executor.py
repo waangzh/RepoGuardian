@@ -2248,6 +2248,7 @@ class ReviewUnitExecutor:
         from app.agents.providers import LLMProviderError
         from app.models.review import ModelCallResult
         from app.services.model_usage import unpack_model_call, annotate_usage
+        from app.services.unit_review_summary import domain_output_errors
         from app.review.run_audit import emit_run_audit
 
         original, retained, attempted, calls = None, [], False, 0
@@ -2261,8 +2262,8 @@ class ReviewUnitExecutor:
                 response, usage = unpack_model_call(raw)
                 errors = response.output_schema_errors
                 checked = validate_record(response.review_record, args[-1], state["scope"].readable_files, response.record_error)
-                if not errors and checked.latest_attempt_reason == "invalid_review_record: unknown review target":
-                    errors = [{"type": "unknown_target", "loc": ["review_record", "target_checks"]}]
+                if not errors:
+                    errors = domain_output_errors(checked.latest_attempt_reason)
                 if attempted:
                     preserve = {"issues": original.issues if original else [], "issues_audited": bool(original and original.issues_audited)}
                 if attempted and original is not None:
