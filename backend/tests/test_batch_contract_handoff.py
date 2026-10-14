@@ -191,7 +191,7 @@ def test_handoff_marks_dropped_obligation_only_when_carryable_body_was_left_out(
     assert support and handoff["carryable_paths"] == ["a.py"]
     assert handoff["dropped_obligations"] == []
 
-    # 同一义务下的前序正文超过单批携带上限：可携带却未进入后续输入。
+    # 同一义务下的前序正文超过单条整段上限：按行分块携带，而不是整段丢弃。
     huge = [large_file(count=40, width=800)]
     huge_manifest = build_diff_manifest(unit, huge, "head-a", "base-a")
     huge_active = active_evidence_set(huge_manifest, huge, "batch-1")
@@ -205,9 +205,48 @@ def test_handoff_marks_dropped_obligation_only_when_carryable_body_was_left_out(
         [(unit, huge, {}), (unit, huge_current, {})], huge_entries, 1, huge_manifest,
         huge_current, "head-a", "base-a")
 
-    assert huge_support == []
+    assert huge_support
     assert huge_handoff["carryable_paths"] == ["a.py"]
-    assert huge_handoff["dropped_obligations"] == [contract_dependency_key(dependency)]
+    assert huge_handoff["dropped_obligations"] == []
+    assert huge_support[0]["derived_from_evidence_id"] == huge_active.hunks[0].evidence_id
+    assert "\n" in huge_support[0]["content"]  # 单条超限正文按行分块，而非整段丢弃
+    assert huge_support[0]["end_line"] >= huge_support[0]["start_line"]
+
+
+def test_chunked_support_slices_remain_citable_contract_evidence() -> None:
+    dependency = _dependency()
+    unit = review_unit().model_copy(update={"primary_files": ["a.py"]})
+    huge = [large_file(count=40, width=800)]
+    manifest = build_diff_manifest(unit, huge, "head-a", "base-a")
+    active = active_evidence_set(manifest, huge, "batch-1")
+    current = [huge[0].model_copy(update={
+        "hunks": [huge[0].hunks[0].model_copy(update={"new_start": 900})]})]
+    entries = [_batch(unit, "batch-1", huge, manifest, active, dependency),
+        UnitDiffBatch(id="batch-2", parent_unit_id=unit.id, input_hash="two",
+            version="unit-diff-worksets-v1", ranges=[], admission={})]
+
+    support, _ = ReviewUnitExecutor._batch_supporting_context(
+        [(unit, huge, {}), (unit, current, {})], entries, 1, manifest, current, "head-a", "base-a")
+
+    chunks, _ = build_context_evidence(support, "head-a", "base-a")
+    assert len(chunks) > 1
+    original_id = support[0]["derived_from_evidence_id"]
+    reference = next(item for item in entries[0].result.review_summary.evidence
+                     if item.id == original_id)
+    record_input = build_record_input(current, chunks, None, "head-a", "base-a")
+    record_input["prior_evidence_bindings"] = [reference.model_dump(mode="json")]
+    summary = validate_record(
+        UnitReviewRecord(
+            change_summary="分块携带的契约证据",
+            contract_dependencies=[dependency.model_copy(update={
+                "status": "checked", "evidence_ids": [chunks[-1]["evidence_id"]]})],
+        ),
+        record_input,
+        {"a.py"},
+    )
+
+    assert summary.status == "reported", summary.reason
+    assert summary.record.contract_dependencies[0].status == "checked"
 
 
 def _empty_batch(batch_id, dependency=None, *, handoff=None):

@@ -4,8 +4,8 @@ import json
 from typing import Any
 
 from app.models.review import (
-    ChangedFile, UnitEvidenceReference, UnitHypothesisCheck, UnitReviewRecord,
-    UnitReviewSummary, UnitTargetCheck,
+    ChangedFile, UnitContractDependency, UnitEvidenceReference, UnitHypothesisCheck,
+    UnitReviewRecord, UnitReviewSummary, UnitTargetCheck,
 )
 from app.services.review_input_context import build_context_evidence, make_evidence, EVIDENCE_INPUT_VERSION, input_snapshot, question_identity
 from app.review.input_protocol import CANONICAL_UNIT_INPUT_PROTOCOL
@@ -57,6 +57,31 @@ def normalize_review_targets(record, record_input):
     target_ids = {item["id"]: item["target"] for item in record_input.get("target_catalog", [])}
     return record.model_copy(update={"target_checks": [check.model_copy(update={
         "target": target_ids.get(check.target, check.target)}) for check in record.target_checks]})
+
+
+def _dependency_evidence_covers(
+    reference: UnitEvidenceReference,
+    dependency: UnitContractDependency,
+    prior_bindings: dict[str, UnitEvidenceReference],
+) -> bool:
+    """契约证据必须来自当前快照的同文件，或可追溯到该快照已授权的原证据。
+
+    携带的跨批次证据保留 derived_from_evidence_id 绑定与快照；整段携带时内容哈希与
+    原证据一致，超过单条上限的正文由服务端按行分块携带，块仍属于同一原证据。
+    """
+    if reference.file_path != dependency.file_path:
+        return False
+    derived = reference.derived_from_evidence_id
+    if derived is None:
+        return True
+    prior = prior_bindings.get(derived)
+    return bool(
+        prior is not None
+        and prior.source == "diff"
+        and prior.file_path == dependency.file_path
+        and prior.head_sha == reference.head_sha
+        and prior.base_sha == reference.base_sha
+    )
 
 
 def validate_record(
@@ -116,21 +141,7 @@ def validate_record(
             if dependency.file_path not in readable_files:
                 raise ValueError("contract dependency outside readable scope")
             if dependency.status != "unresolved" and not any(
-                by_id[identity].file_path == dependency.file_path
-                and (
-                    by_id[identity].derived_from_evidence_id is None
-                    or (
-                        by_id[identity].derived_from_evidence_id in prior_bindings
-                        and prior_bindings[by_id[identity].derived_from_evidence_id].file_path
-                        == dependency.file_path
-                        and prior_bindings[by_id[identity].derived_from_evidence_id].head_sha
-                        == by_id[identity].head_sha
-                        and prior_bindings[by_id[identity].derived_from_evidence_id].base_sha
-                        == by_id[identity].base_sha
-                        and prior_bindings[by_id[identity].derived_from_evidence_id].content_hash
-                        == by_id[identity].content_hash
-                    )
-                )
+                _dependency_evidence_covers(by_id[identity], dependency, prior_bindings)
                 for identity in dependency.evidence_ids
             ):
                 raise ValueError("contract evidence does not cover dependency file")
