@@ -2177,6 +2177,7 @@ class UnitContextOmission(BaseModel):
     content_hash: str
     reason: str
     diagnosis_admission: dict[str, Any] = Field(default_factory=dict)
+    supporting: bool = False  # 支持性交接证据；其未准入不降低本批次目标覆盖
 
 
 class UnitInputCoverage(BaseModel):

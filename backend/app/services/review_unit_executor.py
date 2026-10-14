@@ -978,6 +978,7 @@ class ReviewUnitExecutor:
             for item in current_files
             for hunk in item.hunks
         }
+        current_paths = {item.file_path for item in current_files}
         obligations = ReviewUnitExecutor._prior_obligations(entries[:index])
         dependency_paths = {dependency.file_path for dependency in obligations}
         prior_indexes = list(range(index - 1, -1, -1))
@@ -1040,8 +1041,11 @@ class ReviewUnitExecutor:
                         "derived_from_evidence_id": original["id"],
                         "review_unit_id": manifest.review_unit_id,
                     }
+                    # 仅跨文件依赖分块携带；同一文件的其他批次片段维持原上限，
+                    # 避免大文件拆批时相互挤占到达窗口，必要时由到达批次自行读取。
                     chunked = (ReviewUnitExecutor._chunked_hunk_body(hunk)
-                               if len(content) > max_support_chars and hunk.lines else None)
+                               if len(content) > max_support_chars and hunk.lines
+                               and changed_file.file_path not in current_paths else None)
                     candidates.append((snippet, chunked))
         carried_chars = 0
         for snippet, chunked in reversed(candidates):
@@ -1050,7 +1054,7 @@ class ReviewUnitExecutor:
             size = len(snippet["content"])
             if size > max_support_chars:
                 if not chunked or not dependency_paths:
-                    # 非义务依赖的背景正文维持原上限：可携带但未携带，由 handoff 记录。
+                    # 同文件片段或非义务依赖的背景正文维持原上限：可携带但未携带，由 handoff 记录。
                     continue
                 # 分块携带保留原证据绑定、快照与行结构；容量准入交给后续批次。
                 support.insert(0, {**snippet, "content": chunked,
@@ -2971,7 +2975,7 @@ class ReviewUnitExecutor:
         put_chunks(store, current)
         active_ids = {item["evidence_id"] for item in current}
         seen = set(active_ids)
-        chunks, omitted = [], []
+        chunks, omitted, supporting_ids = [], [], set()
         for candidate in candidates:
             try:
                 if candidate.get("start_line") is not None and int(candidate["start_line"]) < 1:
@@ -2982,6 +2986,8 @@ class ReviewUnitExecutor:
                 for piece in pieces:
                     ContextSnippet.model_validate({"relevance": "exploratory", **piece})
                 chunks.extend(pieces)
+                if candidate.get("source") == "batch_diff_support":
+                    supporting_ids.update(piece["evidence_id"] for piece in pieces)
             except ValueError as exc:
                 coordinates = {}
                 for name in ("start_line", "end_line"):
@@ -2991,6 +2997,7 @@ class ReviewUnitExecutor:
                         coordinates[name] = 0
                 omitted.append(UnitContextOmission(file_path=str(candidate.get("file") or ""),
                     **coordinates,
+                    supporting=candidate.get("source") == "batch_diff_support",
                     content_hash=hashlib.sha256(str(candidate.get("content") or "").encode("utf-8")).hexdigest(),
                     reason="invalid_context:" + ("invalid_context_metadata" if hasattr(exc, "errors") else str(exc))).model_dump(mode="json"))
         previous_ids = set(store.entries)
@@ -3028,6 +3035,7 @@ class ReviewUnitExecutor:
                     continue  # 已展示的批次背景可继续归档；关键引用仍必须准入。
                 omitted.append(UnitContextOmission(file_path=chunk["file"], start_line=chunk["start_line"],
                     end_line=chunk["end_line"], content_hash=chunk["content_hash"],
+                    supporting=chunk["evidence_id"] in supporting_ids,
                     reason=estimate["reason"], diagnosis_admission=estimate).model_dump(mode="json"))
         accepted = [item for item in active if item["evidence_id"] not in active_ids]
         after = self._probe_diagnosis_admission({**trial, "context": active}) if chunks or omitted else None
@@ -3035,6 +3043,7 @@ class ReviewUnitExecutor:
             for chunk in accepted:
                 omitted.append(UnitContextOmission(file_path=chunk["file"], start_line=chunk["start_line"],
                     end_line=chunk["end_line"], content_hash=chunk["content_hash"],
+                    supporting=chunk["evidence_id"] in supporting_ids,
                     reason=after["reason"], diagnosis_admission=after).model_dump(mode="json"))
             accepted = []
             active = current
@@ -3137,13 +3146,16 @@ class ReviewUnitExecutor:
         omissions = [*retained,
                      *(UnitContextOmission.model_validate(item) for item in admission["omitted"])]
         by_scope = {(item.file_path, item.start_line, item.end_line, item.content_hash): item for item in omissions}
-        resolved_labels = {f"读取并检查 {item.file_path}:{item.start_line}-{item.end_line}（{item.reason}）" for item in old_omissions if item not in retained}
+        # 支持性交接证据未准入只降低证据覆盖，不降低本批次目标覆盖。
+        target_scope = {key: item for key, item in by_scope.items() if not item.supporting}
+        resolved_labels = {f"读取并检查 {item.file_path}:{item.start_line}-{item.end_line}（{item.reason}）"
+                           for item in old_omissions if item not in retained and not item.supporting}
         old_targets = [item for item in previous.omitted_targets if item not in resolved_labels] if previous else []
         targets = [*old_targets,
-                   *(f"读取并检查 {item.file_path}:{item.start_line}-{item.end_line}（{item.reason}）" for item in by_scope.values())]
+                   *(f"读取并检查 {item.file_path}:{item.start_line}-{item.end_line}（{item.reason}）" for item in target_scope.values())]
         coverage = (previous or UnitInputCoverage()).model_copy(update={
             "evidence_coverage": "partial" if by_scope else "complete",
-            "target_coverage": "unknown" if by_scope else "partial" if previous and previous.omitted_components else "complete",
+            "target_coverage": "unknown" if target_scope else "partial" if previous and previous.omitted_components else "complete",
             "reason": "retrieval_context_not_admitted" if by_scope else DIAGNOSIS_BACKGROUND_DEGRADED if previous and previous.omitted_components else None,
             "omitted_context": list(by_scope.values()),
             "omitted_targets": list(dict.fromkeys(targets)),
