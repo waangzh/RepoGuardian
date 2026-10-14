@@ -65,7 +65,7 @@ from app.services.evidence_store import (ContextAdmission, evidence_snapshot, re
 from app.services.unit_coverage import (build_diff_manifest, new_coverage_ledger, active_evidence_set,
     update_coverage, rebuild_coverage, coverage_gaps, active_body_chars, MAX_ACTIVE_HUNKS, MAX_ACTIVE_DIFF_CHARS,
     unsupported_hunk_ids, NO_HUNK_CHANGE_REASON, BATCH_NO_EVIDENCE_PROGRESS,
-    TARGET_HUNK_UNCOVERED, CONTRACT_DEPENDENCY_UNRESOLVED)
+    TARGET_HUNK_UNCOVERED, CONTRACT_DEPENDENCY_UNRESOLVED, EVIDENCE_NOT_CARRIED)
 from app.services.unit_coverage import classified_coverage_gaps, contract_coverage_state
 from app.services.review_planner import DeterministicReviewPlanner
 from app.services.unit_review_summary import build_record_input, merge_review_summaries, validate_record
@@ -937,8 +937,30 @@ class ReviewUnitExecutor:
     ):
         """为后续批次提供同快照的前序 hunk 正文，并绑定原始 evidence ID。"""
         support = []
-        current_paths = {item.file_path for item in current_files}
-        for prior_index in range(index):
+        max_support_chars = 16_000
+        max_support_hunks = 4
+        current_ranges = {
+            (
+                item.file_path,
+                hunk.new_start,
+                hunk.new_start + max(0, hunk.new_length - 1),
+            )
+            for item in current_files
+            for hunk in item.hunks
+        }
+        dependency_paths = {
+            dependency.file_path
+            for prior_index in range(index)
+            if entries[prior_index].result
+            and entries[prior_index].result.review_summary.record
+            for dependency in entries[prior_index].result.review_summary.record.contract_dependencies
+            if dependency.status != "verified"
+        }
+        prior_indexes = list(range(index - 1, -1, -1))
+        if not dependency_paths:
+            prior_indexes = prior_indexes[:1]
+        candidates = []
+        for prior_index in prior_indexes:
             entry = entries[prior_index]
             result = entry.result
             if result is None or result.diff_manifest is None or result.active_evidence_set is None:
@@ -960,9 +982,14 @@ class ReviewUnitExecutor:
                 if item.source == "diff" and item.id in active_ids
             }
             for changed_file in worksets[prior_index][1]:
-                if changed_file.file_path in current_paths:
-                    continue
                 for hunk in changed_file.hunks:
+                    hunk_range = (
+                        changed_file.file_path,
+                        hunk.new_start,
+                        hunk.new_start + max(0, hunk.new_length - 1),
+                    )
+                    if hunk_range in current_ranges:
+                        continue
                     content = json.dumps(
                         hunk.model_dump(), ensure_ascii=False, sort_keys=True
                     )
@@ -977,7 +1004,9 @@ class ReviewUnitExecutor:
                     )
                     if original["id"] not in references:
                         continue
-                    support.append({
+                    if dependency_paths and changed_file.file_path not in dependency_paths:
+                        continue
+                    candidates.append({
                         "file": changed_file.file_path,
                         "start_line": max(1, hunk.new_start),
                         "end_line": max(1, hunk.new_start + max(0, hunk.new_length - 1)),
@@ -987,6 +1016,15 @@ class ReviewUnitExecutor:
                         "derived_from_evidence_id": original["id"],
                         "review_unit_id": manifest.review_unit_id,
                     })
+        for item in reversed(candidates):
+            if len(support) >= max_support_hunks:
+                break
+            size = len(item["content"])
+            if not support and size > max_support_chars:
+                continue
+            if sum(len(existing["content"]) for existing in support) + size > max_support_chars:
+                continue
+            support.insert(0, item)
         return support
 
     @staticmethod
@@ -1090,8 +1128,15 @@ class ReviewUnitExecutor:
         contract_verification_status = contract_state["verification_status"]
         blocking_dependencies = contract_state["blocking_dependencies"]
         contract_gate_complete = not details["questions"] and not blocking_dependencies
+        supporting_evidence_carried = any(
+            snippet.source == "batch_diff_support"
+            for result in results
+            for snippet in result.context_snippets
+        )
         coverage_reason = (
-            CONTRACT_DEPENDENCY_UNRESOLVED
+            EVIDENCE_NOT_CARRIED
+            if blocking_dependencies and not supporting_evidence_carried and len(entries) > 1
+            else CONTRACT_DEPENDENCY_UNRESOLVED
             if blocking_dependencies or details["questions"]
             else BATCH_NO_EVIDENCE_PROGRESS
             if any(entry.batch_execution_status == "no_new_context" for entry in entries)
@@ -2251,6 +2296,22 @@ class ReviewUnitExecutor:
         record_input["working_memory"] = {} if core else build_working_memory(
             state.get("last_valid_review_summary") or state["parent_state"].get("batch_memory_summary") or state.get("review_summary"), record_input,
             state["unit"].id, state.get("latest_review_attempt"))[0]
+        prior_dependencies = (
+            state.get("prior_contract_dependencies")
+            or state["parent_state"].get("prior_contract_dependencies")
+            or record_input["working_memory"].get("contract_dependencies")
+        )
+        has_bound_support = any(
+            snippet.get("source") == "batch_diff_support"
+            for snippet in state["parent_state"].get("batch_supporting_context") or []
+        )
+        if prior_dependencies and has_bound_support:
+            record_input["prior_contract_dependencies"] = prior_dependencies
+            record_input["working_memory"] = {
+                key: value
+                for key, value in record_input["working_memory"].items()
+                if key != "contract_dependencies"
+            }
         feedback = [{"tool": event.tool, "status": event.status, "detail": (event.detail or "")[:240],
                      "result_count": event.result_count} for event in state.get("tool_events", [])[-3:]]
         if feedback and self._supports_native_review_step():

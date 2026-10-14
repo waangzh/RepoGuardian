@@ -1,14 +1,16 @@
 from app.models.review import (
     ContextSnippet,
+    PullRequestInfo,
     ReviewUnit,
     ReviewUnitComplexity,
     UnitContractDependency,
     UnitReviewRecord,
 )
+from app.agents.providers import OpenAICompatibleProvider
 from app.services.review_input_context import build_context_evidence, make_evidence
 from app.services.unit_review_summary import build_record_input, validate_record
 from app.services.unit_coverage import contract_dependency_scope
-from test_unit_review_summary import _file
+from test_unit_review_summary import _file, _state
 
 
 def test_derived_prior_diff_evidence_can_verify_cross_batch_dependency() -> None:
@@ -77,3 +79,23 @@ def test_contract_dependency_scope_only_relaxes_same_primary_file() -> None:
         UnitContractDependency(file_path="c.py", assumption="external", status="unresolved"),
         unit,
     ) == "cross_boundary"
+
+
+def test_prompt_explicitly_carries_prior_contract_dependencies() -> None:
+    record_input = build_record_input([_file()], [], None, "head", "base")
+    record_input["prior_contract_dependencies"] = [{
+        "file_path": "a.py",
+        "symbol": "weighted_point",
+        "assumption": "point must remain inside the interval",
+        "status": "unresolved",
+        "evidence_ids": [],
+    }]
+    prompt = OpenAICompatibleProvider._build_unit_review_prompt(
+        PullRequestInfo.model_validate(_state()["pr_info"]),
+        [_file()],
+        "",
+        record_input,
+    )
+
+    assert "prior_contract_dependencies" in prompt
+    assert "Carry each obligation forward" in prompt
