@@ -65,7 +65,8 @@ from app.services.evidence_store import (ContextAdmission, evidence_snapshot, re
 from app.services.unit_coverage import (build_diff_manifest, new_coverage_ledger, active_evidence_set,
     update_coverage, rebuild_coverage, coverage_gaps, active_body_chars, MAX_ACTIVE_HUNKS, MAX_ACTIVE_DIFF_CHARS,
     unsupported_hunk_ids, NO_HUNK_CHANGE_REASON, BATCH_NO_EVIDENCE_PROGRESS,
-    TARGET_HUNK_UNCOVERED, CONTRACT_DEPENDENCY_UNRESOLVED, EVIDENCE_NOT_CARRIED)
+    TARGET_HUNK_UNCOVERED, CONTRACT_DEPENDENCY_UNRESOLVED, EVIDENCE_NOT_CARRIED,
+    contract_dependency_key)
 from app.services.unit_coverage import classified_coverage_gaps, contract_coverage_state
 from app.services.review_planner import DeterministicReviewPlanner
 from app.services.unit_review_summary import build_record_input, merge_review_summaries, validate_record
@@ -798,7 +799,7 @@ class ReviewUnitExecutor:
                 if item.result and item.result.review_summary.status == "reported"
                 for snippet in item.result.context_snippets
             ]
-            prior_support = self._batch_supporting_context(
+            prior_support, contract_handoff = self._batch_supporting_context(
                 worksets,
                 entries,
                 index,
@@ -807,6 +808,7 @@ class ReviewUnitExecutor:
                 str(state.get("head_sha") or ""),
                 review_diff_base(state),
             )
+            entry.contract_handoff = contract_handoff
             batch_state["batch_supporting_context"].extend(prior_support)
             prior_ids = {
                 item["derived_from_evidence_id"]
@@ -914,6 +916,21 @@ class ReviewUnitExecutor:
         return held
 
     @staticmethod
+    def _prior_obligations(entries):
+        """先前批次的未闭合契约义务；批次记忆与证据筛选共用同一来源。"""
+        obligations = {}
+        for entry in entries:
+            result = entry.result
+            summary = result.review_summary if result is not None else None
+            record = (summary.record or summary.last_valid_record) if summary is not None else None
+            for dependency in record.contract_dependencies if record is not None else []:
+                if dependency.status == "verified":
+                    continue
+                obligations.setdefault(
+                    (dependency.file_path, dependency.symbol, dependency.assumption), dependency)
+        return list(obligations.values())
+
+    @staticmethod
     def _batch_memory(entries, ledger):
         from app.models.review import UnitUnresolvedQuestion
         memory = next((item.result.review_summary for item in reversed(entries)
@@ -925,8 +942,7 @@ class ReviewUnitExecutor:
                     for key, item in ledger.questions.items() if item.status == "pending"],
                 "contract_dependencies": [
                     item.model_copy()
-                    for item in memory.last_valid_record.contract_dependencies
-                    if item.status != "verified"
+                    for item in ReviewUnitExecutor._prior_obligations(entries)
                 ],
             }), "record": None})
         return None
@@ -935,7 +951,11 @@ class ReviewUnitExecutor:
     def _batch_supporting_context(
         worksets, entries, index, manifest, current_files, head_sha, base_sha
     ):
-        """为后续批次提供同快照的前序 hunk 正文，并绑定原始 evidence ID。"""
+        """为后续批次提供同快照的前序 hunk 正文，并绑定原始 evidence ID。
+
+        返回 (support, handoff)：support 是本批次实际携带的正文；handoff 记录本次交接的
+        未决义务与“可携带但未携带”的依赖，供聚合阶段判断证据是否确实漏传。
+        """
         support = []
         max_support_chars = 16_000
         max_support_hunks = 4
@@ -948,14 +968,8 @@ class ReviewUnitExecutor:
             for item in current_files
             for hunk in item.hunks
         }
-        dependency_paths = {
-            dependency.file_path
-            for prior_index in range(index)
-            if entries[prior_index].result
-            and entries[prior_index].result.review_summary.record
-            for dependency in entries[prior_index].result.review_summary.record.contract_dependencies
-            if dependency.status != "verified"
-        }
+        obligations = ReviewUnitExecutor._prior_obligations(entries[:index])
+        dependency_paths = {dependency.file_path for dependency in obligations}
         prior_indexes = list(range(index - 1, -1, -1))
         if not dependency_paths:
             prior_indexes = prior_indexes[:1]
@@ -1025,7 +1039,18 @@ class ReviewUnitExecutor:
             if sum(len(existing["content"]) for existing in support) + size > max_support_chars:
                 continue
             support.insert(0, item)
-        return support
+        carried_paths = {item["file"] for item in support}
+        carryable_paths = {item["file"] for item in candidates}
+        handoff = {
+            "obligations": [contract_dependency_key(item) for item in obligations],
+            "carryable_paths": sorted(carryable_paths),
+            "dropped_obligations": [
+                contract_dependency_key(item)
+                for item in obligations
+                if item.file_path in carryable_paths and item.file_path not in carried_paths
+            ],
+        }
+        return support, handoff
 
     @staticmethod
     def _aggregate_diff_batches(unit, entries, budget, binding, reason=None, manifest=None, evidence_store=None):
@@ -1128,14 +1153,16 @@ class ReviewUnitExecutor:
         contract_verification_status = contract_state["verification_status"]
         blocking_dependencies = contract_state["blocking_dependencies"]
         contract_gate_complete = not details["questions"] and not blocking_dependencies
-        supporting_evidence_carried = any(
-            snippet.source == "batch_diff_support"
-            for result in results
-            for snippet in result.context_snippets
-        )
+        # 只在能确认“更早批次留下了未决依赖、后续批次存在、对应证据可携带却未进入
+        # 后续输入”时归因于证据漏传；否则缺口属于契约未决本身。
+        dropped_obligations = {
+            item
+            for entry in entries
+            for item in (entry.contract_handoff or {}).get("dropped_obligations", [])
+        }
         coverage_reason = (
             EVIDENCE_NOT_CARRIED
-            if blocking_dependencies and not supporting_evidence_carried and len(entries) > 1
+            if set(blocking_dependencies) & dropped_obligations
             else CONTRACT_DEPENDENCY_UNRESOLVED
             if blocking_dependencies or details["questions"]
             else BATCH_NO_EVIDENCE_PROGRESS
@@ -2269,6 +2296,33 @@ class ReviewUnitExecutor:
             "head": state["parent_state"].get("head_sha"),
             "base": review_diff_base(state["parent_state"])})
 
+    @staticmethod
+    def _carried_obligations(state, record_input) -> list[dict[str, Any]]:
+        """跨批次未决契约义务的显式交接通道；与可携带的正文片段解耦。
+
+        义务本身始终保留原始 assumption；只有当前输入仍可引用的 evidence ID 才随义务传递。
+        """
+        available = {item["id"] for item in record_input["evidence"]}
+        sources = [
+            state.get("prior_contract_dependencies"),
+            state["parent_state"].get("prior_contract_dependencies"),
+            getattr(state["parent_state"].get("batch_memory_summary"), "last_valid_record", None),
+        ]
+        carried: dict[tuple, dict[str, Any]] = {}
+        for source in sources:
+            if source is None:
+                continue
+            for item in getattr(source, "contract_dependencies", source) or []:
+                payload = item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+                if payload.get("status", "unresolved") == "verified":
+                    continue
+                payload = {**payload,
+                    "evidence_ids": [identity for identity in payload.get("evidence_ids") or []
+                                     if identity in available]}
+                carried.setdefault(
+                    (payload.get("file_path"), payload.get("symbol"), payload.get("assumption")), payload)
+        return list(carried.values())
+
     def _diagnosis_args(self, state, *, core=False):
         pr = PullRequestInfo.model_validate(state["parent_state"].get("pr_info") or {})
         plan = None if core else state.get("unit_plan")
@@ -2296,16 +2350,10 @@ class ReviewUnitExecutor:
         record_input["working_memory"] = {} if core else build_working_memory(
             state.get("last_valid_review_summary") or state["parent_state"].get("batch_memory_summary") or state.get("review_summary"), record_input,
             state["unit"].id, state.get("latest_review_attempt"))[0]
-        prior_dependencies = (
-            state.get("prior_contract_dependencies")
-            or state["parent_state"].get("prior_contract_dependencies")
-            or record_input["working_memory"].get("contract_dependencies")
-        )
-        has_bound_support = any(
-            snippet.get("source") == "batch_diff_support"
-            for snippet in state["parent_state"].get("batch_supporting_context") or []
-        )
-        if prior_dependencies and has_bound_support:
+        # 未决义务与可核验正文分开交接：没有绑定正文时，义务也必须显式传给后续批次。
+        # 降级输入（core）保持原有取舍，不额外加入义务通道。
+        prior_dependencies = [] if core else self._carried_obligations(state, record_input)
+        if prior_dependencies:
             record_input["prior_contract_dependencies"] = prior_dependencies
             record_input["working_memory"] = {
                 key: value
