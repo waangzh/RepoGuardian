@@ -298,6 +298,11 @@ def contract_dependency_scope(dependency, unit, manifest=None) -> str:
     return "cross_boundary"
 
 
+def contract_dependency_key(dependency) -> str:
+    """契约义务的稳定标识；阻塞依赖与批次交接诊断共用同一格式。"""
+    return f"{dependency.file_path}:{dependency.symbol or '*'}:{dependency.assumption}"
+
+
 def contract_coverage_state(records, evidence_ids, unit, manifest=None):
     """统一计算契约证据覆盖、核验状态和阻塞依赖。"""
     dependencies = {
@@ -332,9 +337,7 @@ def contract_coverage_state(records, evidence_ids, unit, manifest=None):
         if dependency.status == "conflicting" or not covered or contract_dependency_scope(
             dependency, unit, manifest
         ) != "intra_file":
-            blocking.append(
-                f"{dependency.file_path}:{dependency.symbol or '*'}:{dependency.assumption}"
-            )
+            blocking.append(contract_dependency_key(dependency))
     return {
         "evidence_coverage": "complete" if evidence_complete else "partial",
         "verification_status": verification_status,

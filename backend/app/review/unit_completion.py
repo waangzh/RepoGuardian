@@ -161,7 +161,6 @@ def review_unit_coverage_warning(result: ReviewUnitResult) -> str | None:
         )
     ):
         return None
-    targets = "；".join(coverage.omitted_targets) or "未记录具体省略目标"
     contract_detail = (
         f"；契约证据 {coverage.contract_evidence_coverage}"
         f"；契约核验 {coverage.contract_verification_status}"
@@ -171,12 +170,13 @@ def review_unit_coverage_warning(result: ReviewUnitResult) -> str | None:
         if coverage.blocking_dependencies
         else ""
     )
+    # 目标列表为空时不要暗示目标遗漏；契约缺口由契约核验字段表达。
+    omitted = f"；省略目标：{'；'.join(coverage.omitted_targets)}" if coverage.omitted_targets else ""
     return (
         f"Unit {result.review_unit_id}：目标覆盖 {coverage.target_coverage}；"
         f"契约闭合 {coverage.contract_coverage}{contract_detail}{blocking}；"
         f"批次状态 {','.join(batch_states) or 'completed'}；"
-        f"原因 {coverage.reason or 'diagnosis_input_incomplete'}；"
-        f"省略目标：{targets}"
+        f"原因 {coverage.reason or 'diagnosis_input_incomplete'}{omitted}"
     )
 
 

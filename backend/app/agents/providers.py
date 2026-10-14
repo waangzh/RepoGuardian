@@ -482,14 +482,6 @@ class OpenAICompatibleProvider(LLMProvider):
             "This input has no source=file_change evidence. Return file_change_checks: []. "
             "Do not invent a file-change ID or substitute a diff/context ID. "
         )
-        contract_handoff_protocol = (
-            "prior_contract_dependencies lists unresolved contract obligations carried from earlier batches. "
-            "Carry each obligation forward until it is verified or conflicting; do not silently drop it. "
-            "When the current displayed evidence verifies one, return the same file_path/symbol/assumption "
-            "with status=verified and cite the current evidence_ids. If it remains unresolved, keep status="
-            "unresolved and explain the exact gap in assumption; do not invent evidence IDs. "
-            if record_input.get("prior_contract_dependencies") else ""
-        )
         return cls._build_prompt(pr, changed_files, "" if canonical else diff_text,
                                  include_hunks=not canonical) + (
             "\nFor this Unit, return an object with issues AND review_record, even with zero issues. "
@@ -525,8 +517,9 @@ class OpenAICompatibleProvider(LLMProvider):
             "Each ID binds the displayed UTF-8 content, range and Base/Head snapshot. "
             "truncated/requested_end_line describe unshown source outside a complete chunk; "
             "never infer absence or claim coverage of that unshown range. Retrieve it if needed. "
-            "Working memory is prior check state, not proof; missing evidence requires rechecking. "
-            + contract_handoff_protocol +
+            "Working memory and prior_contract_dependencies are prior check state, not proof: Carry "
+            "each obligation forward until displayed evidence verifies it, otherwise keep it unresolved; "
+            "missing evidence requires rechecking. "
             "diff_workset, when present, identifies one batch of a larger Unit. Only this batch's "
             "full evidence is displayed; other batches are not checked by this request. The server "
             "tracks their coverage separately. Record cross-batch assumptions as unresolved dependencies "

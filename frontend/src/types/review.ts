@@ -764,6 +764,7 @@ export interface ReviewUnitResult {
     target_coverage?: "complete" | "partial" | "unknown";
     contract_coverage?: "complete" | "pending" | "unknown";
     reason?: string | null;
+    contract_handoff?: { obligations: string[]; carryable_paths: string[]; dropped_obligations: string[] } | null;
     result?: ReviewUnitResult | null;
   }>;
   issues: ReviewIssue[];
