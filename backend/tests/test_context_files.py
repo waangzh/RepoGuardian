@@ -113,7 +113,11 @@ async def test_file_read_diff_uses_parsed_unit_hunks_only(tmp_path: Path) -> Non
 @pytest.mark.asyncio
 async def test_file_read_diff_rejects_sensitive_changed_file(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
-    scope = _scope(repo).model_copy(update={"commentable_files": {".env"}})
+    # 敏感路径即使被错误地放进可读范围，也必须由纵深防御单独拒绝。
+    scope = _scope(repo).model_copy(update={
+        "commentable_files": {".env"},
+        "readable_files": {"src/service.ts", "tests/service.test.ts", ".env"},
+    })
     changed = ChangedFile(
         file_path=".env",
         change_type="modified",
@@ -142,8 +146,10 @@ async def test_file_read_diff_rejects_sensitive_changed_file(tmp_path: Path) -> 
 @pytest.mark.asyncio
 async def test_file_read_diff_rejects_sensitive_rename_source(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
+    # 重命名目标可读，但任一侧命中敏感路径时整个变更仍必须被拒绝。
     scope = _scope(repo).model_copy(update={
-        "commentable_files": {"config/runtime.py"}
+        "commentable_files": {"config/runtime.py"},
+        "readable_files": {"src/service.ts", "tests/service.test.ts", "config/runtime.py"},
     })
     changed = ChangedFile(
         file_path="config/runtime.py",
