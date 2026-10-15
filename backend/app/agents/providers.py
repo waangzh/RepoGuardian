@@ -824,8 +824,12 @@ class OpenAICompatibleProvider(LLMProvider):
             "只使用目录中的 Unit、路径、关系 ID、证据 ID，最多提出三个不同补查。"
             "每项 unit_ids 必须包含至少两个不同且已知的 Unit ID；不要提出单 Unit 补查。"
             "followups 非空时 decision 必须为 required；uncertain/skip 的 followups 必须为空。"
-            "primary_files 必须属于所选 Unit 的主文件；evidence_ids 必须非空、来自当前目录"
-            "且位于所选 Unit 的可读范围。同范围证据下的不同问题应保留；"
+            "primary_files 必须属于所选 Unit 的主文件；evidence_ids 必须非空、来自当前目录且位于所选 Unit 的可读范围"
+            "；supporting_files 显式列出全部必要支持文件，属于其他 Unit 时必须同时选入其 Unit ID。"
+            "读取范围不能由问题文字隐式授权；缺少支持范围时保留未决。"
+            "核验变更到行为的完整因果链：文件引用本身不证明构建影响，Git 忽略规则不影响已跟踪文件。"
+            "AGENTS.local.md 与 AGENTS.md 等不同路径不得混同；缺少阅读不等于已发现风险。"
+            "同范围证据下的不同问题应保留；"
             "范围、问题、反证目标、停止条件完全相同的请求只提出一次。"
             "每项必须明确 question、counterevidence_goal、stop_condition，不能直接确认或删除 Issue。"
             "若补查针对 origin_obligations 中的原契约，填写 origin_obligation_ids，只复制所选 Unit 的真实 ID；没有对应义务时返回空列表。"
@@ -837,7 +841,7 @@ class OpenAICompatibleProvider(LLMProvider):
             '格式：{"decision":"required|uncertain|skip","reason":"理由",'
             '"relationship_ids":[],"evidence_ids":[],"followups":[{"id":"f1",'
             '"question":"问题","unit_ids":["目录中的第一个Unit ID","目录中的另一个Unit ID"],'
-            '"primary_files":["所选Unit的主文件"],"evidence_ids":["目录中的当前证据ID"],'
+            '"primary_files":["所选Unit的主文件"],"supporting_files":[],"evidence_ids":["目录中的当前证据ID"],'
             '"counterevidence_goal":"反证目标","stop_condition":"停止条件","origin_obligation_ids":[]}],'
             '"unresolved_questions":[]}\n'
             + json.dumps(payload, ensure_ascii=False)

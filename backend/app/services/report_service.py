@@ -123,6 +123,8 @@ def _append_cross_unit_risk(lines: list[str], task: ReviewTask) -> None:
                   f"- 协调执行状态：{assessment.execution_status}", ""])
     for reason in assessment.reasons:
         lines.append(f"- {_inline_text(reason.detail)}")
+    for diagnostic in assessment.index_diagnostics:
+        lines.append(f"- 索引诊断：{_inline_text(diagnostic)}")
     lines.append("")
     plan = task.coordination_plan
     if plan is None:
@@ -148,6 +150,8 @@ def _append_cross_unit_risk(lines: list[str], task: ReviewTask) -> None:
                          + (f"；{_inline_text(batch.reason)}" if batch.reason else ""))
     for request in plan.followups:
         lines.append(f"- {_inline_text(request.id)}：{_inline_text(request.question)}")
+        if request.supporting_files:
+            lines.append(f"  - 必要支持文件：{_inline_text('、'.join(request.supporting_files))}")
     for result in task.followup_results:
         lines.append(f"- {_inline_text(result.request_id)}：{result.outcome}；{_inline_text(result.reason)}")
     for question in plan.unresolved_questions:
