@@ -286,7 +286,8 @@ class CrossUnitCoordinationService:
         return (tuple(sorted(set(request.unit_ids))), tuple(sorted(set(request.primary_files))),
                 tuple(sorted(set(request.evidence_ids))), request.question.strip(),
                 request.counterevidence_goal.strip(), request.stop_condition.strip(), tuple(sorted(set(request.origin_obligation_ids))),
-                tuple(sorted(set(request.supporting_files))), tuple(sorted(set(request.verification_files))))
+                tuple(sorted(set(request.supporting_files))), tuple(sorted(set(request.verification_files))),
+                tuple(sorted(set(request.tracking_queries))))
 
     @classmethod
     def normalize_plan(cls, plan, payload, budget=None):
@@ -710,6 +711,23 @@ class CrossUnitCoordinationService:
                          for snippet in raw.get("context_snippets") or []
                          if snippet.get("file") in readable
                      ]}
+            # 继承正文必须能按当前快照重建到原 Unit 的真实证据，旧 ID 不授予当前引用权。
+            from app.services.review_input_context import build_context_evidence
+            from app.review.diff_base import review_diff_base
+            trusted = {ref["id"] for raw in state.get("review_unit_results") or []
+                if raw["review_unit_id"] in request.unit_ids
+                for ref in (raw.get("review_summary") or {}).get("evidence", [])
+                if ref.get("head_sha") == str(state.get("head_sha") or "")
+                and ref.get("base_sha", "") == review_diff_base(state)}
+            inherited = []
+            for snippet in local["cross_unit_followup_context"]:
+                try:
+                    _, references = build_context_evidence([snippet], str(state.get("head_sha") or ""), review_diff_base(state))
+                    if references and {ref["id"] for ref in references} <= trusted:
+                        inherited.append(snippet)
+                except (ValueError, TypeError, KeyError):
+                    continue
+            local["cross_unit_followup_context"] = inherited
             saved = self.runtime.data["followups"].get(request.id)
             allocations = self.runtime.data.setdefault("allocations", {})
             budget = self.provider.budget
@@ -735,7 +753,7 @@ class CrossUnitCoordinationService:
                 max_context_retrievals=min(12, max(2, 2 * len(
                     (set(request.verification_files) | set(request.supporting_files))
                     - {file["file_path"] for file in state.get("changed_files") or [] if file.get("hunks")})),
-                    max(0, allocation["exploration_calls"] - 1)), max_patch_attempts=0,
+                    max(0, allocation["exploration_calls"] - 1)) + int(bool(request.tracking_queries)), max_patch_attempts=0,
             ).model_dump(mode="json")
             deferred_followups = self.runtime.data.setdefault("deferred_followups", {})
             if saved and request.id in deferred_followups:
@@ -862,21 +880,57 @@ class CrossUnitCoordinationService:
         if not valid:
             return "unresolved", ("补查记录未通过校验，无法采用结论：" +
                 str(summary.latest_attempt_reason or summary.reason or "missing_review_record"))[:1000]
-        refs = {item.id: item.file_path for item in summary.evidence}
+        refs = {item.id: item.file_path for item in summary.evidence if item.source != "repository_tree"}
+        all_refs = {item.id for item in summary.evidence}
         paths = {refs[key] for check in record.hypothesis_checks for key in check.evidence_ids if key in refs}
         # 新请求按显式核验范围；旧请求仍要求覆盖每个所选 Unit 的主文件。
         scope_covered = (set(request.verification_files) <= paths if request.verification_files else
                          all(set(item.primary_files) & paths for item in selected))
         closed = {item.obligation_id for item in record.obligation_updates}
-        refuted = (record.target_checks and record.hypothesis_checks and scope_covered
-            and all(item.status == "refuted" and item.evidence_ids and set(item.evidence_ids) <= refs.keys()
-                    for item in record.hypothesis_checks)
-            and all(item.status == "checked" for item in record.target_checks)
-            and not record.unresolved_questions
-            and all(item.status == "verified" for item in record.contract_dependencies)
-            and set(request.origin_obligation_ids) <= closed)
-        return ("refuted", "已找到限定核验范围的反证且完成目标检查") if refuted else (
-            "unresolved", "有效审查后证据仍不足：核验范围、目标、父义务或契约尚未闭合")
+        gaps = []
+        if not scope_covered:
+            required = set(request.verification_files) or {path for unit in selected for path in unit.primary_files}
+            gaps.append("缺少核验正文引用：" + "、".join(sorted(required - paths)))
+        if not record.hypothesis_checks:
+            gaps.append("缺少风险假设检查")
+        for check in record.hypothesis_checks:
+            if check.status != "refuted":
+                gaps.append(f"风险假设 {check.hypothesis_id}={check.status}，未按风险反证协议闭合")
+            if not check.evidence_ids or not set(check.evidence_ids) <= all_refs:
+                gaps.append(f"风险假设 {check.hypothesis_id} 缺少当前证据")
+        if not record.target_checks or any(item.status != "checked" for item in record.target_checks):
+            gaps.append("目标检查未完成")
+        gaps.extend("未决问题：" + item.question for item in record.unresolved_questions)
+        gaps.extend(f"未闭合契约 {item.file_path}：{item.assumption}" for item in record.contract_dependencies
+                    if item.status != "verified")
+        if set(request.origin_obligation_ids) - closed:
+            gaps.append("父义务未闭合：" + "、".join(sorted(set(request.origin_obligation_ids) - closed)))
+        if request.tracking_queries:
+            cited = {key for check in record.hypothesis_checks for key in check.evidence_ids}
+            import hashlib
+            applicable = False
+            for snippet in result.context_snippets:
+                if snippet.source != "repository_tree":
+                    continue
+                try:
+                    fact = json.loads(snippet.content)
+                    applicable |= bool(fact.get("complete") and set(request.tracking_queries) <= set(fact.get("queries", []))
+                        and any(ref.id in cited and ref.source == "repository_tree" and ref.head_sha == fact.get("head_sha")
+                            and ref.content_hash == hashlib.sha256(snippet.content.encode("utf-8")).hexdigest()
+                            for ref in summary.evidence))
+                except (ValueError, TypeError):
+                    continue
+            if not applicable:
+                gaps.append("仓库跟踪状态缺少适用的同快照完整 tree 证据或引用")
+        for event in result.messages:
+            if (event.message or "").startswith("followup_evidence_"):
+                gaps.append(event.message)
+        if gaps:
+            budget = result.execution_budget
+            gaps.append(f"取证额度 {budget.context_retrievals}/{budget.max_context_retrievals}；"
+                f"模型调用 {budget.model_calls}/{budget.max_model_calls}")
+            return "unresolved", "；".join(dict.fromkeys(gaps))[:1000]
+        return "refuted", "已找到限定核验范围的反证且完成目标检查"
 
     async def _retry_verifications(self, state: dict) -> None:
         from app.services.issue_verifier import IssueVerifierService

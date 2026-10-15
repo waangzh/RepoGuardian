@@ -131,6 +131,17 @@ def build_context_evidence(context, head_sha, base_sha):
         if snippet.get("source") == "file_read_diff":
             continue
         content = str(snippet.get("content") or "")
+        if snippet.get("source") == "repository_tree":
+            fact = json.loads(content)
+            if fact.get("head_sha") != head_sha or fact.get("scope") != "committed_head_tree_only":
+                raise ValueError("repository_tree_snapshot_mismatch")
+            ref = make_evidence(str(snippet["file"]), "repository_tree", 0, 0, content, head_sha, base_sha)
+            if ref["id"] not in seen:
+                seen.add(ref["id"])
+                evidence.append(ref)
+                chunks.append({**snippet, "start_line": 0, "end_line": 0, "evidence_id": ref["id"],
+                    "content_hash": ref["content_hash"], "head_sha": head_sha, "base_sha": base_sha})
+            continue
         if not content:
             continue
         if content.endswith("\n...(truncated)"):
