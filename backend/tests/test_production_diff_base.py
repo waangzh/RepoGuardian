@@ -151,3 +151,28 @@ def test_multiple_merge_bases_are_rejected_with_candidates(tmp_path: Path) -> No
     with pytest.raises(DiffPreparationError, match="multiple_merge_bases") as excinfo:
         tool.unified_diff(source, left_merge, right_merge)
     assert sorted(excinfo.value.bases) == sorted([left, right])
+
+
+def test_production_and_evaluation_share_one_diff_function(tmp_path: Path) -> None:
+    """生产 GitTool 与评测 SnapshotGitTool 必须给出同一基准与同一 diff 字节。"""
+    from app.evaluation.runner import SnapshotGitTool
+    from app.tools.git_tool import DIFF_CONTEXT_LINES, DIFF_POLICY_VERSION
+
+    source, root, base, head = _forked_repo(tmp_path)
+    pr = _pr(source, base, head)
+    production = GitTool(tmp_path / "production", command_timeout_seconds=30)
+    production_repo, production_diff = production.clone_and_diff(pr)
+    snapshot = SnapshotGitTool(tmp_path / "evaluation", command_timeout_seconds=30)
+    snapshot_repo, snapshot_diff = snapshot.clone_and_diff(pr)
+
+    assert production_diff == snapshot_diff
+    assert production.merge_base(production_repo, base, head) == root
+    assert snapshot.merge_base(snapshot_repo, base, head) == root
+    context = production.review_diff_context(production_repo, base, head)
+    assert context["effective_base_sha"] == root
+    assert snapshot.review_diff_context(snapshot_repo, base, head) == context
+    assert context["diff_policy_version"] == DIFF_POLICY_VERSION == "merge-base-v1"
+    # 断言与生成共用同一上下文行数常量，避免两侧策略版本漂移。
+    expected = production._run(["git", "-C", str(production_repo), "diff", "--no-ext-diff",
+                                f"--unified={DIFF_CONTEXT_LINES}", root, head])
+    assert expected == production_diff
