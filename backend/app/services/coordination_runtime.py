@@ -73,7 +73,7 @@ def coordination_fingerprint(state: dict) -> str:
         "model_profiles": {key: value.model_dump(mode="json") for key, value in
                            settings.repoguardian_model_request_profiles.items()},
         "catalog_version": CATALOG_BATCH_VERSION,
-        "request_contract_version": "coordination-canonical-evidence-v13-planning-question-state",
+        "request_contract_version": "coordination-canonical-evidence-v14-bounded-output-repair",
         "repository": (state.get("pr_info") or {}).get("clone_url"),
         "base_sha": state.get("base_sha"), "head_sha": state.get("head_sha"),
         "model": state.get("model") or settings.repoguardian_model,
@@ -264,7 +264,7 @@ class CoordinationRuntime:
                            "profile": resolved.profile.model_dump(mode="json") if resolved else None,
                            "model_profile_source": resolved.source if resolved else None,
                            "allocation": held.get("followup_id"), "phase": held.get("phase")})
-        types = {"coordinate_cross_units": CrossUnitCoordinationPlan, "decide": AgentAction,
+        types = {"coordinate_cross_units": CrossUnitCoordinationPlan, "repair_cross_unit_plan": CrossUnitCoordinationPlan, "decide": AgentAction,
                  "review_unit": UnitReviewResponse, "review_step": UnitReviewResponse,
                  "verify_issue": IssueVerification}
         async with self.lock:
@@ -287,7 +287,11 @@ class CoordinationRuntime:
                 if existing["status"] == "running":
                     existing["status"] = "unknown"
                 await self.persist()
-                raise LLMProviderError(existing.get("error") or "previous_call_outcome_unknown")
+                error = LLMProviderError(existing.get("error") or "previous_call_outcome_unknown",
+                    usage=ModelUsage.model_validate(existing["usage"]) if existing.get("usage") else None)
+                error.coordination_error_code = existing.get("coordination_error_code")
+                error.output_schema_errors = existing.get("output_schema_errors", [])
+                raise error
             prepared = bool(getattr(provider, "supports_request_admission", False))
             reservation = ({"estimate": 0, "estimate_source": "provider_prompt",
                             "estimate_method": "prepared_request"}
@@ -380,6 +384,9 @@ class CoordinationRuntime:
                 usage = getattr(exc, "usage", None) or usage
                 self.data["calls"][key].update(status="failed", error=f"{type(exc).__name__}: {exc}",
                     usage=usage.model_dump(mode="json") if usage else None)
+                if getattr(exc, "coordination_error_code", None):
+                    self.data["calls"][key].update(coordination_error_code=exc.coordination_error_code,
+                        output_schema_errors=getattr(exc, "output_schema_errors", []))
                 if rejection and rejection.get("can_defer") and not self.data["calls"][key].get("attempt_ids"):
                     if self.data["calls"][key].get("attempts", 0) == 0:
                         self.data["calls"][key].update(status="deferred_budget",
