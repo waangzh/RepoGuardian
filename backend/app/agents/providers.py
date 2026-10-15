@@ -499,7 +499,9 @@ class OpenAICompatibleProvider(LLMProvider):
             '"symbol":null,"assumption":"依赖的条件","status":"unresolved",'
             '"evidence_ids":[]}],"unresolved_questions":[{"id":null,"question":"未决问题",'
             '"affected_files":[],"evidence_ids":[]}],"question_updates":[{"question_id":"记忆中的问题ID",'
-            '"status":"resolved","reason":"更新依据","evidence_ids":["current evidence ID"],"replacement_id":null}]}\n'
+            '"status":"resolved","reason":"更新依据","evidence_ids":["current evidence ID"],"replacement_id":null}],'
+            '"obligation_updates":[{"obligation_id":"服务端绑定的义务ID","status":"verified|resolved",'
+            '"evidence_ids":["current evidence ID"],"reason":"核验范围与结论依据"}]}\n'
             f"{metadata_protocol}"
             "checked, supported, refuted, verified and conflicting require evidence IDs. "
             "For a verified/conflicting dependency include evidence from that dependency file.\n"
@@ -510,7 +512,9 @@ class OpenAICompatibleProvider(LLMProvider):
             "new questions use id=null or a unique response-local alias, which the server replaces with a stable ID. "
             "Questions keep immutable text/files and current IDs. Omission does not resolve them. "
             "resolved requires current evidence and no replacement; superseded requires a distinct active/new replacement_id. "
-            "With no valid replacement omit the update. Use allowed_question_update_ids or visible active IDs. "
+            "With no valid replacement omit the update. Use only local question IDs in update_catalog.question_updates. "
+            "Parent questions/dependencies in origin_obligations use only update_catalog.obligation_updates IDs; "
+            "never put a parent check_id or question ID in question_updates. Empty catalogs require empty update lists. "
             "Closed transitions are history: do not repeat them. Never guess a prior ID. "
             "Do not copy input evidence objects into the record.\n"
             "For canonical evidence, each full diff body is supplied once; removed_lines is its "
@@ -604,6 +608,8 @@ class OpenAICompatibleProvider(LLMProvider):
             raise ValueError("diagnosis_file_change_evidence_mismatch")
         payload["readonly_context"] = contexts
         payload["evidence"] = evidence
+        from app.services.unit_review_summary import review_update_catalog
+        payload["update_catalog"] = review_update_catalog(record_input)
         from app.services.unit_coverage import hierarchy_payload
         hierarchy_payload(payload, evidence)
         return payload
