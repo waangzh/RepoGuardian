@@ -116,6 +116,22 @@ class TaskReviewV1Protocol:
         }
         for evidence in payload["active_evidence"]:
             evidence.pop("canonical_change", None)
+        if work_item.kind.value == "investigate":
+            payload["investigation_evidence_requirements"] = {
+                "readiness": checker.investigation_citation_readiness(),
+                "required_evidence_ids": work_item.required_evidence_ids,
+                "required_ids_visible": not (set(work_item.required_evidence_ids) - active_evidence_ids),
+                "source_ranges": [{**request.model_dump(mode="json"),
+                    "visible_evidence_ids": sorted(identity for identity in active_evidence_ids
+                        if evidence_catalog[identity]["file_path"] == request.file_path
+                        and evidence_catalog[identity].get("side", "head") == "head"
+                        and evidence_catalog[identity]["start_line"] <= request.end_line
+                        and evidence_catalog[identity]["end_line"] >= request.start_line)}
+                    for request in work_item.evidence_requests],
+                "instruction": "For supported/refuted, cite all required IDs AND enough visible source chunks "
+                    "to cover every requested range, including chunks obtained by preparatory reads. "
+                    "If source is missing or the complete citation set exceeds 20 IDs, submit insufficient_evidence "
+                    "with the exact gap; do not claim a complete answer."}
         system = ("You review one server-selected task. Return exactly one JSON object: "
             "kind=read for one controlled readonly tool, or kind=submit for results. "
             "Do not change task identity, snapshot, goals, or completion state. "
@@ -202,7 +218,13 @@ class TaskReviewV1Protocol:
                     "than guessing from their spelling. Compare removed and added operations before drawing conclusions. "
                     "A nearby alternative branch is not evidence of what the triggered branch does. "
                     "Read missing local implementations or callers; if a necessary premise remains unknown, "
-                    "report the evidence gap instead of inventing behavior.")
+                    "report the evidence gap instead of inventing behavior. "
+                    "For claims about mutation or initialization, distinguish input values, preserved regions, "
+                    "written regions and unspecified values using the actual operation contract. "
+                    "For a claim that a method or symbol does not exist, trace the receiver and actual resolution "
+                    "path, including applicable base classes, imports, delegation or dynamic bindings. "
+                    "Absence from the current class or visible fragment alone is not proof of absence. "
+                    "If that resolution is incomplete, report missing evidence instead of asserting nonexistence.")
         if work_item.kind.value == "verify" and self.spec.publication_contract == "claim-publication-v1":
             from app.services.review_publication import verification_subject_hash
             payload["publication_contract"] = self.spec.publication_contract

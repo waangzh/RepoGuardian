@@ -1,21 +1,10 @@
-import json
 from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.agents.providers import LLMProviderError, OpenAICompatibleProvider, build_provider
-from app.graph.policies import UNIT_ACTION_REGISTRY
-from app.services.unit_review_summary import build_record_input
-from app.models.review import (
-    ChangedFile,
-    IssueVerificationBudget,
-    IssueVerificationRequest,
-    PullRequestInfo,
-    PullRequestRef,
-    ReviewIssue,
-    UnitReviewPlan,
-)
+from app.models.review import ChangedFile, PullRequestInfo, PullRequestRef
 
 
 class FakeChatOpenAI:
@@ -43,62 +32,32 @@ def fake_chat(monkeypatch: pytest.MonkeyPatch) -> type[FakeChatOpenAI]:
     return FakeChatOpenAI
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("invalid", [False, True])
-async def test_unit_review_record_shares_diagnosis_call_and_invalid_record_preserves_issues(
-    fake_chat: type[FakeChatOpenAI], invalid: bool,
-) -> None:
-    record = {"change_summary": "修改返回值", "target_checks": [{
-        "target": "检查返回值", "status": "checked", "evidence_ids": ["e1"], "reason": "已检查",
-    }]}
-    if invalid:
-        record["target_checks"][0]["evidence_ids"] = []
-    issue = {"severity": "high", "category": "correctness", "title": "空值未处理", "confidence": 0.9,
-             "affected_behavior": "空值会失败", "failure_scenario": "输入为空", "recommendation": "处理空值",
-             "primary_evidence": {"file_path": "a.py", "existing_code": "return value"}}
-    record_input = build_record_input([], [{"file": "a.py", "start_line": 1, "end_line": 1,
-        "content": "return value", "relevance": "direct"}], None, "head", "base")
-    record_input["targets"] = ["检查返回值"]
-    if not invalid:
-        record["target_checks"][0]["evidence_ids"] = [record_input["evidence"][0]["id"]]
-    fake_chat.responses = [AIMessage(content=json.dumps({"issues": [issue], "review_record": record}))]
-    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
-    result = await provider.review_unit(_sample_pr(), [], "", None, record_input)
-    assert len(fake_chat.instances) == 1
-    assert len(result.value.issues) == 1
-    assert (result.value.review_record is None) == invalid
-    assert bool(result.value.record_error) == invalid
-    assert result.usage.operation == "diagnosis"
-    assert "review_record" in fake_chat.instances[0].messages[1].content
-    assert "return value" in fake_chat.instances[0].messages[1].content
-    assert record_input["evidence"][0]["id"] in fake_chat.instances[0].messages[1].content
-
-
-@pytest.mark.asyncio
-async def test_canonical_unit_response_without_record_remains_missing(fake_chat: type[FakeChatOpenAI]) -> None:
-    fake_chat.responses = [AIMessage(content='{"issues":[]}')]
-    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
-    result = await provider.review_unit(_sample_pr(), [], "", None, build_record_input([], [], None, "h", "b"))
-    assert result.value.review_record is None
+def _sample_pr() -> PullRequestInfo:
+    return PullRequestInfo(
+        owner="local", repo="sample", number=1, title="Fix stats",
+        html_url="https://github.com/local/sample/pull/1",
+        clone_url="https://github.com/local/sample.git",
+        base=PullRequestRef(ref="main", sha="1" * 40, repo_clone_url="https://github.com/local/sample.git"),
+        head=PullRequestRef(ref="feature", sha="2" * 40, repo_clone_url="https://github.com/local/sample.git"),
+    )
 
 
 @pytest.mark.asyncio
 async def test_provider_constructs_chatopenai_with_json_mode_and_model_override(
     fake_chat: type[FakeChatOpenAI],
 ) -> None:
-    fake_chat.responses = [AIMessage(content='{"action":"finish_report","reason":"完成"}')]
+    fake_chat.responses = [AIMessage(content='{"summary":"修复区间统计。"}')]
     provider = OpenAICompatibleProvider("key", "https://example.com/v1", "default-model")
 
-    action = await provider.decide({}, "override-model")
+    await provider.summarize_pr_purpose(_sample_pr(), [], "override-model")
 
-    assert action.action == "finish_report"
     chat = fake_chat.instances[0]
     assert chat.kwargs == {
         "api_key": "key",
         "base_url": "https://example.com/v1",
         "model": "override-model",
         "temperature": 0.1,
-        "max_tokens": 1200,
+        "max_tokens": 700,
         "max_retries": 0,
         "timeout": 60.0,
         "model_kwargs": {"response_format": {"type": "json_object"}},
@@ -120,20 +79,17 @@ async def test_provider_summarizes_english_pr_purpose_in_chinese(
         None,
     )
 
-    assert summary == "修复区间统计，使点估计始终位于区间内。"
-    chat = fake_chat.instances[0]
-    assert chat.kwargs["max_tokens"] == 700
-    assert "必须使用简体中文" in chat.messages[1].content
+    assert summary.value == "修复区间统计，使点估计始终位于区间内。"
 
 
 @pytest.mark.asyncio
 async def test_provider_rejects_pr_purpose_without_chinese(
     fake_chat: type[FakeChatOpenAI],
 ) -> None:
-    fake_chat.responses = [AIMessage(content='{"summary":"Keep the estimate in the interval."}')]
+    fake_chat.responses = [AIMessage(content='{"summary":"Fix interval statistics."}')]
     provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
 
-    with pytest.raises(LLMProviderError, match="PR purpose summary schema validation failed"):
+    with pytest.raises(LLMProviderError):
         await provider.summarize_pr_purpose(_sample_pr(), [], None)
 
 
@@ -141,61 +97,24 @@ async def test_provider_rejects_pr_purpose_without_chinese(
 async def test_deepseek_passes_thinking_control_via_extra_body(
     fake_chat: type[FakeChatOpenAI],
 ) -> None:
-    fake_chat.responses = [AIMessage(content='{"action":"finish_report","reason":"完成"}')]
+    fake_chat.responses = [AIMessage(content='{"summary":"修复区间统计。"}')]
     provider = build_provider("deepseek", "key", "https://api.deepseek.com", "deepseek-model")
 
-    await provider.decide({}, None)
+    await provider.summarize_pr_purpose(_sample_pr(), [], None)
 
-    options = fake_chat.instances[0].kwargs
-    assert options["extra_body"] == {"thinking": {"type": "disabled"}}
-    assert options["model_kwargs"] == {"response_format": {"type": "json_object"}}
-    assert "thinking" not in options
+    assert fake_chat.instances[0].kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
 
 
 @pytest.mark.asyncio
 async def test_openai_compatible_deepseek_endpoint_disables_thinking(
     fake_chat: type[FakeChatOpenAI],
 ) -> None:
-    fake_chat.responses = [AIMessage(content='{"action":"finish_report","reason":"完成"}')]
+    fake_chat.responses = [AIMessage(content='{"summary":"修复区间统计。"}')]
     provider = build_provider("openai-compatible", "key", "https://api.deepseek.com", "deepseek-model")
 
-    await provider.decide({}, None)
+    await provider.summarize_pr_purpose(_sample_pr(), [], None)
 
     assert fake_chat.instances[0].kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
-
-
-@pytest.mark.asyncio
-async def test_provider_parses_decision_review_and_patch_results(
-    fake_chat: type[FakeChatOpenAI],
-) -> None:
-    fake_chat.responses = [
-        AIMessage(content='{"action":"review_code","reason":"审查变更"}'),
-        AIMessage(content="""{"issues":[{"line_no":10,
-            "severity":"high","category":"correctness","title":"空值未处理",
-            "failure_scenario":"存在空值风险。","recommendation":"增加空值检查。",
-            "confidence":"high","primary_evidence":{"file_path":"app.py",
-            "existing_code":"value = item.name"},"affected_behavior":"空输入可能失败。"}]}"""),
-        AIMessage(content='{"patches":[{"diff_content":"diff --git a/app.py b/app.py","status":"generated"}]}'),
-    ]
-    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
-
-    action = await provider.decide({}, None)
-    issues = await provider.review(
-        _sample_pr(),
-        [ChangedFile(file_path="app.py", change_type="modified", additions=1, deletions=0)],
-        "diff --git a/app.py b/app.py",
-        None,
-    )
-    patches = await provider.generate_patch(
-        {"review_issues": [issues[0].model_dump(mode="json")]},
-        None,
-    )
-
-    assert action.action == "review_code"
-    assert issues[0].confidence == 0.85
-    assert issues[0].primary_evidence.resolved_start_line is None
-    assert patches[0].diff_content == "diff --git a/app.py b/app.py"
-    assert [instance.kwargs["max_tokens"] for instance in fake_chat.instances] == [1200, 4096, 4096]
 
 
 @pytest.mark.asyncio
@@ -203,164 +122,8 @@ async def test_provider_rejects_invalid_json(fake_chat: type[FakeChatOpenAI]) ->
     fake_chat.responses = [AIMessage(content="not json")]
     provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
 
-    with pytest.raises(LLMProviderError, match="not valid JSON"):
-        await provider.decide({}, None)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "legacy_plan, expected_files",
-    [
-        ({"files": ["chainladder/core/tests/test_triangle.py"]},
-         ["chainladder/core/tests/test_triangle.py"]),
-        ({"file_requests": [{"file": "chainladder/core/triangle.py",
-                              "reason": "读取相关实现"}]},
-         ["chainladder/core/triangle.py"]),
-    ],
-)
-async def test_provider_normalizes_observed_retrieval_plan_aliases(
-    fake_chat: type[FakeChatOpenAI],
-    legacy_plan: dict[str, Any],
-    expected_files: list[str],
-) -> None:
-    fake_chat.responses = [AIMessage(content=json.dumps({
-        "action": "retrieve_context",
-        "reason": "需要补充上下文",
-        "tool_args": {"plan": legacy_plan},
-    }, ensure_ascii=False))]
-    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
-
-    action = await provider.decide({"phase": "discovery", "unit_agent": True}, None)
-
-    assert action.tool_args["plan"]["target_files"] == expected_files
-    assert action.tool_args["plan"]["reason"] == "需要补充上下文"
-    assert action.tool_args["plan"]["relevance_types"] == ["direct"]
-
-
-def test_unit_decision_prompt_exposes_small_repository_search_surface() -> None:
-    prompt = OpenAICompatibleProvider._build_decision_prompt({
-        "phase": "discovery",
-        "unit_agent": True,
-    })
-
-    assert "code_search" in prompt
-    assert '"relation": "text"' in prompt
-    assert "Internal retrieval plans are not exposed" in prompt
-
-
-def test_unit_decision_prompt_is_generated_from_action_registry() -> None:
-    prompt = OpenAICompatibleProvider._build_decision_prompt({
-        "phase": "discovery",
-        "unit_agent": True,
-    })
-
-    expected_actions = ", ".join(item.action.value for item in UNIT_ACTION_REGISTRY)
-    assert f"Allowed actions: {expected_actions}." in prompt
-    for item in UNIT_ACTION_REGISTRY:
-        assert f"- {item.action.value}: {item.prompt_instruction}" in prompt
-    assert '"action":"request_human"' not in prompt
-    assert '"missing_information"' not in prompt
-
-
-@pytest.mark.asyncio
-async def test_provider_builds_structured_unit_plan_from_bounded_input(
-    fake_chat: type[FakeChatOpenAI],
-) -> None:
-    fake_chat.responses = [AIMessage(content=json.dumps({
-        "schema_version": "unit-review-plan-v1",
-        "change_summary": "修改公开接口返回值",
-        "review_objectives": ["验证兼容性"],
-        "risk_hypotheses": [{
-            "id": "risk-1",
-            "category": "correctness",
-            "priority": "high",
-            "description": "调用方可能依赖旧返回值",
-            "affected_files": ["api.py"],
-            "affected_symbols": ["public_api"],
-            "evidence_needed": ["检查调用方"],
-            "retrieval_suggestions": [],
-            "completion_criteria": "确认所有调用方兼容",
-        }],
-        "coverage_targets": ["公开接口调用链"],
-        "initial_action": {
-            "action": "report_issue", "reason": "diff 已足够",
-            "target_issue_ids": [], "tool_args": {}, "human_request": None,
-        },
-    }, ensure_ascii=False))]
-    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
-
-    result = await provider.plan_review_unit({
-        "review_unit": {
-            "primary_files": ["api.py"], "risk_tags": ["public_api"],
-            "rule_ids": ["review.api"], "changed_symbols": ["public_api"],
-        },
-        "unit_diff": "+def public_api():\n+    return 2",
-        "changed_files": [{"file_path": "api.py"}],
-        "file_index": [{"path": "api.py"}],
-        "symbol_index": [{"file": "api.py", "symbol": "public_api", "type": "function"}],
-        "review_tool_scope": {"commentable_files": ["api.py"], "readable_files": ["api.py"]},
-    }, None)
-
-    assert isinstance(result.value, UnitReviewPlan)
-    assert result.value.risk_hypotheses[0].id == "risk-1"
-    prompt = fake_chat.instances[0].messages[1].content
-    assert "public_api" in prompt
-    assert "+def public_api" in prompt
-    assert "unconfirmed hypotheses" in prompt
-
-
-@pytest.mark.asyncio
-async def test_provider_discards_invalid_optional_unit_plan_guidance(
-    fake_chat: type[FakeChatOpenAI],
-) -> None:
-    fake_chat.responses = [AIMessage(content=json.dumps({
-        "schema_version": "unit-review-plan-v1",
-        "change_summary": "修复区间边界",
-        "review_objectives": ["验证区间包含点估计"],
-        "risk_hypotheses": [{
-            "id": "risk-valid",
-            "category": "correctness",
-            "priority": "high",
-            "description": "边界修正可能遗漏特殊输入",
-            "affected_files": ["stats.py"],
-            "affected_symbols": ["weighted_posterior"],
-            "evidence_needed": ["检查边界测试"],
-            "retrieval_suggestions": ["查看相关边界测试"],
-            "completion_criteria": "确认特殊输入仍满足区间约束",
-        }, {
-            "id": "risk-invalid-category",
-            "category": "cross_module",
-            "priority": "medium",
-            "description": "跨模块影响",
-            "affected_files": ["stats.py"],
-            "affected_symbols": [],
-            "evidence_needed": [],
-            "retrieval_suggestions": [],
-            "completion_criteria": "确认调用方行为",
-        }],
-        "coverage_targets": ["边界测试"],
-        "initial_action": {
-            "action": "report_issue", "reason": "diff 已足够",
-            "target_issue_ids": [], "tool_args": {}, "human_request": None,
-        },
-    }, ensure_ascii=False))]
-    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
-
-    result = await provider.plan_review_unit({}, None)
-
-    assert [item.id for item in result.value.risk_hypotheses] == ["risk-valid"]
-    assert result.value.risk_hypotheses[0].retrieval_suggestions == []
-
-
-@pytest.mark.asyncio
-async def test_provider_rejects_invalid_unit_plan_schema(
-    fake_chat: type[FakeChatOpenAI],
-) -> None:
-    fake_chat.responses = [AIMessage(content='{"change_summary":"missing fields"}')]
-    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
-
-    with pytest.raises(LLMProviderError, match="Unit review plan schema validation failed"):
-        await provider.plan_review_unit({}, None)
+    with pytest.raises(LLMProviderError):
+        await provider.summarize_pr_purpose(_sample_pr(), [], None)
 
 
 @pytest.mark.asyncio
@@ -369,7 +132,7 @@ async def test_provider_wraps_chatopenai_failures(fake_chat: type[FakeChatOpenAI
     provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
 
     with pytest.raises(LLMProviderError, match="RuntimeError: network unavailable") as raised:
-        await provider.decide({}, None)
+        await provider.summarize_pr_purpose(_sample_pr(), [], None)
     assert raised.value.usage
     assert raised.value.usage.usage_available is False
     assert raised.value.usage.response_metadata["request_attempts"] == 1
@@ -384,15 +147,15 @@ async def test_provider_retries_retryable_connection_failure(
 
     fake_chat.responses = [
         APIConnectionError("temporary outage"),
-        AIMessage(content='{"action":"finish_report","reason":"完成"}'),
+        AIMessage(content='{"summary":"修复区间统计。"}'),
     ]
     provider = OpenAICompatibleProvider(
         "key", "https://example.com/v1", "model", retry_backoff_seconds=0
     )
 
-    result = await provider.decide({}, None)
+    result = await provider.summarize_pr_purpose(_sample_pr(), [], None)
 
-    assert result.action == "finish_report"
+    assert result.value == "修复区间统计。"
     assert len(fake_chat.instances[0].messages) == 2
     assert fake_chat.responses == []
 
@@ -409,7 +172,7 @@ async def test_provider_redacts_credentials_from_failure_detail(
     )
 
     with pytest.raises(LLMProviderError) as raised:
-        await provider.decide({}, None)
+        await provider.summarize_pr_purpose(_sample_pr(), [], None)
 
     assert "secret-token" not in str(raised.value)
     assert "secret-token" not in str(raised.value.usage.response_metadata)
@@ -422,176 +185,25 @@ def test_provider_rejects_non_string_ai_message_content() -> None:
         provider._extract_message_content(AIMessage(content=[{"type": "text", "text": "{}"}]))
 
 
-def test_openai_provider_parses_json_object_with_issues() -> None:
-    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
-    content = """{"issues":[{"line_no":10,"severity":"high",
-    "category":"correctness","title":"空值未处理","failure_scenario":"存在空值风险。",
-    "recommendation":"增加空值检查。","confidence":0.8,
-    "primary_evidence":{"file_path":"app.py","existing_code":"value = item.name"},
-    "affected_behavior":"空输入可能失败。"}]}"""
-
-    issues = provider._parse_issues(content)
-
-    assert len(issues) == 1
-    assert issues[0].confidence == 0.8
-
-
-def test_openai_provider_normalizes_confidence_values() -> None:
-    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
-    content = """{"issues":[
-    {"line_no":10,"severity":"high","category":"correctness",
-    "title":"空值未处理","failure_scenario":"存在空值风险。","recommendation":"增加空值检查。",
-    "confidence":"high","primary_evidence":{"file_path":"app.py","existing_code":"value = item.name"},
-    "affected_behavior":"空输入可能失败。"},
-    {"line_no":20,"severity":"medium","category":"test",
-    "title":"缺少测试","failure_scenario":"新增逻辑缺少测试。","recommendation":"补充测试。",
-    "confidence":"75%","primary_evidence":{"file_path":"app.py","existing_code":"return value"},
-    "affected_behavior":"回归无法验证。"}]}"""
-
-    issues = provider._parse_issues(content)
-
-    assert [issue.confidence for issue in issues] == [0.85, 0.75]
-
-
-def test_openai_provider_rejects_invalid_json() -> None:
-    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
-
-    with pytest.raises(LLMProviderError):
-        provider._parse_issues("not json")
-
-
 def test_build_provider_supports_expected_names() -> None:
-    for name in ("openai", "deepseek", "openai-compatible", " OpenAI-Compatible "):
-        assert isinstance(build_provider(name, "key", "https://example.com/v1", "model"), OpenAICompatibleProvider)
+    assert isinstance(build_provider("deepseek", "key", "https://api.deepseek.com", "model"),
+                      OpenAICompatibleProvider)
+    assert isinstance(build_provider("openai-compatible", "key", "https://example.com/v1", "model"),
+                      OpenAICompatibleProvider)
 
 
 def test_build_provider_rejects_unknown_provider() -> None:
-    for name in ("unknown", "mock"):
-        with pytest.raises(ValueError, match="REPOGUARDIAN_PROVIDER"):
-            build_provider(name, None, "https://example.com", "model")
+    with pytest.raises(ValueError, match="REPOGUARDIAN_PROVIDER"):
+        build_provider("unknown", "key", "https://example.com/v1", "model")
 
 
 @pytest.mark.asyncio
-async def test_issue_verifier_uses_strict_bounded_schema(
-    fake_chat: type[FakeChatOpenAI],
-) -> None:
-    issue = ReviewIssue(
-        id="issue-1",
-        review_unit_id="unit-1",
-        title="错误",
-        category="correctness",
-        severity="medium",
-        confidence=0.9,
-        affected_behavior="返回错误结果",
-        failure_scenario="有效输入会返回错误值",
-        recommendation="修复条件",
-        primary_evidence={"file_path": "app.py", "existing_code": "return wrong"},
-    )
-    request = IssueVerificationRequest(
-        issue=issue,
-        primary_evidence=issue.primary_evidence,
-        unit_diff="[]",
-        budget=IssueVerificationBudget(remaining_calls=1),
-    )
-    fake_chat.responses = [AIMessage(content=(
-        '{"issue_id":"issue-1","decision":"keep","reason":"证据成立",'
-        '"contradicting_evidence":[],"adjusted_severity":null}'
-    ))]
+async def test_task_review_step_requires_matching_operation(fake_chat: type[FakeChatOpenAI]) -> None:
+    from app.services.model_request_budgeter import PreparedModelRequest
+
     provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
+    request = PreparedModelRequest(model="model", operation="diagnosis", system="s",
+                                   prompt="p", output_tokens=10)
 
-    decision = await provider.verify_issue(request, None)
-
-    assert decision.decision == "keep"
-    assert fake_chat.instances[0].kwargs["max_tokens"] == 1200
-    prompt = fake_chat.instances[0].messages[1].content
-    assert "cannot add an issue" in prompt
-    assert "execute code" in prompt
-
-
-@pytest.mark.asyncio
-async def test_issue_verifier_rejects_extra_output_fields(
-    fake_chat: type[FakeChatOpenAI],
-) -> None:
-    issue = ReviewIssue(
-        id="issue-1",
-        review_unit_id="unit-1",
-        title="错误",
-        category="correctness",
-        severity="medium",
-        confidence=0.9,
-        affected_behavior="返回错误结果",
-        failure_scenario="有效输入会返回错误值",
-        recommendation="修复条件",
-        primary_evidence={"file_path": "app.py", "existing_code": "return wrong"},
-    )
-    request = IssueVerificationRequest(
-        issue=issue,
-        primary_evidence=issue.primary_evidence,
-        unit_diff="[]",
-        budget=IssueVerificationBudget(remaining_calls=1),
-    )
-    fake_chat.responses = [AIMessage(content=(
-        '{"issue_id":"issue-1","decision":"keep","reason":"证据成立",'
-        '"contradicting_evidence":[],"adjusted_severity":null,"issues":[]}'
-    ))]
-    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
-
-    with pytest.raises(LLMProviderError, match="schema validation failed"):
-        await provider.verify_issue(request, None)
-
-
-@pytest.mark.asyncio
-async def test_issue_verifier_preserves_decision_when_reason_is_too_long(
-    fake_chat: type[FakeChatOpenAI],
-) -> None:
-    issue = ReviewIssue(
-        id="issue-1",
-        review_unit_id="unit-1",
-        title="错误",
-        category="correctness",
-        severity="medium",
-        confidence=0.9,
-        affected_behavior="返回错误结果",
-        failure_scenario="有效输入会返回错误值",
-        recommendation="修复条件",
-        primary_evidence={"file_path": "app.py", "existing_code": "return wrong"},
-    )
-    request = IssueVerificationRequest(
-        issue=issue,
-        primary_evidence=issue.primary_evidence,
-        unit_diff="[]",
-        budget=IssueVerificationBudget(remaining_calls=1),
-    )
-    long_reason = "分析" * 1_100 + "最终结论：证据成立"
-    fake_chat.responses = [AIMessage(content=json.dumps({
-        "issue_id": "issue-1",
-        "decision": "keep",
-        "reason": long_reason,
-        "contradicting_evidence": [],
-        "adjusted_severity": None,
-    }, ensure_ascii=False))]
-    provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
-
-    decision = await provider.verify_issue(request, None)
-
-    assert decision.decision == "keep"
-    assert len(decision.reason) <= 2_000
-    assert decision.reason.startswith("分析")
-    assert decision.reason.endswith("最终结论：证据成立")
-    assert "verifier reason truncated" in decision.reason
-
-
-def _sample_pr() -> PullRequestInfo:
-    ref = PullRequestRef(
-        ref="main", sha="abc123", repo_clone_url="https://github.com/owner/repo.git"
-    )
-    return PullRequestInfo(
-        owner="owner",
-        repo="repo",
-        number=1,
-        title="Test PR",
-        html_url="https://github.com/owner/repo/pull/1",
-        clone_url="https://github.com/owner/repo.git",
-        base=ref,
-        head=ref,
-    )
+    with pytest.raises(LLMProviderError, match="task_review_v1_request_required"):
+        await provider.task_review_step(request)

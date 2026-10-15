@@ -69,8 +69,8 @@ class Settings(BaseSettings):
     repoguardian_default_review_mode: Literal[
         "review", "review_and_suggest", "review_suggest_and_validate"
     ] = "review"
-    # 创建任务时冻结；运行中不读取此配置切换引擎。
-    repoguardian_review_engine: Literal["legacy_units", "task_review_v1"] = "legacy_units"
+    # 创建任务时冻结；legacy_units 旧引擎已下线，仅历史任务快照保留该值。
+    repoguardian_review_engine: Literal["task_review_v1"] = "task_review_v1"
     repoguardian_default_validation_backend: Literal[
         "none", "user_runner", "project_ci", "gvisor"
     ] = "none"
@@ -101,16 +101,10 @@ class Settings(BaseSettings):
     # ---- Review Unit Planner / 调度 ----
     repoguardian_review_unit_concurrency: int = 4
     repoguardian_task_review_timeout_seconds: float = Field(default=1800, ge=1, le=86_400)
-    repoguardian_review_unit_timeout_seconds: int = 180
     repoguardian_review_unit_small_max_changed_lines: int = 30
     repoguardian_review_unit_large_min_changed_lines: int = 400
     repoguardian_review_unit_max_lines_per_read: int = 240
     repoguardian_review_unit_max_search_results: int = 12
-
-    # ---- Issue 确定性策略与独立验证 ----
-    repoguardian_issue_verifier_enabled: bool = True
-    repoguardian_issue_verifier_fail_mode: Literal["unresolved", "candidate", "needs_human"] = "unresolved"
-    repoguardian_issue_verifier_max_calls_per_unit: int = Field(default=5, ge=0, le=100)
 
     # ---- 阶段 4 候选补丁资格与确定性大小上限 ----
     repoguardian_patch_confidence_threshold: float = Field(default=0.8, ge=0, le=1)

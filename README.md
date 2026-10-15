@@ -12,7 +12,7 @@
 
 - **先预览，再审查**：Preview 展示变更文件、审查单元（Review Unit）、风险标签和预计模型调用数，预览阶段不调用模型。
 - **结合仓库上下文**：Agent 使用只读搜索与文件读取理解关联代码；PR 标题和正文提供背景，但不能替代代码证据。
-- **分工审查与跨组补查**：将变更拆分为独立 Unit，记录检查目标；对契约依赖、结论冲突或覆盖缺口进行受限补查。
+- **目标驱动的分工检查**：将变更规划为审查目标与工作项，在固定快照上独立检查；对证据缺口派生受限调查与独立核验。
 - **证据可追溯**：候选问题经过证据解析、策略检查和独立验证，结果展示代码位置、依据与处理状态。
 - **过程可观察、任务可恢复**：查看检查范围、未决问题、模型用量和耗时；持久化任务与检查记录，恢复时复用兼容的已完成结果。
 
@@ -64,16 +64,16 @@ npm run dev
 
 1. 输入可访问的 GitHub PR URL，点击 **Preview**，检查文件范围、Review Units 和预计模型调用数。预览需要访问 GitHub 并准备仓库。
 2. 确认范围后启动审查，查看任务进度，并在 **审查** 中结合代码证据复核问题。
-3. 打开 **检查与协作**，查看实际检查目标、跨组风险、补查结果和未决问题；在 **文件** 中检查覆盖范围。
+3. 打开 **检查与协作**，查看实际检查目标、调查结论和未决问题；在 **文件** 中检查覆盖范围。
 4. 查看或复制原始 Markdown 报告，也可从历史记录重新打开任务。
 
 审查自动执行至最终报告，不会暂停等待人工回答。证据不足、验证失败和缺少业务规则的内容保留为未确认问题或覆盖缺口；由你在原 PR 决定是否接受、修改或合并，也可自行将报告复制到评论。
 
 解读结果时注意：
 
-- **覆盖情况**：文件可能由多个 Unit 共同审查；只有相关 Unit 均完整完成，文件才计为已审查。`partial` 或 `completed_with_warnings` 表示仍有未完整完成的检查。
+- **覆盖情况**：覆盖按审查目标统计；只有该文件的全部目标均为 `examined` 才计为已审查。`partial`、`blocked` 或 `completed_with_warnings` 表示仍有未完整完成的检查。
 - **问题与检查状态**：`checked` 仅表示检查过，零 Issue 不代表代码正确；缺失证据、未执行补查和未知结果需要人工复核。
-- **调用与成本**：Preview 的 Unit 调用预估不包含审查后的跨组协调。成本未配置或实际用量缺失时保持未知，预估不能视为最终账单。
+- **调用与成本**：Preview 的调用预估不包含审查中的派生调查与核验。成本未配置或实际用量缺失时保持未知，预估不能视为最终账单。
 
 ## 配置
 
@@ -87,14 +87,13 @@ REPOGUARDIAN_PROVIDER=openai # 自定义服务时与 API Key、Base URL、模型
 REPOGUARDIAN_MODEL=gpt-4.1-mini # 实际请求的模型名
 
 REPOGUARDIAN_REVIEW_UNIT_CONCURRENCY=4 # Unit 并发数
-REPOGUARDIAN_REVIEW_UNIT_TIMEOUT_SECONDS=180 # 单 Unit 超时，单位秒
-REPOGUARDIAN_REVIEW_ENGINE=legacy_units # 创建任务时冻结；task_review_v1 为实验性任务运行时，默认暂不切换
-REPOGUARDIAN_TASK_REVIEW_TIMEOUT_SECONDS=1800 # 新引擎运行期限，单位秒；旧单 Unit 期限单独配置
+REPOGUARDIAN_REVIEW_ENGINE=task_review_v1 # 唯一可选引擎；创建时冻结进任务快照，legacy_units 旧引擎已下线
+REPOGUARDIAN_TASK_REVIEW_TIMEOUT_SECONDS=1800 # 审查运行期限，单位秒
 
 REPOGUARDIAN_MODEL_REQUEST_PROFILES={} # JSON：实际模型名到窗口配置的映射，优先于通用配置
 # REPOGUARDIAN_MODEL_REQUEST_PROFILE={"context_window":16384,"safety_margin_tokens":512,"input_output_shared":true} # 可选通用覆盖，启用后优先于内置注册表；按供应商实际限制设置
 REPOGUARDIAN_MODEL_PRICING_JSON={} # 按 provider:model 配置每百万 token 的美元价格；未配置或用量缺失时成本未知
-REPOGUARDIAN_RUN_MAX_TOKENS=1000000 # 整个运行的 Token 上限，包括所有 Unit、Verifier、协调及传输重试
+REPOGUARDIAN_RUN_MAX_TOKENS=1000000 # 整个运行的 Token 上限，包括检查、调查、核验及传输重试
 REPOGUARDIAN_RUN_MAX_CALLS=200 # 整个运行的真实传输尝试上限
 # REPOGUARDIAN_RUN_MAX_COST_MICROUSD=5000000 # 可选金额硬上限；缺价拒绝发送，未知用量保留金额预留
 
@@ -106,7 +105,7 @@ REPOGUARDIAN_LANGSMITH_TRACING=false # 默认关闭追踪；启用后默认仍�
 
 ![RepoGuardian 架构图](https://github.com/user-attachments/assets/e405f29f-0587-43b1-aac8-1f2a20ab1066)
 
-准备 PR 与仓库 → 解析变更、建立索引 → 拆分 Review Units 并独立审查 → 解析证据、检查策略并验证候选 → 跨 Unit 风险筛查与定向补查 → 去重并生成报告。
+准备 PR 与仓库 → 解析变更、建立索引 → 规划审查目标与工作项 → 固定快照运行时执行检查与派生核验 → 投影覆盖、结论与报告。
 
 审查内容以 PR 声明 base 与 head 的唯一 merge base 为基准，等价于 GitHub PR 的三点比较；声明 base 仅保留 PR 身份。无法确定唯一 merge base（无共同祖先或存在多个候选）时明确失败，不退化为两点比较——两点比较会把 base 分支独有提交当作本 PR 的反向变更交给审查。生产、Preview、CLI 与评测共用同一 Diff 生成函数与策略版本，`run_manifest` 同时记录 `base_sha` 与 `effective_base_sha`。
 

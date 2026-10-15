@@ -1,6 +1,5 @@
-"""兼容导出：新实现分别位于 review_graph、repair_graph、policies 和 routers。"""
+"""兼容导出：生产审查图入口。"""
 
 from app.graph.review_graph import build_review_graph
-from app.graph.routers import route_agent_action
 
-__all__ = ["build_review_graph", "route_agent_action"]
+__all__ = ["build_review_graph"]

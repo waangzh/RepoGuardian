@@ -178,7 +178,9 @@ class InspectTaskStep:
         schema_errors = [asdict(error) for error in parsed.errors
                          if error.reason in {"invalid_json", "invalid_response_kind", "unknown_submit_field"}
                          or "validation error" in error.reason
-                         or error.reason == "field_must_be_array"]
+                         or error.reason == "field_must_be_array"
+                         or (error.reason == "incomplete_investigation_evidence"
+                             and executor.investigation_citation_readiness()["status"] == "ready")]
         if schema_errors and executor.work_item.format_corrections < 1:
             executor.work_item.format_corrections += 1
             self.repair_errors = schema_errors
@@ -244,7 +246,9 @@ class InspectTaskStep:
         put_chunks(self.store, canonical)
         chunks = store_chunks(self.store)
         for identity, item in chunks.items():
-            executor.evidence_catalog[identity] = {**item, "file_path": item["file"]}
+            previous = executor.evidence_catalog.get(identity, {})
+            executor.evidence_catalog[identity] = {**item, "file_path": item["file"],
+                **{key: previous[key] for key in ("hunk_id", "canonical_change") if key in previous}}
         visible = {item["evidence_id"] for item in canonical}
         executor.active_evidence_ids.update(visible)
         return {"action": "tool", "status": "completed", "evidence_ids": sorted(visible)}

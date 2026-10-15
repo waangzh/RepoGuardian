@@ -293,7 +293,7 @@ async def run_sample(sample: FrozenSample, provider, workdir: Path, *, timeout_s
             model_sink=model_requests.append, tool_sink=tool_reads.append,
         ):
             async with asyncio.timeout(timeout_seconds):
-                graph = build_review_graph(phase=3).compile()
+                graph = build_review_graph().compile()
                 async for delta in graph.astream(state, stream_mode="updates"):
                     for node, update in delta.items():
                         last_node = node

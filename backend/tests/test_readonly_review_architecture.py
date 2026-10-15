@@ -16,13 +16,14 @@ from app.services.review_manifest import build_review_manifest
 
 
 def test_production_review_graph_contains_only_static_readonly_critical_path() -> None:
-    nodes = set(build_review_graph(phase=2).compile().get_graph().nodes)
+    nodes = set(build_review_graph().compile().get_graph().nodes)
 
-    assert {"review_plan", "review_units", "resolve_evidence", "issue_policy",
-            "issue_verifier", "issue_deduplication", "report", "complete"} <= nodes
+    assert {"intake", "repo_prepare", "diff_parse", "repo_index", "project_detection",
+            "review_plan", "task_review_runtime", "report", "complete"} <= nodes
     assert nodes.isdisjoint({
         "verification", "repair_graph", "static_analysis", "test",
-        "generate_patch", "apply_patch", "run_tests",
+        "generate_patch", "apply_patch", "run_tests", "review_units",
+        "cross_unit_risk", "cross_unit_coordination", "issue_verifier",
     })
 
 
