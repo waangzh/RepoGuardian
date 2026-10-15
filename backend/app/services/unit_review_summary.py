@@ -51,6 +51,20 @@ def review_target_catalog(targets):
     return [{"id": "target-" + stable_hash(target)[:24], "target": target} for target in targets]
 
 
+def review_update_catalog(record_input):
+    """两种身份空间分别公开，父问题 ID 不获得本地问题更新权限。"""
+    memory = record_input.get("working_memory") or {}
+    return {
+        "question_updates": [{"question_id": question_identity(item), "statuses": ["resolved", "superseded"]}
+                             for item in memory.get("unresolved_questions", [])],
+        "obligation_updates": [{"obligation_id": item["id"], "kind": item["kind"],
+            "status": "verified" if item["kind"] == "dependency" else "resolved",
+            "required_files": ([item["check"]["file_path"]] if item["kind"] == "dependency"
+                               else item["check"]["affected_files"])}
+            for item in record_input.get("origin_obligations", [])],
+    }
+
+
 def normalize_review_targets(record, record_input):
     if record is None:
         return None
@@ -103,7 +117,12 @@ def domain_output_errors(reason: str | None) -> list[dict[str, Any]]:
         return [{"type": "unknown_target", "loc": ["review_record", "target_checks"]}]
     kind = _QUESTION_IDENTITY_ERRORS.get(detail)
     if kind:
-        return [{"type": kind, "loc": ["review_record", "unresolved_questions"],
+        field = "question_updates" if kind in {"unknown_question_update", "missing_question_replacement"} else "unresolved_questions"
+        return [{"type": kind, "loc": ["review_record", field],
+                 "message": detail + ("; parent obligations use obligation_updates with a bound obligation_id"
+                                      if kind == "unknown_question_update" else "")}]
+    if detail in {"unknown origin obligation", "obligation closure requires evidence for every bound file"}:
+        return [{"type": "invalid_obligation_update", "loc": ["review_record", "obligation_updates"],
                  "message": detail}]
     return []
 
