@@ -339,6 +339,11 @@ class ReviewUnitExecutor:
             for item in state.get("changed_files") or []
         ]
         primary_paths = set(unit.primary_files)
+        followup = state.get("cross_unit_followup")
+        if followup:
+            # 支持变更也必须真正进入 canonical 证据输入；不改变原 Unit 的覆盖分母。
+            primary_paths.update(set(followup.get("supporting_files") or []) & set(unit.related_files))
+            primary_paths.update(set(followup.get("verification_files") or []) & set(unit.related_files))
         sensitive_files = [
             item.old_file_path or item.file_path
             for item in all_changed
@@ -350,7 +355,7 @@ class ReviewUnitExecutor:
                 f"sensitive changed files cannot enter a Review Unit: {sensitive_files}"
             )
         by_path = {item.file_path: item for item in all_changed}
-        unit_files = self._unit_changed_files(unit, by_path)
+        unit_files = self._unit_changed_files(unit.model_copy(update={"primary_files": sorted(primary_paths & by_path.keys())}), by_path)
         if self.input_mode == "canonical":
             from app.services.file_change_evidence import bind_file_change_evidence
             from app.tools.git_tool import GitTool
@@ -2781,6 +2786,36 @@ class ReviewUnitExecutor:
         limit = max(1, int(state["scope"].max_lines_per_read))
         return {"file_path": path, "start_line": start, "end_line": min(end, start + limit - 1)}
 
+    def _followup_evidence_recovery_action(self, state):
+        followup = state["parent_state"].get("cross_unit_followup")
+        if not followup:
+            return None, None, None
+        required = set(followup.get("verification_files") or []) | set(followup.get("supporting_files") or [])
+        diff_paths = {file.file_path for file in state["unit_files"] if file.hunks or file.file_change_evidence}
+        attempts = state.get("contract_recovery_attempts") or {}
+        for path in sorted(required - diff_paths):
+            snippets = [item for item in state.get("context") or [] if item.get("file") == path]
+            cursor = 1
+            for left, right in sorted((item["start_line"], item["end_line"]) for item in snippets):
+                if left > cursor:
+                    break
+                cursor = max(cursor, right + 1)
+            total = next((item["total_lines"] for item in snippets if item.get("total_lines") is not None), None)
+            if total is not None and cursor > total:
+                continue
+            key = f"followup:{path}:{cursor}"
+            if path not in state["scope"].readable_files or is_sensitive_repository_change(path) or attempts.get(key):
+                return None, f"followup_evidence_unavailable:{path}:{cursor}", None
+            budget = state["budget"]
+            if not budget.can_consume(context_retrievals=1, model_calls=1, diagnosis_attempts=1):
+                return None, f"followup_evidence_budget_exhausted:{path}:{cursor}", None
+            return AgentAction(action="file_read", reason="补齐声明核验范围的必要正文或剩余分页",
+                tool_args={"request": {"file_path": path, "start_line": cursor,
+                    "end_line": cursor + state["scope"].max_lines_per_read - 1}}), key, {
+                        "target_key": key, "kind": "dependency", "file_path": path,
+                        "assumption": "按声明范围补齐正文，读取不代表契约已验证"}
+        return None, None, None
+
     def _contract_recovery_action(self, state):
         """每个活动 Unit 最多两次依赖补审；不扩张范围、不绕过正文和模型预算。
 
@@ -2791,6 +2826,9 @@ class ReviewUnitExecutor:
                 or not summary or summary.latest_attempt_status != "reported" or not summary.record):
             return None, None, None
         record = summary.record
+        recovery = self._followup_evidence_recovery_action(state)
+        if recovery[0] is not None or recovery[1] is not None:
+            return recovery
         blocking = set(contract_coverage_state([record], [item.id for item in summary.evidence],
             state["unit"], state["diff_manifest"])["blocking_dependencies"])
         attempts = state.get("contract_recovery_attempts") or {}
@@ -2805,7 +2843,8 @@ class ReviewUnitExecutor:
             key = contract_dependency_key(dependency)
             if key not in blocking:
                 continue
-            if dependency_attempts >= 2 or attempts.get(key):
+            limit = state["budget"].max_context_retrievals if state["parent_state"].get("cross_unit_followup") else 2
+            if dependency_attempts >= limit or attempts.get(key):
                 blocked = True
                 continue
             path = dependency.file_path

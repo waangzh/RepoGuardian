@@ -1787,6 +1787,7 @@ class ContextSnippet(BaseModel):
     why_retrieved: str | None = None
     truncated: bool = False
     requested_end_line: int | None = Field(default=None, ge=1)
+    total_lines: int | None = Field(default=None, ge=0)
 
 
 class IssueVerificationBudget(BaseModel):
