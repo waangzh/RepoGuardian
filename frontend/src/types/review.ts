@@ -596,6 +596,7 @@ export interface CrossUnitRiskAssessment {
 export interface CrossUnitFollowupRequest {
   supporting_files?: string[];
   verification_files?: string[];
+  planning_question_indices?: number[];
   id: string;
   question: string;
   unit_ids: string[];
@@ -634,6 +635,8 @@ export interface CrossUnitCoordinationPlan {
   schema_version: "cross-unit-plan-v1";
   followups: CrossUnitFollowupRequest[];
   unresolved_questions: string[];
+  question_states?: Array<{ id: string; question: string; followup_ids: string[];
+    status: "pending" | "invalid" | "unresolved" | "resolved"; reason: string }>;
   decision: "required" | "uncertain" | "skip";
   reason: string;
   relationship_ids: string[];

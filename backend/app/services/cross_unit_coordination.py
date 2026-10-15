@@ -23,6 +23,7 @@ from app.services.coordination_runtime import (
 from app.services.fingerprints import stable_hash
 from app.services.coordination_catalog import catalog_batches
 from app.services.review_run_budget import current_run_budget
+from app.services.coordination_questions import bind_plan_questions, refresh_plan_questions
 
 
 class SharedBudgetProvider:
@@ -197,6 +198,8 @@ class CrossUnitCoordinationService:
         # 这是计划准入门槛，不是实际调用预留；每次请求仍按真实提示和实测补记控制。
         seen: set[tuple] = set()
         for request in plan.followups:
+            if any(index < 0 or index >= len(plan.unresolved_questions) for index in request.planning_question_indices):
+                raise ValueError("unknown planning question index")
             origins = {item["id"]: item for item in payload.get("origin_obligations", [])}
             if any(identity not in origins or origins[identity]["unit_id"] not in request.unit_ids
                    for identity in request.origin_obligation_ids):
@@ -232,6 +235,8 @@ class CrossUnitCoordinationService:
     @classmethod
     def normalize_plan(cls, plan, payload, budget=None):
         plan = CrossUnitCoordinationPlan.model_validate(plan.model_dump(mode="json"))
+        plan = bind_plan_questions(plan)
+        aliases = {}
         unique, seen, warnings = [], {}, []
         for request in plan.followups:
             # 仅补全目录内已知主文件的拥有者；未知路径仍由严格范围门拒绝。
@@ -251,11 +256,14 @@ class CrossUnitCoordinationService:
             cls.validate_plan(plan.model_copy(update={"followups": [request]}), payload)
             identity = cls.followup_identity(request)
             if identity in seen:
+                aliases[request.id] = seen[identity]
                 warnings.append(f"完全重复补查已合并：{request.id} -> {seen[identity]}")
             else:
                 unique.append(request)
                 seen[identity] = request.id
-        normalized = plan.model_copy(update={"followups": unique})
+        normalized = plan.model_copy(update={"followups": unique, "question_states": [
+            item.model_copy(update={"followup_ids": list(dict.fromkeys(aliases.get(key, key) for key in item.followup_ids))})
+            for item in plan.question_states]})
         cls.validate_plan(normalized, payload, budget)
         return normalized, warnings
 
@@ -314,6 +322,7 @@ class CrossUnitCoordinationService:
                 self.runtime.data["plan"] = plan.model_dump(mode="json")
                 await self.runtime.persist()
                 result = await self.execute_followups(plan, state)
+                plan = refresh_plan_questions(plan, result.get("followup_results", []), state)
                 status = "completed" if not any(
                     item.status != "validated" for item in plan.catalog_batches
                 ) and (plan.decision == "skip" or (
@@ -352,6 +361,7 @@ class CrossUnitCoordinationService:
             result = {**self._aggregate_output(state), "warnings": [*(state.get("warnings") or []),
                                    f"跨 Unit 协调未完成：{plan.reason}"],
                       "model_usages": [*(state.get("model_usages") or []), *usages]}
+            plan = refresh_plan_questions(plan, result.get("followup_results", []), state)
         plan = plan.model_copy(update={"execution_budget": self.provider.budget})
         result["coordination_plan"] = plan.model_dump(mode="json")
         result["cross_unit_risk"] = risk.model_copy(update={
@@ -403,7 +413,7 @@ class CrossUnitCoordinationService:
         self.runtime.data["plan"] = aggregate.model_dump(mode="json")
         await self.runtime.persist()
         followups, identities, questions, relationships, evidence = [], set(), [], set(), set()
-        proposals, warnings = [], []
+        proposals, warnings, question_states = [], [], {}
         for index, (entry, batch) in enumerate(batches):
             saved = self.runtime.data.setdefault("catalog_batches", {})
             cached = saved.get(entry.id)
@@ -457,20 +467,31 @@ class CrossUnitCoordinationService:
                 relationships.update(proposal.relationship_ids)
                 evidence.update(proposal.evidence_ids)
                 questions.extend(proposal.unresolved_questions)
+                request_ids = {}
                 for request in proposal.followups:
                     identity = self.followup_identity(request)
                     if identity in identities:
+                        request_ids[request.id] = next(item.id for item in followups if self.followup_identity(item) == identity)
                         continue
                     if len(followups) >= 3 or not self.provider.budget.can_consume(
                         model_calls=5 * (len(followups) + 1), token_usage=18_000 * (len(followups) + 1),
                     ):
                         questions.append(f"补查未执行（数量或共享预算限制）：{request.question}")
                         warnings.append(f"目录批次 {entry.id} 提出的补查未获准执行：{request.question}")
+                        request_ids[request.id] = "not-admitted-" + stable_hash([entry.id, request.id])[:24]
                         continue
                     identities.add(identity)
+                    old_id = request.id
                     if len(batches) > 1:
                         request = request.model_copy(update={"id": "followup-" + stable_hash(identity)[:24]})
+                    request_ids[old_id] = request.id
+                    request = request.model_copy(update={"planning_question_indices": []})
                     followups.append(request)
+                for question in (proposal.question_states or bind_plan_questions(proposal).question_states):
+                    linked = [request_ids[key] for key in question.followup_ids]
+                    previous = question_states.get(question.id)
+                    question_states[question.id] = question.model_copy(update={"followup_ids": list(dict.fromkeys([
+                        *(previous.followup_ids if previous else []), *linked]))})
             else:
                 message = f"目录批次 {entry.id} 未覆盖：{coverage.reason}"
                 questions.append(message)
@@ -490,6 +511,9 @@ class CrossUnitCoordinationService:
             "unresolved_questions": list(dict.fromkeys(questions)), "relationship_ids": sorted(relationships),
             "evidence_ids": sorted(evidence), "reason": (proposals[0].reason if len(batches) == 1 else
                 f"目录分为 {len(batches)} 批；{len(proposals)} 批完成规划，{len(batches) - len(proposals)} 批未覆盖")})
+        for question in bind_plan_questions(aggregate).question_states:
+            question_states.setdefault(question.id, question)
+        aggregate = aggregate.model_copy(update={"question_states": list(question_states.values())})
         self.validate_plan(aggregate, payload)
         return aggregate
 
@@ -635,7 +659,7 @@ class CrossUnitCoordinationService:
                 self.runtime.data["followups"][request.id] = CrossUnitFollowupResult(
                     request_id=request.id, outcome="unresolved", unit_result=result, fingerprint=digest,
                     evidence_ids=request.evidence_ids, reason="deferred_budget_not_executed: followup").model_dump(mode="json")
-                await self.runtime.persist()
+                await self._persist_followup_progress(state)
                 continue
             self.runtime.data["deferred_followups"].pop(request.id, None)
             # 候选 ID 和生命周期由服务端重新赋值；补查不能冒充已确认 Issue。
@@ -665,12 +689,12 @@ class CrossUnitCoordinationService:
                 evidence_ids=request.evidence_ids, reason=reason,
             )
             self.runtime.data["followups"][request.id] = followup.model_dump(mode="json")
-            await self.runtime.persist()
+            await self._persist_followup_progress(state)
             if not issues:
                 self.runtime.data["batches"][request.id] = {"review_issues": [], "issue_metrics": {}}
                 followup = followup.model_copy(update={"validation_status": "completed"})
                 self.runtime.data["followups"][request.id] = followup.model_dump(mode="json")
-                await self.runtime.persist()
+                await self._persist_followup_progress(state)
                 continue
             # persist 会规范化并替换嵌套字典，重新取得本次账本中的引用。
             allocation = self.runtime.data["allocations"][request.id]
@@ -712,10 +736,16 @@ class CrossUnitCoordinationService:
             followup = followup.model_copy(update={"unit_result": result,
                 "validation_status": "pending" if pending else "completed"})
             self.runtime.data["followups"][request.id] = followup.model_dump(mode="json")
-            await self.runtime.persist()
+            await self._persist_followup_progress(state)
         aggregated = self._aggregate_output(state)
         aggregated["model_usages"].extend(usages)
         return aggregated
+
+    async def _persist_followup_progress(self, state):
+        plan = CrossUnitCoordinationPlan.model_validate(self.runtime.data["plan"])
+        plan = refresh_plan_questions(plan, list(self.runtime.data["followups"].values()), state)
+        self.runtime.data["plan"] = plan.model_dump(mode="json")
+        await self.runtime.persist()
 
     @staticmethod
     def followup_conclusion(request, result, selected):
@@ -780,4 +810,4 @@ class CrossUnitCoordinationService:
             followup = self.runtime.data["followups"][request_id]
             followup["unit_result"]["issues"] = saved["review_issues"]
             followup["validation_status"] = "pending" if saved["pending_verifications"] else "completed"
-            await self.runtime.persist()
+            await self._persist_followup_progress(state)
