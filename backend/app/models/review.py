@@ -15,6 +15,7 @@ from enum import Enum
 from pathlib import PurePosixPath
 from typing import Any, Generic, Iterator, Literal, TypeVar
 from uuid import uuid4
+from pydantic_core import PydanticCustomError
 
 from pydantic import (
     model_serializer,
@@ -2179,7 +2180,7 @@ class CrossUnitCoordinationProposal(CrossUnitCoordinationPlan):
     @model_validator(mode="after")
     def followups_require_required_decision(self) -> "CrossUnitCoordinationProposal":
         if self.followups and self.decision != "required":
-            raise ValueError("followups require a required decision")
+            raise PydanticCustomError("decision_followups_conflict", "followups require a required decision")
         return self
 
 

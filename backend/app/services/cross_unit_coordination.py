@@ -59,6 +59,9 @@ class SharedBudgetProvider:
     async def coordinate_cross_units(self, *args: Any) -> Any:
         return await self._call("coordinate_cross_units", args, 4096)
 
+    async def repair_cross_unit_plan(self, *args: Any) -> Any:
+        return await self._call("repair_cross_unit_plan", args, 4096)
+
     async def decide(self, *args: Any) -> Any:
         return await self._call("decide", args, 1200)
 
