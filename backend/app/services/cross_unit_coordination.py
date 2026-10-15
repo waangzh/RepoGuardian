@@ -13,6 +13,7 @@ from app.models.review import (
     ReviewUnitResult, ReviewUnitStatus, ReviewIssueInput, EvidenceAnchorInput, ReviewIssue, IssueMetrics,
 )
 from app.review.tool_scope import is_sensitive_repository_change
+from app.review.unit_completion import is_review_unit_complete
 from app.services.model_usage import unpack_model_call
 from app.services.review_unit_executor import ReviewUnitExecutor
 from app.services.review_planner import DeterministicReviewPlanner
@@ -144,6 +145,7 @@ class CrossUnitCoordinationService:
                                   "latest_attempt_status": result.review_summary.latest_attempt_status,
                                   "latest_attempt_reason": result.review_summary.latest_attempt_reason,
                                   "reason": result.review_summary.reason,
+                                  "strict_complete": is_review_unit_complete(result),
                                   "input_coverage": (result.input_coverage.model_dump(mode="json", exclude={"omitted_plan"})
                                                      if result.input_coverage else None),
                                   "evidence_ids": restored_ids,
@@ -154,7 +156,54 @@ class CrossUnitCoordinationService:
             "units": [item.model_dump(mode="json") for item in units],
             "summaries": summaries, "evidence": list(evidence.values()),
             "origin_obligations": origin_obligations(state, set(evidence)),
+            "verified_scopes": CrossUnitCoordinationService._verified_scopes(results, units, evidence),
         }
+
+    @staticmethod
+    def _verified_scopes(results, units, evidence):
+        """只暴露已规划、已反证且具有当前跨文件引用的限定结论，不从局部完成补造。"""
+        scopes = []
+        for unit in units:
+            result = results.get(unit.id)
+            if result is None or result.plan is None or not is_review_unit_complete(result):
+                continue
+            hypotheses = {item.id: item for item in result.plan.risk_hypotheses}
+            for check in result.review_summary.record.hypothesis_checks:
+                hypothesis = hypotheses.get(check.hypothesis_id)
+                if hypothesis is None or check.status != "refuted" or not check.evidence_ids:
+                    continue
+                files = set(hypothesis.affected_files)
+                owners = {item.id for item in units if files & set(item.primary_files)}
+                if (len(files) < 2 or len(owners) < 2 or set(check.evidence_ids) - evidence.keys()
+                        or files - {evidence[key]["file_path"] for key in check.evidence_ids}):
+                    continue
+                scopes.append({"unit_id": unit.id, "hypothesis_id": hypothesis.id,
+                    "description": hypothesis.description, "completion_criteria": hypothesis.completion_criteria,
+                    "files": sorted(files), "unit_ids": sorted(owners | {unit.id}),
+                    "evidence_ids": check.evidence_ids, "reason": check.reason})
+        return scopes
+
+    @staticmethod
+    def _validate_empty_relationship_skip(plan, payload, units, evidence, risk):
+        summaries = {item["unit_id"]: item["summary"] for item in payload.get("summaries", [])}
+        if (not units or payload.get("origin_obligations") or any(
+                not summaries.get(key, {}).get("strict_complete") for key in units)):
+            raise ValueError("empty relationship skip requires current complete Units without origin obligations")
+        paths = {evidence[key]["file_path"] for key in plan.evidence_ids}
+        primary = {path for unit in units.values() for path in unit.primary_files}
+        if primary - paths:
+            raise ValueError("empty relationship skip requires current evidence for every primary file")
+        scopes = [set(item["files"]) for item in payload.get("verified_scopes", [])
+            if set(item["unit_ids"]) <= units.keys() and item["evidence_ids"]
+            and set(item["evidence_ids"]) <= set(plan.evidence_ids)]
+        required = []
+        for reason in risk.reasons:
+            if set(reason.unit_ids) - units.keys():
+                raise ValueError("empty relationship skip contains unknown risk scope")
+            required.append(set(reason.files) | {path for key in reason.unit_ids for path in units[key].primary_files})
+        # 无范围的理由不能被空集包含关系自动放行；也不拼接不相干的局部反证。
+        if any(not any((files or primary) <= scope for scope in scopes) for files in (required or [primary])):
+            raise ValueError("empty relationship skip requires verified cross-file scope for every risk reason")
 
     @staticmethod
     def _mentioned_files(request, payload):
@@ -187,8 +236,12 @@ class CrossUnitCoordinationService:
             # 缺记录、缺索引、覆盖缺口不能被一次模型判断解释为无风险。
             if risk.index_status != "available" or any(
                 item.code != "relationship_unknown" for item in risk.reasons
-            ) or not risk.relationships or set(plan.relationship_ids) != relationships:
+            ) or set(plan.relationship_ids) != relationships:
                 raise ValueError("insufficient coverage to skip uncertain risk")
+            if plan.unresolved_questions or any(item.status != "resolved" for item in plan.question_states):
+                raise ValueError("skip cannot retain unresolved planning questions")
+            if not risk.relationships:
+                CrossUnitCoordinationService._validate_empty_relationship_skip(plan, payload, units, evidence, risk)
             paths = {evidence[key]["file_path"] for key in plan.evidence_ids}
             if any({item.source_file, item.target_file} - paths for item in risk.relationships):
                 raise ValueError("skip requires evidence for both ends of every relationship")

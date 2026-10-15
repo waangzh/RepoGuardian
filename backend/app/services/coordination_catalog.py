@@ -7,7 +7,7 @@ from app.models.review import CrossUnitCatalogBatch
 from app.services.fingerprints import stable_hash
 
 CATALOG_CHAR_LIMIT = 48_000
-CATALOG_BATCH_VERSION = "coordination-catalog-batches-v2-evidence-closure-local-index"
+CATALOG_BATCH_VERSION = "coordination-catalog-batches-v3-verified-cross-file-scopes"
 _PRIORITY = {"changed_contract": 0, "conflicting_contract": 0,
              "unresolved_dependency": 1, "dependency_coverage_gap": 1,
              "unresolved_cross_unit_question": 2}
@@ -111,6 +111,8 @@ def catalog_batches(catalog: dict[str, Any],
                                   "omitted_units": len(units) - len(ids), "global_index_hash": index_hash},
             "units": selected, "summaries": selected_summaries,
             "origin_obligations": [item for item in catalog.get("origin_obligations", []) if item["unit_id"] in ids],
+            "verified_scopes": [item for item in catalog.get("verified_scopes", [])
+                if set(item["unit_ids"]) <= ids and set(item["evidence_ids"]) <= evidence_ids],
             "evidence": [item for item in catalog["evidence"]
                          if item["id"] in evidence_ids],
             "risk": {**risk, "relationships": [relations[key] for key in sorted(relation_ids)],
