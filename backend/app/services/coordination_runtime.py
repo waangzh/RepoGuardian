@@ -61,6 +61,7 @@ def budget_rejection(budget: ExecutionBudget, name: str, estimate: int,
 
 
 def coordination_fingerprint(state: dict) -> str:
+    from app.review.diff_base import review_diff_base
     from app.services.model_request_budgeter import CONTEXT_BUDGET_VERSION
     resolved = settings.resolve_model_profile(state.get("model"))
     risk = {key: item for key, item in (state.get("cross_unit_risk") or {}).items()
@@ -75,7 +76,8 @@ def coordination_fingerprint(state: dict) -> str:
         "catalog_version": CATALOG_BATCH_VERSION,
         "request_contract_version": "coordination-canonical-evidence-v16-followup-evidence-polarity-tree",
         "repository": (state.get("pr_info") or {}).get("clone_url"),
-        "base_sha": state.get("base_sha"), "head_sha": state.get("head_sha"),
+        # 协调账本与证据快照共用同一内容基准，避免跨基准复用旧协调结论。
+        "base_sha": review_diff_base(state), "head_sha": state.get("head_sha"),
         "model": state.get("model") or settings.repoguardian_model,
         "provider": settings.repoguardian_provider,
         "versions": [settings.repoguardian_prompt_version, settings.repoguardian_rule_version,

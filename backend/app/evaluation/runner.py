@@ -18,7 +18,7 @@ from app.review.issue_audit import capture_issue_audit
 from app.review.run_audit import capture_run_audit
 from app.services.model_usage import unpack_model_call
 from app.services.review_run_budget import ReviewRunBudget, activate_run_budget
-from app.tools.git_tool import DIFF_CONTEXT_LINES, DIFF_POLICY_VERSION, GitTool, GitToolError
+from app.tools.git_tool import DIFF_POLICY, DIFF_POLICY_VERSION, GitTool, GitToolError
 
 
 EVALUATION_ENGINE = "task_review_v1"
@@ -40,10 +40,17 @@ class SnapshotGitTool(GitTool):
 
     def review_diff_context(self, repo_path, base_sha=None, head_sha=None):
         self._validate_worktree(repo_path)
-        if self.prepared_diff is None:
-            return {}
-        return {"effective_base_sha": self.prepared_diff.effective_base_sha,
-                "diff_policy": "merge_base", "diff_policy_version": DIFF_POLICY_VERSION}
+        fact = self.prepared_diff
+        if fact is None:
+            return super().review_diff_context(repo_path, base_sha, head_sha)
+        if not base_sha or not head_sha:
+            raise GitToolError("snapshot_review_requires_identity")
+        # 锁定快照必须与真实 merge base 一致；即使它等于声明 base 也要显式核对。
+        effective = self.merge_base(repo_path, base_sha, head_sha)
+        if effective != fact.effective_base_sha:
+            raise GitToolError("snapshot_merge_base_mismatch")
+        return {"effective_base_sha": effective, "diff_policy": DIFF_POLICY,
+                "diff_policy_version": DIFF_POLICY_VERSION}
 
     def clone_and_diff(self, pr, **kwargs):
         # 输入锁未就绪或身份不符时在 clone 前失败，不产生任何工作区副作用。
@@ -54,30 +61,25 @@ class SnapshotGitTool(GitTool):
         return super().clone_and_diff(pr, **kwargs)
 
     def unified_diff(self, repo_path, base_sha, head_sha, *, cancel_event=None):
-        """带输入锁时强制 merge base 与 diff 哈希；v1 协议保留声明 base 两点比较。"""
+        """与生产共用同一生成函数；带输入锁时额外强制 merge base 与 diff 哈希。"""
         fact = self.prepared_diff
-        if fact is None:
-            diff = self._run([self._git, "-C", str(repo_path), "diff", "--no-ext-diff",
-                              f"--unified={DIFF_CONTEXT_LINES}", base_sha, head_sha],
-                             cancel_event=cancel_event)
-            self._record_snapshot(repo_path, base_sha, head_sha, base_sha, "declared_base", diff)
-            return base_sha, diff
-        if (fact.alignment_status != "ready" or fact.declared_base_sha != base_sha
-                or fact.head_sha != head_sha):
+        if fact is not None and (fact.alignment_status != "ready" or fact.declared_base_sha != base_sha
+                                 or fact.head_sha != head_sha):
             raise GitToolError("snapshot_diff_input_not_ready_or_identity_mismatch")
         effective, diff = super().unified_diff(repo_path, base_sha, head_sha, cancel_event=cancel_event)
-        if effective != fact.effective_base_sha:
-            raise GitToolError("snapshot_merge_base_mismatch")
-        if sha256(diff.encode()) != fact.diff_sha256:
-            raise GitToolError("snapshot_diff_hash_mismatch")
-        self._record_snapshot(repo_path, base_sha, head_sha, effective, "merge_base", diff)
+        if fact is not None:
+            if effective != fact.effective_base_sha:
+                raise GitToolError("snapshot_merge_base_mismatch")
+            if sha256(diff.encode()) != fact.diff_sha256:
+                raise GitToolError("snapshot_diff_hash_mismatch")
+        self._record_snapshot(repo_path, base_sha, head_sha, effective, DIFF_POLICY, diff)
         return effective, diff
 
     def _record_snapshot(self, repo_path, base_sha, head_sha, effective, policy, diff):
         self.snapshot = {"repo_path": str(Path(repo_path).resolve()), "verified_head": head_sha,
                          "verified_base": effective, "declared_base_sha": base_sha,
-                         "diff_policy": policy, "diff_sha256": sha256(diff.encode()),
-                         "diff_text": diff}
+                         "diff_policy": policy, "diff_policy_version": DIFF_POLICY_VERSION,
+                         "diff_sha256": sha256(diff.encode()), "diff_text": diff}
 
 
 class FrozenGitHubTool:
@@ -277,7 +279,8 @@ async def run_sample(sample: FrozenSample, provider, workdir: Path, *, timeout_s
         configuration.update(experiment=experiment["variables"],
             experiment_expected_scope_hash=experiment["samples"][sample.instance_id]["readable_scope_hash"])
     if prepared_diff:
-        state.update(effective_base_sha=prepared_diff.effective_base_sha, diff_policy="merge_base")
+        state.update(effective_base_sha=prepared_diff.effective_base_sha, diff_policy=DIFF_POLICY,
+                     diff_policy_version=DIFF_POLICY_VERSION)
     started = time.monotonic()
     last_node = None
     run_status = "completed"
@@ -421,7 +424,9 @@ async def run_dataset(lock_path: Path, output: Path, provider, *, sample_ids: li
     summary = {"protocol_version": diff_lock.protocol_version if diff_lock else lock.protocol_version,
                "engine": EVALUATION_ENGINE, "task_runtime_configuration": configuration,
                "lock_sha256": sha256(data), "diff_lock_sha256": sha256(diff_data) if diff_data else None,
-               "diff_policy": "merge_base" if diff_lock else "declared_base",
+               # 评测与生产共用同一 Diff 策略；v2 输入锁额外固定 diff 哈希。
+               "diff_policy": DIFF_POLICY, "diff_policy_version": DIFF_POLICY_VERSION,
+               "diff_input_locked": bool(diff_lock),
                "source_revision": lock.source_revision, "config": config,
                "implementation_sha256": await asyncio.to_thread(implementation_digest),
                "timeout_seconds": timeout_seconds, "cache_reuse": False,

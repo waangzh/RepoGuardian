@@ -10,7 +10,7 @@ from app.evaluation.data import DatasetLock, FrozenSample, load_references, sha2
 from app.evidence import DiffIndex
 from app.models.review import EvidenceCandidate
 from app.tools.diff_parser import DiffParser
-from app.tools.git_tool import DIFF_CONTEXT_LINES, GitTool, GitToolError
+from app.tools.git_tool import DiffPreparationError, GitTool, GitToolError
 
 
 def dataset_digest(lock: DatasetLock) -> str:
@@ -67,9 +67,11 @@ def inspect_diff(git: GitTool, repo: Path, sample: FrozenSample, references: lis
         actual = git._run([git._git, "-C", str(repo), "rev-parse", revision + "^{commit}"]).strip()
         if actual != revision:
             raise GitToolError("snapshot_revision_mismatch")
-    effective = unique_merge_base(git, repo, sample.base_sha, sample.head_sha)
-    diff = git._run([git._git, "-C", str(repo), "diff", "--no-ext-diff",
-                     f"--unified={DIFF_CONTEXT_LINES}", effective, sample.head_sha])
+    try:
+        # 与生产、Preview 共用同一 Diff 生成函数，只把错误名映射回锁定协议。
+        effective, diff = git.unified_diff(repo, sample.base_sha, sample.head_sha)
+    except DiffPreparationError as exc:
+        raise GitToolError("snapshot_requires_unique_merge_base") from exc
     changed = DiffParser().parse(diff)
     index = DiffIndex(changed)
     failures = []
