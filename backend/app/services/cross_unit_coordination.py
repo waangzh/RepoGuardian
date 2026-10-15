@@ -208,7 +208,7 @@ class CrossUnitCoordinationService:
     @staticmethod
     def _mentioned_files(request, payload):
         text = "\n".join([request.question, request.counterevidence_goal, request.stop_condition])
-        return {path for unit in payload["units"] for path in unit["primary_files"]
+        return {path for unit in payload["units"] for path in [*unit["primary_files"], *unit.get("related_files", [])]
             if re.search(r"(?<![A-Za-z0-9_./\\-])" + re.escape(path) + r"(?![A-Za-z0-9_./\\-])", text)}
 
     @staticmethod
@@ -306,6 +306,8 @@ class CrossUnitCoordinationService:
                 warnings.append(f"补查 {request.id} 纳入必要支持文件所属 Unit：{','.join(sorted(owners))}")
             elif mentioned:
                 request.supporting_files = sorted(needed - set(request.primary_files))
+            if request.verification_files or mentioned:
+                request.verification_files = sorted(set(request.verification_files) | mentioned)
             # 重新经过字段长度与路径校验，不能靠原地赋值绕过 schema。
             request = type(request).model_validate(request.model_dump(mode="json"))
             # 去重前逐项核验，不能因重复而绕过路径或引用校验。
@@ -730,7 +732,10 @@ class CrossUnitCoordinationService:
                 max_model_calls=allocation["exploration_calls"],
                 max_token_usage=allocation["exploration_tokens"],
                 max_diagnosis_attempts=allocation["exploration_calls"] if executor._supports_native_review_step() else 1,
-                max_context_retrievals=2, max_patch_attempts=0,
+                max_context_retrievals=min(12, max(2, 2 * len(
+                    (set(request.verification_files) | set(request.supporting_files))
+                    - {file["file_path"] for file in state.get("changed_files") or [] if file.get("hunks")})),
+                    max(0, allocation["exploration_calls"] - 1)), max_patch_attempts=0,
             ).model_dump(mode="json")
             deferred_followups = self.runtime.data.setdefault("deferred_followups", {})
             if saved and request.id in deferred_followups:
