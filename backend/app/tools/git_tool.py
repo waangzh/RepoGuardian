@@ -348,8 +348,8 @@ class GitTool:
     ) -> dict[str, str]:
         """返回本次审查的内容基准；每次重新计算，避免共享实例跨任务串用。
 
-        缺少任一 SHA、无法确定唯一 merge base、或内容基准等于声明 base 时返回
-        空字典，调用方按 ``declared_base`` 处理；空字典不是成功信号。
+        缺少任一 SHA 或无法确定唯一 merge base 时返回空字典，调用方按
+        ``declared_base`` 处理；空字典是未知状态，不是成功信号。
         """
         if not base_sha or not head_sha:
             return {}
@@ -358,7 +358,7 @@ class GitTool:
         except GitToolError:
             logger.warning("无法确定唯一内容基准，保留声明 base 身份", exc_info=True)
             return {}
-        if effective is None or effective == base_sha:
+        if effective is None:
             return {}
         return {
             "effective_base_sha": effective,

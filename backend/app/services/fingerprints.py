@@ -82,6 +82,7 @@ def patch_fingerprint(
 def unit_execution_fingerprint(unit_fp: str, state: dict, provider: Any, input_mode: str) -> str:
     """即使 plan 来自旧 checkpoint，也绑定本次实际模型、配置和输入版本。"""
     from app.core.config import settings
+    from app.review.diff_base import review_diff_base
     from app.services.review_input_context import build_pr_intent
 
     model = state.get("model") or getattr(provider, "_default_model", settings.repoguardian_model)
@@ -93,7 +94,8 @@ def unit_execution_fingerprint(unit_fp: str, state: dict, provider: Any, input_m
         profile = resolved.profile
     return stable_hash({
         "unit_fp": unit_fp, "input_version": DIAGNOSIS_INPUT_VERSION, "input_mode": input_mode,
-        "head_sha": state.get("head_sha"), "base_sha": state.get("diff_base_sha") or state.get("base_sha"),
+        # 指纹绑定实际审查内容基准，与证据快照的 review_diff_base 口径一致。
+        "head_sha": state.get("head_sha"), "base_sha": review_diff_base(state),
         "pr_intent": build_pr_intent(state.get("pr_info"))["intent_hash"], "model": model,
         "provider": getattr(provider, "_provider_name", settings.repoguardian_provider),
         "provider_type": f"{type(provider).__module__}.{type(provider).__qualname__}",

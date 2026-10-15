@@ -77,8 +77,10 @@ def test_declared_base_identity_is_preserved_and_content_base_reported(tmp_path:
 
     assert context == {"effective_base_sha": root, "diff_policy": DIFF_POLICY,
                        "diff_policy_version": "merge-base-v1"}
-    # 内容基准等于声明 base 时不声明策略，避免把两点比较伪装成 merge_base。
-    assert tool.review_diff_context(repo_path, root, head) == {}
+    # 声明 base 自身作为起点时内容基准就是它，策略与身份仍分别记录。
+    assert tool.review_diff_context(repo_path, root, head) == {
+        "effective_base_sha": root, "diff_policy": DIFF_POLICY,
+        "diff_policy_version": "merge-base-v1"}
 
 
 def test_linear_history_content_base_equals_declared_base(tmp_path: Path) -> None:
@@ -95,7 +97,7 @@ def test_linear_history_content_base_equals_declared_base(tmp_path: Path) -> Non
     repo_path, diff = tool.clone_and_diff(_pr(source, base, head))
 
     assert "+x = 2" in diff and "-x = 1" in diff
-    assert tool.review_diff_context(repo_path, base, head) == {}
+    assert tool.review_diff_context(repo_path, base, head)["effective_base_sha"] == base
 
 
 def test_no_common_ancestor_is_rejected_not_silently_two_dot(tmp_path: Path) -> None:
