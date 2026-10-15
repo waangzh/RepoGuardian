@@ -846,7 +846,7 @@ class OpenAICompatibleProvider(LLMProvider):
             error.coordination_error_code = "coordination_output_invalid"
             if isinstance(exc, ValidationError) and all(item["type"] == "decision_followups_conflict" for item in exc.errors()):
                 error.coordination_error_code = "decision_followups_conflict"
-                error.output_schema_errors = [{"type": "decision_followups_conflict", "loc": ["decision", "followups"],
+                error.output_schema_errors = [{"type": "decision_followups_conflict", "loc": ["followups"],
                     "message": "followups require a required decision; uncertain/skip require empty followups"}]
             raise error from exc
 
