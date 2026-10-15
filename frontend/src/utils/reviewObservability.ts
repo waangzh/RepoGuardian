@@ -148,6 +148,14 @@ export function evidenceSnapshotState(reference: UnitEvidenceReference, baseSha?
   return baseSha && headSha && reference.base_sha && reference.head_sha ? "current" : "unknown";
 }
 
+/**
+ * 证据引用绑定的是内容基准（唯一 merge base），不是 PR 声明 base。
+ * 旧任务没有记录内容基准时回退声明 base，与改动前的行为一致。
+ */
+export function evidenceSnapshotBase(task: Pick<ReviewTask, "run_manifest" | "pr">): string | undefined {
+  return task.run_manifest?.effective_base_sha || task.pr?.base.sha;
+}
+
 export function originalIssueUnit(issue: ReviewIssue, unitIds: string[]): string {
   return [issue.review_unit_id, ...(issue.source_review_unit_ids || [])].find((id) => unitIds.includes(id)) || "";
 }

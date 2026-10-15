@@ -104,6 +104,17 @@ test("Base与Head分别校验，缺少绑定保持未知", () => {
   assert.equal(ui.evidenceSnapshotState({ id: "a", file_path: "a.py" }, "b", "h"), "unknown");
 });
 
+test("证据基准取内容基准，声明base不等于内容基准时不误判为过期", () => {
+  const task = { pr: { base: { sha: "declared" }, head: { sha: "h" } },
+    run_manifest: { effective_base_sha: "merge-base" } };
+  assert.equal(ui.evidenceSnapshotBase(task), "merge-base");
+  const reference = { id: "a", file_path: "a.py", base_sha: "merge-base", head_sha: "h" };
+  assert.equal(ui.evidenceSnapshotState(reference, ui.evidenceSnapshotBase(task), "h"), "current");
+  // 旧任务没有记录内容基准时回退声明 base，保持历史行为。
+  assert.equal(ui.evidenceSnapshotBase({ pr: { base: { sha: "declared" } } }), "declared");
+  assert.equal(ui.evidenceSnapshotBase({}), undefined);
+});
+
 test("待核验、定位、确认、发布、过滤等状态计数覆盖整个候选批次", () => {
   const statuses = ["candidate", "evidence_resolved", "confirmed", "published", "unresolved", "needs_human", "dismissed"];
   const items = ui.issueStatusBreakdown({ unit_result: { issues: statuses.map((status) => ({ status })) } });
