@@ -22,6 +22,12 @@ from app.tools.workspace_cleanup import cleanup_workspace
 
 logger = logging.getLogger("RepoGuardian.GitTool")
 
+# 生产、Preview、CLI 与评测共用的 Diff 策略：内容基准取唯一 merge base，
+# PR 声明 base 只保留身份用途。修改命令或上下文行数时必须同步该版本号。
+DIFF_POLICY = "merge_base"
+DIFF_POLICY_VERSION = "merge-base-v1"
+DIFF_CONTEXT_LINES = 80
+
 _GIT_PROGRESS_RE = re.compile(
     r"(?:remote:\s*)?"
     r"(?P<operation>Counting objects|Compressing objects|Receiving objects|"
@@ -75,6 +81,15 @@ class GitToolCancelled(GitToolError):
 
 class GitToolTimeout(GitToolError):
     """Git 命令超过允许执行时间。"""
+
+
+class DiffPreparationError(GitToolError):
+    """无法确定唯一的内容基准，拒绝退化为两点比较。"""
+
+    def __init__(self, reason: str, bases: list[str] | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.bases = bases or []
 
 
 class GitTool:
@@ -230,18 +245,20 @@ class GitTool:
             )
             # 生成 unified diff（上下文 80 行，足够 LLM 理解）
             self._notify(progress_callback, "diff", "正在生成 PR Diff")
-            diff = self._run(
-                [
-                    self._git, "-C", str(repo_dir), "diff", "--no-ext-diff",
-                    "--unified=80", pr.base.sha, "FETCH_HEAD",
-                ],
+            head_commit = self._run(
+                [self._git, "-C", str(repo_dir), "rev-parse", "FETCH_HEAD"],
                 cancel_event=cancel_event,
+            ).strip()
+            if head_commit != pr.head.sha:
+                raise DiffPreparationError("fetched_head_differs_from_declared")
+            effective_base_sha, diff = self.unified_diff(
+                repo_dir, pr.base.sha, head_commit, cancel_event=cancel_event
             )
             self._notify(progress_callback, "diff", "PR Diff 已生成", "completed", 100)
             # 检出 head 到工作树（后续静态分析/测试需要）
             self._notify(progress_callback, "checkout", "正在检出 Head 工作树")
             self._run(
-                [self._git, "-C", str(repo_dir), "checkout", "--progress", "--detach", "FETCH_HEAD"],
+                [self._git, "-C", str(repo_dir), "checkout", "--progress", "--detach", head_commit],
                 progress_callback=progress_callback,
                 phase="checkout",
                 phase_label="正在检出 Head 工作树",
@@ -252,6 +269,102 @@ class GitTool:
         except BaseException:
             cleanup_workspace(repo_dir, workdir=self._workdir)
             raise
+
+    def unified_diff(
+        self,
+        repo_path: str | Path,
+        base_sha: str,
+        head_sha: str,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> tuple[str, str]:
+        """生产、Preview、CLI 与评测唯一的 Diff 生成函数。
+
+        内容基准是 ``base_sha`` 与 ``head_sha`` 的唯一 merge base；声明 base
+        只保留 PR 身份用途。无法确定唯一基准时抛出 ``DiffPreparationError``，
+        不回退到两点比较——两点比较会把 base 分支独有提交当作本 PR 的反向
+        变更交给 Agent 审查。
+        """
+        repo_dir = self._validate_worktree(repo_path)
+        bases = self.merge_bases(repo_dir, base_sha, head_sha, cancel_event=cancel_event)
+        if not bases:
+            raise DiffPreparationError("no_merge_base")
+        if len(bases) > 1:
+            raise DiffPreparationError("multiple_merge_bases", bases)
+        effective_base_sha = bases[0]
+        diff = self._run(
+            [self._git, "-C", str(repo_dir), "diff", "--no-ext-diff",
+             f"--unified={DIFF_CONTEXT_LINES}", effective_base_sha, head_sha],
+            cancel_event=cancel_event,
+        )
+        return effective_base_sha, diff
+
+    def merge_bases(
+        self,
+        repo_path: str | Path,
+        base_sha: str,
+        head_sha: str,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> list[str]:
+        """列出全部 merge base 候选；无共同祖先返回空列表，不吞掉命令错误。"""
+        repo_dir = self._validate_worktree(repo_path)
+        if cancel_event is not None and cancel_event.is_set():
+            raise GitToolCancelled("Git 操作已取消")
+        timeout = self._command_timeout_seconds if self._command_timeout_seconds > 0 else None
+        try:
+            completed = subprocess.run(
+                [self._git, "-C", str(repo_dir), "merge-base", "--all", base_sha, head_sha],
+                check=False,
+                capture_output=True,
+                timeout=timeout,
+                env=git_safety_environment(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise GitToolTimeout(f"Git merge-base 超过 {timeout:g} 秒超时") from exc
+        if cancel_event is not None and cancel_event.is_set():
+            raise GitToolCancelled("Git 操作已取消")
+        if completed.returncode != 0:
+            # 无共同祖先时 git 以退出码 1 返回空输出；其余失败仍是命令错误。
+            detail = completed.stderr.decode("utf-8", errors="replace").strip()
+            if completed.returncode != 1 or detail:
+                raise GitToolError(
+                    f"Git merge-base 执行失败（exit {completed.returncode}）\n{detail}"
+                )
+            return []
+        return [
+            line.strip()
+            for line in completed.stdout.decode("utf-8", errors="replace").splitlines()
+            if line.strip()
+        ]
+
+    def merge_base(self, repo_path: str | Path, base_sha: str, head_sha: str) -> str | None:
+        """返回唯一 merge base；不存在或存在多个候选时返回 ``None``。"""
+        bases = self.merge_bases(repo_path, base_sha, head_sha)
+        return bases[0] if len(bases) == 1 else None
+
+    def review_diff_context(
+        self, repo_path: str | Path, base_sha: str | None = None, head_sha: str | None = None
+    ) -> dict[str, str]:
+        """返回本次审查的内容基准；每次重新计算，避免共享实例跨任务串用。
+
+        缺少任一 SHA、无法确定唯一 merge base、或内容基准等于声明 base 时返回
+        空字典，调用方按 ``declared_base`` 处理；空字典不是成功信号。
+        """
+        if not base_sha or not head_sha:
+            return {}
+        try:
+            effective = self.merge_base(repo_path, base_sha, head_sha)
+        except GitToolError:
+            logger.warning("无法确定唯一内容基准，保留声明 base 身份", exc_info=True)
+            return {}
+        if effective is None or effective == base_sha:
+            return {}
+        return {
+            "effective_base_sha": effective,
+            "diff_policy": DIFF_POLICY,
+            "diff_policy_version": DIFF_POLICY_VERSION,
+        }
 
     def checkout_sha(self, repo_path: str | Path, sha: str) -> None:
         """在任务临时 clone 中切换到已 fetch 的确定 SHA。"""

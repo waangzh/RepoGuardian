@@ -2503,6 +2503,8 @@ class ReviewRunManifest(BaseModel):
     repository: str | None = None
     pr_number: int | None = Field(default=None, ge=1)
     base_sha: str | None = None
+    effective_base_sha: str | None = None  # 内容基准（merge base）；base_sha 是 PR 身份
+    diff_policy: str | None = None
     head_sha: str | None = None
     planner_version: str | None = None
     provider: str

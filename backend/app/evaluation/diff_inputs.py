@@ -10,7 +10,7 @@ from app.evaluation.data import DatasetLock, FrozenSample, load_references, sha2
 from app.evidence import DiffIndex
 from app.models.review import EvidenceCandidate
 from app.tools.diff_parser import DiffParser
-from app.tools.git_tool import GitTool, GitToolError
+from app.tools.git_tool import DIFF_CONTEXT_LINES, GitTool, GitToolError
 
 
 def dataset_digest(lock: DatasetLock) -> str:
@@ -56,11 +56,10 @@ class DiffInputLock(BaseModel):
 
 
 def unique_merge_base(git: GitTool, repo: Path, base: str, head: str, *, cancel_event=None) -> str:
-    bases = git._run([git._git, "-C", str(repo), "merge-base", "--all", base, head],
-                     cancel_event=cancel_event).splitlines()
+    bases = git.merge_bases(repo, base, head, cancel_event=cancel_event)
     if len(bases) != 1:
         raise GitToolError("snapshot_requires_unique_merge_base")
-    return bases[0].strip()
+    return bases[0]
 
 
 def inspect_diff(git: GitTool, repo: Path, sample: FrozenSample, references: list[dict]):
@@ -69,8 +68,8 @@ def inspect_diff(git: GitTool, repo: Path, sample: FrozenSample, references: lis
         if actual != revision:
             raise GitToolError("snapshot_revision_mismatch")
     effective = unique_merge_base(git, repo, sample.base_sha, sample.head_sha)
-    diff = git._run([git._git, "-C", str(repo), "diff", "--no-ext-diff", "--unified=80",
-                     effective, sample.head_sha])
+    diff = git._run([git._git, "-C", str(repo), "diff", "--no-ext-diff",
+                     f"--unified={DIFF_CONTEXT_LINES}", effective, sample.head_sha])
     changed = DiffParser().parse(diff)
     index = DiffIndex(changed)
     failures = []

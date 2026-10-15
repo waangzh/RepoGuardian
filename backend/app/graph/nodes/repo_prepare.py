@@ -61,7 +61,11 @@ async def repo_prepare_node(state: ReviewState) -> ReviewState:
         raise
     prepared_callback = state.get("_repo_prepared_callback")
     context_reader = getattr(git_tool, "review_diff_context", None)
-    diff_context = (await asyncio.to_thread(context_reader, repo_path)) if callable(context_reader) else {}
+    # 内容基准由 Git 工具按本次 PR 的 base/head 重新计算，不使用共享实例的缓存值。
+    diff_context = (
+        await asyncio.to_thread(context_reader, repo_path, pr_info.base.sha, pr_info.head.sha)
+        if callable(context_reader) else {}
+    )
     if diff_context.get("diff_policy") == "merge_base":
         expected = state.get("effective_base_sha")
         if expected and expected != diff_context.get("effective_base_sha"):

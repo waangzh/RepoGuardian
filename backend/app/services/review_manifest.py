@@ -179,6 +179,8 @@ def build_review_manifest(state: dict[str, Any], completed_at: datetime) -> Revi
         repository=(f"{pr.get('owner')}/{pr.get('repo')}" if pr.get("owner") and pr.get("repo") else None),
         pr_number=pr.get("number") or None,
         base_sha=state.get("base_sha"),
+        effective_base_sha=state.get("effective_base_sha"),
+        diff_policy=state.get("diff_policy"),
         head_sha=state.get("head_sha"),
         planner_version=(state.get("review_plan") or {}).get("planner_version"),
         provider=(state.get("task_runtime_configuration") or {}).get("provider", settings.repoguardian_provider),
