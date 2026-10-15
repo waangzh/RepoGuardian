@@ -34,7 +34,7 @@ def runtime_report(**updates):
 
 
 def test_task_runtime_graph_has_single_runtime_node_and_no_legacy_coordination():
-    nodes = set(build_review_graph(phase=3).compile().get_graph().nodes)
+    nodes = set(build_review_graph().compile().get_graph().nodes)
     assert nodes == {"__start__", "intake", "repo_prepare", "diff_parse", "repo_index",
                      "project_detection", "review_plan", "task_review_runtime", "report", "complete", "__end__"}
     assert "cross_unit_coordination" not in nodes and "issue_verifier" not in nodes
@@ -435,7 +435,7 @@ async def test_evaluation_selects_frozen_new_graph(monkeypatch, tmp_path):
     from app.evaluation.data import FrozenSample
     from app.evaluation.runner import run_sample
     from app.core.config import settings
-    monkeypatch.setattr(settings, "repoguardian_review_engine", "task_review_v1")
+    monkeypatch.setattr(settings, "repoguardian_review_engine", "legacy_units")
     sample = FrozenSample(instance_id="local__sample@2222222", repository="local/sample",
         pr_url="https://github.com/local/sample/pull/1", base_sha="1" * 40, head_sha="2" * 40,
         language="Python", changed_lines=1)
@@ -448,11 +448,11 @@ async def test_evaluation_selects_frozen_new_graph(monkeypatch, tmp_path):
                 "execution_status": "completed", "scope_complete": True}, "review_units": [],
                 "review_unit_results": [], "review_issues": [], "review_coverage": {"review_complete": True}}}
     def build(**kwargs):
-        phases.append(kwargs["phase"])
+        phases.append(kwargs)
         return SimpleNamespace(compile=lambda: Graph())
     monkeypatch.setattr("app.evaluation.runner.build_review_graph", build)
     result = await run_sample(sample, provider, tmp_path, git_tool=object())
-    assert phases == [3] and result["engine"] == "task_review_v1"
+    assert phases == [{}] and result["engine"] == "task_review_v1"
     assert result["status"] == "completed" and result["task_runtime_report"]["scope_complete"]
 
 

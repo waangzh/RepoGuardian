@@ -17,23 +17,16 @@ from app.graph.checkpointer import (
     get_checkpointer,
     review_thread_config,
 )
-from app.graph.nodes.issue_validation import issue_policy_node, issue_verifier_node
-from app.graph.nodes.resolve_evidence import resolve_evidence_node
 from app.graph.state import ReviewState
 from app.models.review import (
     ExecutionBudget,
-    IssueMetrics,
-    IssueStatus,
     PatchStatus,
     PatchValidationResult,
     ReviewCreateRequest,
-    ReviewIssue,
-    ModelUsage,
     RepositorySnapshot,
     ReviewPreviewRequest,
     ReviewPreviewResponse,
     ValidationBackendPreview,
-    ReviewUnitResult,
     ReviewPhase,
     ReviewTask,
     StepStatus,
@@ -46,24 +39,13 @@ from app.models.review import (
 )
 from app.models.review_runtime import TaskRuntimeRetryResult, TaskRuntimeReport
 from app.services.report_service import ReportService
-from app.services.issue_deduplication import IssueDeduplicationService
-from app.services.model_usage import summarize_model_usage
 from app.services.review_rebuild import rebuild_task_from_state
 from app.services.review_planner import DeterministicReviewPlanner
-from app.services.review_unit_executor import ReviewUnitExecutor
 from app.services.review_run_budget import (
     ReviewRepositoryRunBudgetStore,
     ReviewRunBudget,
     activate_run_budget,
 )
-from app.review.unit_completion import (
-    is_review_unit_budget_exhausted,
-    is_review_unit_complete,
-    is_review_unit_execution_complete,
-    is_review_unit_execution_complete_with_warnings,
-    review_unit_coverage_warning,
-)
-from app.services.review_manifest import build_review_manifest
 from app.services.review_repository import ReviewRepository
 from app.services.task_queue import ClaimedJob, DatabaseTaskQueue, ReviewWorker
 from app.services.patch_presentation import build_patch_presentation
@@ -99,39 +81,8 @@ _TASK_STATUS_BY_GRAPH_NODE = {
     "repo_index": TaskStatus.planning,
     "project_detection": TaskStatus.planning,
     "review_plan": TaskStatus.reviewing,
-    "review_units": TaskStatus.reviewing,
     "task_review_runtime": TaskStatus.reviewing,
-    "resolve_evidence": TaskStatus.resolving_evidence,
-    "issue_policy": TaskStatus.verifying_issues,
-    "issue_verifier": TaskStatus.verifying_issues,
-    "cross_unit_risk": TaskStatus.verifying_issues,
-    "cross_unit_coordination": TaskStatus.verifying_issues,
-    "issue_deduplication": TaskStatus.verifying_issues,
-    "verification": TaskStatus.verifying_issues,
-    "generate_patch": TaskStatus.generating_patches,
-    "candidate_check": TaskStatus.generating_patches,
-    "mark_unverified": TaskStatus.generating_patches,
-    "validation": TaskStatus.validating,
-    "repair_assessment": TaskStatus.validating,
 }
-
-
-def _issues_from_unit_results(results: list[ReviewUnitResult]) -> list[ReviewIssue]:
-    """从 per-unit verified issues 重建全局去重输入，并清理旧版 canonical 污染。"""
-    issues: list[ReviewIssue] = []
-    for result in results:
-        for issue in result.issues:
-            legacy_global_issue = set(issue.source_review_unit_ids) != {
-                result.review_unit_id
-            }
-            issues.append(issue.model_copy(update={
-                "source_review_unit_ids": [result.review_unit_id],
-                "source_issue_ids": [issue.id],
-                "supporting_evidence": (
-                    [] if legacy_global_issue else issue.supporting_evidence
-                ),
-            }))
-    return issues
 
 
 class ReviewService:
@@ -170,7 +121,6 @@ class ReviewService:
         self._worker_task: asyncio.Task[None] | None = None
         self._tasks: dict[str, ReviewTask] = {}
         self._run_tasks: dict[str, asyncio.Task[None]] = {}
-        self._retry_locks: dict[str, asyncio.Lock] = {}
         self._repo_paths: dict[str, Path] = {}
 
     def create_task(self, request: ReviewCreateRequest) -> ReviewTask:
@@ -421,9 +371,6 @@ class ReviewService:
         if job.kind == "review":
             await self._run_graph(job.task_id, job=job)
             return
-        if job.kind == "unit_retry":
-            await self.retry_unit(job.task_id, str(job.payload["unit_id"]))
-            return
         raise ValueError(f"unsupported worker job kind: {job.kind}")
 
     def _ensure_worker_started(self) -> None:
@@ -500,7 +447,7 @@ class ReviewService:
         result = None
         interrupted = False
         try:
-            graph = build_review_graph(phase=3 if task.engine == "task_review_v1" else 2)
+            graph = build_review_graph()
             checkpointer = await get_checkpointer() if self._repository else None
             compiled = (
                 graph.compile(checkpointer=checkpointer)
@@ -603,11 +550,6 @@ class ReviewService:
             if not interrupted:
                 task.status = TaskStatus.cancelled
                 task.error = None
-                if task.coordination_plan:
-                    task.coordination_plan.status = "cancelled"
-                if task.cross_unit_risk:
-                    task.cross_unit_risk.execution_status = "cancelled"
-                    task.cross_unit_risk.non_execution_reason = "任务已取消"
                 self._touch(task)
                 self._persist(task)
             raise
@@ -873,274 +815,55 @@ class ReviewService:
         run_task.cancel()
         return True
 
-    async def retry_unit(self, task_id: str, unit_id: str) -> ReviewUnitResult | TaskRuntimeRetryResult:
-        """在新的临时 clone 中只重试一个 Unit，并原位替换其聚合结果。"""
+    async def retry_unit(self, task_id: str, unit_id: str) -> TaskRuntimeRetryResult:
+        """只重排显式的未决缺口；旧引擎任务只读，不能重试。"""
         task = self.get_task(task_id)
         if task is None:
             raise KeyError(task_id)
-        if task.engine == "task_review_v1":
-            if not task.task_runtime_report:
-                raise ValueError("legacy unit retry is forbidden; task_review_v1 runtime report is missing")
-            report = TaskRuntimeReport.model_validate(task.task_runtime_report)
-            known_units = {item.get("unit_id") for item in report.work_items}
-            if unit_id not in known_units:
-                raise KeyError(unit_id)
-            if task.status not in {TaskStatus.completed, TaskStatus.completed_with_warnings,
-                                   TaskStatus.failed}:
-                raise ValueError("task runtime must be terminal before retrying a unit")
-            if self._repository is None:
-                raise ValueError("task runtime retry requires persisted fixed runtime")
-            gaps = {item["goal_id"] for item in report.initial_scope_coverage
-                    if item.get("unit_id") == unit_id and item.get("status") in {"blocked", "not_examined"}}
-            requeued = [item["work_item_id"] for item in report.work_items
-                        if item.get("unit_id") == unit_id and item.get("state") != "unknown"
-                        and gaps.intersection(item.get("goal_ids", []))]
-            if not requeued:
-                return TaskRuntimeRetryResult(unit_id=unit_id, requeued_work_item_ids=[], task_runtime_report=report)
-            task.task_runtime_retry_unit_id = unit_id
-            task.status = TaskStatus.queued
-            task.phase = ReviewPhase.prepare
-            task.error = None
-            task.warnings.append("task runtime retry only requeued explicit pending/blocked gaps")
-            self._touch(task)
-            self._persist(task)
-            if self._repository and self._task_queue:
-                self._task_queue.enqueue(task_id=task.id,
-                    idempotency_key=f"review:{task.id}:task-runtime-retry:{unit_id}:{task.updated_at.timestamp()}")
-                self._ensure_worker_started()
-            else:
-                self._run_tasks[task.id] = asyncio.create_task(self._run_graph(task.id))
-            return TaskRuntimeRetryResult(unit_id=unit_id, requeued_work_item_ids=requeued,
-                                          task_runtime_report=report)
-        if task.status not in {
-            TaskStatus.completed,
-            TaskStatus.completed_with_warnings,
-            TaskStatus.failed,
-        }:
-            raise ValueError("review task must be terminal before retrying a unit")
-        unit = next((item for item in task.review_units if item.id == unit_id), None)
-        if unit is None:
+        if task.engine != "task_review_v1":
+            raise ValueError("legacy_units engine is retired; historical tasks are read-only")
+        if not task.task_runtime_report:
+            raise ValueError("task_review_v1 runtime report is missing")
+        report = TaskRuntimeReport.model_validate(task.task_runtime_report)
+        known_units = {item.get("unit_id") for item in report.work_items}
+        if unit_id not in known_units:
             raise KeyError(unit_id)
-
-        lock = self._retry_locks.setdefault(task_id, asyncio.Lock())
-        async with lock:
-            previous_status = task.status
-            previous_phase = task.phase
-            previous_completed = task.review.completed
-            task.status = TaskStatus.reviewing
-            task.review.status = task.status
-            task.review.completed = False
-            self._touch(task)
-            try:
-                pr = task.pr or await self._github_tool.fetch_pr(task.pr_url)
-                repo_path, diff_text = await asyncio.to_thread(self._git_tool.clone_and_diff, pr)
-            except BaseException:
-                task.status = previous_status
-                task.phase = previous_phase
-                task.review.status = previous_status
-                task.review.completed = previous_completed
-                self._touch(task)
-                raise
-            try:
-                changed_files = self._diff_parser.parse(diff_text)
-                index = await RepoIndexer().execute(repo_path=str(repo_path))
-                # 重试必须与产生该 diff 的内容基准一致，否则证据会跨基准解析。
-                diff_context = await self._diff_context(repo_path, pr)
-                state = {
-                    "task_id": task.id,
-                    "model": task.model,
-                    "pr_info": pr.model_dump(mode="json"),
-                    "repo_path": str(repo_path),
-                    "changed_files": [item.model_dump(mode="json") for item in changed_files],
-                    "file_index": index["file_index"],
-                    "symbol_index": index["symbol_index"],
-                    "repository_graph": index["repository_graph"],
-                    **diff_context,
-                }
-                result = await ReviewUnitExecutor(
-                    self._provider,
-                    concurrency=1,
-                    timeout_seconds=settings.repoguardian_review_unit_timeout_seconds,
-                ).execute_unit(unit, state)
-                aggregated_issues = list(task.issues)
-                retry_metrics = task.issue_metrics
-                lifecycle_warnings: list[str] = []
-                if is_review_unit_execution_complete(result):
-                    lifecycle_state: ReviewState = {
-                        **state,
-                        "base_sha": pr.base.sha,
-                        "review_units": [item.model_dump(mode="json") for item in task.review_units],
-                        "review_unit_results": [result.model_dump(mode="json")],
-                        "review_issues": [item.model_dump(mode="json") for item in result.issues],
-                        "context_snippets": [
-                            item.model_dump(mode="json") for item in result.context_snippets
-                        ],
-                        "warnings": [],
-                        "_git_tool": self._git_tool,
-                        "_provider": self._provider,
-                    }
-                    resolved = await resolve_evidence_node(lifecycle_state)
-                    lifecycle_state = ReviewState(**{**lifecycle_state, **resolved})
-                    checked = await issue_policy_node(lifecycle_state)
-                    lifecycle_state = ReviewState(**{**lifecycle_state, **checked})
-                    verified = await issue_verifier_node(lifecycle_state)
-                    lifecycle_state = ReviewState(**{**lifecycle_state, **verified})
-                    verified_result = next(
-                        (
-                            ReviewUnitResult.model_validate(item)
-                            for item in lifecycle_state.get("review_unit_results") or []
-                            if item.get("review_unit_id") == unit_id
-                        ),
-                        result,
-                    )
-                    result = verified_result.model_copy(update={
-                        "issues": [
-                            issue for issue in verified_result.issues
-                            if issue.status in {
-                                IssueStatus.confirmed, IssueStatus.unresolved, IssueStatus.candidate
-                            }
-                        ],
-                    })
-                    source_results = [
-                        item for item in task.review_unit_results
-                        if item.review_unit_id != unit_id
-                    ] + [result]
-                    source_issues = _issues_from_unit_results(source_results)
-                    retry_metrics = IssueMetrics.model_validate(
-                        lifecycle_state.get("issue_metrics") or {}
-                    ).model_copy(update={
-                        "candidate_issue_count": max(
-                            len(result.issues), task.issue_metrics.candidate_issue_count
-                        ),
-                    })
-                    deduplicated = await IssueDeduplicationService().aggregate(
-                        source_issues,
-                        self._provider,
-                        task.model,
-                        retry_metrics,
-                    )
-                    aggregated_issues = deduplicated.issues
-                    retry_metrics = deduplicated.metrics
-                    lifecycle_warnings = list(lifecycle_state.get("warnings") or [])
-            except BaseException:
-                task.status = previous_status
-                task.phase = previous_phase
-                task.review.status = previous_status
-                task.review.completed = previous_completed
-                self._touch(task)
-                raise
-            finally:
-                await _cleanup_repo(Path(repo_path))
-
-            previous = {item.review_unit_id: item for item in task.review_unit_results}
-            previous[unit_id] = result
-            # 重试改变了筛查输入；不能继续展示旧跨 Unit 判断。
-            task.cross_unit_risk = None
-            task.coordination_plan = None
-            task.followup_results = []
-            task.review_unit_results = [
-                previous[item.id] for item in task.review_units if item.id in previous
-            ]
-            retained_task_usages = [
-                usage for usage in task.model_usages
-                if usage.review_unit_id != unit_id
-            ]
-            by_usage_id = {
-                usage.id: usage
-                for usage in [*retained_task_usages, *result.model_usages]
-                if isinstance(usage, ModelUsage)
-            }
-            task.model_usages = list(by_usage_id.values())
-            task.model_usage_summary = summarize_model_usage(task.model_usages)
-            task.issues = aggregated_issues
-            task.issue_metrics = retry_metrics
-            task.context_snippets = [
-                item for item in task.context_snippets if item.review_unit_id != unit_id
-            ] + result.context_snippets
-            task.agent_events = [
-                item for item in task.agent_events if item.review_unit_id != unit_id
-            ] + result.messages
-
-            incomplete = [
-                item for item in task.review_unit_results
-                if not is_review_unit_complete(item)
-            ]
-            completed = len(task.review_unit_results) - len(incomplete)
-            task.warnings = [
-                warning for warning in task.warnings if "Review Unit" not in warning
-                and not warning.startswith(f"Unit {unit_id} 目标覆盖 ")
-            ]
-            task.warnings = list(dict.fromkeys([*task.warnings, *lifecycle_warnings,
-                *(warning for item in task.review_unit_results if (warning := review_unit_coverage_warning(item)))]))
-            if incomplete and (
-                completed
-                or any(is_review_unit_execution_complete(item) for item in incomplete)
-                or any(is_review_unit_budget_exhausted(item) for item in incomplete)
-            ):
-                task.status = TaskStatus.completed_with_warnings
-                task.warnings.append(
-                    (
-                        f"{len(incomplete)} 个 Review Unit 已执行完成但存在未决契约，"
-                        "本次没有 Unit 可复用"
-                    )
-                    if not completed and all(
-                        is_review_unit_execution_complete_with_warnings(item)
-                        for item in incomplete
-                    )
-                    else (
-                        f"{len(incomplete)} 个 Review Unit 未完整完成，"
-                        f"其他 {completed} 个 Unit 已完成"
-                    )
-                    if completed
-                    else f"{len(incomplete)} 个 Review Unit 未完整完成，本次没有 Unit 成功完成"
-                )
-                task.error = None
-            elif incomplete:
-                task.status = TaskStatus.failed
-                task.error = result.error or "all review units failed"
-            else:
-                task.status = (
-                    TaskStatus.completed_with_warnings if task.warnings else TaskStatus.completed
-                )
-                task.error = None
-            task.review.status = task.status
-            task.review.completed = task.status in {
-                TaskStatus.completed, TaskStatus.completed_with_warnings
-            }
-            task.phase = (
-                ReviewPhase.failed if task.status == TaskStatus.failed else ReviewPhase.completed
-            )
-            excluded = {item.file_path: item.reason for item in task.excluded_files}
-            task.run_manifest = build_review_manifest({
-                **state, "created_at": task.created_at, "base_sha": pr.base.sha, "head_sha": pr.head.sha,
-                "effective_base_sha": diff_context.get("effective_base_sha"),
-                "diff_policy": diff_context.get("diff_policy"),
-                "review_plan": {"planner_version": task.run_manifest.planner_version if task.run_manifest else None,
-                    "changed_files": [{"file_path": item.file_path, "change_type": item.change_type,
-                        "additions": item.additions, "deletions": item.deletions,
-                        "included": item.file_path not in excluded,
-                        "excluded_reason": excluded.get(item.file_path)} for item in task.changed_files]},
-                "review_units": [item.model_dump(mode="json") for item in task.review_units],
-                "review_unit_results": [item.model_dump(mode="json") for item in task.review_unit_results],
-                "review_issues": [item.model_dump(mode="json") for item in task.issues],
-                "model_usages": [item.model_dump(mode="json") for item in task.model_usages],
-                "warnings": task.warnings,
-            }, datetime.now(timezone.utc))
-            task.coverage = task.run_manifest.coverage
-            task.warnings = task.run_manifest.warnings
-            task.report_markdown = self._report_service.generate(task)
-            self._touch(task)
-            self._persist(task)
-            return result
+        if task.status not in {TaskStatus.completed, TaskStatus.completed_with_warnings,
+                               TaskStatus.failed}:
+            raise ValueError("task runtime must be terminal before retrying a unit")
+        if self._repository is None:
+            raise ValueError("task runtime retry requires persisted fixed runtime")
+        gaps = {item["goal_id"] for item in report.initial_scope_coverage
+                if item.get("unit_id") == unit_id and item.get("status") in {"blocked", "not_examined"}}
+        requeued = [item["work_item_id"] for item in report.work_items
+                    if item.get("unit_id") == unit_id and item.get("state") != "unknown"
+                    and gaps.intersection(item.get("goal_ids", []))]
+        if not requeued:
+            return TaskRuntimeRetryResult(unit_id=unit_id, requeued_work_item_ids=[], task_runtime_report=report)
+        task.task_runtime_retry_unit_id = unit_id
+        task.status = TaskStatus.queued
+        task.phase = ReviewPhase.prepare
+        task.error = None
+        task.warnings.append("task runtime retry only requeued explicit pending/blocked gaps")
+        self._touch(task)
+        self._persist(task)
+        if self._repository and self._task_queue:
+            self._task_queue.enqueue(task_id=task.id,
+                idempotency_key=f"review:{task.id}:task-runtime-retry:{unit_id}:{task.updated_at.timestamp()}")
+            self._ensure_worker_started()
+        else:
+            self._run_tasks[task.id] = asyncio.create_task(self._run_graph(task.id))
+        return TaskRuntimeRetryResult(unit_id=unit_id, requeued_work_item_ids=requeued,
+                                      task_runtime_report=report)
 
     async def _reject_unwired_task_review_v1(self, task: ReviewTask) -> None:
-        """显式拒绝尚未接入生产快照适配器的新引擎，禁止旧图静默回退。"""
+        """显式拒绝缺少持久化与模型适配器的执行环境，不做静默降级。"""
         task.status = TaskStatus.failed
         task.phase = ReviewPhase.failed
         task.review.completed = False
         task.error = "task_review_v1_production_entry_not_enabled"
         task.warnings.append(
-            "task_review_v1 已冻结；P1 仅支持离线垂直切片，生产运行尚未接入快照与持久化适配器"
+            "task_review_v1 需要持久化仓储与模型 Provider；当前执行环境未接入，已显式失败"
         )
         task.review.status = task.status
         self._touch(task)

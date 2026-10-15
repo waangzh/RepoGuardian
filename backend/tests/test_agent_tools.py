@@ -5,7 +5,6 @@ import pytest
 from app.models.review import CommandId, PatchResult
 from app.tools.command_runner import CommandPolicyError, LocalCommandExecutor, resolve_command_spec
 from app.tools.patch_tool import PatchTool
-from app.tools.test_runner import TestRunnerTool
 
 
 def test_resolve_command_spec_rejects_unknown_command_id() -> None:
@@ -18,16 +17,6 @@ def test_resolve_command_spec_allows_registered_pytest_command() -> None:
 
     assert spec.command_id == CommandId.python_test_full
     assert "-m" in spec.argv
-
-
-@pytest.mark.asyncio
-async def test_test_runner_returns_structured_result(tmp_path: Path) -> None:
-    result = await TestRunnerTool().execute(
-        repo_path=str(tmp_path), command_id=CommandId.python_test_full
-    )
-
-    assert result["test_results"][0]["command"] == "python.test.full"
-    assert isinstance(result["test_results"][0]["exit_code"], int)
 
 
 @pytest.mark.asyncio

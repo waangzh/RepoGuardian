@@ -17,4 +17,7 @@ node_modules/
 AGENTS.md
 CLAUDE.md
 .claude
+.zvec-grep
 docs/
+/.trellis
+.pytest-*/

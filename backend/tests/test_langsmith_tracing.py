@@ -104,7 +104,7 @@ class FakeTracer:
 @pytest.fixture
 def graph_service(monkeypatch: pytest.MonkeyPatch) -> tuple[ReviewService, FakeCompiledGraph]:
     compiled = FakeCompiledGraph()
-    monkeypatch.setattr(review_service, "build_review_graph", lambda phase: FakeGraph(compiled))
+    monkeypatch.setattr(review_service, "build_review_graph", lambda: FakeGraph(compiled))
     service = ReviewService(
         github_tool=object(),  # type: ignore[arg-type]
         git_tool=object(),  # type: ignore[arg-type]
@@ -158,7 +158,7 @@ async def test_graph_stream_persists_running_and_completed_node_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     compiled = FakeStreamingCompiledGraph()
-    monkeypatch.setattr(review_service, "build_review_graph", lambda phase: FakeGraph(compiled))
+    monkeypatch.setattr(review_service, "build_review_graph", lambda: FakeGraph(compiled))
     monkeypatch.setattr(review_service.settings, "repoguardian_langsmith_tracing", False)
     service = ReviewService(
         github_tool=object(),  # type: ignore[arg-type]

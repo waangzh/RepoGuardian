@@ -26,6 +26,13 @@ def project_task_runtime(runtime, steps, goals, *, termination_reason, budget=No
             "limitations": result.limitations if result else []})
     derivation = runtime.derivation
     findings = list(derivation.data["candidates"].values()) if derivation else []
+    represented = {identity for record in findings for identity in record.get("source_candidate_ids", [])}
+    for identity, step in steps.items():
+        for candidate in step.executor.projection.candidates.values():
+            if candidate.candidate_id not in represented:
+                findings.append({"candidate": candidate.model_dump(mode="json"), "status": "unresolved",
+                    "reason": "candidate_derivation_incomplete", "issue": None, "origin": identity,
+                    "source_candidate_ids": [candidate.candidate_id], "source_result_ids": candidate.source_result_ids})
     leads = [{"lead_id": key, **value} for key, value in derivation.data["leads"].items()
              if value["status"] in {"not_scheduled", "duplicate"}] if derivation else []
     budget = budget or (next(iter(steps.values())).budget if steps else None)
@@ -46,6 +53,7 @@ def project_task_runtime(runtime, steps, goals, *, termination_reason, budget=No
         unscheduled_leads=leads, findings=findings, usage_integrity=integrity,
         sent_calls=sum(attempt.sent for attempt in attempts), settled_tokens=budget.settled_actual if budget else 0,
         unknown_attempts=len(unknown), total_tokens=budget.settled_actual if budget and integrity == "complete" else None,
+        diagnostics=runtime.failures,
         work_items=[{**item, "last_observation": steps[item["work_item_id"]].last_observation,
                      "tool_observations": steps[item["work_item_id"]].tool_observations}
                     for item in runtime.snapshot()])

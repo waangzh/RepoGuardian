@@ -325,8 +325,17 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
             if checkpoint is None:
                 await queue.cancel(steps)
             raise
-        if not queue.cancelled:
-            queue.derivation.refresh()
+        except Exception as exc:
+            queue.record_failure(exc, stage="task_execution")
+            termination = "technical_failure"
+        if not queue.cancelled and not queue.failures:
+            try:
+                queue.derivation.refresh()
+            except Exception as exc:
+                queue.record_failure(exc, stage="task_derivation")
+                termination = "technical_failure"
+        if queue.failures:
+            termination = "technical_failure"
     else:
         termination = "plan_exhausted"
     report = project_task_runtime(queue, steps, goals, termination_reason=termination, budget=budget)

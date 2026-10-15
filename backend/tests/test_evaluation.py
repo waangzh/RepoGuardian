@@ -4,12 +4,23 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from langchain_core.messages import AIMessage
 
+from app.agents.providers import LLMProvider, OpenAICompatibleProvider
+from app.core.config import settings
 from app.evaluation.data import DatasetLock, FrozenSample, freeze_dataset, load_references
 from app.evaluation.runner import FrozenGitHubTool, SnapshotGitTool, final_audit, run_dataset, run_sample
 from app.models.review import ReviewIssue
+from app.services.model_request_budgeter import ModelRequestProfile
 from app.review.issue_audit import audit_issue, capture_issue_audit
-from test_review_pipeline import FakeGitTool, ScriptedProvider
+from test_task_runtime_p4 import production_input as production_input
+
+
+class ScriptedProvider(LLMProvider):
+    """评测编排测试的占位 Provider；不实现任何模型能力。"""
+
+    async def summarize_pr_purpose(self, pr, changed_files, model):
+        raise AssertionError("scripted evaluation provider never summarizes")
 
 
 DIFF = '''diff --git a/sample.py b/sample.py
@@ -22,6 +33,49 @@ index 1111111..2222222 100644
 +    name = "RepoGuardian"
 +    return f"hi {name}"
 '''
+
+
+class LocalSnapshotGit(SnapshotGitTool):
+    def __init__(self, source, workdir, **kwargs):
+        super().__init__(workdir, **kwargs)
+        self.source = str(source)
+
+    def clone_and_diff(self, pr, **kwargs):
+        local = pr.model_copy(update={"clone_url": self.source,
+            "base": pr.base.model_copy(update={"repo_clone_url": self.source}),
+            "head": pr.head.model_copy(update={"repo_clone_url": self.source})})
+        return super().clone_and_diff(local, **kwargs)
+
+
+def current_evaluation_provider(calls, *, delay=0, candidates=True):
+    provider = OpenAICompatibleProvider("fixture", "https://example.test/v1", "fixture", request_attempts=1,
+        request_profile=ModelRequestProfile(context_window=32_000))
+
+    class SDK:
+        async def ainvoke(self, messages):
+            payload = json.loads(messages[1].content.split("\n")[0])
+            calls.append(payload)
+            if delay:
+                await asyncio.sleep(delay)
+            if payload["task"]["kind"] == "verify":
+                raw = {"kind": "submit", "verification": {
+                    "candidate_id": payload["candidate"]["candidate_id"], "decision": "supported",
+                    "evidence_ids": payload["active_evidence_ids"], "reason": "SDK 替身验证交付链",
+                    "subject_hash": payload["verification_subject_hash"], "publication_action": "retain"}}
+            else:
+                raw = {"kind": "submit", "examinations": [{"target_id": goal["goal_id"],
+                    "disposition": "examined", "evidence_ids": payload["active_evidence_ids"],
+                    "reason": "核对固定变更范围"} for goal in payload["goals"]], "candidates": [], "leads": []}
+                if candidates:
+                    # 人工构造的候选仅验证协议与发布链，不作为真实缺陷判断。
+                    raw["candidates"] = [{"claim": "受控测试候选", "primary_anchor": payload["goals"][0]["goal_id"],
+                        "evidence_ids": payload["active_evidence_ids"], "affected_behavior": "返回值兼容性",
+                        "failure_scenario": "调用方要求原返回值时出现差异", "recommendation": "核对调用方契约"}]
+            return AIMessage(content=json.dumps(raw), usage_metadata={
+                "input_tokens": 10, "output_tokens": 5, "total_tokens": 15})
+
+    provider._build_chat_model = lambda *args: SDK()
+    return provider
 
 
 def raw_record():
@@ -71,28 +125,30 @@ async def test_frozen_metadata_has_no_live_body_or_labels(tmp_path):
     assert pr.base.sha == "1" * 40 and pr.head.ref == "2" * 40
 
 
-async def test_real_production_graph_and_lifecycle(tmp_path, monkeypatch):
+async def test_real_production_graph_and_lifecycle(tmp_path, monkeypatch, production_input):
     lock, _, _ = frozen(tmp_path)
-    # 无 DB/checkpoint 路径不应构造生产持久化仓储。
-    def forbidden(*args, **kwargs):
-        raise AssertionError("production repository/cache accessed")
-    monkeypatch.setattr("app.graph.nodes.review_units.ReviewRepository", forbidden)
-    monkeypatch.setattr("app.graph.nodes.cross_unit_coordination.ReviewRepository", forbidden)
-    result = await run_sample(lock.samples[0], ScriptedProvider(), tmp_path / "workspaces",
-        git_tool=FakeGitTool(tmp_path / "target", DIFF))
+    state, _, _ = production_input
+    sample = lock.samples[0].model_copy(update={"base_sha": state["base_sha"], "head_sha": state["head_sha"]})
+    monkeypatch.setattr(settings, "repoguardian_model", "fixture")
+    calls = []
+    result = await run_sample(sample, current_evaluation_provider(calls), tmp_path / "workspaces",
+        git_tool=LocalSnapshotGit(state["repo_path"], tmp_path / "workspaces"))
     assert result["status"] == "completed", result
-    assert result["manifest"]["head_sha"] == lock.samples[0].head_sha
+    assert result["engine"] == result["manifest"]["engine"] == "task_review_v1"
+    assert result["manifest"]["head_sha"] == sample.head_sha
     assert result["coverage"]["completed_units"] >= 1
-    stages = {x["stage"] for x in result["issue_audit"]}
-    assert {"generated", "unit_filter", "evidence", "policy", "verifier", "deduplication", "final"} <= stages
+    assert [call["task"]["kind"] for call in calls] == ["inspect", "verify"]
+    assert {call["operation"] for call in result["model_calls"]} == {"task_review_step"}
+    assert result["task_runtime_configuration"]["publication_contract"] == "claim-publication-v1"
+    assert result["task_runtime_configuration"]["risk_planner_version"] == "risk-planner-v4"
     assert result["confirmed"] and not result["needs_human"]
     assert result["confirmed"][0]["side"] == "right"
-    assert result["scoring_profiles"]["product_core"] == []
-    assert result["usage_summary"]["actual_total_tokens"] is None
+    assert result["scoring_profiles"]["product_core"] == result["confirmed"]
+    assert result["usage_summary"]["actual_total_tokens"] == result["run_budget"]["settled_actual"] == 30
     assert "SECRET_REFERENCE" not in json.dumps(result)
 
 
-async def test_prepare_failure_and_timeout_preserve_results(tmp_path):
+async def test_prepare_failure_and_timeout_preserve_results(tmp_path, production_input):
     lock, _, _ = frozen(tmp_path)
     class BrokenGit:
         def clone_and_diff(self, *args, **kwargs):
@@ -101,11 +157,10 @@ async def test_prepare_failure_and_timeout_preserve_results(tmp_path):
                               git_tool=BrokenGit())
     assert result["status"] == "prepare_failed" and result["error_type"] == "RuntimeError"
     assert result["confirmed"] == [] and result["coverage"] is None
-    class SlowProvider(ScriptedProvider):
-        async def decide(self, *args, **kwargs):
-            await asyncio.sleep(1)
-    result = await run_sample(lock.samples[0], SlowProvider(), tmp_path,
-        timeout_seconds=0.2, git_tool=FakeGitTool(tmp_path / "target", DIFF))
+    state, _, _ = production_input
+    sample = lock.samples[0].model_copy(update={"base_sha": state["base_sha"], "head_sha": state["head_sha"]})
+    result = await run_sample(sample, current_evaluation_provider([], delay=10), tmp_path,
+        timeout_seconds=0.5, git_tool=LocalSnapshotGit(state["repo_path"], tmp_path / "target"))
     assert result["status"] == "timed_out"
 
 
@@ -181,7 +236,7 @@ def test_snapshot_git_real_history(tmp_path):
     assert git("rev-parse", "HEAD") == head
 
 
-async def test_run_manifest_records_all_failures_and_refuses_overwrite(tmp_path):
+async def test_run_manifest_records_all_failures_and_refuses_overwrite(tmp_path, monkeypatch):
     lock, _, _ = frozen(tmp_path)
     lock_path = tmp_path / "lock.json"
     lock_path.write_text(lock.model_dump_json())
@@ -195,9 +250,66 @@ async def test_run_manifest_records_all_failures_and_refuses_overwrite(tmp_path)
     with patch("app.evaluation.runner.run_sample", failed):
         summary = await run_dataset(lock_path, output, ScriptedProvider())
     assert summary["samples"][0]["status"] == "prepare_failed"
+    assert summary["engine"] == summary["config"]["repoguardian_review_engine"] == "task_review_v1"
+    assert summary["task_runtime_configuration"]["publication_contract"] == "claim-publication-v1"
     assert (output / "0000.json").exists()
     with pytest.raises(FileExistsError):
         await run_dataset(lock_path, output, ScriptedProvider())
+
+
+async def test_dataset_freezes_runtime_configuration_across_samples(tmp_path, monkeypatch):
+    lock, _, _ = frozen(tmp_path)
+    second = lock.samples[0].model_copy(update={"instance_id": "local__sample@3333333"})
+    lock.samples.append(second)
+    lock.files["positive_samples.json"].records = 2
+    lock_path = tmp_path / "lock.json"
+    lock_path.write_text(lock.model_dump_json(), encoding="utf-8")
+    monkeypatch.setattr(settings, "repoguardian_model", "fixture")
+    monkeypatch.setattr(settings, "repoguardian_run_max_calls", 5)
+    seen = []
+
+    async def run(sample, provider, workdir, **kwargs):
+        seen.append(json.loads(json.dumps(kwargs["runtime_configuration"])))
+        monkeypatch.setattr(settings, "repoguardian_model", "changed-default")
+        monkeypatch.setattr(settings, "repoguardian_run_max_calls", 99)
+        return {"status": "completed"}
+
+    monkeypatch.setattr("app.evaluation.runner.run_sample", run)
+    summary = await run_dataset(lock_path, tmp_path / "results", ScriptedProvider())
+    assert len(seen) == 2 and seen[0] == seen[1] == summary["task_runtime_configuration"]
+    assert seen[0]["model"] == "fixture" and seen[0]["limits"]["max_calls"] == 5
+
+
+async def test_missing_current_runtime_report_cannot_fall_back_to_legacy_success(tmp_path, monkeypatch):
+    lock, _, _ = frozen(tmp_path)
+
+    class Graph:
+        def compile(self):
+            return self
+
+        async def astream(self, initial, **kwargs):
+            yield {"report": {"status": "completed", "review_units": [], "review_unit_results": [],
+                              "review_coverage": {"review_complete": True}}}
+
+    monkeypatch.setattr("app.evaluation.runner.build_review_graph", lambda **kwargs: Graph())
+    result = await run_sample(lock.samples[0], ScriptedProvider(), tmp_path, git_tool=object())
+    assert result["engine"] == "task_review_v1" and result["status"] == "failed"
+
+
+def test_cli_rejects_quality_gate_without_experiment_plan(tmp_path, monkeypatch, capsys):
+    from app.evaluation.__main__ import main
+
+    monkeypatch.setattr("app.evaluation.isolation.protect_reviewer_process", lambda: None)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("invalid experiment arguments must fail before provider construction")
+
+    monkeypatch.setattr("app.agents.providers.build_provider", forbidden)
+    with pytest.raises(SystemExit) as exc:
+        main(["_review", "--lock", str(tmp_path / "lock.json"), "--output", str(tmp_path / "output"),
+              "--quality-gate", str(tmp_path / "gate.json")])
+    assert exc.value.code == 2
+    assert "实验组和门必须绑定冻结清单" in capsys.readouterr().err
 
 
 def test_frozen_local_dataset():

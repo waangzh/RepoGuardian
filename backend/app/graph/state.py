@@ -125,10 +125,6 @@ class ReviewState(TypedDict, total=False):
     _provider: Any
     _project_registry: Any
     _review_planner: Any
-    _review_unit_executor: Any
     _coordination_repository: Any
-    _issue_policy_service: Any
-    _issue_verifier_service: Any
-    _issue_deduplication_service: Any
     _validation_backend_selector: Any
     _repo_prepared_callback: Any

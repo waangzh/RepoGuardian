@@ -12,7 +12,6 @@ from app.models.review import (
     ValidationCheck,
     ValidationStatus,
 )
-from app.graph.nodes.optional_validation import optional_validation_node
 from app.models.runner import RunnerRegistrationRequest, RunnerResultSubmission
 from app.services.user_runner_service import (
     InvalidRunnerResult,
@@ -289,29 +288,13 @@ async def test_offline_user_runner_keeps_patch_unverified_and_review_can_continu
         patch_sha=normalized_patch_sha(PATCH),
     )
 
-    result = await optional_validation_node({
-        "task_id": "task-1",
-        "mode": "review_suggest_and_validate",
-        "validation_backend": "user_runner",
-        "validation_profile": "unit",
-        "base_sha": "base-sha",
-        "head_sha": "head-sha",
-        "pr_url": "https://github.com/owner/repo/pull/1",
-        "pr_info": {
-            "owner": "owner",
-            "repo": "repo",
-            "clone_url": "https://github.com/owner/repo.git",
-            "head": {"ref": "feature"},
-        },
-        "patches": [patch.model_dump(mode="json")],
-        "validation_results": [],
-        "warnings": [],
-        "_validation_backend_selector": selector,
-    })
+    request = _request().model_copy(update={"patch_id": patch.id, "head_sha": patch.head_sha,
+                                            "patch_sha": patch.patch_sha})
+    result = await selector.select("user_runner", "review_suggest_and_validate").validate(request)
 
-    assert result["patches"][0]["status"] == "unverified"
-    assert result["validation_results"][0]["validation_request_id"]
-    assert result["validation_results"][0]["trusted"] is False
+    assert patch.status == "unverified"
+    assert result.validation_request_id
+    assert result.trusted is False
 
 
 def test_only_trusted_runner_result_can_verify_review_patch() -> None:
