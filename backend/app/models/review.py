@@ -2079,6 +2079,7 @@ class CrossUnitFollowupRequest(BaseModel):
     counterevidence_goal: str = Field(min_length=1, max_length=1_000)
     stop_condition: str = Field(min_length=1, max_length=1_000)
     origin_obligation_ids: list[str] = Field(default_factory=list, max_length=20)
+    planning_question_indices: list[int] = Field(default_factory=list, max_length=20)
 
     @field_validator("primary_files", "supporting_files", "verification_files")
     @classmethod
@@ -2117,11 +2118,23 @@ class CrossUnitCatalogBatch(BaseModel):
     reason: str | None = None
 
 
+class CrossUnitPlanningQuestion(BaseModel):
+    """服务端维护的问题身份、补查关联及执行后状态。"""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    question: str
+    followup_ids: list[str] = Field(default_factory=list)
+    status: Literal["pending", "invalid", "unresolved", "resolved"] = "pending"
+    reason: str = "尚未执行关联补查"
+
+
 class CrossUnitCoordinationPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
     schema_version: Literal["cross-unit-plan-v1"] = "cross-unit-plan-v1"
     followups: list[CrossUnitFollowupRequest] = Field(default_factory=list, max_length=3)
     unresolved_questions: list[str] = Field(default_factory=list)
+    question_states: list[CrossUnitPlanningQuestion] = Field(default_factory=list)
     decision: Literal["required", "uncertain", "skip"] = "uncertain"
     reason: str = Field(default="尚未完成协调", max_length=1_000)
     relationship_ids: list[str] = Field(default_factory=list)

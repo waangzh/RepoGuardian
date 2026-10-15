@@ -78,6 +78,15 @@ test("候选处理完成仍可未决，不推导为找到反证", () => {
   assert.equal(ui.followupPresentation(undefined, "completed").label, "未执行或未保存结果");
 });
 
+test("无效补查与未执行和有效未决分别呈现", () => {
+  const invalid = ui.followupPresentation({ outcome: "unresolved", validation_status: "completed",
+    unit_result: { review_summary: { latest_attempt_status: "invalid" } } }, "completed");
+  assert.equal(invalid.label, "审查记录无效");
+  assert.equal(invalid.validation, "输出未通过校验，结论未采用");
+  assert.equal(ui.planningQuestionLabels.pending, "尚未执行或未覆盖");
+  assert.equal(ui.planningQuestionLabels.resolved, "已解决");
+});
+
 test("补查候选通过去重来源关联发布结果，不展示过滤项为确认问题", () => {
   const followup = { unit_result: { issues: [{ id: "candidate-a" }] } };
   const merged = { id: "published", status: "confirmed", source_issue_ids: ["candidate-a"] };

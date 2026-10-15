@@ -118,10 +118,16 @@ export function coordinationDecisionLabel(plan: CrossUnitCoordinationPlan): stri
 
 export function followupPresentation(result: CrossUnitFollowupResult | undefined, taskStatus: string) {
   if (!result) return { label: isTerminal(taskStatus) ? "未执行或未保存结果" : "等待执行", tone: "pending", validation: "尚无候选批次" };
+  if (result.unit_result?.review_summary?.latest_attempt_status === "invalid") {
+    return { label: "审查记录无效", tone: "warning", validation: "输出未通过校验，结论未采用" };
+  }
   const labels = { candidate_found: "发现候选", refuted: "找到反证", unresolved: "未决", failed: "补查失败" };
   return { label: labels[result.outcome], tone: result.outcome === "failed" ? "failed" : result.outcome === "unresolved" ? "warning" : "neutral",
     validation: result.validation_status === "completed" ? "候选处理已结束" : result.validation_status === "pending" ? "候选处理未结束" : "候选处理状态未知" };
 }
+
+export const planningQuestionLabels = { pending: "尚未执行或未覆盖", invalid: "审查记录无效",
+  unresolved: "有效结论不足或执行未完成", resolved: "已解决" };
 
 export function publishedFollowupIssues(result: CrossUnitFollowupResult | undefined, issues: ReviewIssue[]): ReviewIssue[] {
   const ids = new Set(result?.unit_result?.issues.map((issue) => issue.id) || []);
