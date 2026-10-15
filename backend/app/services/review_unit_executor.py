@@ -2624,11 +2624,13 @@ class ReviewUnitExecutor:
                      "result_count": event.result_count} for event in state.get("tool_events", [])[-3:]]
         if feedback and self._supports_native_review_step():
             for item, event in zip(feedback, state.get("tool_events", [])[-3:]):
-                if event.tool == "file_find" and event.result_count:
+                if event.tool == "file_find":
                     try:
                         page = json.loads(event.detail or "{}")
                         if isinstance(page, dict):
                             item["files"] = [path for path in page.get("files", []) if isinstance(path, str)]
+                            item["search_scope"] = page.get("search_scope", "authorized_scope")
+                            item["absence_is_repository_absence"] = False
                     except (ValueError, TypeError):
                         pass
             record_input["tool_feedback"] = feedback

@@ -19,6 +19,7 @@ _CONTRACT_TAGS = {"public_api", "api", "model", "config", "migration", "auth", "
 _CONTRACT_PARTS = {"api", "apis", "schema", "schemas", "model", "models", "types", "config", "configs",
                    "migration", "migrations", "auth", "permissions"}
 _PASSIVE_SUFFIXES = {".md", ".txt", ".rst", ".png", ".jpg", ".svg", ".css", ".scss"}
+_NON_SYMBOL_FILES = {".gitignore", ".gitattributes", ".dockerignore", ".editorconfig"}
 _CONTRACT_CHANGE = re.compile(
     r"^\s*(?:async\s+def\b|def\b|class\b|export\b|interface\b|type\s+\w+\s*=|"
     r"return\b|@(?:\w+\.)?(?:get|post|put|patch|delete|route)\b|"
@@ -104,16 +105,25 @@ class CrossUnitRiskService:
         eligible_paths = set(owners)
         metadata = graph.get("metadata") or {}
         graph_paths = {item.get("path") for item in graph.get("files") or []}
-        index_available = bool(graph) and eligible_paths <= indexed_paths and eligible_paths <= graph_paths
-        index_available = index_available and metadata.get("file_count") == len(file_index)
-        index_available = index_available and metadata.get("edge_count") == len(graph.get("edges") or [])
-        index_available = index_available and all(
-            int(file_index[path].get("analysis_level") or 0) >= 2
-            for path in eligible_paths if PurePosixPath(path).suffix.lower() not in _PASSIVE_SUFFIXES
-        )
+        diagnostics = []
+        if not graph:
+            diagnostics.append("repository_graph_missing")
+        diagnostics.extend("file_index_missing:" + path for path in sorted(eligible_paths - indexed_paths))
+        diagnostics.extend("graph_file_missing:" + path for path in sorted(eligible_paths - graph_paths))
+        if metadata.get("file_count") != len(file_index):
+            diagnostics.append("file_count_mismatch")
+        if metadata.get("edge_count") != len(graph.get("edges") or []):
+            diagnostics.append("edge_count_mismatch")
+        non_symbol_paths = {path for path in eligible_paths if PurePosixPath(path).name in _NON_SYMBOL_FILES}
+        for path in sorted(eligible_paths & indexed_paths):
+            if (path not in non_symbol_paths and PurePosixPath(path).suffix.lower() not in _PASSIVE_SUFFIXES
+                    and int(file_index[path].get("analysis_level") or 0) < 2):
+                diagnostics.append("symbol_analysis_insufficient:" + path)
+        index_available = not diagnostics
+        index_diagnostics = [*diagnostics, *("symbol_analysis_not_applicable:" + path for path in sorted(non_symbol_paths))]
         index_status = "available" if index_available else "partial" if graph or file_index else "unknown"
         if len(units) < 2:
-            return CrossUnitRiskAssessment(decision="skip", index_status=index_status, reasons=[
+            return CrossUnitRiskAssessment(decision="skip", index_status=index_status, index_diagnostics=index_diagnostics, reasons=[
                 CrossUnitRiskReason(code="no_cross_unit_scope", unit_ids=[item.id for item in units],
                                     detail="当前计划不足两个 Unit，跨 Unit 筛查不适用；局部覆盖另行统计")
             ])
@@ -217,7 +227,10 @@ class CrossUnitRiskService:
                     "涉及契约变更但未建立跨 Unit 关系；无图边不等于无依赖", needs_check=False)
         if not index_available and any(not _passive_unit(item) for item in units):
             add("relationship_unknown", [item.id for item in units], sorted(eligible_paths),
-                "索引缺失、降级或内部计数不自洽，无法充分判别变更关系", needs_check=False)
+                "索引未满足关系判别条件：" + "; ".join(diagnostics), needs_check=False)
+        if non_symbol_paths:
+            add("relationship_unknown", [unit.id for unit in units if set(unit.primary_files) & non_symbol_paths],
+                sorted(non_symbol_paths), "此类文件不适用代码符号分析，仍需核验配置或文件引用关系；不代表无风险", needs_check=False)
         # 未完成的局部任务只影响局部覆盖；没有依赖关系时不自动升级 required。
         if not required and not uncertain:
             reasons.append(CrossUnitRiskReason(
@@ -227,7 +240,7 @@ class CrossUnitRiskService:
         unique = {item.model_dump_json(): item for item in reasons}
         decision = "required" if required else "uncertain" if uncertain else "skip"
         return CrossUnitRiskAssessment(
-            decision=decision, index_status=index_status,
+            decision=decision, index_status=index_status, index_diagnostics=index_diagnostics,
             reasons=[unique[key] for key in sorted(unique)],
             relationships=[relationships[key] for key in sorted(relationships)],
             execution_status="not_implemented" if decision != "skip" else "not_requested",

@@ -120,6 +120,8 @@ class ScopedContextTool:
         safe: list[str] = []
         # 预留最大计数与 24-byte cursor 的 JSON 包装，约束整个返回对象而非仅路径正文。
         page = {"files": safe, "scope_id": scope_id, "matched_candidates": len(matched),
+                "search_scope": "readable_files" if scope.repository_discovery_enabled else "seed_files",
+                "absence_is_repository_absence": False,
                 "scanned_candidates": 100, "omitted_for_safety": 100, "next_cursor": "x" * 32}
         path_budget = _MAX_FIND_PAGE_CHARS - (len(json.dumps(page, ensure_ascii=False)) - 2)
         index, scanned, omitted, size = offset, 0, 0, 2

@@ -588,11 +588,13 @@ export interface CrossUnitRiskAssessment {
   reasons: CrossUnitRiskReason[];
   relationships: CrossUnitRelationship[];
   index_status: "available" | "partial" | "unknown";
+  index_diagnostics?: string[];
   execution_status: "not_requested" | "not_implemented" | "completed" | "unresolved" | "failed" | "cancelled";
   non_execution_reason?: string | null;
 }
 
 export interface CrossUnitFollowupRequest {
+  supporting_files?: string[];
   id: string;
   question: string;
   unit_ids: string[];
