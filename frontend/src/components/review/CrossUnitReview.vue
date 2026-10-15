@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { CrossUnitFollowupRequest, ReviewIssue, ReviewTask } from "../../types/review";
-import { budgetPercent, coordinationDecisionLabel, crossUnitPresentation, evidenceCatalog, followupPresentation, formatCost, issueStatusBreakdown, publishedFollowupIssues, reasonLabels } from "../../utils/reviewObservability";
+import { budgetPercent, coordinationDecisionLabel, crossUnitPresentation, evidenceCatalog, evidenceSnapshotBase, followupPresentation, formatCost, issueStatusBreakdown, publishedFollowupIssues, reasonLabels } from "../../utils/reviewObservability";
 import StatusBadge from "../common/StatusBadge.vue";
 import EmptyState from "../common/EmptyState.vue";
 import EvidenceReferences from "./EvidenceReferences.vue";
@@ -18,6 +18,7 @@ const metrics = computed(() => plan.value?.runtime_fingerprint ? plan.value.runt
 const budget = computed(() => plan.value?.execution_budget);
 const results = computed(() => props.task.followup_results || []);
 const relationships = { calls: "调用", imports: "导入", test_of: "测试覆盖", configures: "配置影响", declared_dependency: "声明依赖" };
+const snapshotBase = computed(() => evidenceSnapshotBase(props.task));
 const indexLabels = { available: "索引可用", partial: "索引不完整", unknown: "索引状态未知" };
 const batchLabels = { pending: "待规划", validated: "规划已校验", skipped: "输入超限，未覆盖", failed: "规划失败，未覆盖" };
 function unitName(id: string): string {
@@ -38,13 +39,13 @@ const orphanResults = computed(() => results.value.filter((item) => !plan.value?
         <EmptyState v-if="!risk" icon="help" title="尚无跨组筛查记录" description="审查可能尚未进入筛查阶段，或该历史任务未保存此记录；未知不代表可跳过。" />
         <template v-else>
           <p class="interpretation">{{ risk.decision === 'required' ? '需要检查表示存在契约、关联或覆盖疑点，不等于已经确认缺陷。' : risk.decision === 'uncertain' ? '关联或检查记录不足，保留不确定性，等待受限关系判别。' : '当前规则允许跳过跨组补查；原始 Unit 的局部覆盖和正确性仍需分别判断。' }}</p>
-          <ol class="risk-reasons"><li v-for="(reason, index) in risk.reasons" :key="index"><strong>{{ reasonLabels[reason.code] || '筛查依据' }}</strong><p>{{ reason.detail }}</p><div class="scope-links"><button v-for="id in reason.unit_ids" :key="id" type="button" @click="emit('openUnit', id)">{{ unitName(id) }} ↗</button></div><code v-for="file in reason.files" :key="file" class="scope-file">{{ file }}</code><EvidenceReferences :ids="reason.evidence_ids" :catalog="catalog" :relationships="risk.relationships" :head-sha="task.pr?.head.sha" :base-sha="task.pr?.base.sha" /></li></ol>
+          <ol class="risk-reasons"><li v-for="(reason, index) in risk.reasons" :key="index"><strong>{{ reasonLabels[reason.code] || '筛查依据' }}</strong><p>{{ reason.detail }}</p><div class="scope-links"><button v-for="id in reason.unit_ids" :key="id" type="button" @click="emit('openUnit', id)">{{ unitName(id) }} ↗</button></div><code v-for="file in reason.files" :key="file" class="scope-file">{{ file }}</code><EvidenceReferences :ids="reason.evidence_ids" :catalog="catalog" :relationships="risk.relationships" :head-sha="task.pr?.head.sha" :base-sha="snapshotBase" /></li></ol>
           <p v-if="!risk.reasons.length" class="muted">没有保存具体筛查依据。</p>
           <p class="index-note">{{ indexLabels[risk.index_status] }}<span> · 静态关联不能单独证明本次变更存在缺陷。</span></p>
           <p v-for="diagnostic in risk.index_diagnostics || []" :key="diagnostic" class="index-note">索引诊断：{{ diagnostic }}</p>
           <details v-if="risk.relationships.length" class="relationships"><summary>关联路径 · {{ risk.relationships.length }}</summary><article v-for="edge in risk.relationships" :key="edge.id"><div><code>{{ edge.source_file }}<template v-if="edge.source_symbol"> · {{ edge.source_symbol }}</template></code><span>{{ relationships[edge.type] }} →</span><code>{{ edge.target_file }}<template v-if="edge.target_symbol"> · {{ edge.target_symbol }}</template></code></div><p>{{ edge.provenance || '未记录关联说明' }}</p><small>{{ edge.parser_id || '来源未记录' }} · 解析评分 {{ edge.confidence.toFixed(2) }}，不是缺陷概率</small></article></details>
         </template>
-        <div v-if="plan" class="coordination-decision"><h3>协调记录</h3><StatusBadge status="neutral" :label="coordinationDecisionLabel(plan)" /><p>{{ plan.reason }}</p><EvidenceReferences :ids="plan.evidence_ids || []" :catalog="catalog" :head-sha="task.pr?.head.sha" :base-sha="task.pr?.base.sha" /></div>
+        <div v-if="plan" class="coordination-decision"><h3>协调记录</h3><StatusBadge status="neutral" :label="coordinationDecisionLabel(plan)" /><p>{{ plan.reason }}</p><EvidenceReferences :ids="plan.evidence_ids || []" :catalog="catalog" :head-sha="task.pr?.head.sha" :base-sha="snapshotBase" /></div>
         <p v-else-if="risk?.non_execution_reason" class="index-note">{{ risk.non_execution_reason }}</p>
         <p v-else-if="task.coverage?.coordination_reason" class="index-note">{{ task.coverage.coordination_reason }}</p>
       </article>
@@ -76,10 +77,10 @@ const orphanResults = computed(() => results.value.filter((item) => !plan.value?
         <p v-if="request.supporting_files?.length">必要支持文件：{{ request.supporting_files.join('、') }}</p>
         <p v-if="request.verification_files?.length">本问题核验范围：{{ request.verification_files.join('、') }}</p>
         <dl class="followup-objectives"><div><dt>主检查文件</dt><dd><code>{{ request.primary_files.join('、') }}</code></dd></div><div><dt>反证目标</dt><dd>{{ request.counterevidence_goal }}</dd></div><div><dt>停止条件</dt><dd>{{ request.stop_condition }}</dd></div></dl>
-        <EvidenceReferences :ids="request.evidence_ids" :catalog="catalog" :head-sha="task.pr?.head.sha" :base-sha="task.pr?.base.sha" />
+        <EvidenceReferences :ids="request.evidence_ids" :catalog="catalog" :head-sha="task.pr?.head.sha" :base-sha="snapshotBase" />
         <div v-if="resultFor(request)" class="followup-conclusion"><strong>{{ followupPresentation(resultFor(request), task.status).validation }}</strong><p>{{ resultFor(request)?.reason }}</p><p v-if="resultFor(request)?.unit_result?.issues.length">本批次 {{ resultFor(request)?.unit_result?.issues.length }} 条记录：{{ issueStatusBreakdown(resultFor(request)).map(item => item.count + ' ' + item.label).join(' · ') }}</p><p v-else-if="resultFor(request)?.outcome === 'refuted'">已记录针对本次补查问题的反证，不代表整个变更正确。</p><p v-else>未报告候选不等于已找到反证。</p></div>
         <div class="followup-findings"><button v-for="issue in findings(request)" :key="issue.id" type="button" @click="emit('openIssue', issue)"><StatusBadge :status="issue.status" /><span>{{ issue.title }}</span><span>查看证据 →</span></button></div>
-        <details v-if="resultFor(request)?.unit_result" class="followup-record"><summary>查看补查的实际检查记录</summary><UnitReviewRecord :result="resultFor(request)?.unit_result || undefined" :head-sha="task.pr?.head.sha" :base-sha="task.pr?.base.sha" /></details>
+        <details v-if="resultFor(request)?.unit_result" class="followup-record"><summary>查看补查的实际检查记录</summary><UnitReviewRecord :result="resultFor(request)?.unit_result || undefined" :head-sha="task.pr?.head.sha" :base-sha="snapshotBase" /></details>
       </article>
       <article v-for="result in orphanResults" :key="result.request_id" class="followup-item"><StatusBadge :status="followupPresentation(result, task.status).tone" :label="followupPresentation(result, task.status).label" /><p>{{ result.reason }}</p><p class="muted">此结果没有匹配的计划记录，无法完整还原检查范围。</p></article>
       <div v-if="plan?.unresolved_questions.length" class="coordination-questions"><h4>协调仍未解决的问题</h4><ul><li v-for="(question, index) in plan.unresolved_questions" :key="index">{{ question }}</li></ul></div>

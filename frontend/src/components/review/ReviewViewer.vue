@@ -19,7 +19,7 @@ import CrossUnitReview from "./CrossUnitReview.vue";
 import TaskRuntimePanel from "./TaskRuntimePanel.vue";
 import { runtimeReport } from "../../utils/taskRuntimePresentation";
 import UnitReviewRecord from "./UnitReviewRecord.vue";
-import { coverageCompletionLabel, crossUnitPresentation, originalIssueUnit, unitCoverageWarning, unitFindingLabel } from "../../utils/reviewObservability";
+import { coverageCompletionLabel, crossUnitPresentation, evidenceSnapshotBase, originalIssueUnit, unitCoverageWarning, unitFindingLabel } from "../../utils/reviewObservability";
 
 type ReviewTab = "overview" | "review" | "checks" | "files" | "activity";
 type SeverityFilter = "all" | ReviewIssue["severity"];
@@ -48,6 +48,8 @@ const emit = defineEmits<{
   newReview: [];
   retry: [unitId: string];
 }>();
+
+const snapshotBase = computed(() => evidenceSnapshotBase(props.task));
 
 const activeTab = ref<ReviewTab>("overview");
 const severityFilter = ref<SeverityFilter>("all");
@@ -545,7 +547,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
     <section v-else-if="activeTab === 'checks'" class="review-tab-panel checks-view">
       <CrossUnitReview :task="task" @open-unit="openUnitChecks" @open-issue="openIssue" />
       <section id="unit-review-records" class="unit-records-section" aria-label="原始变更组检查记录"><header><h2>变更组实际检查范围</h2><p>覆盖率只描述原始审查范围；检查记录用于解释已检查、未检查和仍未解决的内容。</p></header>
-        <div v-if="task.review_units.length" class="unit-records-layout"><nav class="unit-records-nav" aria-label="选择变更组检查记录"><button v-for="unit in task.review_units" :key="unit.id" type="button" :class="{ 'is-active': selectedUnit?.id === unit.id }" :aria-current="selectedUnit?.id === unit.id ? 'true' : undefined" @click="chooseUnit(unit.id)"><strong>{{ unitTitle(unit) }}</strong><code>{{ unit.primary_files[0] }}</code><StatusBadge :status="unitResult(unit.id)?.status || 'pending'" /><small>{{ unitResult(unit.id)?.review_summary?.status === 'reported' ? '已保存检查记录' : '检查记录未知' }}</small></button></nav><UnitReviewRecord :key="selectedUnit?.id" :result="selectedUnitResult" :head-sha="task.pr?.head.sha" :base-sha="task.pr?.base.sha" /></div>
+        <div v-if="task.review_units.length" class="unit-records-layout"><nav class="unit-records-nav" aria-label="选择变更组检查记录"><button v-for="unit in task.review_units" :key="unit.id" type="button" :class="{ 'is-active': selectedUnit?.id === unit.id }" :aria-current="selectedUnit?.id === unit.id ? 'true' : undefined" @click="chooseUnit(unit.id)"><strong>{{ unitTitle(unit) }}</strong><code>{{ unit.primary_files[0] }}</code><StatusBadge :status="unitResult(unit.id)?.status || 'pending'" /><small>{{ unitResult(unit.id)?.review_summary?.status === 'reported' ? '已保存检查记录' : '检查记录未知' }}</small></button></nav><UnitReviewRecord :key="selectedUnit?.id" :result="selectedUnitResult" :head-sha="task.pr?.head.sha" :base-sha="snapshotBase" /></div>
         <EmptyState v-else icon="units" title="尚无变更组" description="确定性规划完成后，这里会展示每个变更组的检查记录。" />
       </section>
     </section>
