@@ -2210,8 +2210,7 @@ class ReviewUnitExecutor:
     ) -> "_ReviewUnitGraphState":
         self._remember_unit_state(state)
         budget = state["budget"]
-        if (not budget.can_consume(diagnosis_attempts=1, model_calls=1)
-                or (self._supports_native_review_step() and state["parent_state"].get("cross_unit_followup") and budget.diagnosis_attempts >= 1)):
+        if not budget.can_consume(diagnosis_attempts=1, model_calls=1):
             return {
                 "pending_issues": [],
                 "next_action": None,
