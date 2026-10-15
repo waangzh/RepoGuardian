@@ -6,6 +6,7 @@ from app.services.review_unit_executor import ReviewUnitExecutor
 from app.services.unit_review_summary import domain_output_errors, validate_record
 from test_review_step_flow_repairs import StepProvider
 from test_unit_review_summary import _state
+from test_phase6a_persistence import persistence as persistence
 
 
 def parent_question():
@@ -70,6 +71,30 @@ def test_prompt_lists_both_update_channels_and_disjoint_catalogs():
         "review_record", "obligation_updates"]
 
 
+def test_local_question_catalog_is_not_duplicated_without_parent_obligations():
+    import json
+    from app.models.review import ChangedFile, PullRequestInfo
+    from app.services.unit_review_summary import build_record_input
+    value = _state()
+    files = [ChangedFile.model_validate(item) for item in value["changed_files"]]
+    record_input = build_record_input(files, [], None, "h", "b")
+    record_input["working_memory"] = {"unresolved_questions": [{"id": "local-question", "question": "调用方是否处理空值",
+        "affected_files": ["a.py"], "evidence_ids": []}]}
+    payload = OpenAICompatibleProvider._unit_evidence_payload(files, record_input)
+    assert "update_catalog" not in payload
+    assert payload["working_memory"] == record_input["working_memory"]
+    prompt = OpenAICompatibleProvider._build_unit_review_prompt(
+        PullRequestInfo.model_validate(value["pr_info"]), files, "", record_input)
+    schema = json.JSONDecoder().raw_decode(prompt.split("review_record schema (replace values; empty lists are allowed): ", 1)[1])[0]
+    assert schema["obligation_updates"] == []
+    assert "Otherwise obligation_updates must be []" in prompt
+    assert "working_memory" in prompt
+    record_input["origin_obligations"] = [parent_question()]
+    catalog = OpenAICompatibleProvider._unit_evidence_payload(files, record_input)["update_catalog"]
+    assert catalog["question_updates"][0]["question_id"] == "local-question"
+    assert catalog["obligation_updates"][0]["obligation_id"] == "obligation-parent"
+
+
 @pytest.mark.parametrize("change,expected", [("valid", "refuted"), ("invalid", "unresolved"),
     ("missing", "unresolved"), ("dependency", "unresolved"), ("parent", "unresolved"),
     ("evidence", "unresolved"), ("legacy", "unresolved")])
@@ -126,3 +151,169 @@ def test_verification_scope_cannot_authorize_unknown_files():
     proposed.followups[0].verification_files = ["unknown.py"]
     with pytest.raises(ValueError, match="supporting files outside"):
         CrossUnitCoordinationService.normalize_plan(proposed, payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid,uncovered,interrupt", [(True, True, False), (False, False, False),
+    (False, True, False), (False, False, True)])
+async def test_execution_updates_bound_planning_questions_and_completion_report(invalid, uncovered, interrupt, persistence):
+    from app.models.review import CrossUnitCoordinationPlan, UnitReviewRecord
+    from app.services.cross_unit_coordination import CrossUnitCoordinationService
+    from app.services.coordination_questions import refresh_plan_questions
+    from app.services.review_rebuild import rebuild_task_from_state
+    from app.services.report_service import ReportService
+    from test_cross_unit_coordination import state, plan
+
+    class Provider(StepProvider):
+        async def coordinate_cross_units(self, payload, model):
+            proposed = plan(payload)
+            first = proposed.followups[0]
+            first.planning_question_indices = [0]
+            second = first.model_copy(update={"id": "f2", "question": "文档是否引用本地指引？", "planning_question_indices": [1]})
+            proposed.followups.append(second)
+            proposed.unresolved_questions = [first.question, second.question] + (["没有补查覆盖的构建机制"] if uncovered else [])
+            return proposed
+
+        async def review_step(self, pr, files, diff, model, record_input):
+            self.inputs.append(record_input)
+            if invalid and record_input["verification_scope"]["id"] == "f1":
+                return UnitReviewResponse(record_error="invalid_review_record: question update requires a visible prior question")
+            evidence = [item["id"] for item in record_input["evidence"]]
+            return UnitReviewResponse(review_record=UnitReviewRecord(change_summary="限定问题已核验", target_checks=[{
+                "target": target, "status": "checked", "reason": "核对当前证据", "evidence_ids": evidence}
+                for target in record_input["targets"]], hypothesis_checks=[{
+                    "hypothesis_id": item["id"], "status": "refuted", "reason": "存在限定反证", "evidence_ids": evidence}
+                    for item in record_input["hypotheses"]]))
+
+    value = state()
+    # 将两个文件的已保存正文送入补查，确保旧范围规则也具有两侧证据。
+    from app.models.review import ContextSnippet
+    from app.services.unit_review_summary import build_record_input
+    for raw in value["review_unit_results"]:
+        path = next(item["primary_files"][0] for item in value["review_units"] if item["id"] == raw["review_unit_id"])
+        context = ContextSnippet(file=path, start_line=1, end_line=1, content="return None", relevance="direct")
+        raw["context_snippets"] = [context.model_dump(mode="json")]
+        file = next(item for item in value["changed_files"] if item["file_path"] == path)
+        from app.models.review import ChangedFile
+        catalog = build_record_input([ChangedFile.model_validate(file)], raw["context_snippets"], None, "h", "b")
+        raw["review_summary"] = validate_record(UnitReviewRecord(change_summary="当前证据"), catalog, {path}).model_dump(mode="json")
+    provider = Provider()
+    observed = []
+    stopped = False
+    repository = persistence[0] if interrupt else None
+    if repository:
+        from app.models.review import ReviewTask
+        repository.create_task(ReviewTask(id=value["task_id"], pr_url=value["pr_info"]["html_url"]))
+
+    def progress(snapshot):
+        nonlocal stopped
+        observed.append(snapshot)
+        if interrupt and not stopped and any(question["question"] == "文档是否引用本地指引？"
+                and question["status"] == "resolved" for question in snapshot["coordination_plan"]["question_states"]):
+            import asyncio
+            stopped = True
+            raise asyncio.CancelledError
+
+    service = CrossUnitCoordinationService(provider, repository=repository, progress=progress)
+    if interrupt:
+        import asyncio
+        with pytest.raises(asyncio.CancelledError):
+            await service.run(value)
+        service = CrossUnitCoordinationService(provider, repository=repository, progress=progress)
+    result = await service.run(value)
+    saved = result["coordination_plan"]
+    assert saved["status"] == ("unresolved" if invalid or uncovered else "completed"), saved
+    states = {item["question"]: item for item in saved["question_states"]}
+    assert states["文档是否引用本地指引？"]["status"] == "resolved", result["followup_results"]
+    assert "文档是否引用本地指引？" not in saved["unresolved_questions"]
+    if invalid:
+        assert states[saved["followups"][0]["question"]]["status"] == "invalid"
+    if uncovered:
+        assert "没有补查覆盖的构建机制" in saved["unresolved_questions"]
+    restored = CrossUnitCoordinationPlan.model_validate(saved)
+    refreshed = refresh_plan_questions(restored, result["followup_results"], value)
+    assert refreshed.model_dump(mode="json") == saved
+    assert any(snapshot["coordination_plan"]["status"] == "validated"
+        and any(question["question"] == "文档是否引用本地指引？" and question["status"] == "resolved"
+                for question in snapshot["coordination_plan"]["question_states"])
+        for snapshot in observed), "问题关闭必须在运行进度落盘时可见，不只出现在最终输出"
+    from copy import deepcopy
+    stale = deepcopy(result["followup_results"])
+    stale[-1]["unit_result"]["review_summary"]["last_valid_snapshot"]["head_sha"] = "other-head"
+    assert next(item.status for item in refresh_plan_questions(restored, stale, value).question_states
+                if item.question == "文档是否引用本地指引？") == "unresolved"
+    report = ReportService().generate(rebuild_task_from_state({**value, **result}))
+    assert "- 未决：文档是否引用本地指引？" not in report
+    assert "规划问题[已解决]：文档是否引用本地指引？" in report
+    assert await CrossUnitCoordinationService(provider).run({**value, **result}) == {}
+    assert len(provider.inputs) == 2
+
+
+def test_planning_question_binding_rejects_unknown_index_and_survives_deduplication():
+    from app.services.cross_unit_coordination import CrossUnitCoordinationService
+    from test_cross_unit_coordination import state, plan
+    payload = CrossUnitCoordinationService.catalog(state())
+    proposed = plan(payload)
+    first = proposed.followups[0]
+    first.planning_question_indices = [0]
+    proposed.unresolved_questions = ["问题一", "问题二", "未覆盖"]
+    proposed.followups.append(first.model_copy(update={"id": "duplicate", "planning_question_indices": [1]}))
+    normalized, _ = CrossUnitCoordinationService.normalize_plan(proposed, payload)
+    assert len(normalized.followups) == 1
+    assert [item.followup_ids for item in normalized.question_states] == [["f1"], ["f1"], []]
+    first.planning_question_indices = [3]
+    with pytest.raises(ValueError, match="unknown planning question index"):
+        CrossUnitCoordinationService.normalize_plan(proposed, payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("duplicate", [True, False])
+async def test_catalog_question_bindings_follow_rebased_ids_and_preserve_unadmitted_work(monkeypatch, duplicate):
+    from app.models.review import CrossUnitCatalogBatch
+    from app.services.coordination_runtime import CoordinationRuntime
+    from app.services.cross_unit_coordination import CrossUnitCoordinationService
+    from test_cross_unit_coordination import Provider as BaseProvider, state, plan
+    payload = CrossUnitCoordinationService.catalog(state())
+    batches = [(CrossUnitCatalogBatch(id=f"catalog-{index}", input_hash=f"hash-{index}", input_chars=100,
+        unit_ids=["u0", "u1"]), {**payload, "batch_id": f"catalog-{index}"}) for index in range(2)]
+    monkeypatch.setattr("app.services.cross_unit_coordination.catalog_batches", lambda *args: batches)
+
+    class Provider(BaseProvider):
+        async def coordinate_cross_units(self, batch, model):
+            index = len(self.calls)
+            self.calls.append(index)
+            proposed = plan(batch)
+            original = proposed.followups[0]
+            proposed.followups = [original.model_copy(update={"id": f"local-{offset}",
+                "question": original.question if duplicate else f"独立检查 {index}-{offset}",
+                "planning_question_indices": [offset]}) for offset in range(1 if duplicate else 2)]
+            proposed.unresolved_questions = [f"批次 {index} 规划问题 {offset}" for offset in range(len(proposed.followups))]
+            return proposed
+
+    service = CrossUnitCoordinationService(Provider(), budget=ExecutionBudget(max_model_calls=64, max_token_usage=1000000))
+    service.runtime = CoordinationRuntime("test", "fingerprint", service.provider.budget)
+    service.provider.runtime = service.runtime
+    result = await service.plan_catalog(payload, None, [])
+    assert len(result.followups) == (1 if duplicate else 3)
+    ids = {item.id for item in result.followups}
+    linked = [identity for item in result.question_states for identity in item.followup_ids]
+    assert all(identity in ids or identity.startswith("not-admitted-") for identity in linked)
+    if duplicate:
+        assert len(result.question_states) == 2
+        assert set(linked) == ids
+    else:
+        assert any(identity.startswith("not-admitted-") for identity in linked)
+        assert any("补查未执行" in question for question in result.unresolved_questions)
+    assert all(not item.planning_question_indices for item in result.followups)
+
+
+def test_legacy_question_binding_does_not_guess_from_similar_wording():
+    from app.services.coordination_questions import bind_plan_questions
+    from app.services.cross_unit_coordination import CrossUnitCoordinationService
+    from test_cross_unit_coordination import state, plan
+    proposed = plan(CrossUnitCoordinationService.catalog(state()))
+    question = proposed.followups[0].question
+    proposed.unresolved_questions = [question, question + "以及完整构建机制是否受影响？"]
+    bound = bind_plan_questions(proposed)
+    assert bound.question_states[0].followup_ids == ["f1"]
+    assert bound.question_states[1].followup_ids == []

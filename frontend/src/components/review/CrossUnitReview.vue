@@ -6,6 +6,7 @@ import StatusBadge from "../common/StatusBadge.vue";
 import EmptyState from "../common/EmptyState.vue";
 import EvidenceReferences from "./EvidenceReferences.vue";
 import UnitReviewRecord from "./UnitReviewRecord.vue";
+import { planningQuestionLabels } from "../../utils/reviewObservability";
 
 const props = defineProps<{ task: ReviewTask }>();
 const emit = defineEmits<{ openUnit: [id: string]; openIssue: [issue: ReviewIssue] }>();
@@ -82,6 +83,7 @@ const orphanResults = computed(() => results.value.filter((item) => !plan.value?
       </article>
       <article v-for="result in orphanResults" :key="result.request_id" class="followup-item"><StatusBadge :status="followupPresentation(result, task.status).tone" :label="followupPresentation(result, task.status).label" /><p>{{ result.reason }}</p><p class="muted">此结果没有匹配的计划记录，无法完整还原检查范围。</p></article>
       <div v-if="plan?.unresolved_questions.length" class="coordination-questions"><h4>协调仍未解决的问题</h4><ul><li v-for="(question, index) in plan.unresolved_questions" :key="index">{{ question }}</li></ul></div>
+      <div v-if="plan?.question_states?.length" class="coordination-questions"><h4>规划问题处理状态</h4><ul><li v-for="question in plan.question_states" :key="question.id">{{ planningQuestionLabels[question.status] }}：{{ question.question }}<p class="muted">{{ question.reason }}</p></li></ul></div>
     </section>
   </section>
 </template>

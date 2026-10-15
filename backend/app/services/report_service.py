@@ -158,6 +158,10 @@ def _append_cross_unit_risk(lines: list[str], task: ReviewTask) -> None:
         lines.append(f"- {_inline_text(result.request_id)}：{result.outcome}；{_inline_text(result.reason)}")
     for question in plan.unresolved_questions:
         lines.append(f"- 未决：{_inline_text(question)}")
+    question_labels = {"pending": "尚未执行或未覆盖", "invalid": "审查记录无效", "unresolved": "有效结论不足或执行未完成", "resolved": "已解决"}
+    for question in plan.question_states:
+        lines.append(f"- 规划问题[{question_labels[question.status]}]：{_inline_text(question.question)}；"
+                     f"{_inline_text(question.reason)}")
     lines.append("")
 
 
