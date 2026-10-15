@@ -873,6 +873,8 @@ export interface ReviewRunManifest {
   repository?: string | null;
   pr_number?: number | null;
   base_sha?: string | null;
+  effective_base_sha?: string | null;
+  diff_policy?: string | null;
   head_sha?: string | null;
   planner_version?: string | null;
   provider: string;
