@@ -421,7 +421,8 @@ class ReviewUnitExecutor:
                 coverage_targets=[followup["stop_condition"]],
                 risk_hypotheses=[UnitRiskHypothesis(
                     id="followup-question", category="correctness", priority="high",
-                    description=followup["question"], affected_files=followup.get("verification_files") or unit.primary_files,
+                    description="风险命题：限定核验契约未满足。需反证的契约目标：" + followup["counterevidence_goal"],
+                    affected_files=followup.get("verification_files") or unit.primary_files,
                     evidence_needed=[followup["counterevidence_goal"]],
                     completion_criteria=followup["stop_condition"][:500],
                 )],
@@ -528,6 +529,18 @@ class ReviewUnitExecutor:
                                input_coverage=self._retrieval_input_coverage(graph_state, admission))
         if followup and not prior:
             seeds = [item for item in state.get("cross_unit_followup_context") or [] if item.get("file") in scope.readable_files]
+            if followup.get("tracking_queries") and graph_state["budget"].can_consume(context_retrievals=1):
+                from app.tools.git_tool import GitTool
+                graph_state["budget"] = graph_state["budget"].consume(context_retrievals=1)
+                try:
+                    fact = await asyncio.to_thread(GitTool().tracking_evidence, state.get("repo_path") or "",
+                        str(state.get("head_sha") or ""), followup["tracking_queries"])
+                    seeds.append({"file": unit.primary_files[0], "start_line": 0, "end_line": 0,
+                        "content": json.dumps(fact, ensure_ascii=False, sort_keys=True), "source": "repository_tree",
+                        "relevance": "contract", "review_unit_id": unit.id})
+                except (ValueError, OSError, RuntimeError) as exc:
+                    graph_state["tool_events"].append(ReviewUnitToolEvent(review_unit_id=unit.id,
+                        tool="repository_tree", status="failed", detail=type(exc).__name__))
             context, admission = self._admit_retrieved_context(graph_state, seeds, graph_state["budget"])
             graph_state.update(**self._context_selection_update(graph_state, admission),
                                input_coverage=self._retrieval_input_coverage(graph_state, admission))
@@ -2595,6 +2608,11 @@ class ReviewUnitExecutor:
         record_input["pr_intent"] = build_pr_intent(pr)
         if state["parent_state"].get("cross_unit_followup"):
             record_input["verification_scope"] = state["parent_state"]["cross_unit_followup"]
+            record_input["hypothesis_protocol"] = (
+                "假设固定为风险命题：supported 表示风险成立，refuted 表示契约目标已核验满足；"
+                "证据不足用 unresolved，不能把对正向问句的肯定回答标为 supported 后当作安全。"
+                "repository_tree 仅证明给定 Head 中明确文件名的跟踪状态，不是文件正文或工作树状态；"
+                "未查询或不完整清单不能证明全仓库不存在其他本地文件。")
         if self._supports_native_review_step():
             from app.services.unit_review_summary import review_target_catalog
             record_input["target_catalog"] = review_target_catalog(record_input["targets"])
@@ -2794,7 +2812,7 @@ class ReviewUnitExecutor:
         diff_paths = {file.file_path for file in state["unit_files"] if file.hunks or file.file_change_evidence}
         attempts = state.get("contract_recovery_attempts") or {}
         for path in sorted(required - diff_paths):
-            snippets = [item for item in state.get("context") or [] if item.get("file") == path]
+            snippets = [item for item in state.get("context") or [] if item.get("file") == path and item.get("source") != "repository_tree"]
             cursor = 1
             for left, right in sorted((item["start_line"], item["end_line"]) for item in snippets):
                 if left > cursor:
@@ -2803,6 +2821,8 @@ class ReviewUnitExecutor:
             total = next((item["total_lines"] for item in snippets if item.get("total_lines") is not None), None)
             if total is not None and cursor > total:
                 continue
+            if total is None:
+                cursor = 1
             key = f"followup:{path}:{cursor}"
             if path not in state["scope"].readable_files or is_sensitive_repository_change(path) or attempts.get(key):
                 return None, f"followup_evidence_unavailable:{path}:{cursor}", None
@@ -2814,6 +2834,14 @@ class ReviewUnitExecutor:
                     "end_line": cursor + state["scope"].max_lines_per_read - 1}}), key, {
                         "target_key": key, "kind": "dependency", "file_path": path,
                         "assumption": "按声明范围补齐正文，读取不代表契约已验证"}
+        cited_paths = {ref.file_path for ref in state["review_summary"].evidence if ref.source != "repository_tree"
+            and any(ref.id in check.evidence_ids for check in state["review_summary"].record.hypothesis_checks)}
+        missing = required - cited_paths
+        key = "followup:citations"
+        if missing and not attempts.get(key) and state["budget"].can_consume(model_calls=1, diagnosis_attempts=1):
+            return AgentAction(action="report_issue", reason="按核验范围逐文件引用已交付证据"), key, {
+                "target_key": key, "kind": "dependency", "file_path": sorted(missing)[0],
+                "assumption": "缺少正文引用：" + "、".join(sorted(missing))}
         return None, None, None
 
     def _contract_recovery_action(self, state):
@@ -3296,7 +3324,7 @@ class ReviewUnitExecutor:
         chunks, omitted, supporting_ids = [], [], set()
         for candidate in candidates:
             try:
-                if candidate.get("start_line") is not None and int(candidate["start_line"]) < 1:
+                if candidate.get("source") != "repository_tree" and candidate.get("start_line") is not None and int(candidate["start_line"]) < 1:
                     raise ValueError("context_source_line_must_be_positive")
                 if candidate.get("file") not in state["scope"].readable_files or is_sensitive_repository_change(str(candidate.get("file") or "")):
                     raise ValueError("context_outside_readable_scope")

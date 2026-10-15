@@ -281,6 +281,7 @@ export interface HumanReviewRequest {
 }
 
 export interface ContextSnippet {
+  total_lines?: number | null;
   file: string;
   start_line: number;
   end_line: number;
@@ -485,7 +486,7 @@ export interface FileChangeEvidence {
 export interface UnitEvidenceReference {
   id: string;
   file_path: string;
-  source: "diff" | "context" | "file_change";
+  source: "diff" | "context" | "file_change" | "repository_tree";
   file_change?: FileChangeEvidence | null;
   start_line: number;
   end_line: number;
@@ -594,6 +595,7 @@ export interface CrossUnitRiskAssessment {
 }
 
 export interface CrossUnitFollowupRequest {
+  tracking_queries?: string[];
   supporting_files?: string[];
   verification_files?: string[];
   planning_question_indices?: number[];

@@ -1822,7 +1822,7 @@ class UnitEvidenceReference(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str = Field(min_length=1, max_length=100)
     file_path: str
-    source: Literal["diff", "context", "file_change"]
+    source: Literal["diff", "context", "file_change", "repository_tree"]
     start_line: int = Field(ge=0)
     end_line: int = Field(ge=0)
     head_sha: str
@@ -1847,6 +1847,8 @@ class UnitEvidenceReference(BaseModel):
     def ordered_lines(self) -> "UnitEvidenceReference":
         if self.end_line < self.start_line:
             raise ValueError("evidence line range is reversed")
+        if self.source == "repository_tree" and (self.start_line or self.end_line):
+            raise ValueError("repository tree evidence has no source line anchor")
         if self.source == "file_change":
             from app.services.file_change_evidence import validate_file_change_evidence
             if self.file_change is None or self.start_line or self.end_line:
@@ -2077,6 +2079,7 @@ class CrossUnitFollowupRequest(BaseModel):
     primary_files: list[str] = Field(min_length=1, max_length=12)
     supporting_files: list[str] = Field(default_factory=list, max_length=24)
     verification_files: list[str] = Field(default_factory=list, max_length=24)
+    tracking_queries: list[str] = Field(default_factory=list, max_length=12)
     evidence_ids: list[str] = Field(default_factory=list, max_length=20)
     counterevidence_goal: str = Field(min_length=1, max_length=1_000)
     stop_condition: str = Field(min_length=1, max_length=1_000)
@@ -2087,6 +2090,18 @@ class CrossUnitFollowupRequest(BaseModel):
     @classmethod
     def validate_paths(cls, values: list[str]) -> list[str]:
         return list(dict.fromkeys(_validate_repo_relative_path(value) for value in values))
+
+    @field_validator("tracking_queries")
+    @classmethod
+    def validate_tracking_queries(cls, values: list[str]) -> list[str]:
+        from app.review.tool_scope import is_sensitive_repository_path
+        result = []
+        for value in values:
+            name = _validate_repo_relative_path(value)
+            if "/" in name or any(char in name for char in "*?[]") or is_sensitive_repository_path(name):
+                raise ValueError("tracking query must be a non-sensitive literal basename")
+            result.append(name)
+        return list(dict.fromkeys(result))
 
 
 class CrossUnitRuntimeMetrics(BaseModel):

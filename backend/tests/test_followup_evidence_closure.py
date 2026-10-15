@@ -87,3 +87,119 @@ async def test_necessary_file_outside_scope_is_not_read(tmp_path):
     result = await ReviewUnitExecutor(provider, concurrency=1, timeout_seconds=10).execute_unit(followup_unit(), value)
     assert result.execution_budget.context_retrievals == 0
     assert any("followup_evidence_unavailable:outside.py" in (item.message or "") for item in result.messages)
+
+
+@pytest.mark.asyncio
+async def test_followup_question_is_not_used_as_risk_polarity():
+    provider = EvidenceProvider()
+    value = followup_state()
+    value["cross_unit_followup"].update(question="引用是否正确，还是指向其他路径？", verification_files=["a.py"])
+    result = await ReviewUnitExecutor(provider, concurrency=1, timeout_seconds=10).execute_unit(followup_unit(), value)
+    assert result.error is None
+    assert result.plan.risk_hypotheses[0].description.startswith("风险命题：限定核验契约未满足")
+    assert value["cross_unit_followup"]["question"] not in result.plan.risk_hypotheses[0].description
+    assert "supported 表示风险成立" in provider.inputs[0]["hypothesis_protocol"]
+
+
+@pytest.mark.asyncio
+async def test_missing_citation_gets_one_controlled_recheck():
+    class Partial(EvidenceProvider):
+        async def review_step(self, *args):
+            response = await super().review_step(*args)
+            for check in response.review_record.hypothesis_checks:
+                check.evidence_ids = [item["id"] for item in self.inputs[-1]["evidence"] if item["file_path"] == "a.py"]
+            return response
+    value = followup_state()
+    value["changed_files"].append({**value["changed_files"][0], "file_path": "AGENTS.md"})
+    value["cross_unit_followup"].update(supporting_files=["AGENTS.md"], verification_files=["a.py", "AGENTS.md"])
+    provider = Partial()
+    result = await ReviewUnitExecutor(provider, concurrency=1, timeout_seconds=10).execute_unit(
+        followup_unit().model_copy(update={"related_files": ["AGENTS.md"]}), value)
+    assert len(provider.inputs) == 2
+    assert result.execution_budget.context_retrievals == 0
+
+
+def test_tracking_evidence_uses_head_tree_and_exact_basename(tmp_path):
+    import subprocess
+    from app.tools.git_tool import GitTool
+    def git(*args):
+        return subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True, text=True).stdout.strip()
+    git("init")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "AGENTS.local.md").write_text("local", encoding="utf-8")
+    (tmp_path / "OTHERAGENTS.local.md").write_text("other", encoding="utf-8")
+    git("add", ".")
+    git("-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture")
+    head = git("rev-parse", "HEAD")
+    (tmp_path / "AGENTS.local.md").write_text("untracked", encoding="utf-8")
+    fact = GitTool().tracking_evidence(tmp_path, head, ["AGENTS.local.md", "CLAUDE.local.md"])
+    assert fact["matches"] == ["docs/AGENTS.local.md"]
+    assert fact["complete"] and fact["head_sha"] == head
+    with pytest.raises(ValueError):
+        GitTool().tracking_evidence(tmp_path, "HEAD", ["AGENTS.local.md"])
+
+
+@pytest.mark.parametrize("query", ["../escape", "docs/AGENTS.md", "*.md", ".env"])
+def test_tracking_query_rejects_path_glob_and_sensitive_file(query):
+    from app.models.review import CrossUnitFollowupRequest
+    with pytest.raises(ValueError):
+        CrossUnitFollowupRequest.validate_tracking_queries([query])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [True, False])
+async def test_tracking_fact_is_citable_metadata_and_restorable(tmp_path, complete):
+    from app.tools.git_tool import GitTool
+    from app.services.evidence_store import restore_store
+    from app.services.review_input_context import build_context_evidence
+    value = followup_state()
+    value.update(repo_path=str(tmp_path), head_sha="a" * 40)
+    value["cross_unit_followup"].update(verification_files=["a.py"], tracking_queries=["AGENTS.local.md"])
+    from unittest.mock import patch
+    fact = {"head_sha": value["head_sha"], "queries": ["AGENTS.local.md"], "matches": [],
+        "matched_count": 0, "complete": complete, "scope": "committed_head_tree_only"}
+    provider = EvidenceProvider()
+    with patch.object(GitTool, "tracking_evidence", return_value=fact):
+        result = await ReviewUnitExecutor(provider, concurrency=1, timeout_seconds=10).execute_unit(followup_unit(), value)
+    assert result.error is None
+    refs = [ref for ref in provider.inputs[0]["evidence"] if ref["source"] == "repository_tree"]
+    assert len(refs) == 1 and refs[0]["start_line"] == refs[0]["end_line"] == 0
+    from app.agents.providers import OpenAICompatibleProvider
+    from app.models.review import ChangedFile
+    OpenAICompatibleProvider._unit_evidence_payload([ChangedFile.model_validate(value["changed_files"][0])], provider.inputs[0])
+    restored = restore_store(result.evidence_store, result.evidence_store.review_unit_id,
+        result.evidence_store.snapshot, {"a.py"})
+    assert refs[0]["id"] in restored.entries
+    from app.models.review import CrossUnitFollowupRequest
+    from app.services.cross_unit_coordination import CrossUnitCoordinationService
+    request = CrossUnitFollowupRequest(id="f", unit_ids=["u", "v"], primary_files=["a.py"],
+        verification_files=["a.py"], question="跟踪状态是否影响引用？", counterevidence_goal="核验文件跟踪状态",
+        stop_condition="证据充分或保留未决", tracking_queries=["AGENTS.local.md"])
+    outcome, reason = CrossUnitCoordinationService.followup_conclusion(request, result, [])
+    assert outcome == ("refuted" if complete else "unresolved"), reason
+    with pytest.raises(ValueError, match="snapshot_mismatch"):
+        build_context_evidence([item.model_dump() for item in result.context_snippets], "b" * 40, "b")
+
+
+def test_conclusion_explains_missing_citation_polarity_and_tracking():
+    from app.models.review import ReviewUnitResult
+    from app.services.cross_unit_coordination import CrossUnitCoordinationService
+    from app.services.unit_review_summary import build_record_input, validate_record
+    from test_cross_unit_coordination import state, plan
+    value = state()
+    request = plan(CrossUnitCoordinationService.catalog(value)).followups[0]
+    request.verification_files = ["callee.py", "AGENTS.md"]
+    request.tracking_queries = ["AGENTS.local.md"]
+    from app.models.review import ChangedFile, UnitReviewRecord
+    record_input = build_record_input([ChangedFile.model_validate(value["changed_files"][1])], [], None, "h", "b")
+    record_input["hypotheses"] = [{"id": "risk"}]
+    evidence = [item["id"] for item in record_input["evidence"]]
+    record = UnitReviewRecord(change_summary="引用正确", hypothesis_checks=[{
+        "hypothesis_id": "risk", "status": "supported", "reason": "支持正向问句", "evidence_ids": evidence}],
+        target_checks=[{"target": target, "status": "checked", "reason": "检查", "evidence_ids": evidence}
+            for target in record_input["targets"]])
+    summary = validate_record(record, record_input, {"callee.py"})
+    outcome, reason = CrossUnitCoordinationService.followup_conclusion(request,
+        ReviewUnitResult(review_unit_id="f", status="completed", review_summary=summary), [])
+    assert outcome == "unresolved"
+    assert "AGENTS.md" in reason and "supported" in reason and "仓库跟踪状态" in reason and "取证额度" in reason
