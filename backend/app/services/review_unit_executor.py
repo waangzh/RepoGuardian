@@ -2766,7 +2766,8 @@ class ReviewUnitExecutor:
     def _recovery_symbol_request(state, path, symbol):
         """按仓库符号索引定位缺失符号的有界读取请求；未索引时返回 None。"""
         if not symbol:
-            return None
+            return {"file_path": path, "start_line": 1,
+                    "end_line": max(1, int(state["scope"].max_lines_per_read))}
         definition = next((item for item in state["parent_state"].get("symbol_index") or []
                            if item.get("file") == path and item.get("symbol") == symbol), None)
         if definition is None:
@@ -2777,13 +2778,12 @@ class ReviewUnitExecutor:
         return {"file_path": path, "start_line": start, "end_line": min(end, start + limit - 1)}
 
     def _contract_recovery_action(self, state):
-        """每批最多两次补审；不扩张读取范围、不绕过正文和模型预算。
+        """每个活动 Unit 最多两次依赖补审；不扩张范围、不绕过正文和模型预算。
 
         补审的证据判断精确到依赖涉及的符号：同文件出现无关片段不等于必要正文已具备。
         """
         summary = state.get("review_summary")
         if (not self._supports_native_review_step() or not state.get("diff_manifest")
-                or not state["parent_state"].get("unit_diff_batch")
                 or not summary or summary.latest_attempt_status != "reported" or not summary.record):
             return None, None, None
         record = summary.record
