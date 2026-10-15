@@ -108,6 +108,8 @@ REPOGUARDIAN_LANGSMITH_TRACING=false # 默认关闭追踪；启用后默认仍�
 
 准备 PR 与仓库 → 解析变更、建立索引 → 拆分 Review Units 并独立审查 → 解析证据、检查策略并验证候选 → 跨 Unit 风险筛查与定向补查 → 去重并生成报告。
 
+审查内容以 PR 声明 base 与 head 的唯一 merge base 为基准，等价于 GitHub PR 的三点比较；声明 base 仅保留 PR 身份。无法确定唯一 merge base（无共同祖先或存在多个候选）时明确失败，不退化为两点比较——两点比较会把 base 分支独有提交当作本 PR 的反向变更交给审查。生产、Preview、CLI 与评测共用同一 Diff 生成函数与策略版本，`run_manifest` 同时记录 `base_sha` 与 `effective_base_sha`。
+
 动态验证独立于审查流程，Review 完成时 CI 仍可能运行中。新请求使用 `review`；旧 API 模式值仅作兼容，仍按只读审查处理。
 
 ## 安全边界
