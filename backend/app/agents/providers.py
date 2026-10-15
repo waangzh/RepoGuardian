@@ -858,6 +858,12 @@ class OpenAICompatibleProvider(LLMProvider):
             "计划 required 表示需要检查，不表示风险已经确认；安排任何补查均选择 required。"
             "计划 uncertain 表示尚不能形成可执行计划，保留具体未决问题且不安排补查。"
             "skip 表示证据充分且可获服务端批准跳过。risk.decision=required 不得降级。"
+            "这是引用与摘要目录，不含正文；补查能够读取所选 Unit 可读范围内的正文。"
+            "relationships=[] 不表示没有关系或不能检查；可用现有 Unit/路径/证据提出新假设，relationship_ids 留空，禁止伪造 ID。"
+            "origin_obligations=[] 不是补查的阻碍：无父义务的新问题令 origin_obligation_ids=[]。"
+            "索引 partial/unknown 是缺口，symbol_analysis_not_applicable 是类型不适用，available 无图边只是尚无静态关系。"
+            "有疑点且证据可读则 required；已有对应跨文件反证才考虑 skip；"
+            "确有无法取得的文件、证据或权限才保留 uncertain，具体说明缺什么、为何现有读取不能满足、阻断哪个判断。"
             "只使用目录中的 Unit、路径、关系 ID、证据 ID，最多提出三个不同补查。"
             "每项 unit_ids 必须包含至少两个不同且已知的 Unit ID；不要提出单 Unit 补查。"
             "followups 非空时 decision 必须为 required；uncertain/skip 的 followups 必须为空。"
@@ -866,6 +872,8 @@ class OpenAICompatibleProvider(LLMProvider):
             "读取范围不能由问题文字隐式授权；缺少支持范围时保留未决。"
             "核验变更到行为的完整因果链：文件引用本身不证明构建影响，Git 忽略规则不影响已跟踪文件。"
             "AGENTS.local.md 与 AGENTS.md 等不同路径不得混同；缺少阅读不等于已发现风险。"
+            "将忽略模式匹配、文件实际存在性、文档引用解析、外部工具加载优先级拆成不同问题。"
+            "判断忽略模式是否匹配一个明确路径不要求该路径实际存在；工具加载行为的疑点必须说明具体工具行为和变更因果链。"
             "同范围证据下的不同问题应保留；"
             "范围、问题、反证目标、停止条件完全相同的请求只提出一次。"
             "每项必须明确 question、counterevidence_goal、stop_condition，不能直接确认或删除 Issue。"
@@ -884,11 +892,14 @@ class OpenAICompatibleProvider(LLMProvider):
             '{"decision":"skip","reason":"本批关系两侧证据足够且无未决疑点",'
             '"relationship_ids":["当前关系ID"],"evidence_ids":["当前两端证据ID"],"followups":[],"unresolved_questions":[]}\n'
             '{"decision":"required","reason":"需要定向检查，尚未确认风险",'
-            '"relationship_ids":[],"evidence_ids":[],"followups":[{"id":"f1",'
-            '"question":"问题","unit_ids":["目录中的第一个Unit ID","目录中的另一个Unit ID"],'
-            '"primary_files":["所选Unit的主文件"],"supporting_files":[],"verification_files":[],"evidence_ids":["目录中的当前证据ID"],'
-            '"counterevidence_goal":"反证目标","stop_condition":"停止条件","origin_obligation_ids":[],"planning_question_indices":[]}],'
-            '"unresolved_questions":[]}\n'
+            '"relationship_ids":[],"evidence_ids":["CLAUDE证据ID","AGENTS证据ID"],'
+            '"unresolved_questions":["CLAUDE.md 的 @AGENTS.md 是否指向本批 AGENTS.md？"],'
+            '"followups":[{"id":"docs-reference","question":"CLAUDE.md 的 @AGENTS.md 是否指向本批 AGENTS.md？",'
+            '"unit_ids":["CLAUDE所属UnitID","AGENTS所属UnitID"],"primary_files":["CLAUDE.md"],'
+            '"supporting_files":["AGENTS.md"],"verification_files":["CLAUDE.md","AGENTS.md"],'
+            '"evidence_ids":["CLAUDE证据ID","AGENTS证据ID"],"origin_obligation_ids":[],"planning_question_indices":[0],'
+            '"counterevidence_goal":"核对正文引用路径与目标文档；仅回答此引用，不推断外部工具加载行为",'
+            '"stop_condition":"两份授权正文已核对并给出限定结论，或记录具体不可达证据"}]}\n'
             + json.dumps(payload, ensure_ascii=False)
         )
 
