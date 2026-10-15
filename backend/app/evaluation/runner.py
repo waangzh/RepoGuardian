@@ -1,25 +1,27 @@
-"""固定快照 + 生产 phase2 图；不访问线上 PR 元数据或生产持久化状态。"""
+"""固定快照 + 当前 task_review_v1 生产图；不复用生产持久化状态。"""
 
 import asyncio
 import inspect
 import json
 import time
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
 from app.core.config import settings
 from app.evaluation.data import DatasetLock, FrozenSample, sha256
-from app.evaluation.diff_inputs import DiffInputLock, PreparedDiff, unique_merge_base
+from app.evaluation.diff_inputs import DiffInputLock, PreparedDiff
 from app.graph.review_graph import build_review_graph
-from app.models.review import PullRequestInfo, PullRequestRef, ReviewIssue, ReviewUnitResult
+from app.models.review import PullRequestInfo, PullRequestRef, ReviewIssue
 from app.review.issue_audit import capture_issue_audit
 from app.review.run_audit import capture_run_audit
-from app.review.unit_completion import is_review_unit_complete
 from app.services.model_usage import unpack_model_call
 from app.services.review_run_budget import ReviewRunBudget, activate_run_budget
-from app.tools.git_tool import GitTool, GitToolError
-from app.tools.workspace_cleanup import cleanup_workspace
+from app.tools.git_tool import DIFF_CONTEXT_LINES, DIFF_POLICY_VERSION, GitTool, GitToolError
+
+
+EVALUATION_ENGINE = "task_review_v1"
 
 
 class SnapshotGitTool(GitTool):
@@ -36,43 +38,46 @@ class SnapshotGitTool(GitTool):
         if actual != sha:
             raise GitToolError("snapshot_fetch_sha_mismatch")
 
-    def review_diff_context(self, repo_path):
+    def review_diff_context(self, repo_path, base_sha=None, head_sha=None):
         self._validate_worktree(repo_path)
         if self.prepared_diff is None:
             return {}
         return {"effective_base_sha": self.prepared_diff.effective_base_sha,
-                "diff_policy": "merge_base"}
+                "diff_policy": "merge_base", "diff_policy_version": DIFF_POLICY_VERSION}
 
     def clone_and_diff(self, pr, **kwargs):
+        # 输入锁未就绪或身份不符时在 clone 前失败，不产生任何工作区副作用。
         fact = self.prepared_diff
         if fact and (fact.alignment_status != "ready" or fact.declared_base_sha != pr.base.sha
                      or fact.head_sha != pr.head.sha):
             raise GitToolError("snapshot_diff_input_not_ready_or_identity_mismatch")
-        path, diff = super().clone_and_diff(pr, **kwargs)
-        try:
-            actual = self._run([self._git, "-C", str(path), "rev-parse", "HEAD"],
-                               cancel_event=kwargs.get("cancel_event")).strip()
-            if actual != pr.head.sha:
-                raise GitToolError("snapshot_head_sha_mismatch")
-            effective = pr.base.sha
-            if fact:
-                effective = unique_merge_base(self, path, pr.base.sha, pr.head.sha,
-                                              cancel_event=kwargs.get("cancel_event"))
-                if effective != fact.effective_base_sha:
-                    raise GitToolError("snapshot_merge_base_mismatch")
-                diff = self._run([self._git, "-C", str(path), "diff", "--no-ext-diff", "--unified=80",
-                                  effective, pr.head.sha], cancel_event=kwargs.get("cancel_event"))
-                if sha256(diff.encode()) != fact.diff_sha256:
-                    raise GitToolError("snapshot_diff_hash_mismatch")
-            self.snapshot = {"repo_path": str(path.resolve()), "verified_head": actual,
-                             "verified_base": effective, "declared_base_sha": pr.base.sha,
-                             "diff_policy": "merge_base" if fact else "declared_base",
-                             "diff_sha256": sha256(diff.encode()),
-                             "diff_text": diff}
-            return path, diff
-        except BaseException:
-            cleanup_workspace(path, workdir=self._workdir)
-            raise
+        return super().clone_and_diff(pr, **kwargs)
+
+    def unified_diff(self, repo_path, base_sha, head_sha, *, cancel_event=None):
+        """带输入锁时强制 merge base 与 diff 哈希；v1 协议保留声明 base 两点比较。"""
+        fact = self.prepared_diff
+        if fact is None:
+            diff = self._run([self._git, "-C", str(repo_path), "diff", "--no-ext-diff",
+                              f"--unified={DIFF_CONTEXT_LINES}", base_sha, head_sha],
+                             cancel_event=cancel_event)
+            self._record_snapshot(repo_path, base_sha, head_sha, base_sha, "declared_base", diff)
+            return base_sha, diff
+        if (fact.alignment_status != "ready" or fact.declared_base_sha != base_sha
+                or fact.head_sha != head_sha):
+            raise GitToolError("snapshot_diff_input_not_ready_or_identity_mismatch")
+        effective, diff = super().unified_diff(repo_path, base_sha, head_sha, cancel_event=cancel_event)
+        if effective != fact.effective_base_sha:
+            raise GitToolError("snapshot_merge_base_mismatch")
+        if sha256(diff.encode()) != fact.diff_sha256:
+            raise GitToolError("snapshot_diff_hash_mismatch")
+        self._record_snapshot(repo_path, base_sha, head_sha, effective, "merge_base", diff)
+        return effective, diff
+
+    def _record_snapshot(self, repo_path, base_sha, head_sha, effective, policy, diff):
+        self.snapshot = {"repo_path": str(Path(repo_path).resolve()), "verified_head": head_sha,
+                         "verified_base": effective, "declared_base_sha": base_sha,
+                         "diff_policy": policy, "diff_sha256": sha256(diff.encode()),
+                         "diff_text": diff}
 
 
 class FrozenGitHubTool:
@@ -246,37 +251,38 @@ def final_audit(events: list[dict], state: dict, run_status: str) -> list[dict]:
 
 
 async def run_sample(sample: FrozenSample, provider, workdir: Path, *, timeout_seconds: float = 1800,
-                     git_tool=None, prepared_diff: PreparedDiff | None = None, experiment=None) -> dict:
+                     git_tool=None, prepared_diff: PreparedDiff | None = None, experiment=None,
+                     runtime_configuration: dict | None = None) -> dict:
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive")
+    from app.graph.nodes.task_review_runtime import task_runtime_configuration
+    configuration = deepcopy(runtime_configuration) if runtime_configuration is not None else (
+        task_runtime_configuration(settings.repoguardian_model, provider=provider))
     observed = ObservedProvider(provider)
     events = []
     model_requests, tool_reads = [], []
     selected_git = git_tool or SnapshotGitTool(workdir, prepared_diff=prepared_diff)
     state = {"task_id": uuid4().hex, "mode": "review", "pr_url": sample.pr_url,
-             "engine": settings.repoguardian_review_engine,
-             "model": settings.repoguardian_model, "created_at": datetime.now(timezone.utc).isoformat(),
+             "engine": EVALUATION_ENGINE,
+             "model": configuration["model"], "created_at": datetime.now(timezone.utc).isoformat(),
              "generate_patches": False, "validation_backend": "none",
              "_persistence_enabled": False,
              "_github_tool": FrozenGitHubTool(sample), "_git_tool": selected_git,
              "_provider": observed}
-    if state["engine"] == "task_review_v1":
-        from app.graph.nodes.task_review_runtime import task_runtime_configuration
-        state["task_runtime_configuration"] = task_runtime_configuration(state["model"], provider=provider)
-        if experiment is not None:
-            if (not experiment.get("runtime_versions") or any(
-                    state["task_runtime_configuration"].get(key) != value
-                    for key, value in experiment["runtime_versions"].items())):
-                raise ValueError("experiment runtime versions changed before dispatch")
-            state["task_runtime_configuration"].update(experiment=experiment["variables"],
-                experiment_expected_scope_hash=experiment["samples"][sample.instance_id]["readable_scope_hash"])
+    state["task_runtime_configuration"] = configuration
+    if experiment is not None:
+        if (not experiment.get("runtime_versions") or any(
+                configuration.get(key) != value for key, value in experiment["runtime_versions"].items())):
+            raise ValueError("experiment runtime versions changed before dispatch")
+        configuration.update(experiment=experiment["variables"],
+            experiment_expected_scope_hash=experiment["samples"][sample.instance_id]["readable_scope_hash"])
     if prepared_diff:
         state.update(effective_base_sha=prepared_diff.effective_base_sha, diff_policy="merge_base")
     started = time.monotonic()
     last_node = None
     run_status = "completed"
     error_type = None
-    run_budget = await ReviewRunBudget.load_or_create(state["task_id"], **settings.run_budget_limits())
+    run_budget = await ReviewRunBudget.load_or_create(state["task_id"], **configuration["limits"])
     resolver = getattr(provider, "resolve_request_profile", None)
     profile = resolver(state["model"]) if callable(resolver) else None
     try:
@@ -284,7 +290,7 @@ async def run_sample(sample: FrozenSample, provider, workdir: Path, *, timeout_s
             model_sink=model_requests.append, tool_sink=tool_reads.append,
         ):
             async with asyncio.timeout(timeout_seconds):
-                graph = build_review_graph(phase=3 if state["engine"] == "task_review_v1" else 2).compile()
+                graph = build_review_graph(phase=3).compile()
                 async for delta in graph.astream(state, stream_mode="updates"):
                     for node, update in delta.items():
                         last_node = node
@@ -297,20 +303,12 @@ async def run_sample(sample: FrozenSample, provider, workdir: Path, *, timeout_s
     except Exception as exc:
         run_status = "prepare_failed" if not state.get("repo_path") else "failed"
         error_type = type(exc).__name__
-    results = [ReviewUnitResult.model_validate(x) for x in state.get("review_unit_results") or []]
     if run_status == "completed":
-        if state["engine"] == "task_review_v1":
-            report = state.get("task_runtime_report") or {}
-            run_status = ("failed" if report.get("execution_status") == "failed" else
-                          "cancelled" if report.get("execution_status") == "cancelled" else
-                          "partial" if not report.get("scope_complete") else state.get("status", "completed"))
-        elif (state.get("status") == "failed" or len(results) != len(state.get("review_units") or [])
-              or any(not is_review_unit_complete(x) for x in results)):
-            run_status = "partial" if any(is_review_unit_complete(x) for x in results) else "failed"
-        elif (state.get("review_coverage") or {}).get("review_complete") is False:
-            run_status = "partial"
-        elif state.get("warnings"):
-            run_status = "completed_with_warnings"
+        report = state.get("task_runtime_report") or {}
+        run_status = ("failed" if state.get("status") == "failed" or not report
+                      or report.get("execution_status") == "failed" else
+                      "cancelled" if report.get("execution_status") == "cancelled" else
+                      "partial" if not report.get("scope_complete") else state.get("status", "completed"))
     issues = state.get("review_issues") or []
     confirmed = [prediction(x) for x in issues if x["status"] == "confirmed"]
     human = [prediction(x) for x in issues if x["status"] == "needs_human"]
@@ -408,6 +406,8 @@ async def run_dataset(lock_path: Path, output: Path, provider, *, sample_ids: li
         if limit < 1:
             raise ValueError("limit must be positive")
         samples = samples[:limit]
+    from app.graph.nodes.task_review_runtime import task_runtime_configuration
+    configuration = task_runtime_configuration(settings.repoguardian_model, provider=provider)
     if experiment is not None:
         from app.evaluation.runtime_experiments import claim_experiment_slot
         await asyncio.to_thread(claim_experiment_slot, experiment_plan, experiment_group, experiment_stage,
@@ -416,7 +416,10 @@ async def run_dataset(lock_path: Path, output: Path, provider, *, sample_ids: li
     config = {k: v for k, v in settings.model_dump(mode="json").items()
               if k.startswith("repoguardian_") and not any(x in k for x in
                   ("key", "secret", "token", "registration", "workdir", "db", "artifact"))}
+    # 评测执行版本独立于产品默认引擎；清单必须记录实际执行值。
+    config["repoguardian_review_engine"] = EVALUATION_ENGINE
     summary = {"protocol_version": diff_lock.protocol_version if diff_lock else lock.protocol_version,
+               "engine": EVALUATION_ENGINE, "task_runtime_configuration": configuration,
                "lock_sha256": sha256(data), "diff_lock_sha256": sha256(diff_data) if diff_data else None,
                "diff_policy": "merge_base" if diff_lock else "declared_base",
                "source_revision": lock.source_revision, "config": config,
@@ -432,7 +435,8 @@ async def run_dataset(lock_path: Path, output: Path, provider, *, sample_ids: li
         summary["samples"][index]["status"] = "running"
         await asyncio.to_thread(write_json, output / "run.json", summary)
         result = await run_sample(sample, provider, output / "workspaces", timeout_seconds=timeout_seconds,
-                                  prepared_diff=diff_inputs.get(sample.instance_id), experiment=experiment)
+                                  prepared_diff=diff_inputs.get(sample.instance_id), experiment=experiment,
+                                  runtime_configuration=configuration)
         filename = f"{index:04d}.json"
         await asyncio.to_thread(write_json, output / filename, result)
         summary["samples"][index].update(status=result["status"], result_file=filename)

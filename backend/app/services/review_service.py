@@ -343,9 +343,11 @@ class ReviewService:
             changed_files = self._diff_parser.parse(diff_text)
             index = await RepoIndexer().execute(repo_path=str(repo_path))
             planner = DeterministicReviewPlanner()
+            # Preview 与正式执行使用同一内容基准：声明 base 只保留 PR 身份。
+            diff_context = await self._diff_context(repo_path, pr)
             plan = planner.plan(
                 changed_files,
-                base_sha=pr.base.sha,
+                base_sha=diff_context.get("effective_base_sha") or pr.base.sha,
                 head_sha=pr.head.sha,
                 file_index=index["file_index"],
                 symbol_index=index["symbol_index"],
@@ -403,6 +405,17 @@ class ReviewService:
             )
         finally:
             await _cleanup_repo(Path(repo_path))
+
+    async def _diff_context(self, repo_path: str | Path, pr: Any) -> dict[str, str]:
+        """按 PR 身份重新计算内容基准；共享 Git 实例不保存跨任务的基准状态。"""
+        reader = getattr(self._git_tool, "review_diff_context", None)
+        if not callable(reader):
+            return {}
+        try:
+            return await asyncio.to_thread(reader, repo_path, pr.base.sha, pr.head.sha) or {}
+        except Exception:
+            logger.warning("无法确定审查内容基准，保留声明 base 身份", exc_info=True)
+            return {}
 
     async def _handle_job(self, job: ClaimedJob) -> None:
         if job.kind == "review":
@@ -931,6 +944,8 @@ class ReviewService:
             try:
                 changed_files = self._diff_parser.parse(diff_text)
                 index = await RepoIndexer().execute(repo_path=str(repo_path))
+                # 重试必须与产生该 diff 的内容基准一致，否则证据会跨基准解析。
+                diff_context = await self._diff_context(repo_path, pr)
                 state = {
                     "task_id": task.id,
                     "model": task.model,
@@ -940,6 +955,7 @@ class ReviewService:
                     "file_index": index["file_index"],
                     "symbol_index": index["symbol_index"],
                     "repository_graph": index["repository_graph"],
+                    **diff_context,
                 }
                 result = await ReviewUnitExecutor(
                     self._provider,
@@ -1097,6 +1113,8 @@ class ReviewService:
             excluded = {item.file_path: item.reason for item in task.excluded_files}
             task.run_manifest = build_review_manifest({
                 **state, "created_at": task.created_at, "base_sha": pr.base.sha, "head_sha": pr.head.sha,
+                "effective_base_sha": diff_context.get("effective_base_sha"),
+                "diff_policy": diff_context.get("diff_policy"),
                 "review_plan": {"planner_version": task.run_manifest.planner_version if task.run_manifest else None,
                     "changed_files": [{"file_path": item.file_path, "change_type": item.change_type,
                         "additions": item.additions, "deletions": item.deletions,

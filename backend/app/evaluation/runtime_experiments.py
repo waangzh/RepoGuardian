@@ -12,7 +12,7 @@ from app.tools.diff_parser import DiffParser
 from app.services.review_planner import DeterministicReviewPlanner
 from app.review.tool_scope import is_sensitive_repository_path, list_git_tracked_files
 from app.services.fingerprints import stable_hash
-from app.tools.git_tool import GitTool
+from app.tools.git_tool import DIFF_CONTEXT_LINES, GitTool
 
 
 GROUPS = {
@@ -95,8 +95,8 @@ def freeze_experiment_plan(lock_path, diff_path, selection_path, baseline_runs, 
             if (root["head_sha"] != fact.head_sha or root["base_sha"] != fact.effective_base_sha
                     or git._run([git._git, "-C", root["source_root"], "rev-parse", "HEAD"]).strip() != fact.head_sha):
                 raise ValueError("baseline source snapshot mismatch")
-            text = git._run([git._git, "-C", root["source_root"], "diff", "--no-ext-diff", "--unified=80",
-                             fact.effective_base_sha, fact.head_sha])
+            text = git._run([git._git, "-C", root["source_root"], "diff", "--no-ext-diff",
+                             f"--unified={DIFF_CONTEXT_LINES}", fact.effective_base_sha, fact.head_sha])
             if sha256(text.encode()) != fact.diff_sha256:
                 raise ValueError("baseline source canonical diff mismatch")
             changed = DiffParser().parse(text)
