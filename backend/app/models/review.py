@@ -2060,6 +2060,7 @@ class CrossUnitRiskAssessment(BaseModel):
     reasons: list[CrossUnitRiskReason] = Field(default_factory=list)
     relationships: list[CrossUnitRelationship] = Field(default_factory=list)
     index_status: Literal["available", "partial", "unknown"] = "unknown"
+    index_diagnostics: list[str] = Field(default_factory=list)
     execution_status: Literal["not_requested", "not_implemented", "completed", "unresolved", "failed", "cancelled"] = "not_requested"
     non_execution_reason: str | None = None
 
@@ -2072,12 +2073,13 @@ class CrossUnitFollowupRequest(BaseModel):
     question: str = Field(min_length=1, max_length=1_000)
     unit_ids: list[str] = Field(min_length=1, max_length=12)
     primary_files: list[str] = Field(min_length=1, max_length=12)
+    supporting_files: list[str] = Field(default_factory=list, max_length=24)
     evidence_ids: list[str] = Field(default_factory=list, max_length=20)
     counterevidence_goal: str = Field(min_length=1, max_length=1_000)
     stop_condition: str = Field(min_length=1, max_length=1_000)
     origin_obligation_ids: list[str] = Field(default_factory=list, max_length=20)
 
-    @field_validator("primary_files")
+    @field_validator("primary_files", "supporting_files")
     @classmethod
     def validate_paths(cls, values: list[str]) -> list[str]:
         return list(dict.fromkeys(_validate_repo_relative_path(value) for value in values))

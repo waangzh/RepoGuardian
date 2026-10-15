@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 from typing import Any
 
 from app.agents.providers import LLMProviderError
@@ -152,6 +153,22 @@ class CrossUnitCoordinationService:
         }
 
     @staticmethod
+    def _mentioned_files(request, payload):
+        text = "\n".join([request.question, request.counterevidence_goal, request.stop_condition])
+        return {path for unit in payload["units"] for path in unit["primary_files"]
+            if re.search(r"(?<![A-Za-z0-9_./\\-])" + re.escape(path) + r"(?![A-Za-z0-9_./\\-])", text)}
+
+    @staticmethod
+    def _followup_readable(request, payload):
+        units = {item["id"]: item for item in payload["units"]}
+        readable = {path for key in request.unit_ids if key in units
+            for path in [*units[key]["primary_files"], *units[key].get("related_files", [])]}
+        scoped_ids = {identity for item in payload.get("summaries", []) if item["unit_id"] in request.unit_ids
+            for identity in item["summary"].get("evidence_ids", [])}
+        readable.update(item["file_path"] for item in payload["evidence"] if item["id"] in scoped_ids)
+        return readable
+
+    @staticmethod
     def validate_plan(plan: CrossUnitCoordinationPlan, payload: dict[str, Any],
                       budget: ExecutionBudget | None = None) -> None:
         units = {item["id"]: ReviewUnit.model_validate(item) for item in payload["units"]}
@@ -188,12 +205,10 @@ class CrossUnitCoordinationService:
                 raise ValueError("followup must name at least two known Units")
             selected = [units[key] for key in request.unit_ids]
             primary = {path for unit in selected for path in unit.primary_files}
-            readable = primary | {path for unit in selected for path in unit.related_files}
-            # 动态发现的依赖以所选 Unit 实际恢复的证据关联为准；规划文件列表不是证据权限。
-            scoped_ids = {identity for item in payload.get("summaries", [])
-                          if item["unit_id"] in request.unit_ids
-                          for identity in item["summary"].get("evidence_ids", [])}
-            readable.update(evidence[key]["file_path"] for key in scoped_ids if key in evidence)
+            readable = CrossUnitCoordinationService._followup_readable(request, payload)
+            mentioned = CrossUnitCoordinationService._mentioned_files(request, payload)
+            if (set(request.supporting_files) | mentioned) - readable:
+                raise ValueError("followup supporting files outside selected Units; include their owning Unit")
             if set(request.primary_files) - primary:
                 raise ValueError("followup primary files exceed selected Units")
             if any(is_sensitive_repository_change(path) for path in readable):
@@ -211,13 +226,27 @@ class CrossUnitCoordinationService:
     def followup_identity(request) -> tuple:
         return (tuple(sorted(set(request.unit_ids))), tuple(sorted(set(request.primary_files))),
                 tuple(sorted(set(request.evidence_ids))), request.question.strip(),
-                request.counterevidence_goal.strip(), request.stop_condition.strip(), tuple(sorted(set(request.origin_obligation_ids))))
+                request.counterevidence_goal.strip(), request.stop_condition.strip(), tuple(sorted(set(request.origin_obligation_ids))),
+                tuple(sorted(set(request.supporting_files))))
 
     @classmethod
     def normalize_plan(cls, plan, payload, budget=None):
         plan = CrossUnitCoordinationPlan.model_validate(plan.model_dump(mode="json"))
         unique, seen, warnings = [], {}, []
         for request in plan.followups:
+            # 仅补全目录内已知主文件的拥有者；未知路径仍由严格范围门拒绝。
+            mentioned = cls._mentioned_files(request, payload)
+            needed = set(request.supporting_files) | mentioned
+            missing = needed - cls._followup_readable(request, payload)
+            owners = {unit["id"] for unit in payload["units"] if missing & set(unit["primary_files"])}
+            if owners:
+                request.unit_ids = list(dict.fromkeys([*request.unit_ids, *sorted(owners)]))
+                request.supporting_files = sorted(needed - set(request.primary_files))
+                warnings.append(f"补查 {request.id} 纳入必要支持文件所属 Unit：{','.join(sorted(owners))}")
+            elif mentioned:
+                request.supporting_files = sorted(needed - set(request.primary_files))
+            # 重新经过字段长度与路径校验，不能靠原地赋值绕过 schema。
+            request = type(request).model_validate(request.model_dump(mode="json"))
             # 去重前逐项核验，不能因重复而绕过路径或引用校验。
             cls.validate_plan(plan.model_copy(update={"followups": [request]}), payload)
             identity = cls.followup_identity(request)
@@ -538,7 +567,7 @@ class CrossUnitCoordinationService:
             if request.id in self.runtime.data["batches"]:
                 self.runtime.data["cache_hits"] += 1
                 continue
-            readable = {path for unit in selected for path in [*unit.primary_files, *unit.related_files]}
+            readable = self._followup_readable(request, self.catalog(state))
             unit = ReviewUnit(
                 id="followup-" + digest[:24], primary_files=request.primary_files,
                 related_files=sorted(readable - set(request.primary_files)),
