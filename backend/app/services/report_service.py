@@ -152,6 +152,8 @@ def _append_cross_unit_risk(lines: list[str], task: ReviewTask) -> None:
         lines.append(f"- {_inline_text(request.id)}：{_inline_text(request.question)}")
         if request.supporting_files:
             lines.append(f"  - 必要支持文件：{_inline_text('、'.join(request.supporting_files))}")
+        if request.verification_files:
+            lines.append(f"  - 本问题核验范围：{_inline_text('、'.join(request.verification_files))}")
     for result in task.followup_results:
         lines.append(f"- {_inline_text(result.request_id)}：{result.outcome}；{_inline_text(result.reason)}")
     for question in plan.unresolved_questions:

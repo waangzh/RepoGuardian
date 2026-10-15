@@ -595,6 +595,7 @@ export interface CrossUnitRiskAssessment {
 
 export interface CrossUnitFollowupRequest {
   supporting_files?: string[];
+  verification_files?: string[];
   id: string;
   question: string;
   unit_ids: string[];
