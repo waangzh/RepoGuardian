@@ -416,7 +416,7 @@ class ReviewUnitExecutor:
                 coverage_targets=[followup["stop_condition"]],
                 risk_hypotheses=[UnitRiskHypothesis(
                     id="followup-question", category="correctness", priority="high",
-                    description=followup["question"], affected_files=unit.primary_files,
+                    description=followup["question"], affected_files=followup.get("verification_files") or unit.primary_files,
                     evidence_needed=[followup["counterevidence_goal"]],
                     completion_criteria=followup["stop_condition"][:500],
                 )],
@@ -2588,6 +2588,8 @@ class ReviewUnitExecutor:
         from app.services.file_change_evidence import set_file_change_impact_scope
         set_file_change_impact_scope(record_input, getattr(state["unit"], "related_files", []))
         record_input["pr_intent"] = build_pr_intent(pr)
+        if state["parent_state"].get("cross_unit_followup"):
+            record_input["verification_scope"] = state["parent_state"]["cross_unit_followup"]
         if self._supports_native_review_step():
             from app.services.unit_review_summary import review_target_catalog
             record_input["target_catalog"] = review_target_catalog(record_input["targets"])

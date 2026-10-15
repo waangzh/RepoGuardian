@@ -207,7 +207,7 @@ class CrossUnitCoordinationService:
             primary = {path for unit in selected for path in unit.primary_files}
             readable = CrossUnitCoordinationService._followup_readable(request, payload)
             mentioned = CrossUnitCoordinationService._mentioned_files(request, payload)
-            if (set(request.supporting_files) | mentioned) - readable:
+            if (set(request.supporting_files) | set(request.verification_files) | mentioned) - readable:
                 raise ValueError("followup supporting files outside selected Units; include their owning Unit")
             if set(request.primary_files) - primary:
                 raise ValueError("followup primary files exceed selected Units")
@@ -227,7 +227,7 @@ class CrossUnitCoordinationService:
         return (tuple(sorted(set(request.unit_ids))), tuple(sorted(set(request.primary_files))),
                 tuple(sorted(set(request.evidence_ids))), request.question.strip(),
                 request.counterevidence_goal.strip(), request.stop_condition.strip(), tuple(sorted(set(request.origin_obligation_ids))),
-                tuple(sorted(set(request.supporting_files))))
+                tuple(sorted(set(request.supporting_files))), tuple(sorted(set(request.verification_files))))
 
     @classmethod
     def normalize_plan(cls, plan, payload, budget=None):
@@ -236,7 +236,7 @@ class CrossUnitCoordinationService:
         for request in plan.followups:
             # 仅补全目录内已知主文件的拥有者；未知路径仍由严格范围门拒绝。
             mentioned = cls._mentioned_files(request, payload)
-            needed = set(request.supporting_files) | mentioned
+            needed = set(request.supporting_files) | set(request.verification_files) | mentioned
             missing = needed - cls._followup_readable(request, payload)
             owners = {unit["id"] for unit in payload["units"] if missing & set(unit["primary_files"])}
             if owners:
@@ -658,26 +658,11 @@ class CrossUnitCoordinationService:
                 issues.append(candidate)
             result = result.model_copy(update={"issues": issues})
             usages.extend(item.model_dump(mode="json") for item in result.model_usages)
-            # 零候选不是反证；只有目标检查完成且具有证据的 refuted 假设才是反证。
-            record = result.review_summary.record
-            refuted = bool(record and record.hypothesis_checks and
-                           all(item.status == "refuted" and item.evidence_ids for item in record.hypothesis_checks)
-                           and not record.unresolved_questions
-                           and all(item.status == "checked" for item in record.target_checks))
-            if refuted:
-                refs = {item.id: item.file_path for item in result.review_summary.evidence}
-                paths = {refs[key] for check in record.hypothesis_checks for key in check.evidence_ids}
-                refuted = all(set(item.primary_files) & paths for item in selected)
-            outcome = "failed" if result.status != ReviewUnitStatus.completed else (
-                "candidate_found" if issues else "refuted" if refuted else "unresolved")
+            outcome, reason = self.followup_conclusion(request, result, selected)
             followup = CrossUnitFollowupResult(
                 request_id=request.id, outcome=outcome, unit_result=result,
                 fingerprint=digest,
-                evidence_ids=request.evidence_ids, reason=result.error or (
-                    "新增候选将接受证据、策略与独立验证" if issues else
-                    "已找到相关 Unit 的反证且完成目标检查" if refuted else
-                    "未发现候选；没有充分反证时保留未决"
-                ),
+                evidence_ids=request.evidence_ids, reason=reason,
             )
             self.runtime.data["followups"][request.id] = followup.model_dump(mode="json")
             await self.runtime.persist()
@@ -731,6 +716,34 @@ class CrossUnitCoordinationService:
         aggregated = self._aggregate_output(state)
         aggregated["model_usages"].extend(usages)
         return aggregated
+
+    @staticmethod
+    def followup_conclusion(request, result, selected):
+        if result.status != ReviewUnitStatus.completed:
+            return "failed", result.error or "补查执行未完成"
+        summary, record = result.review_summary, result.review_summary.record
+        valid = summary.status == "reported" and summary.latest_attempt_status == "reported" and record is not None
+        if result.issues:
+            return "candidate_found", "新增候选将接受证据、策略与独立验证" + (
+                "；补查记录无效，不能据此关闭原问题" if not valid else "")
+        if not valid:
+            return "unresolved", ("补查记录未通过校验，无法采用结论：" +
+                str(summary.latest_attempt_reason or summary.reason or "missing_review_record"))[:1000]
+        refs = {item.id: item.file_path for item in summary.evidence}
+        paths = {refs[key] for check in record.hypothesis_checks for key in check.evidence_ids if key in refs}
+        # 新请求按显式核验范围；旧请求仍要求覆盖每个所选 Unit 的主文件。
+        scope_covered = (set(request.verification_files) <= paths if request.verification_files else
+                         all(set(item.primary_files) & paths for item in selected))
+        closed = {item.obligation_id for item in record.obligation_updates}
+        refuted = (record.target_checks and record.hypothesis_checks and scope_covered
+            and all(item.status == "refuted" and item.evidence_ids and set(item.evidence_ids) <= refs.keys()
+                    for item in record.hypothesis_checks)
+            and all(item.status == "checked" for item in record.target_checks)
+            and not record.unresolved_questions
+            and all(item.status == "verified" for item in record.contract_dependencies)
+            and set(request.origin_obligation_ids) <= closed)
+        return ("refuted", "已找到限定核验范围的反证且完成目标检查") if refuted else (
+            "unresolved", "有效审查后证据仍不足：核验范围、目标、父义务或契约尚未闭合")
 
     async def _retry_verifications(self, state: dict) -> None:
         from app.services.issue_verifier import IssueVerifierService

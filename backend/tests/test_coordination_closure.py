@@ -68,3 +68,61 @@ def test_prompt_lists_both_update_channels_and_disjoint_catalogs():
     assert '"question_updates"' in schema
     assert domain_output_errors("invalid_review_record: unknown origin obligation")[0]["loc"] == [
         "review_record", "obligation_updates"]
+
+
+@pytest.mark.parametrize("change,expected", [("valid", "refuted"), ("invalid", "unresolved"),
+    ("missing", "unresolved"), ("dependency", "unresolved"), ("parent", "unresolved"),
+    ("evidence", "unresolved"), ("legacy", "unresolved")])
+def test_counterevidence_covers_verification_files_without_unrelated_primary_refs(change, expected):
+    from app.models.review import ReviewUnitResult, UnitReviewRecord
+    from app.services.unit_review_summary import build_record_input
+    from app.services.cross_unit_coordination import CrossUnitCoordinationService
+    from test_cross_unit_coordination import state, plan
+    value = state()
+    payload = CrossUnitCoordinationService.catalog(value)
+    request = plan(payload).followups[0].model_copy(update={"verification_files": ["pyproject.toml", "setup.py"]})
+    contexts = [{"file": path, "start_line": 1, "end_line": 1, "content": content}
+        for path, content in [("pyproject.toml", '[tool.setuptools]\n'), ("setup.py", "setup()")]]
+    record_input = build_record_input([], contexts, None, "h", "b")
+    evidence = [item["id"] for item in record_input["evidence"]]
+    record = UnitReviewRecord(change_summary="两个配置正文没有显式引用本地文件名", target_checks=[{
+        "target": target, "status": "checked", "reason": "核对完整正文", "evidence_ids": evidence}
+        for target in record_input["targets"] or ["核验显式引用"]], hypothesis_checks=[])
+    record_input["targets"] = ["核验显式引用"]
+    record_input["hypotheses"] = [{"id": "scope"}]
+    from app.models.review import UnitHypothesisCheck
+    record.hypothesis_checks = [UnitHypothesisCheck(hypothesis_id="scope", status="refuted", reason="仅限定正文", evidence_ids=evidence)]
+    summary = validate_record(record, record_input, {"pyproject.toml", "setup.py"})
+    assert summary.status == "reported", summary.reason
+    if change == "invalid":
+        summary.latest_attempt_status = "invalid"
+        summary.latest_attempt_reason = "invalid_review_record: question update requires a visible prior question"
+    elif change == "missing":
+        summary.record = None
+        summary.status = "unknown"
+        summary.latest_attempt_status = "missing"
+    elif change == "dependency":
+        from app.models.review import UnitContractDependency
+        summary.record.contract_dependencies = [UnitContractDependency(file_path="setup.py", assumption="全局机制未知", status="unresolved")]
+    elif change == "parent":
+        request.origin_obligation_ids = ["unclosed-parent"]
+    elif change == "evidence":
+        summary.record.hypothesis_checks[0].evidence_ids = evidence[:1]
+    elif change == "legacy":
+        request.verification_files = []
+    result = ReviewUnitResult(review_unit_id="followup", status="completed", review_summary=summary)
+    selected = [ReviewUnit.model_validate(raw) for raw in value["review_units"]]
+    outcome, reason = CrossUnitCoordinationService.followup_conclusion(request, result, selected)
+    assert outcome == expected
+    if change == "invalid":
+        assert "question update requires a visible prior question" in reason
+
+
+def test_verification_scope_cannot_authorize_unknown_files():
+    from app.services.cross_unit_coordination import CrossUnitCoordinationService
+    from test_cross_unit_coordination import state, plan
+    payload = CrossUnitCoordinationService.catalog(state())
+    proposed = plan(payload)
+    proposed.followups[0].verification_files = ["unknown.py"]
+    with pytest.raises(ValueError, match="supporting files outside"):
+        CrossUnitCoordinationService.normalize_plan(proposed, payload)

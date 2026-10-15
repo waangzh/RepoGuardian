@@ -526,6 +526,9 @@ class OpenAICompatibleProvider(LLMProvider):
             "Working memory and prior_contract_dependencies are prior check state, not proof: Carry "
             "each obligation forward until displayed evidence verifies it, otherwise keep it unresolved; "
             "missing evidence requires rechecking. "
+            "Separate a bounded explicit-reference check in named files from a claim about the entire build/packaging mechanism. "
+            "Report the bounded result explicitly. For a broader claim identify the exact missing build inputs/rules as "
+            "unresolved questions and request their evidence; do not repeat the same conditional without a concrete gap. "
             "diff_workset, when present, identifies one batch of a larger Unit. Only this batch's "
             "full evidence is displayed; other batches are not checked by this request. The server "
             "tracks their coverage separately. Record cross-batch assumptions as unresolved dependencies "
@@ -838,6 +841,8 @@ class OpenAICompatibleProvider(LLMProvider):
             "同范围证据下的不同问题应保留；"
             "范围、问题、反证目标、停止条件完全相同的请求只提出一次。"
             "每项必须明确 question、counterevidence_goal、stop_condition，不能直接确认或删除 Issue。"
+            "verification_files 明确本问题反证必须覆盖的文件，必须在所选 Unit 可读范围；留空沿用全部所选 Unit 主文件。"
+            "将限定文件是否显式引用与整个构建机制是否受影响拆成独立问题；限定结论不得关闭更广的父义务。"
             "若补查针对 origin_obligations 中的原契约，填写 origin_obligation_ids，只复制所选 Unit 的真实 ID；没有对应义务时返回空列表。"
             "只有证据充分且全部疑点已排除才返回 skip。返回 JSON，中文理由。"
             "不要回显 API 的 response_format 或 type=json_object；它们不是结果字段。"
@@ -847,7 +852,7 @@ class OpenAICompatibleProvider(LLMProvider):
             '格式：{"decision":"required|uncertain|skip","reason":"理由",'
             '"relationship_ids":[],"evidence_ids":[],"followups":[{"id":"f1",'
             '"question":"问题","unit_ids":["目录中的第一个Unit ID","目录中的另一个Unit ID"],'
-            '"primary_files":["所选Unit的主文件"],"supporting_files":[],"evidence_ids":["目录中的当前证据ID"],'
+            '"primary_files":["所选Unit的主文件"],"supporting_files":[],"verification_files":[],"evidence_ids":["目录中的当前证据ID"],'
             '"counterevidence_goal":"反证目标","stop_condition":"停止条件","origin_obligation_ids":[]}],'
             '"unresolved_questions":[]}\n'
             + json.dumps(payload, ensure_ascii=False)
