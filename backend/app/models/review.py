@@ -656,7 +656,7 @@ def _default_review_mode() -> ReviewMode:
     return ReviewMode(settings.repoguardian_default_review_mode)
 
 
-def _default_review_engine() -> Literal["legacy_units", "task_review_v1"]:
+def _default_review_engine() -> Literal["task_review_v1"]:
     """只在创建请求构造时读取默认引擎，任务随后保存冻结值。"""
     from app.core.config import settings
 
@@ -679,7 +679,7 @@ class ReviewCreateRequest(BaseModel):
     """POST /api/reviews 请求体。"""
     pr_url: HttpUrl
     model: str | None = None
-    engine: Literal["legacy_units", "task_review_v1"] = Field(default_factory=_default_review_engine)
+    engine: Literal["task_review_v1"] = Field(default_factory=_default_review_engine)
     mode: ReviewMode = Field(default_factory=_default_review_mode)
     generate_patches: bool = False
     validation_backend: ValidationBackend = Field(default_factory=_default_validation_backend)
@@ -689,10 +689,8 @@ class ReviewCreateRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_product_policy(self) -> "ReviewCreateRequest":
-        if self.engine == "task_review_v1" and (
-                self.generate_patches or self.validation_backend != ValidationBackend.none
-        ):
-            raise ValueError("task_review_v1 P1 only supports read-only inspect tasks")
+        if self.generate_patches or self.validation_backend != ValidationBackend.none:
+            raise ValueError("task_review_v1 only supports read-only inspect tasks")
         if self.mode == ReviewMode.review:
             if self.generate_patches:
                 raise ValueError("mode=review does not allow generate_patches=true")
@@ -717,7 +715,7 @@ class ReviewPreviewRequest(BaseModel):
     """仅执行确定性 PR 分析，不创建任务或调用模型。"""
 
     pr_url: HttpUrl
-    engine: Literal["legacy_units", "task_review_v1"] = Field(default_factory=_default_review_engine)
+    engine: Literal["task_review_v1"] = Field(default_factory=_default_review_engine)
     mode: ReviewMode = Field(default_factory=_default_review_mode)
     generate_patches: bool = False
     validation_backend: ValidationBackend = Field(default_factory=_default_validation_backend)
@@ -1989,20 +1987,6 @@ class UnitReviewRecord(BaseModel):
             if len(identifiers) != len(set(identifiers)):
                 raise ValueError("review record contains duplicate checks")
         return self
-
-
-class UnitReviewResponse(BaseModel):
-    """一次既有 diagnosis 调用的结果，不额外请求摘要模型。"""
-
-    model_config = ConfigDict(extra="forbid")
-    issues: list[ReviewIssue] = Field(default_factory=list)
-    review_record: UnitReviewRecord | None = None
-    record_error: str | None = None
-    # 合并循环允许服务端执行至多一个受控的下一步；不携带任意命令或范围。
-    next_need: AgentAction | None = None
-    next_need_error: str | None = None
-    output_schema_errors: list[dict[str, Any]] = Field(default_factory=list)
-    issues_audited: bool = False
 
 
 class UnitReviewSummary(BaseModel):

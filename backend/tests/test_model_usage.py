@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage
 
 from app.agents.providers import OpenAICompatibleProvider
 from app.models.review import ModelUsage, ReviewUnitComplexity
+from app.services.model_request_budgeter import PreparedModelRequest
 from app.services.model_pricing import calculate_cost_microusd
 from app.services.model_usage import summarize_model_usage
 
@@ -37,9 +38,11 @@ async def test_provider_returns_actual_usage_metadata_and_raw_response_metadata(
     provider = OpenAICompatibleProvider("key", "https://example.test/v1", "default")
     monkeypatch.setattr(provider, "_build_chat_model", lambda *_: _FakeChat(response))
 
-    result = await provider.decide({}, None)
+    result = await provider.task_review_step(
+        PreparedModelRequest(model="default", operation="task_review_v1", system="s",
+                             prompt="p", output_tokens=10))
 
-    assert result.value.action == "finish_report"
+    assert result.value == '{"action":"finish_report","reason":"done"}'
     assert result.usage.actual_input_tokens == 120
     assert result.usage.actual_output_tokens == 30
     assert result.usage.actual_total_tokens == 150
@@ -58,7 +61,9 @@ async def test_provider_records_successful_response_with_missing_usage(
     response = AIMessage(content='{"action":"finish_report","reason":"done"}')
     monkeypatch.setattr(provider, "_build_chat_model", lambda *_: _FakeChat(response))
 
-    result = await provider.decide({}, None)
+    result = await provider.task_review_step(
+        PreparedModelRequest(model="model", operation="task_review_v1", system="s",
+                             prompt="p", output_tokens=10))
 
     assert result.usage.usage_available is False
     assert result.usage.accounting_source == "missing"

@@ -1,26 +1,13 @@
-"""确定性计划节点与 Review Unit 并发聚合节点。"""
+"""确定性 Review Unit 计划节点。"""
 
 from typing import Any
 
-from app.agents.providers import build_provider
 from app.core.config import settings
 from app.graph.nodes._events import append_step
 from app.graph.state import ReviewState
 from app.review.diff_base import review_diff_base
-from app.models.review import ReviewPlan, ReviewUnitResult
-from app.graph.checkpointer import get_checkpointer
 from app.services.review_planner import DeterministicReviewPlanner
 from app.services.review_input_context import build_pr_intent
-from app.services.fingerprints import unit_execution_fingerprint
-from app.services.review_unit_executor import ReviewUnitExecutor
-from app.services.review_repository import ReviewRepository
-from app.review.unit_completion import (
-    is_reusable_review_unit_result,
-    is_review_unit_complete,
-    is_review_unit_execution_complete,
-    is_review_unit_execution_complete_with_warnings,
-    review_unit_coverage_warning,
-)
 
 
 async def review_plan_node(state: ReviewState) -> ReviewState:
@@ -46,140 +33,5 @@ async def review_plan_node(state: ReviewState) -> ReviewState:
             "review_plan",
             "completed",
             f"生成 {len(plan.review_units)} 个 Review Unit，排除 {len(plan.excluded_files)} 个文件",
-        ),
-    )
-
-
-async def review_units_node(state: ReviewState) -> ReviewState:
-    if state.get("engine") == "task_review_v1":
-        raise ValueError("frozen task_review_v1 cannot enter legacy Unit executor")
-    plan = ReviewPlan.model_validate(state.get("review_plan") or {
-        "planner_version": "unknown",
-        "review_units": state.get("review_units") or [],
-    })
-    if not plan.review_units:
-        return ReviewState(
-            status="reviewing",
-            review_unit_results=[],
-            review_issues=[],
-            step_progress=append_step(state, "review_units", "completed", "没有可审查的 Unit"),
-        )
-
-    executor: Any = state.get("_review_unit_executor")
-    if executor is None:
-        provider = state.get("_provider") or build_provider(
-            settings.repoguardian_provider,
-            settings.openai_api_key,
-            settings.openai_base_url,
-            settings.repoguardian_model,
-        )
-        executor = ReviewUnitExecutor(
-            provider,
-            concurrency=settings.repoguardian_review_unit_concurrency,
-            timeout_seconds=settings.repoguardian_review_unit_timeout_seconds,
-            checkpointer=(await get_checkpointer()) if state.get("_persistence_enabled") else None,
-        )
-    mode = getattr(executor, "input_mode", settings.repoguardian_unit_input_mode)
-    provider = getattr(executor, "provider", state.get("_provider"))
-    bindings = {unit.id: unit_execution_fingerprint(unit.fingerprint, state, provider, mode) for unit in plan.review_units}
-    previous = {
-        item.review_unit_id: item
-        for item in (
-            ReviewUnitResult.model_validate(raw)
-            for raw in state.get("review_unit_results") or []
-        )
-        if is_reusable_review_unit_result(item) and item.input_fingerprint == bindings.get(item.review_unit_id)
-        and item.review_unit_id in bindings and mode == "canonical"
-    }
-    pending_units = [unit for unit in plan.review_units if unit.id not in previous]
-    reusable: dict[str, ReviewUnitResult] = {}
-    repository = ReviewRepository() if state.get("_persistence_enabled") else None
-    if repository:
-        still_pending = []
-        for unit in pending_units:
-            cached = repository.find_reusable_unit(
-                fingerprint=unit.fingerprint,
-                model=state.get("model") or settings.repoguardian_model,
-                provider=settings.repoguardian_provider,
-                prompt_version=settings.repoguardian_prompt_version,
-                rule_version=settings.repoguardian_rule_version,
-                tool_schema_version=settings.repoguardian_tool_schema_version,
-                review_policy_version=settings.repoguardian_review_policy_version,
-            )
-            if cached and cached.result_snapshot:
-                result = ReviewUnitResult.model_validate(cached.result_snapshot)
-                if not is_reusable_review_unit_result(result) or result.input_fingerprint != bindings[unit.id] or mode != "canonical":
-                    still_pending.append(unit)
-                    continue
-                result = result.model_copy(update={"model_usages": []})
-                reusable[unit.id] = result
-                repository.record_unit_result(
-                    task_id=str(state["task_id"]),
-                    unit=unit,
-                    result=result,
-                    reused_from_id=cached.id,
-                )
-            else:
-                still_pending.append(unit)
-        pending_units = still_pending
-    executed: list[ReviewUnitResult] = await executor.execute(pending_units, dict(state))
-    if repository:
-        units_by_id = {unit.id: unit for unit in pending_units}
-        for result in executed:
-            repository.record_unit_result(
-                task_id=str(state["task_id"]),
-                unit=units_by_id[result.review_unit_id],
-                result=result,
-            )
-    by_id = {
-        **previous,
-        **reusable,
-        **{item.review_unit_id: item for item in executed},
-    }
-    results = [by_id[unit.id] for unit in plan.review_units if unit.id in by_id]
-    successful = [item for item in results if is_review_unit_complete(item)]
-    executed_results = [item for item in results if is_review_unit_execution_complete(item)]
-    incomplete = [item for item in results if not is_review_unit_complete(item)]
-    warnings = list(dict.fromkeys([*(state.get("warnings") or []),
-        *(warning for item in results if (warning := review_unit_coverage_warning(item)))]))
-    issues = [issue for item in executed_results for issue in item.issues]
-    snippets = [snippet for item in executed_results for snippet in item.context_snippets]
-    events = [event for item in results for event in item.messages]
-    legacy_units = [item for item in results if item.review_summary.input_protocol == "legacy"]
-    if legacy_units:
-        warnings.append(f"{len(legacy_units)} 个 Unit 使用显式 legacy Provider：缺少 canonical 输入保证，检查记录未知且不缓存")
-    if incomplete:
-        warnings.append(
-            (
-                f"{len(incomplete)} 个 Review Unit 已执行完成但存在未决契约，"
-                "本次没有 Unit 可复用"
-            )
-            if not successful and all(
-                is_review_unit_execution_complete_with_warnings(item)
-                for item in incomplete
-            )
-            else (
-                f"{len(incomplete)} 个 Review Unit 未完整完成，"
-                f"其他 {len(successful)} 个 Unit 已完成"
-            )
-            if successful
-            else f"{len(incomplete)} 个 Review Unit 未完整完成，本次没有 Unit 成功完成"
-        )
-    return ReviewState(
-        status="reviewing",
-        next_action=None,
-        review_unit_results=[item.model_dump(mode="json") for item in results],
-        review_issues=[item.model_dump(mode="json") for item in issues],
-        context_snippets=[item.model_dump(mode="json") for item in snippets],
-        agent_events=[
-            *(state.get("agent_events") or []),
-            *(item.model_dump(mode="json") for item in events),
-        ],
-        warnings=warnings,
-        step_progress=append_step(
-            state,
-            "review_units",
-            "completed",
-            f"完成 {len(successful)}/{len(results)} 个 Review Unit",
         ),
     )

@@ -271,33 +271,6 @@ def test_frozen_r9_wire_attempts_recalculate_all_five_samples():
     assert sum(item["actual_total_tokens"] for item in reports) == 2_155_240
 
 
-def test_checkmate_failure_reconstruction_uses_current_validator():
-    from app.models.review import UnitReviewRecord
-    from app.services.unit_review_summary import validate_record
-
-    sample = next(item for item in _observations()["samples"]
-                  if "Checkmate" in item["sample"]["instance_id"])
-    assert len(sample["observed"]["followups"]) == 2
-    for followup in sample["observed"]["followups"]:
-        evidence = followup["evidence"]
-        ids = [evidence[0]["id"]]
-        # 原产物没有保存被拒响应；只重建造成相同校验失败的最小记录。
-        record = UnitReviewRecord(change_summary="重建最小不可见旧问题失败", target_checks=[{
-            "target": "reconstructed-check", "status": "checked",
-            "evidence_ids": ids, "reason": "独立合法检查结果",
-        }], question_updates=[{
-            "question_id": "reconstructed-invisible-question", "status": "resolved",
-            "evidence_ids": ids, "reason": "旧问题不在当前目录",
-        }])
-        request = {"targets": ["reconstructed-check"], "hypotheses": [],
-                   "evidence": evidence, "snapshot": followup["input_snapshot"],
-                   "input_protocol": "canonical-evidence-v3", "working_memory": {}}
-        summary = validate_record(record, request, {item["file_path"] for item in evidence})
-        assert summary.latest_attempt_status == "invalid"
-        assert summary.latest_attempt_reason == followup["latest_attempt_reason"]
-        assert summary.record is None  # legacy 整份拒绝也会丢掉合法兄弟检查。
-
-
 def test_r9_observations_keep_scope_gaps_and_local_closure_separate():
     by_repo = {item["sample"]["repository"]: item for item in _observations()["samples"]}
     gemini = by_repo["google-gemini/gemini-cli"]

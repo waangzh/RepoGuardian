@@ -68,8 +68,13 @@ class TaskReviewDerivation:
         catalog = {}
         for step in self.steps.values():
             for identity, value in step.executor.evidence_catalog.items():
-                if identity in catalog and catalog[identity] != value:
-                    raise ValueError("conflicting evidence identity across runtime")
+                if identity in catalog:
+                    previous = catalog[identity]
+                    # 来源/检索元数据可随读取更新；身份绑定的原文与快照必须一致。
+                    if (evidence_key(previous) != evidence_key(value)
+                            or previous.get("content") != value.get("content")):
+                        raise ValueError("conflicting evidence identity across runtime")
+                    value = {**value, **previous}
                 catalog[identity] = value
         return catalog
 

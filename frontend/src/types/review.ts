@@ -15,6 +15,7 @@ export type KnownTaskStatus =
   | "cancelled";
 export type TaskStatus = KnownTaskStatus | (string & {});
 export type ReviewMode = "review" | "review_and_suggest" | "review_suggest_and_validate";
+// 新任务恒为 task_review_v1；legacy_units 只出现在历史任务快照中。
 export type ReviewEngine = "legacy_units" | "task_review_v1";
 export type ValidationBackend = "none" | "user_runner" | "project_ci" | "gvisor";
 export type ValidationStatus =
@@ -952,7 +953,7 @@ export interface ReviewTask {
   phase: ReviewPhase;
   pr_url: string;
   model?: string | null;
-  engine?: ReviewEngine; // 缺省字段的旧任务属于 legacy_units
+  engine?: ReviewEngine; // 缺省字段的旧任务属于 legacy_units；新任务恒为 task_review_v1
   task_runtime_configuration?: Record<string, unknown> | null;
   task_runtime_report?: TaskRuntimeReport | null;
   task_runtime_retry_unit_id?: string | null;

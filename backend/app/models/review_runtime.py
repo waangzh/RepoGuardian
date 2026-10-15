@@ -383,6 +383,7 @@ class TaskRuntimeReport(BaseModel):
     unknown_attempts: int = Field(default=0, ge=0)
     total_tokens: int | None = Field(default=None, ge=0)
     work_items: list[dict] = Field(default_factory=list)
+    diagnostics: list[dict] = Field(default_factory=list)
 
 
 class TaskRuntimeRetryResult(BaseModel):

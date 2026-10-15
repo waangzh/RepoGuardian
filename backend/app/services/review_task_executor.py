@@ -1,7 +1,7 @@
 """task_review_v1 单任务推进、局部校验和结果投影。
 
-该执行器只处理已冻结的 WorkItem。它不创建私有队列、不调用旧
-ReviewUnitExecutor，也不让模型修改目标身份、快照或任务完成状态。
+该执行器只处理已冻结的 WorkItem，不创建私有队列，也不让模型
+修改目标身份、快照或任务完成状态。
 """
 
 from __future__ import annotations
@@ -263,6 +263,30 @@ class ReviewTaskExecutor:
                 self._apply_investigation(getattr(parsed.response, "investigation", None), parsed.errors)
             self._apply_submit(parsed.response, parsed.errors, parsed.item_indices)
         return parsed
+
+    def investigation_citation_readiness(self):
+        """仅对当前可见原文计算可表达的完整引用集，不扩大读取权限。"""
+        selected = set(self.work_item.required_evidence_ids)
+        if selected - self.active_evidence_ids:
+            return {"status": "required_evidence_not_visible", "citation_ids": None}
+        for request in self.work_item.evidence_requests:
+            cursor = request.start_line
+            while cursor <= request.end_line:
+                choices = [(value["end_line"], identity) for identity, value in self.evidence_catalog.items()
+                    if identity in self.active_evidence_ids and value["file_path"] == request.file_path
+                    and value.get("side", "head") == "head"
+                    and value["start_line"] <= cursor <= value["end_line"]]
+                if not choices:
+                    return {"status": "requested_source_not_visible", "citation_ids": None}
+                end, identity = max(choices)
+                selected.add(identity)
+                cursor = end + 1
+        if not selected:
+            return {"status": "requested_source_not_visible", "citation_ids": None}
+        if len(selected) > 20:
+            return {"status": "citation_capacity_exceeded", "citation_ids": None}
+        error = self.evidence_error(sorted(selected))
+        return {"status": error or "ready", "citation_ids": None if error else sorted(selected)}
 
     def _apply_investigation(self, item, errors):
         if item is None:

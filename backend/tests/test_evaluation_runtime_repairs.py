@@ -49,7 +49,8 @@ async def test_evaluation_activates_and_exports_each_attempt(monkeypatch, tmp_pa
         async def astream(self, state, **kwargs):
             assert current_run_budget() is not None
             await state["_provider"]._request_json_content("return JSON", None, "review_step", "JSON", 32)
-            yield {"report": {"review_units": [], "review_unit_results": [], "review_issues": []}}
+            yield {"report": {"task_runtime_report": {"execution_status": "completed", "scope_complete": True},
+                              "review_units": [], "review_unit_results": [], "review_issues": []}}
 
     monkeypatch.setattr("app.evaluation.runner.build_review_graph",
         lambda **kwargs: SimpleNamespace(compile=lambda: Graph()))

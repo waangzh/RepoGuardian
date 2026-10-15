@@ -26,7 +26,8 @@ def main(argv=None):
     freeze.add_argument("--negative", type=Path, required=True)
     freeze.add_argument("--source-revision", required=True)
     freeze.add_argument("--output", type=Path, required=True)
-    run = commands.add_parser("run", help="执行生产审查图；会调用真实模型")
+    run = commands.add_parser("run", help="评测当前 task_review_v1 生产图；会调用真实模型",
+        description="固定使用当前 task_review_v1，不跟随产品的 legacy_units 默认值。")
     run.add_argument("--lock", type=Path, required=True)
     run.add_argument("--diff-lock", type=Path, help="v2 有效 diff 基准锁；缺省保持 v1 两点差分")
     run.add_argument("--output", type=Path, required=True)
@@ -108,7 +109,7 @@ def main(argv=None):
                 parser.error("首样本验收文件与真实结果不一致")
             for name, value in FIXED_SETTINGS.items():
                 setattr(settings, name, value)
-        elif args.experiment_group or args.experiment_stage or args.first_gate:
+        elif args.experiment_group or args.experiment_stage or args.first_gate or args.quality_gate:
             parser.error("实验组和门必须绑定冻结清单")
         provider = build_provider(settings.repoguardian_provider, settings.openai_api_key,
                                   settings.openai_base_url, settings.repoguardian_model)
