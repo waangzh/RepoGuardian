@@ -360,7 +360,7 @@ class CrossUnitCoordinationService:
             deferred = self._catalog_deferred()
             plan = plan.model_copy(update={"status": "unresolved" if deferred else "failed",
                 "reason": ("deferred_budget_not_executed: catalog" if deferred
-                           else f"{type(exc).__name__}: {exc}"[:1000])})
+                           else self._planning_failure_reason(exc))})
             result = {**self._aggregate_output(state), "warnings": [*(state.get("warnings") or []),
                                    f"跨 Unit 协调未完成：{plan.reason}"],
                       "model_usages": [*(state.get("model_usages") or []), *usages]}
@@ -439,7 +439,7 @@ class CrossUnitCoordinationService:
                         if len(batches) > 1 else None)
                     try:
                         async with asyncio.timeout(60):
-                            raw = await self.provider.coordinate_cross_units(batch, model)
+                            raw = await self._coordinate_with_output_repair(batch, model, usages)
                         proposed, usage = unpack_model_call(raw)
                         if usage is not None:
                             usages.append(usage.model_dump(mode="json"))
@@ -455,9 +455,10 @@ class CrossUnitCoordinationService:
                             usages.append(usage.model_dump(mode="json"))
                         proposal = None
                         coverage = entry.model_copy(update={"status": "failed",
-                            "reason": f"{type(exc).__name__}: {exc}"[:1000]})
+                            "reason": self._planning_failure_reason(exc)})
                         rejection = getattr(exc, "admission_rejection", None)
-                        if rejection and rejection.get("can_defer"):
+                        if (rejection and rejection.get("can_defer")
+                                and getattr(exc, "coordination_error_code", None) != "coordination_repair_not_admitted"):
                             saved[entry.id] = {"deferred_budget": True,
                                 "budget_signature": self.runtime.budget_signature()}
                     finally:
@@ -519,6 +520,47 @@ class CrossUnitCoordinationService:
         aggregate = aggregate.model_copy(update={"question_states": list(question_states.values())})
         self.validate_plan(aggregate, payload)
         return aggregate
+
+    async def _coordinate_with_output_repair(self, batch, model, usages):
+        try:
+            return await self.provider.coordinate_cross_units(batch, model)
+        except LLMProviderError as exc:
+            usage = exc.usage
+            errors = getattr(exc, "output_schema_errors", [])
+            if (getattr(exc, "coordination_error_code", None) != "decision_followups_conflict"
+                    or not errors or any(item.get("type") != "decision_followups_conflict" for item in errors)
+                    or usage is None or not usage.usage_available or usage.actual_total_tokens is None
+                    or not callable(getattr(self.provider.provider, "repair_cross_unit_plan", None))):
+                raise
+            # 初次失败的响应已计费；保留它，再由同一共享账本准入一个独立纠错请求。
+            # 缓存身份包含相同目录及稳定反馈，恢复只复用这一次纠错，不产生第三次发送。
+            usages.append(usage.model_dump(mode="json"))
+            feedback = {"attempt": 1, "errors": errors[:10]}
+            try:
+                return await self.provider.repair_cross_unit_plan(batch, model, feedback)
+            except LLMProviderError as repair_error:
+                if not getattr(repair_error, "coordination_error_code", None):
+                    not_admitted = getattr(repair_error, "admission_rejection", None) or any(code in str(repair_error) for code in (
+                        "model_context_window_exceeded", "model_input_limit_exceeded", "model_output_limit_exceeded"))
+                    repair_error.coordination_error_code = ("coordination_repair_not_admitted" if not_admitted
+                                                            else "coordination_repair_failed")
+                raise
+
+    @staticmethod
+    def _planning_failure_reason(exc):
+        reasons = {
+            "decision_followups_conflict": "协调计划的决策与补查列表冲突，未执行补查",
+            "coordination_output_invalid": "协调计划响应已收到，但输出协议无效，未执行补查",
+            "coordination_repair_not_admitted": "协调计划输出无效，纠错请求未获预算或窗口准入，未执行补查",
+            "coordination_repair_failed": "协调计划输出无效，后续纠错请求失败，未执行补查",
+        }
+        code = getattr(exc, "coordination_error_code", None)
+        if code in reasons:
+            return reasons[code]
+        # 唯一目录批次失败时，外层只传递已生成的可读原因，不再叠加异常类名。
+        if str(exc).startswith("协调计划"):
+            return str(exc)[:1000]
+        return f"{type(exc).__name__}: {exc}"[:1000]
 
     def _aggregate_output(self, state: dict) -> dict:
         from app.services.followup_contracts import reconcile_contracts
