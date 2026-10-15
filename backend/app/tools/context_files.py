@@ -279,6 +279,7 @@ class ScopedContextTool:
             "end_line": actual_end,
             "content": content,
             "requested_end_line": requested_end_line or end_line,
+            "total_lines": len(lines),
             "truncated": actual_end < min(requested_end_line or end_line, len(lines)),
             "relevance": "direct",
             "review_unit_id": review_unit_id,
