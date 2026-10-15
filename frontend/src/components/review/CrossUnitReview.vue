@@ -123,7 +123,7 @@ h3 { font-size: 16px; margin: 0 0 10px; }
 .runtime-facts { font-size: 12px; margin: 22px 0; }
 .runtime-facts > div { display: flex; justify-content: space-between; gap: 8px; border-top: 1px solid var(--border); padding: 10px 0; }
 .runtime-facts dt { color: var(--text-secondary); }
-.runtime-facts dd { text-align: right; font-weight: 650; font-variant-numeric: tabular-nums; margin: 0; }
+.runtime-facts dd { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; margin: 0; }
 .runtime-facts small, .audit-identity small, .audit-identity code { display: block; font-size: 11px; font-weight: 400; margin-top: 6px; }
 .coordination-resources > .coverage-contract { border-left: 2px solid var(--primary); padding-left: 10px; }
 .followups { margin-top: 26px; }
