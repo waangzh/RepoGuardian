@@ -407,15 +407,15 @@ class ReviewService:
             await _cleanup_repo(Path(repo_path))
 
     async def _diff_context(self, repo_path: str | Path, pr: Any) -> dict[str, str]:
-        """按 PR 身份重新计算内容基准；共享 Git 实例不保存跨任务的基准状态。"""
+        """按 PR 身份重新计算内容基准；共享 Git 实例不保存跨任务的基准状态。
+
+        ``GitTool.review_diff_context`` 自身把"无法确定唯一基准"降级为空字典，
+        因此这里不吞异常：锁定快照的基准不一致必须显式失败。
+        """
         reader = getattr(self._git_tool, "review_diff_context", None)
         if not callable(reader):
             return {}
-        try:
-            return await asyncio.to_thread(reader, repo_path, pr.base.sha, pr.head.sha) or {}
-        except Exception:
-            logger.warning("无法确定审查内容基准，保留声明 base 身份", exc_info=True)
-            return {}
+        return await asyncio.to_thread(reader, repo_path, pr.base.sha, pr.head.sha) or {}
 
     async def _handle_job(self, job: ClaimedJob) -> None:
         if job.kind == "review":
