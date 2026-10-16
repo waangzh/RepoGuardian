@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path, PurePosixPath
+from typing import Callable
 
 
 class ReviewPathPolicyError(ValueError):
@@ -77,14 +78,31 @@ def list_git_tracked_files(repository_root: str | Path, git_executable: str = "g
     }
 
 
-def validate_repository_file(
+def validate_repository_base_file(
     repository_root: str | Path,
     file_path: str,
     *,
-    tracked_files: set[str] | None = None,
-    require_tracked_if_git: bool = True,
-) -> Path:
-    """执行敏感路径、Git tracked 与 realpath 根目录三重校验。"""
+    base_sha: str,
+    tree_entries: Callable[[str | Path, str, list[str]], dict],
+) -> str:
+    """Base 快照内的只读文件校验。
+
+    文件可能在本 PR 中已被删除，工作树因此不存在该路径，不能用
+    ``validate_repository_file`` 的 realpath/is_file 判定；改为要求它存在于
+    固定 Base 树的 tracked 条目中，路径与敏感边界与 Head 侧完全一致。
+    """
+    _validate_repository_relative_path(file_path)
+    if is_sensitive_repository_path(file_path):
+        raise ReviewPathPolicyError(f"sensitive repository path is not readable: {file_path}")
+    entries = tree_entries(repository_root, base_sha, [file_path])
+    entry = entries.get(file_path) if isinstance(entries, dict) else None
+    if not isinstance(entry, dict) or not entry.get("blob_id"):
+        raise ReviewPathPolicyError(f"repository path is not tracked at base revision: {file_path}")
+    return file_path
+
+
+def _validate_repository_relative_path(file_path: str) -> str:
+    """规范化与遍历校验；与工作树状态无关。"""
     if not isinstance(file_path, str) or not file_path or "\\" in file_path or "\x00" in file_path:
         raise ReviewPathPolicyError("repository path must be a normalized POSIX relative path")
     relative = PurePosixPath(file_path)
@@ -95,9 +113,22 @@ def validate_repository_file(
         or ":" in file_path
     ):
         raise ReviewPathPolicyError("repository path traversal is not allowed")
+    return file_path
+
+
+def validate_repository_file(
+    repository_root: str | Path,
+    file_path: str,
+    *,
+    tracked_files: set[str] | None = None,
+    require_tracked_if_git: bool = True,
+) -> Path:
+    """执行敏感路径、Git tracked 与 realpath 根目录三重校验。"""
+    _validate_repository_relative_path(file_path)
     if is_sensitive_repository_path(file_path):
         raise ReviewPathPolicyError(f"sensitive repository path is not readable: {file_path}")
 
+    relative = PurePosixPath(file_path)
     root = Path(repository_root).resolve(strict=True)
     candidate = root.joinpath(*relative.parts).resolve(strict=True)
     try:

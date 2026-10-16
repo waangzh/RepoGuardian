@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import PurePosixPath
 
 from app.evidence import DiffIndex, EvidenceResolver
 from app.models.review import EvidenceAnchor, ReviewIssue, ReviewUnit, ReviewUnitComplexity
@@ -50,7 +51,10 @@ class TaskReviewDerivation:
         self.runtime, self.steps = runtime, steps
         self.initial_ids = set(steps)
         self.initial_goals = {key: goal for step in steps.values() for key, goal in step.executor.goals.items()}
+        # 允许范围仍由初始目标决定；删除目标额外允许其 Base 取证路径作为种子。
         self.allowed_files = set(path for step in steps.values() for path in step.executor.readable_files)
+        self.base_evidence_files = {goal.target_ref for goal in self.initial_goals.values()
+                                    if goal.target_kind == "base_source_range"}
         self.changed_files = changed_files or []
         self.rule_ids = rule_ids or {}
         self.risk_catalog = risk_catalog or []
@@ -110,7 +114,7 @@ class TaskReviewDerivation:
     def restore_item(self, item, derived_goals):
         if item.generation != 1 or item.origin_work_item_id not in self.initial_ids:
             raise ValueError("invalid derived task lineage")
-        if set(item.scope_files) - self.allowed_files:
+        if set(item.scope_files) - self.allowed_files - self.base_evidence_files:
             raise ValueError("derived task cannot expand frozen run scope")
         root = self.steps[item.origin_work_item_id]
         if item.readable_scope_hash != root.executor.work_item.readable_scope_hash:
@@ -334,6 +338,11 @@ class TaskReviewDerivation:
                     and value["start_line"] <= request.end_line and value["end_line"] >= request.start_line
                     for request in requests)}
             required = sorted(requested if source == "deterministic_risk" else requested | set(required))
+        # 删除目标的 Base 原文是命题的必要前提；Head 侧目标维持原有口径，避免扩大既有取证集。
+        base_targets = {target.target_ref for target in targets if target.target_kind == "base_source_range"}
+        if base_targets:
+            required = sorted(set(required) | {identity for identity, value in catalog.items()
+                                               if value["file_path"] in base_targets})
         if len(required) > 20:
             self.data["leads"][source_id] = {"status": "not_scheduled", "reason": "necessary_evidence_capacity_exceeded",
                                            "proposition": proposition, "source": source}
@@ -533,12 +542,64 @@ class TaskReviewDerivation:
         self._verify(record, catalog)
 
 
-def build_task_risk_catalog(goals, work_items, repository_graph, *, planner_version="legacy", max_lines_per_read=240):
+def _module_names_for_path(file_path: str) -> set[str]:
+    """被删路径的候选模块名；只做确定性推导，不猜包结构之外的形式。"""
+    path = PurePosixPath(file_path)
+    if path.suffix != ".py":
+        return set()
+    parts = list(path.with_suffix("").parts)
+    if parts and parts[-1] == "__init__":
+        parts = parts[:-1]
+    if not parts:
+        return set()
+    names = {".".join(parts)}
+    # 仓库内常见的源码前缀：src/ 与 backend/ 下的模块通常按去掉前缀后的名字导入。
+    for prefix in ("src", "backend"):
+        if parts[0] == prefix and len(parts) > 1:
+            names.add(".".join(parts[1:]))
+    return {name for name in names if name}
+
+
+def dangling_deleted_references(deleted_paths, file_index):
+    """Head 索引中仍导入本次被删除模块的文件；仅返回可举证的引用行。
+
+    删除后该模块在 Head 已不存在，因此这里的命中都是真实悬空引用；只产出
+    线索/调查绑定，不代替模型核对，也不猜测符号语义。
+    """
+    deleted = {path for path in deleted_paths if not is_sensitive_repository_path(path)}
+    if not deleted:
+        return []
+    modules = {}
+    for path in sorted(deleted):
+        for name in _module_names_for_path(path):
+            modules.setdefault(name, []).append(path)
+    if not modules:
+        return []
+    results = []
+    for item in file_index or []:
+        source = item.get("path")
+        if not source or source in deleted:
+            continue
+        references = []
+        for ref in item.get("import_refs") or []:
+            module = str(ref.get("module") or "").strip().lstrip(".")
+            if module in modules:
+                references.append({"module": module, "line": ref.get("line"),
+                    "imported_name": ref.get("imported_name"), "local_name": ref.get("local_name"),
+                    "target_paths": sorted(modules[module])})
+        if references:
+            results.append({"file_path": source, "references": sorted(
+                references, key=lambda value: (value["line"] or 0, value["module"]))})
+    return sorted(results, key=lambda value: value["file_path"])
+
+
+def build_task_risk_catalog(goals, work_items, repository_graph, *, planner_version="legacy", max_lines_per_read=240,
+                            dangling_references=()):
     """绑定关系符号；v3 调查任一侧变更影响，未变更端只作为证据。"""
     by_path = {}
     owners = {goal: item.work_item_id for item in work_items for goal in item.goal_ids}
     for goal in goals:
-        if goal.origin == "initial" and goal.target_kind == "source_range":
+        if goal.origin == "initial" and goal.target_kind in {"source_range", "base_source_range"}:
             by_path.setdefault(goal.target_ref, []).append(goal)
     output = {}
     if planner_version not in {"legacy", "risk-planner-v2", "risk-planner-v3", "risk-planner-v4", "risk-planner-v5", "risk-planner-v6"}:
@@ -668,7 +729,44 @@ def build_task_risk_catalog(goals, work_items, repository_graph, *, planner_vers
                 "evidence_requests": requests if not reason else [], "not_scheduled_reason": reason}
             if planner_version in {"risk-planner-v5", "risk-planner-v6"}:
                 output[key]["relationship"] = relationship
+    _append_dangling_references(output, dangling_references, by_path, owners)
     return [output[key] for key in sorted(output)]
+
+
+def _append_dangling_references(output, references, by_path, owners):
+    """Head 仍导入已删模块：绑定明确 import 行则准入调查，否则保留未核验线索。"""
+    for entry in references or []:
+        source = entry["file_path"]
+        targets = sorted({path for ref in entry["references"] for path in ref["target_paths"]})
+        related = [goal.goal_id for path in (source, *targets) for goal in by_path.get(path, [])]
+        # 只有删除目标在冻结目标集合中时才可能绑定；否则保留线索不生成泛化调查。
+        binding = [goal for target in targets for goal in by_path.get(target, [])]
+        origin = next((owners.get(goal.goal_id) for goal in sorted(binding, key=lambda goal: goal.goal_id)
+                       if owners.get(goal.goal_id)), None)
+        requests = []
+        for ref in entry["references"]:
+            line = ref.get("line")
+            if line:
+                requests.append(RuntimeReadArguments(file_path=source, start_line=int(line),
+                    end_line=int(line)).model_dump(mode="json"))
+        key = "risk-dangling-" + stable_hash([source, targets, entry["references"]])[:32]
+        relationship = {"type": "imports", "source_file": source,
+            "target_file": targets[0] if len(targets) == 1 else None, "source": source,
+            "target": targets[0] if len(targets) == 1 else None,
+            "resolution_status": "dangling_deleted_target", "resolution_basis": "head_import_ref",
+            "call_sites": [{"line": ref.get("line"), "expression": ref.get("module")}
+                           for ref in entry["references"]]}
+        entry_value = {"id": key, "origin_work_item_id": origin, "related_goal_ids": related,
+            "proposition": (f"Head 文件 {source} 仍导入本次删除的模块 "
+                + "、".join(f"{ref.get('module')}（原 {', '.join(ref['target_paths'])}）" for ref in entry["references"])
+                + "；需核对删除后该引用是否仍然成立"),
+            "evidence_requests": requests, "relationship": relationship}
+        if not origin or not related or not requests or len(requests) > 20:
+            entry_value.update(evidence_requests=[], related_goal_ids=related,
+                not_scheduled_reason=("origin_work_item_missing" if not origin or not related
+                                      else "necessary_evidence_capacity_exceeded"),
+                hint=not origin or not related)
+        output[key] = entry_value
 
 
 def _build_legacy_risk_catalog(repository_graph, by_path, owners):
