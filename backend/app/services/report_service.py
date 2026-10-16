@@ -5,6 +5,7 @@ import html
 import re
 
 from app.models.review import ReviewTask
+from app.services.task_review_projection import group_relationship_leads, relationship_description
 
 
 _MODE_LABELS = {
@@ -67,10 +68,14 @@ def _append_task_runtime_findings(lines: list[str], report: dict) -> None:
         lines.append(f"- [{finding.get('status', 'unresolved')}] {finding.get('candidate', {}).get('claim', '未命名候选')}：{finding.get('reason') or '已保留服务端证据与验证结果'}")
     if not report.get("findings"):
         lines.append("- 当前没有可发布的候选发现。")
-    if report.get("unscheduled_leads"):
-        lines.extend(["", "### 未调度线索", ""])
-        for lead in report["unscheduled_leads"]:
-            lines.append(f"- {lead.get('proposition', '未命名线索')}：{lead.get('reason', '未调度')}")
+    for field, title in (("unscheduled_leads", "未调度线索"), ("relationship_hints", "关系取证提示（尚未核验，不计作已完成调查）")):
+        if report.get(field):
+            lines.extend(["", f"### {title}", ""])
+            for group in group_relationship_leads(report[field]):
+                lines.append(f"- {group['label']}：{group['status']} / {group['reason']}（{len(group['members'])} 条）")
+                for member in group["members"]:
+                    if member.get("relationship"):
+                        lines.append("  - " + html.escape(relationship_description(member)).replace("\n", " "))
     lines.extend(["", "### 初始范围", ""])
     for goal in report.get("initial_scope_coverage", []):
         position = f"{goal.get('target_ref')}:{goal.get('start_line')}–{goal.get('end_line')}"
@@ -79,6 +84,8 @@ def _append_task_runtime_findings(lines: list[str], report: dict) -> None:
         lines.extend(["", "### 已准入调查", ""])
         for investigation in report["admitted_investigations"]:
             lines.append(f"- {investigation.get('proposition')}：{investigation.get('status')} / {investigation.get('answer') or '尚无答案'}")
+            for lead in investigation.get("relationship_leads", []):
+                lines.append("  - " + html.escape(relationship_description(lead)).replace("\n", " "))
 
 
 def _append_unit_review_records(lines: list[str], task: ReviewTask) -> None:

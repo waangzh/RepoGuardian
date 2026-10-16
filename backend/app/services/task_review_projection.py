@@ -12,6 +12,7 @@ def project_task_runtime(runtime, steps, goals, *, termination_reason, budget=No
         outcomes.append({**goal.model_dump(mode="json"), "status": status,
                          "reason": goal.unsupported_reason or (result.reason if result else "no_accepted_examination"),
                          "result_id": result.result_id if result else None})
+    derivation = runtime.derivation
     investigations = []
     for step in steps.values():
         item = step.executor.work_item
@@ -23,8 +24,9 @@ def project_task_runtime(runtime, steps, goals, *, termination_reason, budget=No
                 "insufficient_evidence" if result.answer.value == "insufficient_evidence" else "answered",
             "answer": result.answer.value if result else None,
             "reason": item.reason if not result else result.reason,
-            "limitations": result.limitations if result else []})
-    derivation = runtime.derivation
+            "limitations": result.limitations if result else [],
+            "relationship_leads": relationship_leads_for_item(
+                derivation.data["leads"] if derivation else {}, item.work_item_id)})
     findings = list(derivation.data["candidates"].values()) if derivation else []
     represented = {identity for record in findings for identity in record.get("source_candidate_ids", [])}
     for identity, step in steps.items():
@@ -59,6 +61,38 @@ def project_task_runtime(runtime, steps, goals, *, termination_reason, budget=No
         work_items=[{**item, "last_observation": steps[item["work_item_id"]].last_observation,
                      "tool_observations": steps[item["work_item_id"]].tool_observations}
                     for item in runtime.snapshot()])
+
+
+def relationship_leads_for_item(leads, identity):
+    return [{"lead_id": key, "relationship": value["relationship"],
+             "related_goal_ids": value.get("related_goal_ids", [])}
+            for key, value in leads.items() if value.get("work_item_id") == identity and value.get("relationship")]
+
+
+def group_relationship_leads(leads):
+    groups = {}
+    for index, item in enumerate(leads):
+        relation = item.get("relationship")
+        relation = relation if isinstance(relation, dict) else {}
+        key = (tuple(str(value) for value in (relation.get("source_file"), relation.get("target_file"),
+                    relation.get("type"), item.get("reason"), item.get("status")))
+               if relation else ("legacy", index))
+        label = (f"{relation.get('source_file')} → {relation.get('target_file')}（{relation.get('type')}）"
+                 if relation else item.get("proposition", "未命名线索"))
+        groups.setdefault(key, {"label": label, "reason": item.get("reason"),
+                                "status": item.get("status"), "members": []})["members"].append(item)
+    return list(groups.values())
+
+
+def relationship_description(item):
+    relation = item.get("relationship")
+    relation = relation if isinstance(relation, dict) else {}
+    sites = ", ".join(f"{site.get('line', '?')}: {site.get('expression', '?')}"
+                      for site in (relation.get("call_sites") or []) if isinstance(site, dict))
+    return (f"{item.get('lead_id', '?')} · {relation.get('source', '?')} → {relation.get('target', '?')}"
+            f" · 调用位置 {sites or '未记录'} · {relation.get('resolution_status') or 'unknown'}"
+            f" / {relation.get('resolution_basis') or 'unknown'}"
+            f" · 关联目标 {', '.join(item.get('related_goal_ids', [])) or '未记录'}")
 
 
 def task_runtime_coverage(report, changed):

@@ -90,3 +90,15 @@ def test_ambiguous_modules_are_visible_unresolved_edges(tmp_path):
         extra={"pkg/stats.py": "def measure(values):\n    return None\n"})
     edges = [edge for edge in graph["edges"] if edge["type"] == "calls"]
     assert len(edges) == 2 and all(edge["resolution_status"] == "unresolved" for edge in edges)
+    assert all(edge["relationship_level"] == "symbol" for edge in edges)
+
+
+def test_name_only_match_stays_unverified_hint_instead_of_investigation(tmp_path):
+    from app.models.review_runtime import ReviewGoal, ReviewWorkItem
+    graph, _ = indexed_graph(tmp_path, "import external_sdk\ndef run():\n    return external_sdk.measure([])\n")
+    edge = next(edge for edge in graph["edges"] if edge["type"] == "calls")
+    assert edge["resolution_status"] == "unresolved" and edge["relationship_level"] == "search_hint"
+    goal = ReviewGoal(goal_id="changed", unit_id="u", kind="inspect", target_ref="src/pkg/stats.py", start_line=1, end_line=2)
+    item = ReviewWorkItem(work_item_id="work", kind="inspect", goal_ids=[goal.goal_id])
+    risks = build_task_risk_catalog([goal], [item], graph, planner_version="risk-planner-v5")
+    assert risks and all(risk.get("hint") for risk in risks)
