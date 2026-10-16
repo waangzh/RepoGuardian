@@ -17,7 +17,7 @@ import ReportPanel from "../ReportPanel.vue";
 import ExecutionTimeline from "./ExecutionTimeline.vue";
 import CrossUnitReview from "./CrossUnitReview.vue";
 import TaskRuntimePanel from "./TaskRuntimePanel.vue";
-import { runtimeReport } from "../../utils/taskRuntimePresentation";
+import { runtimeReport, runtimeLabel, taskRuntimeSummary } from "../../utils/taskRuntimePresentation";
 import UnitReviewRecord from "./UnitReviewRecord.vue";
 import { coverageCompletionLabel, crossUnitPresentation, evidenceSnapshotBase, originalIssueUnit, unitCoverageWarning, unitFindingLabel } from "../../utils/reviewObservability";
 
@@ -89,9 +89,11 @@ const fileCoveragePercent = computed(() => Math.round(coverage.value.coverage_ra
 const unitCoveragePercent = computed(() => Math.round(coverage.value.unit_coverage_rate * 1000) / 10);
 const taskRuntimeReport = computed(() => runtimeReport(props.task));
 const isTaskRuntime = computed(() => props.task.engine === "task_review_v1");
+const runtimeSummary = computed(() => taskRuntimeReport.value ? taskRuntimeSummary(taskRuntimeReport.value) : null);
 const confirmedIssues = computed(() => props.task.issues.filter((issue) => issue.status === "confirmed"));
-const confirmedIssueCount = computed(() => confirmedIssues.value.length);
-const unresolvedIssueCount = computed(() => props.task.issues.filter((issue) => ["candidate", "unresolved", "needs_human"].includes(issue.status)).length);
+const confirmedIssueCount = computed(() => isTaskRuntime.value && runtimeSummary.value ? runtimeSummary.value.findings.confirmed : confirmedIssues.value.length);
+const unresolvedIssueCount = computed(() => isTaskRuntime.value && runtimeSummary.value ? runtimeSummary.value.findings.unresolved : props.task.issues.filter((issue) => ["candidate", "unresolved", "needs_human"].includes(issue.status)).length);
+const issueDisplayCount = computed(() => isTaskRuntime.value && runtimeSummary.value ? runtimeSummary.value.findings.total : props.task.issues.length);
 const highPriorityCount = computed(() => confirmedIssues.value.filter((issue) => ["critical", "high"].includes(issue.severity)).length);
 const resolvedEvidenceCount = computed(() => props.task.issues.filter((issue) => issue.primary_evidence.resolution_status !== "unresolved").length);
 const severityCounts = computed(() => ({
@@ -192,6 +194,14 @@ function unitFiles(unit: ReviewUnit): string[] {
 
 function issueCountForUnit(unitId: string): number {
   return props.task.issues.filter((issue) => issue.review_unit_id === unitId || issue.source_review_unit_ids.includes(unitId)).length;
+}
+
+const runtimeFindings = computed(() => isTaskRuntime.value ? (taskRuntimeReport.value?.findings || []) : []);
+
+function runtimeFindingClaim(value: Record<string, unknown>): string {
+  const candidate = value.candidate;
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return "未命名候选";
+  return String((candidate as Record<string, unknown>).claim || "未命名候选");
 }
 
 const selectedUnit = computed(() => props.task.review_units.find((unit) => unit.id === selectedUnitId.value) || props.task.review_units[0] || null);
@@ -406,14 +416,19 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
     </header>
 
     <nav class="review-tabs" aria-label="审查结果导航">
-      <button v-for="tab in ([['overview', '概览'], ['review', `审查 ${task.issues.length || ''}`], ['checks', '检查与协作'], ['files', `文件 ${task.changed_files.length || ''}`], ['activity', '活动']] as const)" :key="tab[0]" type="button" :class="{ 'is-active': activeTab === tab[0] }" :aria-current="activeTab === tab[0] ? 'page' : undefined" @click="activeTab = tab[0]">
+      <button v-for="tab in ([['overview', '概览'], ['review', `审查 ${issueDisplayCount || ''}`], ['checks', '检查与范围'], ['files', `文件 ${task.changed_files.length || ''}`], ['activity', '运行记录']] as const)" :key="tab[0]" type="button" :class="{ 'is-active': activeTab === tab[0] }" :aria-current="activeTab === tab[0] ? 'page' : undefined" @click="activeTab = tab[0]">
         {{ tab[1] }}
       </button>
     </nav>
 
-    <section v-if="isTaskRuntime && (activeTab === 'overview' || activeTab === 'checks')" class="review-tab-panel overview-view">
+    <section v-if="isTaskRuntime && activeTab === 'overview'" class="review-tab-panel overview-view">
       <TaskRuntimePanel v-if="taskRuntimeReport" :report="taskRuntimeReport" :terminal="terminal"
-        :retrying-unit-id="retryingUnitId" @retry="emit('retry', $event)" />
+        :retrying-unit-id="retryingUnitId" view="overview" @retry="emit('retry', $event)" @open-checks="activeTab = 'checks'" />
+      <EmptyState v-else icon="context" title="任务级报告尚未生成" description="当前范围与用量仍待记录，旧覆盖结果不能作为本轮成功证据。" />
+    </section>
+    <section v-else-if="isTaskRuntime && activeTab === 'checks'" class="review-tab-panel overview-view">
+      <TaskRuntimePanel v-if="taskRuntimeReport" :report="taskRuntimeReport" :terminal="terminal"
+        :retrying-unit-id="retryingUnitId" view="checks" @retry="emit('retry', $event)" />
       <EmptyState v-else icon="context" title="任务级报告尚未生成" description="当前范围与用量仍待记录，旧覆盖结果不能作为本轮成功证据。" />
     </section>
     <section v-else-if="activeTab === 'overview'" class="review-tab-panel overview-view">
@@ -445,7 +460,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
         </article>
 
         <article class="overview-card overview-card--attention">
-          <header><div><h2>需要你关注</h2><p>按严重程度和置信度排序</p></div><button v-if="task.issues.length" type="button" class="text-button" @click="activeTab = 'review'">查看全部 →</button></header>
+          <header><div><h2>需要你关注</h2><p>按严重程度和置信度排序</p></div><button v-if="issueDisplayCount" type="button" class="text-button" @click="activeTab = 'review'">查看全部 →</button></header>
           <EmptyState v-if="!attentionIssues.length" icon="check-circle" title="没有达到报告门槛的问题" description="仍建议人工复核关键业务路径。" />
           <button v-for="issue in attentionIssues" v-else :key="issue.id" type="button" class="attention-row" @click="openIssue(issue)">
             <StatusBadge :status="issue.severity" :label="severityLabel(issue.severity)" />
@@ -470,13 +485,12 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
           <p v-if="coverage.coordination_reason" class="health-warning">{{ coverage.coordination_reason }}</p>
           <div class="health-row"><span>可审查文件</span><i><b :style="{ width: `${fileCoveragePercent}%` }" /></i><strong>{{ coverage.reviewed_files }}/{{ coverage.eligible_files }}</strong></div>
           <div class="health-row"><span>变更组完成</span><i><b :style="{ width: `${unitCoveragePercent}%` }" /></i><strong>{{ coverage.completed_units }}/{{ coverage.total_units }}</strong></div>
-          <div class="health-row"><span>证据链已定位</span><i><b :style="{ width: `${task.issues.length ? (resolvedEvidenceCount / task.issues.length) * 100 : 100}%` }" /></i><strong>{{ resolvedEvidenceCount }}/{{ task.issues.length }}</strong></div>
+          <div class="health-row"><span>证据链已定位</span><i><b :style="{ width: `${issueDisplayCount ? (resolvedEvidenceCount / issueDisplayCount) * 100 : 100}%` }" /></i><strong>{{ resolvedEvidenceCount }}/{{ issueDisplayCount }}</strong></div>
           <div v-if="task.warnings.length || reviewUnitWarnings.length" class="health-warning"><AppIcon name="alert" :size="16" /><span><strong>{{ task.warnings.length + reviewUnitWarnings.length }} 条运行警告</strong>{{ task.warnings[0] || reviewUnitWarnings[0] }}</span></div>
           <div class="health-usage"><span>已保存用量记录</span><code>{{ task.model_usage_summary.overall.calls }} 条 · {{ formatTokens(task.model_usage_summary.overall.actual_total_tokens || task.model_usage_summary.overall.accounted_tokens_estimate) }} tokens · {{ formatDuration(task.model_usage_summary.overall.latency_ms_p50 || 0) }} p50</code></div>
         </article>
       </div>
     </section>
-
     <section v-else-if="activeTab === 'review'" class="review-tab-panel findings-view">
       <div class="finding-toolbar">
         <div class="filter-chips" aria-label="严重程度筛选">
@@ -509,9 +523,10 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
               <span>{{ row.oldLine ?? '' }}</span><span>{{ row.newLine ?? '' }}</span><i>{{ row.kind === 'added' ? '+' : row.kind === 'deleted' ? '−' : ' ' }}</i><code>{{ row.content }}</code>
             </div>
           </div>
-          <EmptyState v-else-if="!selectedIssue" icon="check-circle" title="这个变更组没有需报告的问题" description="你仍可以在文件页确认覆盖范围，或切换到其他变更组。" />
+          <EmptyState v-else-if="!selectedIssue" icon="check-circle" :title="isTaskRuntime && runtimeFindings.length ? '当前候选尚未形成可定位问题' : '这个变更组没有需报告的问题'" :description="isTaskRuntime && runtimeFindings.length ? '候选仍保留在检查范围中，请查看检查详情与证据。' : '你仍可以在文件页确认覆盖范围，或切换到其他变更组。'" />
           <EmptyState v-else icon="code" title="代码上下文尚未定位" description="该发现保留在摘要中；请结合尚未定位的证据判断。" />
           <div v-if="selectedIssue" class="inline-finding-note"><StatusBadge :status="selectedIssue.severity" label="发现" /><strong>锚定到 {{ selectedIssue.primary_evidence.resolved_start_line ? `第 ${selectedIssue.primary_evidence.resolved_start_line} 行` : '当前证据片段' }}</strong><p>{{ selectedIssue.failure_scenario }}</p></div>
+          <p v-if="isTaskRuntime && runtimeFindings.length" class="runtime-finding-note">新引擎保留 {{ runtimeFindings.length }} 项候选；未形成完整 Issue 的候选不会生成可定位问题评论。</p>
           <div v-if="filteredIssues.length > 1" class="finding-switcher">
             <button v-for="issue in filteredIssues" :key="issue.id" type="button" :class="{ 'is-active': selectedIssue?.id === issue.id }" @click="selectedIssueId = issue.id"><span :data-severity="issue.severity" />{{ issue.title }}</button>
           </div>
@@ -540,7 +555,16 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
             <h3>{{ task.human_request.questions[0] }}</h3>
             <dl class="evidence-facts"><div><dt>缺失信息</dt><dd>{{ task.human_request.missing_information.join('；') }}</dd></div><div><dt>已知证据</dt><dd>{{ task.human_request.known_evidence.join('；') }}</dd></div></dl>
           </template>
-          <EmptyState v-else icon="check-circle" title="没有选中的发现" description="请选择包含发现的变更组。" />
+          <template v-else>
+            <section v-if="isTaskRuntime && runtimeFindings.length" class="runtime-candidate-list">
+              <header><div><h2>待确认候选</h2><p>这些记录尚未形成完整问题或可发布定位。</p></div><StatusBadge status="unresolved" label="待确认" /></header>
+              <article v-for="(finding, index) in runtimeFindings" :key="String(finding.key || index)">
+                <strong>{{ runtimeLabel(finding.status) }} · {{ runtimeFindingClaim(finding) }}</strong>
+                <p v-if="finding.reason">{{ String(finding.reason) }}</p>
+              </article>
+            </section>
+            <EmptyState v-else icon="check-circle" title="没有选中的发现" description="请选择包含发现的变更组。" />
+          </template>
         </aside>
       </div>
     </section>
