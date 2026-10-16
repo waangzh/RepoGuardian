@@ -81,6 +81,32 @@
 .finding-workspace--runtime .finding-evidence-panel > details { margin: 18px 20px; }
 .finding-technical { margin: 18px; }
 .runtime-panel summary:focus-visible { outline-offset: -3px; }
+.comment-draft { margin: 24px 20px; padding: 18px; border: 1px solid var(--border); border-left: 3px solid var(--primary); border-radius: var(--radius-sm); background: var(--surface-subtle); }
+.comment-draft > header { display: flex; gap: 12px; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; }
+.comment-draft h3 { margin: 0; font-size: 14px; }
+.comment-draft header p { margin: 6px 0 0; font-size: 12px; color: var(--text-muted); line-height: 1.6; }
+.comment-draft__preview { margin-top: 18px; font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; }
+.comment-draft__preview code { display: block; margin-top: 6px; color: var(--text-secondary); font-size: 12px; }
+.comment-draft__preview p { margin: 12px 0; }
+.comment-draft textarea, .report-comment-export textarea { display: block; width: 100%; min-height: 180px; margin-top: 12px; padding: 12px; resize: vertical; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-primary); font: 12px/1.7 "Cascadia Code", Consolas, monospace; }
+.report-mode-switch { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 18px 24px; border-bottom: 1px solid var(--border); }
+.report-mode-switch button { min-height: 36px; padding: 8px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-secondary); cursor: pointer; }
+.report-mode-switch button[aria-pressed="true"] { border-color: var(--primary); background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+.report-mode-switch span { color: var(--text-secondary); font-size: 12px; }
+.report-feedback { margin: 16px 24px; color: var(--primary); font-size: 13px; }
+.report-view .report-document { max-height: none; overflow: visible; padding: 24px; }
+.report-view .report-document > * { max-width: 100ch; }
+.report-view .report-document code { overflow-wrap: anywhere; }
+.report-comment-export { margin: 0 24px 24px; padding-top: 18px; border-top: 1px solid var(--border); }
+.report-comment-export summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+.report-comment-export p { font-size: 13px; line-height: 1.8; color: var(--text-secondary); }
+@media (max-width: 600px) {
+  .comment-draft { margin: 18px 12px; padding: 14px; }
+  .report-mode-switch { padding: 16px; }
+  .report-view .report-document { padding: 18px 16px; }
+  .report-comment-export { margin: 0 16px 18px; }
+  .report-view .report-actions { flex-wrap: wrap; }
+}
 @media (max-width: 900px) {
   .finding-workspace.finding-workspace--runtime { grid-template-columns: minmax(0, 1fr); }
 }

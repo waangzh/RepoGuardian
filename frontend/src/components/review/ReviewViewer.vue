@@ -17,11 +17,12 @@ import ReportPanel from "../ReportPanel.vue";
 import ExecutionTimeline from "./ExecutionTimeline.vue";
 import CrossUnitReview from "./CrossUnitReview.vue";
 import TaskRuntimePanel from "./TaskRuntimePanel.vue";
-import { runtimeReport, runtimeLabel, taskRuntimeSummary, runtimeFindingRows, filterRuntimeFindings, type RuntimeFindingFilter } from "../../utils/taskRuntimePresentation";
+import CommentDraftPanel from "./CommentDraftPanel.vue";
+import { runtimeReport, runtimeLabel, taskRuntimeSummary, runtimeFindingRows, filterRuntimeFindings, runtimeUserReport, runtimeCommentsMarkdown, type RuntimeFindingFilter } from "../../utils/taskRuntimePresentation";
 import UnitReviewRecord from "./UnitReviewRecord.vue";
 import { coverageCompletionLabel, crossUnitPresentation, evidenceSnapshotBase, originalIssueUnit, unitCoverageWarning, unitFindingLabel } from "../../utils/reviewObservability";
 
-type ReviewTab = "overview" | "review" | "checks" | "files" | "activity";
+type ReviewTab = "overview" | "review" | "checks" | "files" | "report" | "activity";
 type SeverityFilter = "all" | ReviewIssue["severity"];
 type StatusFilter = "all" | "confirmed" | "unresolved";
 
@@ -419,7 +420,8 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
         <div class="review-hero__actions">
           <a v-if="task.pr?.html_url" class="button button--secondary button--compact" :href="task.pr.html_url" target="_blank" rel="noreferrer">在 GitHub 查看 ↗</a>
           <button v-if="!terminal && isTaskRuntime" type="button" class="button button--secondary button--compact" :disabled="cancelling" @click="emit('cancel')">{{ cancelling ? "取消中…" : "取消审查" }}</button>
-          <button v-else type="button" class="button button--primary button--compact" @click="emit('newReview')">＋ 新建审查</button>
+          <button v-else type="button" class="button button--secondary button--compact" @click="emit('newReview')">＋ 新建审查</button>
+          <button v-if="isTaskRuntime && terminal" type="button" class="button button--primary button--compact" @click="activeTab = 'report'">报告与导出</button>
         </div>
       </div>
       <p v-if="!isTaskRuntime" class="historical-review-notice">此任务使用的审查引擎已退役，仅供查看历史结果。请新建审查以使用当前引擎。</p>
@@ -429,6 +431,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
       <button v-for="tab in ([['overview', '概览'], ['review', `审查 ${issueDisplayCount || ''}`], ['checks', '检查与范围'], ['files', `文件 ${task.changed_files.length || ''}`], ['activity', '运行记录']] as const)" :key="tab[0]" type="button" :class="{ 'is-active': activeTab === tab[0] }" :aria-current="activeTab === tab[0] ? 'page' : undefined" @click="activeTab = tab[0]">
         {{ tab[1] }}
       </button>
+      <button v-if="isTaskRuntime" type="button" :class="{ 'is-active': activeTab === 'report' }" :aria-current="activeTab === 'report' ? 'page' : undefined" @click="activeTab = 'report'">报告与导出</button>
     </nav>
 
     <section v-if="isTaskRuntime && activeTab === 'overview'" class="review-tab-panel overview-view">
@@ -565,6 +568,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
               <div><dt>建议</dt><dd>{{ selectedIssue.recommendation }}</dd></div>
             </dl>
             <details class="runtime-technical finding-technical"><summary>证据定位与模型详情</summary><p>{{ selectedIssue.primary_evidence.resolution_status }} · {{ selectedIssue.primary_evidence.resolution_method }} · {{ selectedIssue.primary_evidence.provenance || '未知来源' }}</p><p>模型置信度 {{ Math.round(selectedIssue.confidence * 100) }}% · 未经校准</p></details>
+            <CommentDraftPanel v-if="isTaskRuntime && selectedRuntimeFinding" :finding="selectedRuntimeFinding" :head-sha="task.pr?.head.sha" />
             <section v-if="selectedIssue.supporting_evidence.length" class="supporting-evidence">
               <h4>辅助证据</h4>
               <article v-for="evidence in selectedIssue.supporting_evidence" :key="`${evidence.file_path}:${evidence.resolved_start_line}`"><code>{{ evidence.file_path }}<template v-if="evidence.resolved_start_line">:{{ evidence.resolved_start_line }}</template></code><pre>{{ evidence.existing_code }}</pre></article>
@@ -585,6 +589,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
               <div v-if="selectedRuntimeFinding.failureScenario"><dt>触发场景</dt><dd>{{ selectedRuntimeFinding.failureScenario }}</dd></div>
               <div v-if="selectedRuntimeFinding.recommendation"><dt>建议</dt><dd>{{ selectedRuntimeFinding.recommendation }}</dd></div>
             </dl>
+            <CommentDraftPanel :finding="selectedRuntimeFinding" :head-sha="task.pr?.head.sha" />
             <details v-if="selectedRuntimeFinding.rawReason"><summary>技术详情</summary><code>{{ selectedRuntimeFinding.rawReason }}</code></details>
           </template>
           <EmptyState v-else icon="context" title="没有选中的发现" description="请选择包含发现的变更组。" />
@@ -633,6 +638,9 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
       </div>
     </section>
 
+    <section v-else-if="activeTab === 'report'" class="review-tab-panel report-view">
+      <ReportPanel :markdown="report || task.report_markdown" :user-markdown="runtimeUserReport(task)" :comments-markdown="runtimeCommentsMarkdown(task)" :filename-prefix="`review-${task.id}`" />
+    </section>
     <section v-else class="review-tab-panel activity-view">
       <article class="run-manifest-card">
         <div><span>Run Manifest · {{ task.run_manifest?.schema_version || '实时任务' }}</span><h2>可审计的审查运行记录</h2><code>{{ task.id }} · {{ task.pr?.owner }}/{{ task.pr?.repo }} #{{ task.pr?.number }}</code></div>
