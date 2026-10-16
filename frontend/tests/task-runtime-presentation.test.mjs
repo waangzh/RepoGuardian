@@ -54,33 +54,18 @@ function mixedReport(updates = {}) {
       { key: "c", status: "dismissed", candidate: { claim: "已排除" }, issue: null }], ...updates };
 }
 
-const { runtimeCommentDraft, runtimeCommentsMarkdown, runtimeUserReport } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
-test("评论草稿仅接受已确认、有效定位且文本完整的发现，用户报告包含可行动内容", () => {
+test("内部发现保留审计文本，前端不再判定发布资格或生成公开正文", () => {
   const issue = { id: "a", title: "核验标题", placement: "summary", failure_scenario: "失败场景", affected_behavior: "业务影响", recommendation: "修改建议", primary_evidence: { file_path: "src/stats.py", resolved_start_line: 12, resolution_status: "exact", resolved_side: "base" } };
   const report = mixedReport();
   report.findings[0].issue = issue;
   const task = { engine: "task_review_v1", task_runtime_report: report, issues: [issue], pr: { title: "PR 标题", number: 1, head: { sha: "snapshot-sha" } } };
   const rows = runtimeFindingRows(report, task.issues);
-  assert.match(runtimeCommentDraft(rows[0], "snapshot-sha"), /src\/stats.py:12.*base/);
-  assert.match(runtimeCommentsMarkdown(task), /失败场景.*\n.*修改建议/s);
-  assert.doesNotMatch(runtimeCommentsMarkdown(task), /待确认|已排除/);
-  assert.equal(runtimeCommentDraft(rows[1]), null);
-  assert.equal(runtimeCommentDraft(rows[2]), null);
-  const output = runtimeUserReport(task);
-  for (const part of ["核验标题", "业务影响", "失败场景", "修改建议", "snapshot-sha"]) assert.ok(output.includes(part));
-  assert.doesNotMatch(output, /candidate_derivation_incomplete/);
-  report.findings[0].publication = { published_text: null };
-  assert.equal(runtimeCommentDraft(runtimeFindingRows(report, task.issues)[0]), null);
-  delete report.findings[0].publication;
-  issue.primary_evidence.resolution_status = "unresolved";
-  assert.equal(runtimeCommentDraft(runtimeFindingRows(report, task.issues)[0]), null);
-});
-
-test("用户报告将模型 HTML 当作文本，不输出伪造的审计或脚本标签", () => {
-  const report = mixedReport({ findings: [{ status: "unresolved", candidate: { claim: "</details><script>alert(1)</script>" } }] });
-  const output = runtimeUserReport({ engine: "task_review_v1", task_runtime_report: report, issues: [] });
-  assert.doesNotMatch(output, /<script>|<\/details>/);
-  assert.match(output, /&lt;script&gt;/);
+  assert.equal(rows[0].title, "核验标题");
+  assert.equal(rows[0].failureScenario, "失败场景");
+  assert.equal(rows[0].recommendation, "修改建议");
+  assert.equal(rows[1].group, "unresolved");
+  assert.ok(rows.every(row => !("draftEligible" in row)));
+  assert.doesNotMatch(source, /runtimeCommentDraft|runtimeCommentsMarkdown|runtimeUserReport/);
 });
 
 test("完整问题与无 Issue 候选独立可达，已排除不混入需关注计数", () => {

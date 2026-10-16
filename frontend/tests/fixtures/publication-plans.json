@@ -1,0 +1,1887 @@
+{
+  "findings": {
+    "task": {
+      "id": "preview-findings",
+      "status": "completed",
+      "phase": "prepare",
+      "pr_url": "https://github.com/o/r/pull/1",
+      "model": null,
+      "engine": "task_review_v1",
+      "task_runtime_configuration": null,
+      "task_runtime_report": {
+        "engine": "task_review_v1",
+        "coverage_version": "task-goals-v1",
+        "execution_status": "completed",
+        "termination_reason": "plan_exhausted",
+        "failure_summary": null,
+        "readable_scope_hash": null,
+        "readable_file_count": null,
+        "scope_complete": true,
+        "initial_scope_coverage": [
+          {
+            "goal_id": "g1",
+            "unit_id": "u1",
+            "target_kind": "source_range",
+            "target_ref": "src/a.py",
+            "start_line": 7,
+            "end_line": 7,
+            "status": "examined",
+            "reason": "固定源码检查"
+          }
+        ],
+        "admitted_investigations": [],
+        "unscheduled_leads": [],
+        "relationship_hints": [],
+        "findings": [
+          {
+            "key": "key-a",
+            "candidate": {
+              "candidate_id": "candidate-a",
+              "claim": "空返回值破坏调用方契约",
+              "primary_anchor": "g1",
+              "supporting_evidence": [
+                "e1"
+              ],
+              "source_result_ids": [
+                "r1"
+              ],
+              "affected_behavior": "调用方字段读取失败",
+              "failure_scenario": "服务返回空值时直接读取字段",
+              "recommendation": "先处理空值",
+              "category": "correctness",
+              "severity": "medium",
+              "evidence_requests": []
+            },
+            "status": "confirmed",
+            "verification": {
+              "candidate_id": "candidate-a",
+              "decision": "supported",
+              "evidence_ids": [
+                "e1"
+              ],
+              "reason": "独立核对主张",
+              "work_item_id": "verify1",
+              "request_id": "req1",
+              "attempt_id": "attempt1",
+              "snapshot_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "subject_hash": "9b32f70434b4124afe384c7e3014f488558a93cff7e288b7a26bd0a3dea9f4fb",
+              "publication_action": "retain",
+              "narrowing": null
+            },
+            "publication": {
+              "version": "claim-publication-v1",
+              "original_candidate_id": "candidate-a",
+              "subject_hash": "9b32f70434b4124afe384c7e3014f488558a93cff7e288b7a26bd0a3dea9f4fb",
+              "original_text": {
+                "claim": "空返回值破坏调用方契约",
+                "affected_behavior": "调用方字段读取失败",
+                "failure_scenario": "服务返回空值时直接读取字段",
+                "recommendation": "先处理空值"
+              },
+              "verified_core": {
+                "claim": "空返回值破坏调用方契约",
+                "failure_scenario": "服务返回空值时直接读取字段"
+              },
+              "verified_text": {
+                "claim": "空返回值破坏调用方契约",
+                "affected_behavior": "调用方字段读取失败",
+                "failure_scenario": "服务返回空值时直接读取字段",
+                "recommendation": "先处理空值"
+              },
+              "published_text": {
+                "claim": "空返回值破坏调用方契约",
+                "affected_behavior": "调用方字段读取失败",
+                "failure_scenario": "服务返回空值时直接读取字段",
+                "recommendation": "先处理空值"
+              },
+              "action": "retain",
+              "decision": "supported",
+              "basis": "独立核对主张",
+              "evidence_ids": [
+                "e1"
+              ],
+              "request_id": "req1",
+              "attempt_id": "attempt1",
+              "work_item_id": "verify1",
+              "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "base_sha": "cccccccccccccccccccccccccccccccccccccccc",
+              "usage_known": true
+            },
+            "issue": {
+              "id": "candidate-a",
+              "review_unit_id": "u1",
+              "title": "空返回值破坏调用方契约",
+              "category": "correctness",
+              "severity": "medium",
+              "confidence": 0.5,
+              "affected_behavior": "调用方字段读取失败",
+              "failure_scenario": "服务返回空值时直接读取字段",
+              "reasoning_summary": null,
+              "recommendation": "先处理空值",
+              "primary_evidence": {
+                "file_path": "src/a.py",
+                "existing_code": "return None",
+                "symbol": null,
+                "expected_side": "head",
+                "expected_hunk_id": null,
+                "branch_claim": null,
+                "context_before": [],
+                "context_after": [],
+                "resolved_start_line": 7,
+                "resolved_end_line": 7,
+                "resolution_method": "diff_exact",
+                "resolution_status": "exact",
+                "provenance": null,
+                "match_count": 1,
+                "anchor_hash": "hash",
+                "resolved_side": "head",
+                "candidate_locations": [],
+                "unresolved_reason": null
+              },
+              "supporting_evidence": [],
+              "assumptions": [],
+              "related_tests": [],
+              "requires_human_confirmation": false,
+              "auto_fix_eligible": false,
+              "fix_risk": "low",
+              "status": "candidate",
+              "placement": "inline",
+              "unresolved_reason": null,
+              "resolved_location": {
+                "file_path": "src/a.py",
+                "start_line": 7,
+                "end_line": 7,
+                "side": "head",
+                "hunk_id": null
+              },
+              "source_review_unit_ids": [
+                "u1"
+              ],
+              "source_issue_ids": [
+                "candidate-a"
+              ]
+            }
+          }
+        ],
+        "usage_integrity": "complete",
+        "sent_calls": 0,
+        "settled_tokens": 0,
+        "unknown_attempts": 0,
+        "total_tokens": null,
+        "work_items": [],
+        "diagnostics": []
+      },
+      "task_runtime_retry_unit_id": null,
+      "mode": "review",
+      "generate_patches": false,
+      "validation_backend": "none",
+      "validation_profile": "unit",
+      "review": {
+        "mode": "review",
+        "status": "queued",
+        "completed": false
+      },
+      "steps": [],
+      "pr": null,
+      "changed_files": [],
+      "review_units": [
+        {
+          "id": "u1",
+          "primary_files": [
+            "src/a.py"
+          ],
+          "related_files": [],
+          "context_provenance": [],
+          "diff_hunk_ids": [],
+          "changed_symbols": [],
+          "rule_ids": [],
+          "risk_tags": [],
+          "estimated_tokens": 0,
+          "complexity": "small",
+          "fingerprint": "fixture",
+          "grouping_reason": "fixture"
+        }
+      ],
+      "review_unit_results": [],
+      "cross_unit_risk": null,
+      "coordination_plan": null,
+      "followup_results": [],
+      "model_usages": [],
+      "model_usage_summary": {
+        "overall": {
+          "calls": 0,
+          "usage_available_calls": 0,
+          "usage_missing_calls": 0,
+          "usage_coverage_rate": 0.0,
+          "actual_input_tokens": 0,
+          "actual_output_tokens": 0,
+          "actual_total_tokens": 0,
+          "cached_input_tokens": 0,
+          "reasoning_output_tokens": 0,
+          "accounted_tokens_estimate": 0,
+          "estimation_delta_tokens": 0,
+          "cost_microusd": 0,
+          "cost_available_calls": 0,
+          "input_tokens_p50": null,
+          "input_tokens_p95": null,
+          "output_tokens_p50": null,
+          "output_tokens_p95": null,
+          "latency_ms_p50": null,
+          "latency_ms_p95": null
+        },
+        "by_operation": [],
+        "by_unit_complexity": [],
+        "by_provider": []
+      },
+      "excluded_files": [],
+      "coverage": {
+        "coverage_version": "legacy-units-v1",
+        "changed_files": 0,
+        "eligible_files": 0,
+        "reviewed_files": 0,
+        "partial_files": 0,
+        "skipped_files": 0,
+        "failed_files": 0,
+        "coverage_rate": 0.0,
+        "completed_units": 0,
+        "total_units": 0,
+        "unit_coverage_rate": 0.0,
+        "coordination_status": "unknown",
+        "coordination_reason": null,
+        "review_complete": null,
+        "files": [],
+        "units": []
+      },
+      "run_manifest": {
+        "schema_version": "review-run-manifest-v1",
+        "engine": "task_review_v1",
+        "coverage_version": "task-goals-v1",
+        "usage_integrity": "complete",
+        "review_id": "preview-findings",
+        "repository": null,
+        "pr_number": null,
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "effective_base_sha": "cccccccccccccccccccccccccccccccccccccccc",
+        "diff_policy": null,
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "planner_version": null,
+        "provider": "fixture",
+        "model": "fixture",
+        "started_at": "2026-01-01T00:00:00Z",
+        "completed_at": "2026-01-01T00:00:00Z",
+        "duration_ms": 0,
+        "model_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "confirmed_issues": 0,
+        "coverage": {
+          "coverage_version": "legacy-units-v1",
+          "changed_files": 0,
+          "eligible_files": 0,
+          "reviewed_files": 0,
+          "partial_files": 0,
+          "skipped_files": 0,
+          "failed_files": 0,
+          "coverage_rate": 0.0,
+          "completed_units": 0,
+          "total_units": 0,
+          "unit_coverage_rate": 0.0,
+          "coordination_status": "unknown",
+          "coordination_reason": null,
+          "review_complete": null,
+          "files": [],
+          "units": []
+        },
+        "coordination_metrics": null,
+        "coordination_fingerprint": null,
+        "warnings": []
+      },
+      "issues": [],
+      "issue_metrics": {
+        "candidate_issue_count": 0,
+        "deterministic_drop_count": 0,
+        "verifier_drop_count": 0,
+        "needs_human_count": 0,
+        "unresolved_count": 0,
+        "duplicate_count": 0,
+        "confirmed_count": 0,
+        "severity_adjustment_count": 0,
+        "verifier_call_count": 0,
+        "verifier_token_count": 0
+      },
+      "context_snippets": [],
+      "repo_snapshot": null,
+      "project_profile": null,
+      "static_results": [],
+      "validation_snapshots": [],
+      "validation_deltas": [],
+      "validation": [],
+      "patch_eligibility": [],
+      "patches": [],
+      "test_results": [],
+      "agent_events": [],
+      "human_request": null,
+      "report_markdown": "# 原始审计报告\n\n保留完整内部记录，不生成对外发布状态。",
+      "warnings": [],
+      "error": null,
+      "created_at": "2026-10-16T09:17:22.126885Z",
+      "updated_at": "2026-10-16T09:17:22.126885Z"
+    },
+    "plan": {
+      "schema_version": "review-publication-v1",
+      "review_id": "preview-findings",
+      "snapshot": {
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "effective_base_sha": "cccccccccccccccccccccccccccccccccccccccc"
+      },
+      "outcome": {
+        "kind": "findings",
+        "coverage": "complete",
+        "confirmed_count": 1,
+        "publishable_count": 1,
+        "unresolved_count": 0,
+        "examined_goals": 1,
+        "total_goals": 1,
+        "incomplete_investigations": 0,
+        "reason_codes": []
+      },
+      "summary_markdown": "## RepoGuardian Review\n\n**发现已确认问题**\n\n- 目标检查：1 / 1\n- 已确认问题：1\n- 可生成草稿：1\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：complete\n\n### 问题索引\n\n1. [Medium] 空返回值破坏调用方契约 — src/a\\.py:7（head）\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。",
+      "user_report_markdown": "# RepoGuardian 用户审查报告\n\n## RepoGuardian Review\n\n**发现已确认问题**\n\n- 目标检查：1 / 1\n- 已确认问题：1\n- 可生成草稿：1\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：complete\n\n### 问题索引\n\n1. [Medium] 空返回值破坏调用方契约 — src/a\\.py:7（head）\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。\n\n### 空返回值破坏调用方契约\n\n**[Medium] 空返回值破坏调用方契约**\n\n**影响：** 调用方字段读取失败\n\n**触发场景：** 服务返回空值时直接读取字段\n\n**建议：** 先处理空值\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。静态审查结论。\n\n完整证据、被扣留记录与运行过程请查看原始审计报告。",
+      "inline_drafts": [
+        {
+          "finding_key": "key-a",
+          "candidate_id": "candidate-a",
+          "severity": "medium",
+          "placement": "inline",
+          "anchor": {
+            "file_path": "src/a.py",
+            "start_line": 7,
+            "end_line": 7,
+            "side": "head",
+            "hunk_id": null
+          },
+          "title": "空返回值破坏调用方契约",
+          "body_markdown": "**[Medium] 空返回值破坏调用方契约**\n\n**影响：** 调用方字段读取失败\n\n**触发场景：** 服务返回空值时直接读取字段\n\n**建议：** 先处理空值\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。静态审查结论。"
+        }
+      ],
+      "summary_findings": [],
+      "withheld_findings": [],
+      "content_eligible": true,
+      "blocking_reasons": []
+    }
+  },
+  "clean": {
+    "task": {
+      "id": "preview-clean",
+      "status": "completed",
+      "phase": "prepare",
+      "pr_url": "https://github.com/o/r/pull/1",
+      "model": null,
+      "engine": "task_review_v1",
+      "task_runtime_configuration": null,
+      "task_runtime_report": {
+        "engine": "task_review_v1",
+        "coverage_version": "task-goals-v1",
+        "execution_status": "completed",
+        "termination_reason": "plan_exhausted",
+        "failure_summary": null,
+        "readable_scope_hash": null,
+        "readable_file_count": null,
+        "scope_complete": true,
+        "initial_scope_coverage": [
+          {
+            "goal_id": "g1",
+            "unit_id": "u1",
+            "target_kind": "source_range",
+            "target_ref": "src/a.py",
+            "start_line": 7,
+            "end_line": 7,
+            "status": "examined",
+            "reason": "固定源码检查"
+          }
+        ],
+        "admitted_investigations": [],
+        "unscheduled_leads": [],
+        "relationship_hints": [],
+        "findings": [],
+        "usage_integrity": "complete",
+        "sent_calls": 0,
+        "settled_tokens": 0,
+        "unknown_attempts": 0,
+        "total_tokens": null,
+        "work_items": [],
+        "diagnostics": []
+      },
+      "task_runtime_retry_unit_id": null,
+      "mode": "review",
+      "generate_patches": false,
+      "validation_backend": "none",
+      "validation_profile": "unit",
+      "review": {
+        "mode": "review",
+        "status": "queued",
+        "completed": false
+      },
+      "steps": [],
+      "pr": null,
+      "changed_files": [],
+      "review_units": [],
+      "review_unit_results": [],
+      "cross_unit_risk": null,
+      "coordination_plan": null,
+      "followup_results": [],
+      "model_usages": [],
+      "model_usage_summary": {
+        "overall": {
+          "calls": 0,
+          "usage_available_calls": 0,
+          "usage_missing_calls": 0,
+          "usage_coverage_rate": 0.0,
+          "actual_input_tokens": 0,
+          "actual_output_tokens": 0,
+          "actual_total_tokens": 0,
+          "cached_input_tokens": 0,
+          "reasoning_output_tokens": 0,
+          "accounted_tokens_estimate": 0,
+          "estimation_delta_tokens": 0,
+          "cost_microusd": 0,
+          "cost_available_calls": 0,
+          "input_tokens_p50": null,
+          "input_tokens_p95": null,
+          "output_tokens_p50": null,
+          "output_tokens_p95": null,
+          "latency_ms_p50": null,
+          "latency_ms_p95": null
+        },
+        "by_operation": [],
+        "by_unit_complexity": [],
+        "by_provider": []
+      },
+      "excluded_files": [],
+      "coverage": {
+        "coverage_version": "legacy-units-v1",
+        "changed_files": 0,
+        "eligible_files": 0,
+        "reviewed_files": 0,
+        "partial_files": 0,
+        "skipped_files": 0,
+        "failed_files": 0,
+        "coverage_rate": 0.0,
+        "completed_units": 0,
+        "total_units": 0,
+        "unit_coverage_rate": 0.0,
+        "coordination_status": "unknown",
+        "coordination_reason": null,
+        "review_complete": null,
+        "files": [],
+        "units": []
+      },
+      "run_manifest": {
+        "schema_version": "review-run-manifest-v1",
+        "engine": "task_review_v1",
+        "coverage_version": "task-goals-v1",
+        "usage_integrity": "complete",
+        "review_id": "preview-clean",
+        "repository": null,
+        "pr_number": null,
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "effective_base_sha": "cccccccccccccccccccccccccccccccccccccccc",
+        "diff_policy": null,
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "planner_version": null,
+        "provider": "fixture",
+        "model": "fixture",
+        "started_at": "2026-01-01T00:00:00Z",
+        "completed_at": "2026-01-01T00:00:00Z",
+        "duration_ms": 0,
+        "model_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "confirmed_issues": 0,
+        "coverage": {
+          "coverage_version": "legacy-units-v1",
+          "changed_files": 0,
+          "eligible_files": 0,
+          "reviewed_files": 0,
+          "partial_files": 0,
+          "skipped_files": 0,
+          "failed_files": 0,
+          "coverage_rate": 0.0,
+          "completed_units": 0,
+          "total_units": 0,
+          "unit_coverage_rate": 0.0,
+          "coordination_status": "unknown",
+          "coordination_reason": null,
+          "review_complete": null,
+          "files": [],
+          "units": []
+        },
+        "coordination_metrics": null,
+        "coordination_fingerprint": null,
+        "warnings": []
+      },
+      "issues": [],
+      "issue_metrics": {
+        "candidate_issue_count": 0,
+        "deterministic_drop_count": 0,
+        "verifier_drop_count": 0,
+        "needs_human_count": 0,
+        "unresolved_count": 0,
+        "duplicate_count": 0,
+        "confirmed_count": 0,
+        "severity_adjustment_count": 0,
+        "verifier_call_count": 0,
+        "verifier_token_count": 0
+      },
+      "context_snippets": [],
+      "repo_snapshot": null,
+      "project_profile": null,
+      "static_results": [],
+      "validation_snapshots": [],
+      "validation_deltas": [],
+      "validation": [],
+      "patch_eligibility": [],
+      "patches": [],
+      "test_results": [],
+      "agent_events": [],
+      "human_request": null,
+      "report_markdown": "# 原始审计报告\n\n保留完整内部记录，不生成对外发布状态。",
+      "warnings": [],
+      "error": null,
+      "created_at": "2026-10-16T09:17:22.129881Z",
+      "updated_at": "2026-10-16T09:17:22.129881Z"
+    },
+    "plan": {
+      "schema_version": "review-publication-v1",
+      "review_id": "preview-clean",
+      "snapshot": {
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "effective_base_sha": "cccccccccccccccccccccccccccccccccccccccc"
+      },
+      "outcome": {
+        "kind": "clean",
+        "coverage": "complete",
+        "confirmed_count": 0,
+        "publishable_count": 0,
+        "unresolved_count": 0,
+        "examined_goals": 1,
+        "total_goals": 1,
+        "incomplete_investigations": 0,
+        "reason_codes": []
+      },
+      "summary_markdown": "## RepoGuardian Review\n\n**未发现可行动问题**\n\n- 目标检查：1 / 1\n- 已确认问题：0\n- 可生成草稿：0\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：complete\n\n在已审查变更中未发现可行动问题。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。",
+      "user_report_markdown": "# RepoGuardian 用户审查报告\n\n## RepoGuardian Review\n\n**未发现可行动问题**\n\n- 目标检查：1 / 1\n- 已确认问题：0\n- 可生成草稿：0\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：complete\n\n在已审查变更中未发现可行动问题。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。\n\n完整证据、被扣留记录与运行过程请查看原始审计报告。",
+      "inline_drafts": [],
+      "summary_findings": [],
+      "withheld_findings": [],
+      "content_eligible": true,
+      "blocking_reasons": []
+    }
+  },
+  "inconclusive": {
+    "task": {
+      "id": "preview-inconclusive",
+      "status": "completed",
+      "phase": "prepare",
+      "pr_url": "https://github.com/o/r/pull/1",
+      "model": null,
+      "engine": "task_review_v1",
+      "task_runtime_configuration": null,
+      "task_runtime_report": {
+        "engine": "task_review_v1",
+        "coverage_version": "task-goals-v1",
+        "execution_status": "completed",
+        "termination_reason": "plan_exhausted",
+        "failure_summary": null,
+        "readable_scope_hash": null,
+        "readable_file_count": null,
+        "scope_complete": false,
+        "initial_scope_coverage": [
+          {
+            "goal_id": "g1",
+            "unit_id": "u1",
+            "target_kind": "source_range",
+            "target_ref": "src/a.py",
+            "start_line": 7,
+            "end_line": 7,
+            "status": "examined",
+            "reason": "固定源码检查"
+          }
+        ],
+        "admitted_investigations": [],
+        "unscheduled_leads": [],
+        "relationship_hints": [],
+        "findings": [],
+        "usage_integrity": "complete",
+        "sent_calls": 0,
+        "settled_tokens": 0,
+        "unknown_attempts": 0,
+        "total_tokens": null,
+        "work_items": [],
+        "diagnostics": []
+      },
+      "task_runtime_retry_unit_id": null,
+      "mode": "review",
+      "generate_patches": false,
+      "validation_backend": "none",
+      "validation_profile": "unit",
+      "review": {
+        "mode": "review",
+        "status": "queued",
+        "completed": false
+      },
+      "steps": [],
+      "pr": null,
+      "changed_files": [],
+      "review_units": [],
+      "review_unit_results": [],
+      "cross_unit_risk": null,
+      "coordination_plan": null,
+      "followup_results": [],
+      "model_usages": [],
+      "model_usage_summary": {
+        "overall": {
+          "calls": 0,
+          "usage_available_calls": 0,
+          "usage_missing_calls": 0,
+          "usage_coverage_rate": 0.0,
+          "actual_input_tokens": 0,
+          "actual_output_tokens": 0,
+          "actual_total_tokens": 0,
+          "cached_input_tokens": 0,
+          "reasoning_output_tokens": 0,
+          "accounted_tokens_estimate": 0,
+          "estimation_delta_tokens": 0,
+          "cost_microusd": 0,
+          "cost_available_calls": 0,
+          "input_tokens_p50": null,
+          "input_tokens_p95": null,
+          "output_tokens_p50": null,
+          "output_tokens_p95": null,
+          "latency_ms_p50": null,
+          "latency_ms_p95": null
+        },
+        "by_operation": [],
+        "by_unit_complexity": [],
+        "by_provider": []
+      },
+      "excluded_files": [],
+      "coverage": {
+        "coverage_version": "legacy-units-v1",
+        "changed_files": 0,
+        "eligible_files": 0,
+        "reviewed_files": 0,
+        "partial_files": 0,
+        "skipped_files": 0,
+        "failed_files": 0,
+        "coverage_rate": 0.0,
+        "completed_units": 0,
+        "total_units": 0,
+        "unit_coverage_rate": 0.0,
+        "coordination_status": "unknown",
+        "coordination_reason": null,
+        "review_complete": null,
+        "files": [],
+        "units": []
+      },
+      "run_manifest": {
+        "schema_version": "review-run-manifest-v1",
+        "engine": "task_review_v1",
+        "coverage_version": "task-goals-v1",
+        "usage_integrity": "complete",
+        "review_id": "preview-inconclusive",
+        "repository": null,
+        "pr_number": null,
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "effective_base_sha": "cccccccccccccccccccccccccccccccccccccccc",
+        "diff_policy": null,
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "planner_version": null,
+        "provider": "fixture",
+        "model": "fixture",
+        "started_at": "2026-01-01T00:00:00Z",
+        "completed_at": "2026-01-01T00:00:00Z",
+        "duration_ms": 0,
+        "model_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "confirmed_issues": 0,
+        "coverage": {
+          "coverage_version": "legacy-units-v1",
+          "changed_files": 0,
+          "eligible_files": 0,
+          "reviewed_files": 0,
+          "partial_files": 0,
+          "skipped_files": 0,
+          "failed_files": 0,
+          "coverage_rate": 0.0,
+          "completed_units": 0,
+          "total_units": 0,
+          "unit_coverage_rate": 0.0,
+          "coordination_status": "unknown",
+          "coordination_reason": null,
+          "review_complete": null,
+          "files": [],
+          "units": []
+        },
+        "coordination_metrics": null,
+        "coordination_fingerprint": null,
+        "warnings": []
+      },
+      "issues": [],
+      "issue_metrics": {
+        "candidate_issue_count": 0,
+        "deterministic_drop_count": 0,
+        "verifier_drop_count": 0,
+        "needs_human_count": 0,
+        "unresolved_count": 0,
+        "duplicate_count": 0,
+        "confirmed_count": 0,
+        "severity_adjustment_count": 0,
+        "verifier_call_count": 0,
+        "verifier_token_count": 0
+      },
+      "context_snippets": [],
+      "repo_snapshot": null,
+      "project_profile": null,
+      "static_results": [],
+      "validation_snapshots": [],
+      "validation_deltas": [],
+      "validation": [],
+      "patch_eligibility": [],
+      "patches": [],
+      "test_results": [],
+      "agent_events": [],
+      "human_request": null,
+      "report_markdown": "# 原始审计报告\n\n保留完整内部记录，不生成对外发布状态。",
+      "warnings": [],
+      "error": null,
+      "created_at": "2026-10-16T09:17:22.129881Z",
+      "updated_at": "2026-10-16T09:17:22.129881Z"
+    },
+    "plan": {
+      "schema_version": "review-publication-v1",
+      "review_id": "preview-inconclusive",
+      "snapshot": {
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "effective_base_sha": "cccccccccccccccccccccccccccccccccccccccc"
+      },
+      "outcome": {
+        "kind": "inconclusive",
+        "coverage": "partial",
+        "confirmed_count": 0,
+        "publishable_count": 0,
+        "unresolved_count": 0,
+        "examined_goals": 1,
+        "total_goals": 1,
+        "incomplete_investigations": 0,
+        "reason_codes": [
+          "scope_incomplete"
+        ]
+      },
+      "summary_markdown": "## RepoGuardian Review\n\n**审查结论不确定**\n\n- 目标检查：1 / 1\n- 已确认问题：0\n- 可生成草稿：0\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：partial\n\n### 限制条件\n\n- 部分目标未完成检查\n\n未产生可发布问题不代表审查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。",
+      "user_report_markdown": "# RepoGuardian 用户审查报告\n\n## RepoGuardian Review\n\n**审查结论不确定**\n\n- 目标检查：1 / 1\n- 已确认问题：0\n- 可生成草稿：0\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：partial\n\n### 限制条件\n\n- 部分目标未完成检查\n\n未产生可发布问题不代表审查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。\n\n完整证据、被扣留记录与运行过程请查看原始审计报告。",
+      "inline_drafts": [],
+      "summary_findings": [],
+      "withheld_findings": [],
+      "content_eligible": true,
+      "blocking_reasons": []
+    }
+  },
+  "failed": {
+    "task": {
+      "id": "preview-failed",
+      "status": "failed",
+      "phase": "prepare",
+      "pr_url": "https://github.com/o/r/pull/1",
+      "model": null,
+      "engine": "task_review_v1",
+      "task_runtime_configuration": null,
+      "task_runtime_report": {
+        "engine": "task_review_v1",
+        "coverage_version": "task-goals-v1",
+        "execution_status": "completed",
+        "termination_reason": "plan_exhausted",
+        "failure_summary": null,
+        "readable_scope_hash": null,
+        "readable_file_count": null,
+        "scope_complete": true,
+        "initial_scope_coverage": [
+          {
+            "goal_id": "g1",
+            "unit_id": "u1",
+            "target_kind": "source_range",
+            "target_ref": "src/a.py",
+            "start_line": 7,
+            "end_line": 7,
+            "status": "examined",
+            "reason": "固定源码检查"
+          }
+        ],
+        "admitted_investigations": [],
+        "unscheduled_leads": [],
+        "relationship_hints": [],
+        "findings": [
+          {
+            "key": "key-a",
+            "candidate": {
+              "candidate_id": "candidate-a",
+              "claim": "空返回值破坏调用方契约",
+              "primary_anchor": "g1",
+              "supporting_evidence": [
+                "e1"
+              ],
+              "source_result_ids": [
+                "r1"
+              ],
+              "affected_behavior": "调用方字段读取失败",
+              "failure_scenario": "服务返回空值时直接读取字段",
+              "recommendation": "先处理空值",
+              "category": "correctness",
+              "severity": "medium",
+              "evidence_requests": []
+            },
+            "status": "confirmed",
+            "verification": {
+              "candidate_id": "candidate-a",
+              "decision": "supported",
+              "evidence_ids": [
+                "e1"
+              ],
+              "reason": "独立核对主张",
+              "work_item_id": "verify1",
+              "request_id": "req1",
+              "attempt_id": "attempt1",
+              "snapshot_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "subject_hash": "9b32f70434b4124afe384c7e3014f488558a93cff7e288b7a26bd0a3dea9f4fb",
+              "publication_action": "retain",
+              "narrowing": null
+            },
+            "publication": {
+              "version": "claim-publication-v1",
+              "original_candidate_id": "candidate-a",
+              "subject_hash": "9b32f70434b4124afe384c7e3014f488558a93cff7e288b7a26bd0a3dea9f4fb",
+              "original_text": {
+                "claim": "空返回值破坏调用方契约",
+                "affected_behavior": "调用方字段读取失败",
+                "failure_scenario": "服务返回空值时直接读取字段",
+                "recommendation": "先处理空值"
+              },
+              "verified_core": {
+                "claim": "空返回值破坏调用方契约",
+                "failure_scenario": "服务返回空值时直接读取字段"
+              },
+              "verified_text": {
+                "claim": "空返回值破坏调用方契约",
+                "affected_behavior": "调用方字段读取失败",
+                "failure_scenario": "服务返回空值时直接读取字段",
+                "recommendation": "先处理空值"
+              },
+              "published_text": {
+                "claim": "空返回值破坏调用方契约",
+                "affected_behavior": "调用方字段读取失败",
+                "failure_scenario": "服务返回空值时直接读取字段",
+                "recommendation": "先处理空值"
+              },
+              "action": "retain",
+              "decision": "supported",
+              "basis": "独立核对主张",
+              "evidence_ids": [
+                "e1"
+              ],
+              "request_id": "req1",
+              "attempt_id": "attempt1",
+              "work_item_id": "verify1",
+              "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "base_sha": "cccccccccccccccccccccccccccccccccccccccc",
+              "usage_known": true
+            },
+            "issue": {
+              "id": "candidate-a",
+              "review_unit_id": "u1",
+              "title": "空返回值破坏调用方契约",
+              "category": "correctness",
+              "severity": "medium",
+              "confidence": 0.5,
+              "affected_behavior": "调用方字段读取失败",
+              "failure_scenario": "服务返回空值时直接读取字段",
+              "reasoning_summary": null,
+              "recommendation": "先处理空值",
+              "primary_evidence": {
+                "file_path": "src/a.py",
+                "existing_code": "return None",
+                "symbol": null,
+                "expected_side": "head",
+                "expected_hunk_id": null,
+                "branch_claim": null,
+                "context_before": [],
+                "context_after": [],
+                "resolved_start_line": 7,
+                "resolved_end_line": 7,
+                "resolution_method": "diff_exact",
+                "resolution_status": "exact",
+                "provenance": null,
+                "match_count": 1,
+                "anchor_hash": "hash",
+                "resolved_side": "head",
+                "candidate_locations": [],
+                "unresolved_reason": null
+              },
+              "supporting_evidence": [],
+              "assumptions": [],
+              "related_tests": [],
+              "requires_human_confirmation": false,
+              "auto_fix_eligible": false,
+              "fix_risk": "low",
+              "status": "candidate",
+              "placement": "inline",
+              "unresolved_reason": null,
+              "resolved_location": {
+                "file_path": "src/a.py",
+                "start_line": 7,
+                "end_line": 7,
+                "side": "head",
+                "hunk_id": null
+              },
+              "source_review_unit_ids": [
+                "u1"
+              ],
+              "source_issue_ids": [
+                "candidate-a"
+              ]
+            }
+          }
+        ],
+        "usage_integrity": "complete",
+        "sent_calls": 0,
+        "settled_tokens": 0,
+        "unknown_attempts": 0,
+        "total_tokens": null,
+        "work_items": [],
+        "diagnostics": []
+      },
+      "task_runtime_retry_unit_id": null,
+      "mode": "review",
+      "generate_patches": false,
+      "validation_backend": "none",
+      "validation_profile": "unit",
+      "review": {
+        "mode": "review",
+        "status": "queued",
+        "completed": false
+      },
+      "steps": [],
+      "pr": null,
+      "changed_files": [],
+      "review_units": [
+        {
+          "id": "u1",
+          "primary_files": [
+            "src/a.py"
+          ],
+          "related_files": [],
+          "context_provenance": [],
+          "diff_hunk_ids": [],
+          "changed_symbols": [],
+          "rule_ids": [],
+          "risk_tags": [],
+          "estimated_tokens": 0,
+          "complexity": "small",
+          "fingerprint": "fixture",
+          "grouping_reason": "fixture"
+        }
+      ],
+      "review_unit_results": [],
+      "cross_unit_risk": null,
+      "coordination_plan": null,
+      "followup_results": [],
+      "model_usages": [],
+      "model_usage_summary": {
+        "overall": {
+          "calls": 0,
+          "usage_available_calls": 0,
+          "usage_missing_calls": 0,
+          "usage_coverage_rate": 0.0,
+          "actual_input_tokens": 0,
+          "actual_output_tokens": 0,
+          "actual_total_tokens": 0,
+          "cached_input_tokens": 0,
+          "reasoning_output_tokens": 0,
+          "accounted_tokens_estimate": 0,
+          "estimation_delta_tokens": 0,
+          "cost_microusd": 0,
+          "cost_available_calls": 0,
+          "input_tokens_p50": null,
+          "input_tokens_p95": null,
+          "output_tokens_p50": null,
+          "output_tokens_p95": null,
+          "latency_ms_p50": null,
+          "latency_ms_p95": null
+        },
+        "by_operation": [],
+        "by_unit_complexity": [],
+        "by_provider": []
+      },
+      "excluded_files": [],
+      "coverage": {
+        "coverage_version": "legacy-units-v1",
+        "changed_files": 0,
+        "eligible_files": 0,
+        "reviewed_files": 0,
+        "partial_files": 0,
+        "skipped_files": 0,
+        "failed_files": 0,
+        "coverage_rate": 0.0,
+        "completed_units": 0,
+        "total_units": 0,
+        "unit_coverage_rate": 0.0,
+        "coordination_status": "unknown",
+        "coordination_reason": null,
+        "review_complete": null,
+        "files": [],
+        "units": []
+      },
+      "run_manifest": {
+        "schema_version": "review-run-manifest-v1",
+        "engine": "task_review_v1",
+        "coverage_version": "task-goals-v1",
+        "usage_integrity": "complete",
+        "review_id": "preview-failed",
+        "repository": null,
+        "pr_number": null,
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "effective_base_sha": "cccccccccccccccccccccccccccccccccccccccc",
+        "diff_policy": null,
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "planner_version": null,
+        "provider": "fixture",
+        "model": "fixture",
+        "started_at": "2026-01-01T00:00:00Z",
+        "completed_at": "2026-01-01T00:00:00Z",
+        "duration_ms": 0,
+        "model_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "confirmed_issues": 0,
+        "coverage": {
+          "coverage_version": "legacy-units-v1",
+          "changed_files": 0,
+          "eligible_files": 0,
+          "reviewed_files": 0,
+          "partial_files": 0,
+          "skipped_files": 0,
+          "failed_files": 0,
+          "coverage_rate": 0.0,
+          "completed_units": 0,
+          "total_units": 0,
+          "unit_coverage_rate": 0.0,
+          "coordination_status": "unknown",
+          "coordination_reason": null,
+          "review_complete": null,
+          "files": [],
+          "units": []
+        },
+        "coordination_metrics": null,
+        "coordination_fingerprint": null,
+        "warnings": []
+      },
+      "issues": [],
+      "issue_metrics": {
+        "candidate_issue_count": 0,
+        "deterministic_drop_count": 0,
+        "verifier_drop_count": 0,
+        "needs_human_count": 0,
+        "unresolved_count": 0,
+        "duplicate_count": 0,
+        "confirmed_count": 0,
+        "severity_adjustment_count": 0,
+        "verifier_call_count": 0,
+        "verifier_token_count": 0
+      },
+      "context_snippets": [],
+      "repo_snapshot": null,
+      "project_profile": null,
+      "static_results": [],
+      "validation_snapshots": [],
+      "validation_deltas": [],
+      "validation": [],
+      "patch_eligibility": [],
+      "patches": [],
+      "test_results": [],
+      "agent_events": [],
+      "human_request": null,
+      "report_markdown": "# 原始审计报告\n\n保留完整内部记录，不生成对外发布状态。",
+      "warnings": [],
+      "error": null,
+      "created_at": "2026-10-16T09:17:22.129881Z",
+      "updated_at": "2026-10-16T09:17:22.129881Z"
+    },
+    "plan": {
+      "schema_version": "review-publication-v1",
+      "review_id": "preview-failed",
+      "snapshot": {
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "effective_base_sha": "cccccccccccccccccccccccccccccccccccccccc"
+      },
+      "outcome": {
+        "kind": "failed",
+        "coverage": "partial",
+        "confirmed_count": 1,
+        "publishable_count": 0,
+        "unresolved_count": 0,
+        "examined_goals": 1,
+        "total_goals": 1,
+        "incomplete_investigations": 0,
+        "reason_codes": [
+          "task_failed",
+          "termination_incomplete"
+        ]
+      },
+      "summary_markdown": "## RepoGuardian Review\n\n**审查失败**\n\n- 目标检查：1 / 1\n- 已确认问题：1\n- 可生成草稿：0\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：partial\n\n1 项已确认记录未进入发布草稿；具体扣留原因保留在内部发布计划中。\n\n### 限制条件\n\n- 任务或运行时执行失败\n- 任务未可靠完成全部计划\n\n未产生可发布问题不代表审查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。",
+      "user_report_markdown": "# RepoGuardian 用户审查报告\n\n## RepoGuardian Review\n\n**审查失败**\n\n- 目标检查：1 / 1\n- 已确认问题：1\n- 可生成草稿：0\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：partial\n\n1 项已确认记录未进入发布草稿；具体扣留原因保留在内部发布计划中。\n\n### 限制条件\n\n- 任务或运行时执行失败\n- 任务未可靠完成全部计划\n\n未产生可发布问题不代表审查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。\n\n完整证据、被扣留记录与运行过程请查看原始审计报告。",
+      "inline_drafts": [],
+      "summary_findings": [],
+      "withheld_findings": [
+        {
+          "candidate_id": "candidate-a",
+          "reason_code": "review_content_blocked"
+        }
+      ],
+      "content_eligible": false,
+      "blocking_reasons": [
+        "task_failed"
+      ]
+    }
+  },
+  "cancelled": {
+    "task": {
+      "id": "preview-cancelled",
+      "status": "cancelled",
+      "phase": "prepare",
+      "pr_url": "https://github.com/o/r/pull/1",
+      "model": null,
+      "engine": "task_review_v1",
+      "task_runtime_configuration": null,
+      "task_runtime_report": {
+        "engine": "task_review_v1",
+        "coverage_version": "task-goals-v1",
+        "execution_status": "completed",
+        "termination_reason": "plan_exhausted",
+        "failure_summary": null,
+        "readable_scope_hash": null,
+        "readable_file_count": null,
+        "scope_complete": true,
+        "initial_scope_coverage": [
+          {
+            "goal_id": "g1",
+            "unit_id": "u1",
+            "target_kind": "source_range",
+            "target_ref": "src/a.py",
+            "start_line": 7,
+            "end_line": 7,
+            "status": "examined",
+            "reason": "固定源码检查"
+          }
+        ],
+        "admitted_investigations": [],
+        "unscheduled_leads": [],
+        "relationship_hints": [],
+        "findings": [
+          {
+            "key": "key-a",
+            "candidate": {
+              "candidate_id": "candidate-a",
+              "claim": "空返回值破坏调用方契约",
+              "primary_anchor": "g1",
+              "supporting_evidence": [
+                "e1"
+              ],
+              "source_result_ids": [
+                "r1"
+              ],
+              "affected_behavior": "调用方字段读取失败",
+              "failure_scenario": "服务返回空值时直接读取字段",
+              "recommendation": "先处理空值",
+              "category": "correctness",
+              "severity": "medium",
+              "evidence_requests": []
+            },
+            "status": "confirmed",
+            "verification": {
+              "candidate_id": "candidate-a",
+              "decision": "supported",
+              "evidence_ids": [
+                "e1"
+              ],
+              "reason": "独立核对主张",
+              "work_item_id": "verify1",
+              "request_id": "req1",
+              "attempt_id": "attempt1",
+              "snapshot_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "subject_hash": "9b32f70434b4124afe384c7e3014f488558a93cff7e288b7a26bd0a3dea9f4fb",
+              "publication_action": "retain",
+              "narrowing": null
+            },
+            "publication": {
+              "version": "claim-publication-v1",
+              "original_candidate_id": "candidate-a",
+              "subject_hash": "9b32f70434b4124afe384c7e3014f488558a93cff7e288b7a26bd0a3dea9f4fb",
+              "original_text": {
+                "claim": "空返回值破坏调用方契约",
+                "affected_behavior": "调用方字段读取失败",
+                "failure_scenario": "服务返回空值时直接读取字段",
+                "recommendation": "先处理空值"
+              },
+              "verified_core": {
+                "claim": "空返回值破坏调用方契约",
+                "failure_scenario": "服务返回空值时直接读取字段"
+              },
+              "verified_text": {
+                "claim": "空返回值破坏调用方契约",
+                "affected_behavior": "调用方字段读取失败",
+                "failure_scenario": "服务返回空值时直接读取字段",
+                "recommendation": "先处理空值"
+              },
+              "published_text": {
+                "claim": "空返回值破坏调用方契约",
+                "affected_behavior": "调用方字段读取失败",
+                "failure_scenario": "服务返回空值时直接读取字段",
+                "recommendation": "先处理空值"
+              },
+              "action": "retain",
+              "decision": "supported",
+              "basis": "独立核对主张",
+              "evidence_ids": [
+                "e1"
+              ],
+              "request_id": "req1",
+              "attempt_id": "attempt1",
+              "work_item_id": "verify1",
+              "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "base_sha": "cccccccccccccccccccccccccccccccccccccccc",
+              "usage_known": true
+            },
+            "issue": {
+              "id": "candidate-a",
+              "review_unit_id": "u1",
+              "title": "空返回值破坏调用方契约",
+              "category": "correctness",
+              "severity": "medium",
+              "confidence": 0.5,
+              "affected_behavior": "调用方字段读取失败",
+              "failure_scenario": "服务返回空值时直接读取字段",
+              "reasoning_summary": null,
+              "recommendation": "先处理空值",
+              "primary_evidence": {
+                "file_path": "src/a.py",
+                "existing_code": "return None",
+                "symbol": null,
+                "expected_side": "head",
+                "expected_hunk_id": null,
+                "branch_claim": null,
+                "context_before": [],
+                "context_after": [],
+                "resolved_start_line": 7,
+                "resolved_end_line": 7,
+                "resolution_method": "diff_exact",
+                "resolution_status": "exact",
+                "provenance": null,
+                "match_count": 1,
+                "anchor_hash": "hash",
+                "resolved_side": "head",
+                "candidate_locations": [],
+                "unresolved_reason": null
+              },
+              "supporting_evidence": [],
+              "assumptions": [],
+              "related_tests": [],
+              "requires_human_confirmation": false,
+              "auto_fix_eligible": false,
+              "fix_risk": "low",
+              "status": "candidate",
+              "placement": "inline",
+              "unresolved_reason": null,
+              "resolved_location": {
+                "file_path": "src/a.py",
+                "start_line": 7,
+                "end_line": 7,
+                "side": "head",
+                "hunk_id": null
+              },
+              "source_review_unit_ids": [
+                "u1"
+              ],
+              "source_issue_ids": [
+                "candidate-a"
+              ]
+            }
+          }
+        ],
+        "usage_integrity": "complete",
+        "sent_calls": 0,
+        "settled_tokens": 0,
+        "unknown_attempts": 0,
+        "total_tokens": null,
+        "work_items": [],
+        "diagnostics": []
+      },
+      "task_runtime_retry_unit_id": null,
+      "mode": "review",
+      "generate_patches": false,
+      "validation_backend": "none",
+      "validation_profile": "unit",
+      "review": {
+        "mode": "review",
+        "status": "queued",
+        "completed": false
+      },
+      "steps": [],
+      "pr": null,
+      "changed_files": [],
+      "review_units": [
+        {
+          "id": "u1",
+          "primary_files": [
+            "src/a.py"
+          ],
+          "related_files": [],
+          "context_provenance": [],
+          "diff_hunk_ids": [],
+          "changed_symbols": [],
+          "rule_ids": [],
+          "risk_tags": [],
+          "estimated_tokens": 0,
+          "complexity": "small",
+          "fingerprint": "fixture",
+          "grouping_reason": "fixture"
+        }
+      ],
+      "review_unit_results": [],
+      "cross_unit_risk": null,
+      "coordination_plan": null,
+      "followup_results": [],
+      "model_usages": [],
+      "model_usage_summary": {
+        "overall": {
+          "calls": 0,
+          "usage_available_calls": 0,
+          "usage_missing_calls": 0,
+          "usage_coverage_rate": 0.0,
+          "actual_input_tokens": 0,
+          "actual_output_tokens": 0,
+          "actual_total_tokens": 0,
+          "cached_input_tokens": 0,
+          "reasoning_output_tokens": 0,
+          "accounted_tokens_estimate": 0,
+          "estimation_delta_tokens": 0,
+          "cost_microusd": 0,
+          "cost_available_calls": 0,
+          "input_tokens_p50": null,
+          "input_tokens_p95": null,
+          "output_tokens_p50": null,
+          "output_tokens_p95": null,
+          "latency_ms_p50": null,
+          "latency_ms_p95": null
+        },
+        "by_operation": [],
+        "by_unit_complexity": [],
+        "by_provider": []
+      },
+      "excluded_files": [],
+      "coverage": {
+        "coverage_version": "legacy-units-v1",
+        "changed_files": 0,
+        "eligible_files": 0,
+        "reviewed_files": 0,
+        "partial_files": 0,
+        "skipped_files": 0,
+        "failed_files": 0,
+        "coverage_rate": 0.0,
+        "completed_units": 0,
+        "total_units": 0,
+        "unit_coverage_rate": 0.0,
+        "coordination_status": "unknown",
+        "coordination_reason": null,
+        "review_complete": null,
+        "files": [],
+        "units": []
+      },
+      "run_manifest": {
+        "schema_version": "review-run-manifest-v1",
+        "engine": "task_review_v1",
+        "coverage_version": "task-goals-v1",
+        "usage_integrity": "complete",
+        "review_id": "preview-cancelled",
+        "repository": null,
+        "pr_number": null,
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "effective_base_sha": "cccccccccccccccccccccccccccccccccccccccc",
+        "diff_policy": null,
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "planner_version": null,
+        "provider": "fixture",
+        "model": "fixture",
+        "started_at": "2026-01-01T00:00:00Z",
+        "completed_at": "2026-01-01T00:00:00Z",
+        "duration_ms": 0,
+        "model_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "confirmed_issues": 0,
+        "coverage": {
+          "coverage_version": "legacy-units-v1",
+          "changed_files": 0,
+          "eligible_files": 0,
+          "reviewed_files": 0,
+          "partial_files": 0,
+          "skipped_files": 0,
+          "failed_files": 0,
+          "coverage_rate": 0.0,
+          "completed_units": 0,
+          "total_units": 0,
+          "unit_coverage_rate": 0.0,
+          "coordination_status": "unknown",
+          "coordination_reason": null,
+          "review_complete": null,
+          "files": [],
+          "units": []
+        },
+        "coordination_metrics": null,
+        "coordination_fingerprint": null,
+        "warnings": []
+      },
+      "issues": [],
+      "issue_metrics": {
+        "candidate_issue_count": 0,
+        "deterministic_drop_count": 0,
+        "verifier_drop_count": 0,
+        "needs_human_count": 0,
+        "unresolved_count": 0,
+        "duplicate_count": 0,
+        "confirmed_count": 0,
+        "severity_adjustment_count": 0,
+        "verifier_call_count": 0,
+        "verifier_token_count": 0
+      },
+      "context_snippets": [],
+      "repo_snapshot": null,
+      "project_profile": null,
+      "static_results": [],
+      "validation_snapshots": [],
+      "validation_deltas": [],
+      "validation": [],
+      "patch_eligibility": [],
+      "patches": [],
+      "test_results": [],
+      "agent_events": [],
+      "human_request": null,
+      "report_markdown": "# 原始审计报告\n\n保留完整内部记录，不生成对外发布状态。",
+      "warnings": [],
+      "error": null,
+      "created_at": "2026-10-16T09:17:22.132404Z",
+      "updated_at": "2026-10-16T09:17:22.132404Z"
+    },
+    "plan": {
+      "schema_version": "review-publication-v1",
+      "review_id": "preview-cancelled",
+      "snapshot": {
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "effective_base_sha": "cccccccccccccccccccccccccccccccccccccccc"
+      },
+      "outcome": {
+        "kind": "cancelled",
+        "coverage": "partial",
+        "confirmed_count": 1,
+        "publishable_count": 0,
+        "unresolved_count": 0,
+        "examined_goals": 1,
+        "total_goals": 1,
+        "incomplete_investigations": 0,
+        "reason_codes": [
+          "task_cancelled",
+          "termination_incomplete"
+        ]
+      },
+      "summary_markdown": "## RepoGuardian Review\n\n**审查已取消**\n\n- 目标检查：1 / 1\n- 已确认问题：1\n- 可生成草稿：0\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：partial\n\n1 项已确认记录未进入发布草稿；具体扣留原因保留在内部发布计划中。\n\n### 限制条件\n\n- 任务或运行时已取消\n- 任务未可靠完成全部计划\n\n未产生可发布问题不代表审查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。",
+      "user_report_markdown": "# RepoGuardian 用户审查报告\n\n## RepoGuardian Review\n\n**审查已取消**\n\n- 目标检查：1 / 1\n- 已确认问题：1\n- 可生成草稿：0\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：partial\n\n1 项已确认记录未进入发布草稿；具体扣留原因保留在内部发布计划中。\n\n### 限制条件\n\n- 任务或运行时已取消\n- 任务未可靠完成全部计划\n\n未产生可发布问题不代表审查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。\n\n完整证据、被扣留记录与运行过程请查看原始审计报告。",
+      "inline_drafts": [],
+      "summary_findings": [],
+      "withheld_findings": [
+        {
+          "candidate_id": "candidate-a",
+          "reason_code": "review_content_blocked"
+        }
+      ],
+      "content_eligible": false,
+      "blocking_reasons": [
+        "task_cancelled"
+      ]
+    }
+  },
+  "withheld": {
+    "task": {
+      "id": "preview-withheld",
+      "status": "completed",
+      "phase": "prepare",
+      "pr_url": "https://github.com/o/r/pull/1",
+      "model": null,
+      "engine": "task_review_v1",
+      "task_runtime_configuration": null,
+      "task_runtime_report": {
+        "engine": "task_review_v1",
+        "coverage_version": "task-goals-v1",
+        "execution_status": "completed",
+        "termination_reason": "plan_exhausted",
+        "failure_summary": null,
+        "readable_scope_hash": null,
+        "readable_file_count": null,
+        "scope_complete": true,
+        "initial_scope_coverage": [
+          {
+            "goal_id": "g1",
+            "unit_id": "u1",
+            "target_kind": "source_range",
+            "target_ref": "src/a.py",
+            "start_line": 7,
+            "end_line": 7,
+            "status": "examined",
+            "reason": "固定源码检查"
+          }
+        ],
+        "admitted_investigations": [],
+        "unscheduled_leads": [],
+        "relationship_hints": [],
+        "findings": [
+          {
+            "key": "key-a",
+            "candidate": {
+              "candidate_id": "candidate-a",
+              "claim": "空返回值破坏调用方契约",
+              "primary_anchor": "g1",
+              "supporting_evidence": [
+                "e1"
+              ],
+              "source_result_ids": [
+                "r1"
+              ],
+              "affected_behavior": "调用方字段读取失败",
+              "failure_scenario": "服务返回空值时直接读取字段",
+              "recommendation": "先处理空值",
+              "category": "correctness",
+              "severity": "medium",
+              "evidence_requests": []
+            },
+            "status": "confirmed",
+            "verification": {
+              "candidate_id": "candidate-a",
+              "decision": "supported",
+              "evidence_ids": [
+                "e1"
+              ],
+              "reason": "独立核对主张",
+              "work_item_id": "verify1",
+              "request_id": "req1",
+              "attempt_id": "attempt1",
+              "snapshot_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "subject_hash": "9b32f70434b4124afe384c7e3014f488558a93cff7e288b7a26bd0a3dea9f4fb",
+              "publication_action": "retain",
+              "narrowing": null
+            },
+            "publication": {
+              "version": "claim-publication-v1",
+              "original_candidate_id": "candidate-a",
+              "subject_hash": "9b32f70434b4124afe384c7e3014f488558a93cff7e288b7a26bd0a3dea9f4fb",
+              "original_text": {
+                "claim": "空返回值破坏调用方契约",
+                "affected_behavior": "调用方字段读取失败",
+                "failure_scenario": "服务返回空值时直接读取字段",
+                "recommendation": "先处理空值"
+              },
+              "verified_core": {
+                "claim": "空返回值破坏调用方契约",
+                "failure_scenario": "服务返回空值时直接读取字段"
+              },
+              "verified_text": {
+                "claim": "空返回值破坏调用方契约",
+                "affected_behavior": "调用方字段读取失败",
+                "failure_scenario": "服务返回空值时直接读取字段",
+                "recommendation": "先处理空值"
+              },
+              "published_text": {
+                "claim": "空返回值破坏调用方契约",
+                "affected_behavior": "调用方字段读取失败",
+                "failure_scenario": "服务返回空值时直接读取字段",
+                "recommendation": "先处理空值"
+              },
+              "action": "retain",
+              "decision": "supported",
+              "basis": "独立核对主张",
+              "evidence_ids": [
+                "e1"
+              ],
+              "request_id": "req1",
+              "attempt_id": "attempt1",
+              "work_item_id": "verify1",
+              "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "base_sha": "cccccccccccccccccccccccccccccccccccccccc",
+              "usage_known": false
+            },
+            "issue": {
+              "id": "candidate-a",
+              "review_unit_id": "u1",
+              "title": "空返回值破坏调用方契约",
+              "category": "correctness",
+              "severity": "medium",
+              "confidence": 0.5,
+              "affected_behavior": "调用方字段读取失败",
+              "failure_scenario": "服务返回空值时直接读取字段",
+              "reasoning_summary": null,
+              "recommendation": "先处理空值",
+              "primary_evidence": {
+                "file_path": "src/a.py",
+                "existing_code": "return None",
+                "symbol": null,
+                "expected_side": "head",
+                "expected_hunk_id": null,
+                "branch_claim": null,
+                "context_before": [],
+                "context_after": [],
+                "resolved_start_line": 7,
+                "resolved_end_line": 7,
+                "resolution_method": "diff_exact",
+                "resolution_status": "exact",
+                "provenance": null,
+                "match_count": 1,
+                "anchor_hash": "hash",
+                "resolved_side": "head",
+                "candidate_locations": [],
+                "unresolved_reason": null
+              },
+              "supporting_evidence": [],
+              "assumptions": [],
+              "related_tests": [],
+              "requires_human_confirmation": false,
+              "auto_fix_eligible": false,
+              "fix_risk": "low",
+              "status": "candidate",
+              "placement": "inline",
+              "unresolved_reason": null,
+              "resolved_location": {
+                "file_path": "src/a.py",
+                "start_line": 7,
+                "end_line": 7,
+                "side": "head",
+                "hunk_id": null
+              },
+              "source_review_unit_ids": [
+                "u1"
+              ],
+              "source_issue_ids": [
+                "candidate-a"
+              ]
+            }
+          }
+        ],
+        "usage_integrity": "complete",
+        "sent_calls": 0,
+        "settled_tokens": 0,
+        "unknown_attempts": 0,
+        "total_tokens": null,
+        "work_items": [],
+        "diagnostics": []
+      },
+      "task_runtime_retry_unit_id": null,
+      "mode": "review",
+      "generate_patches": false,
+      "validation_backend": "none",
+      "validation_profile": "unit",
+      "review": {
+        "mode": "review",
+        "status": "queued",
+        "completed": false
+      },
+      "steps": [],
+      "pr": null,
+      "changed_files": [],
+      "review_units": [
+        {
+          "id": "u1",
+          "primary_files": [
+            "src/a.py"
+          ],
+          "related_files": [],
+          "context_provenance": [],
+          "diff_hunk_ids": [],
+          "changed_symbols": [],
+          "rule_ids": [],
+          "risk_tags": [],
+          "estimated_tokens": 0,
+          "complexity": "small",
+          "fingerprint": "fixture",
+          "grouping_reason": "fixture"
+        }
+      ],
+      "review_unit_results": [],
+      "cross_unit_risk": null,
+      "coordination_plan": null,
+      "followup_results": [],
+      "model_usages": [],
+      "model_usage_summary": {
+        "overall": {
+          "calls": 0,
+          "usage_available_calls": 0,
+          "usage_missing_calls": 0,
+          "usage_coverage_rate": 0.0,
+          "actual_input_tokens": 0,
+          "actual_output_tokens": 0,
+          "actual_total_tokens": 0,
+          "cached_input_tokens": 0,
+          "reasoning_output_tokens": 0,
+          "accounted_tokens_estimate": 0,
+          "estimation_delta_tokens": 0,
+          "cost_microusd": 0,
+          "cost_available_calls": 0,
+          "input_tokens_p50": null,
+          "input_tokens_p95": null,
+          "output_tokens_p50": null,
+          "output_tokens_p95": null,
+          "latency_ms_p50": null,
+          "latency_ms_p95": null
+        },
+        "by_operation": [],
+        "by_unit_complexity": [],
+        "by_provider": []
+      },
+      "excluded_files": [],
+      "coverage": {
+        "coverage_version": "legacy-units-v1",
+        "changed_files": 0,
+        "eligible_files": 0,
+        "reviewed_files": 0,
+        "partial_files": 0,
+        "skipped_files": 0,
+        "failed_files": 0,
+        "coverage_rate": 0.0,
+        "completed_units": 0,
+        "total_units": 0,
+        "unit_coverage_rate": 0.0,
+        "coordination_status": "unknown",
+        "coordination_reason": null,
+        "review_complete": null,
+        "files": [],
+        "units": []
+      },
+      "run_manifest": {
+        "schema_version": "review-run-manifest-v1",
+        "engine": "task_review_v1",
+        "coverage_version": "task-goals-v1",
+        "usage_integrity": "complete",
+        "review_id": "preview-withheld",
+        "repository": null,
+        "pr_number": null,
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "effective_base_sha": "cccccccccccccccccccccccccccccccccccccccc",
+        "diff_policy": null,
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "planner_version": null,
+        "provider": "fixture",
+        "model": "fixture",
+        "started_at": "2026-01-01T00:00:00Z",
+        "completed_at": "2026-01-01T00:00:00Z",
+        "duration_ms": 0,
+        "model_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "confirmed_issues": 0,
+        "coverage": {
+          "coverage_version": "legacy-units-v1",
+          "changed_files": 0,
+          "eligible_files": 0,
+          "reviewed_files": 0,
+          "partial_files": 0,
+          "skipped_files": 0,
+          "failed_files": 0,
+          "coverage_rate": 0.0,
+          "completed_units": 0,
+          "total_units": 0,
+          "unit_coverage_rate": 0.0,
+          "coordination_status": "unknown",
+          "coordination_reason": null,
+          "review_complete": null,
+          "files": [],
+          "units": []
+        },
+        "coordination_metrics": null,
+        "coordination_fingerprint": null,
+        "warnings": []
+      },
+      "issues": [],
+      "issue_metrics": {
+        "candidate_issue_count": 0,
+        "deterministic_drop_count": 0,
+        "verifier_drop_count": 0,
+        "needs_human_count": 0,
+        "unresolved_count": 0,
+        "duplicate_count": 0,
+        "confirmed_count": 0,
+        "severity_adjustment_count": 0,
+        "verifier_call_count": 0,
+        "verifier_token_count": 0
+      },
+      "context_snippets": [],
+      "repo_snapshot": null,
+      "project_profile": null,
+      "static_results": [],
+      "validation_snapshots": [],
+      "validation_deltas": [],
+      "validation": [],
+      "patch_eligibility": [],
+      "patches": [],
+      "test_results": [],
+      "agent_events": [],
+      "human_request": null,
+      "report_markdown": "# 原始审计报告\n\n保留完整内部记录，不生成对外发布状态。",
+      "warnings": [],
+      "error": null,
+      "created_at": "2026-10-16T09:17:22.133410Z",
+      "updated_at": "2026-10-16T09:17:22.133410Z"
+    },
+    "plan": {
+      "schema_version": "review-publication-v1",
+      "review_id": "preview-withheld",
+      "snapshot": {
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "effective_base_sha": "cccccccccccccccccccccccccccccccccccccccc"
+      },
+      "outcome": {
+        "kind": "findings",
+        "coverage": "complete",
+        "confirmed_count": 1,
+        "publishable_count": 0,
+        "unresolved_count": 0,
+        "examined_goals": 1,
+        "total_goals": 1,
+        "incomplete_investigations": 0,
+        "reason_codes": []
+      },
+      "summary_markdown": "## RepoGuardian Review\n\n**发现已确认问题**\n\n- 目标检查：1 / 1\n- 已确认问题：1\n- 可生成草稿：0\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：complete\n\n1 项已确认记录未进入发布草稿；具体扣留原因保留在内部发布计划中。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。",
+      "user_report_markdown": "# RepoGuardian 用户审查报告\n\n## RepoGuardian Review\n\n**发现已确认问题**\n\n- 目标检查：1 / 1\n- 已确认问题：1\n- 可生成草稿：0\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：complete\n\n1 项已确认记录未进入发布草稿；具体扣留原因保留在内部发布计划中。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。\n\n完整证据、被扣留记录与运行过程请查看原始审计报告。",
+      "inline_drafts": [],
+      "summary_findings": [],
+      "withheld_findings": [
+        {
+          "candidate_id": "candidate-a",
+          "reason_code": "publication_usage_unknown"
+        }
+      ],
+      "content_eligible": true,
+      "blocking_reasons": []
+    }
+  }
+}

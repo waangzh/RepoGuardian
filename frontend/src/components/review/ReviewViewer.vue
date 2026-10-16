@@ -18,7 +18,9 @@ import ExecutionTimeline from "./ExecutionTimeline.vue";
 import CrossUnitReview from "./CrossUnitReview.vue";
 import TaskRuntimePanel from "./TaskRuntimePanel.vue";
 import CommentDraftPanel from "./CommentDraftPanel.vue";
-import { runtimeReport, runtimeLabel, taskRuntimeSummary, runtimeFindingRows, filterRuntimeFindings, runtimeUserReport, runtimeCommentsMarkdown, type RuntimeFindingFilter } from "../../utils/taskRuntimePresentation";
+import ReviewOutcomePanel from "./ReviewOutcomePanel.vue";
+import { usePublicationPlan } from "../../composables/usePublicationPlan";
+import { runtimeReport, runtimeLabel, taskRuntimeSummary, runtimeFindingRows, filterRuntimeFindings, type RuntimeFindingFilter } from "../../utils/taskRuntimePresentation";
 import UnitReviewRecord from "./UnitReviewRecord.vue";
 import { coverageCompletionLabel, crossUnitPresentation, evidenceSnapshotBase, originalIssueUnit, unitCoverageWarning, unitFindingLabel } from "../../utils/reviewObservability";
 
@@ -51,6 +53,9 @@ const emit = defineEmits<{
 }>();
 
 const snapshotBase = computed(() => evidenceSnapshotBase(props.task));
+const { plan: publicationPlan, error: publicationError, loading: publicationLoading, reload: reloadPublication } = usePublicationPlan(() => props.task);
+const publicationFindings = computed(() => [...(publicationPlan.value?.inline_drafts || []), ...(publicationPlan.value?.summary_findings || [])]);
+const commentsMarkdown = computed(() => publicationFindings.value.map(item => item.body_markdown).join("\n\n---\n\n"));
 
 const activeTab = ref<ReviewTab>("overview");
 const severityFilter = ref<SeverityFilter>("all");
@@ -204,6 +209,8 @@ function issueCountForUnit(unitId: string): number {
 const runtimeFindings = computed(() => taskRuntimeReport.value ? runtimeFindingRows(taskRuntimeReport.value, props.task.issues) : []);
 const visibleRuntimeFindings = computed(() => filterRuntimeFindings(runtimeFindings.value, runtimeFilter.value));
 const selectedRuntimeFinding = computed(() => visibleRuntimeFindings.value.find(item => item.key === selectedRuntimeKey.value) || null);
+const selectedPublicationFinding = computed(() => publicationFindings.value.find(item => item.finding_key === selectedRuntimeFinding.value?.key
+  || item.candidate_id === selectedRuntimeFinding.value?.issue?.id));
 watch(visibleRuntimeFindings, rows => {
   if (!rows.some(row => row.key === selectedRuntimeKey.value)) selectedRuntimeKey.value = rows[0]?.key || "";
 }, { immediate: true });
@@ -434,6 +441,10 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
       <button v-if="isTaskRuntime" type="button" :class="{ 'is-active': activeTab === 'report' }" :aria-current="activeTab === 'report' ? 'page' : undefined" @click="activeTab = 'report'">报告与导出</button>
     </nav>
 
+    <p v-if="publicationLoading" class="runtime-caption" role="status">正在生成发布计划…</p>
+    <p v-if="publicationError" class="runtime-warning-block" role="alert">{{ publicationError }} <button type="button" class="text-button" @click="reloadPublication">重试加载发布计划</button></p>
+    <ReviewOutcomePanel v-if="publicationPlan && activeTab === 'overview'" :plan="publicationPlan" />
+
     <section v-if="isTaskRuntime && activeTab === 'overview'" class="review-tab-panel overview-view">
       <article class="runtime-change-summary"><span>本次变更</span><p>{{ purposeSummary }}</p></article>
       <TaskRuntimePanel v-if="taskRuntimeReport" :report="taskRuntimeReport" :terminal="terminal"
@@ -568,7 +579,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
               <div><dt>建议</dt><dd>{{ selectedIssue.recommendation }}</dd></div>
             </dl>
             <details class="runtime-technical finding-technical"><summary>证据定位与模型详情</summary><p>{{ selectedIssue.primary_evidence.resolution_status }} · {{ selectedIssue.primary_evidence.resolution_method }} · {{ selectedIssue.primary_evidence.provenance || '未知来源' }}</p><p>模型置信度 {{ Math.round(selectedIssue.confidence * 100) }}% · 未经校准</p></details>
-            <CommentDraftPanel v-if="isTaskRuntime && selectedRuntimeFinding" :finding="selectedRuntimeFinding" :head-sha="task.pr?.head.sha" />
+            <CommentDraftPanel v-if="selectedPublicationFinding" :finding="selectedPublicationFinding" />
             <section v-if="selectedIssue.supporting_evidence.length" class="supporting-evidence">
               <h4>辅助证据</h4>
               <article v-for="evidence in selectedIssue.supporting_evidence" :key="`${evidence.file_path}:${evidence.resolved_start_line}`"><code>{{ evidence.file_path }}<template v-if="evidence.resolved_start_line">:{{ evidence.resolved_start_line }}</template></code><pre>{{ evidence.existing_code }}</pre></article>
@@ -589,7 +600,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
               <div v-if="selectedRuntimeFinding.failureScenario"><dt>触发场景</dt><dd>{{ selectedRuntimeFinding.failureScenario }}</dd></div>
               <div v-if="selectedRuntimeFinding.recommendation"><dt>建议</dt><dd>{{ selectedRuntimeFinding.recommendation }}</dd></div>
             </dl>
-            <CommentDraftPanel :finding="selectedRuntimeFinding" :head-sha="task.pr?.head.sha" />
+            <CommentDraftPanel v-if="selectedPublicationFinding" :finding="selectedPublicationFinding" />
             <details v-if="selectedRuntimeFinding.rawReason"><summary>技术详情</summary><code>{{ selectedRuntimeFinding.rawReason }}</code></details>
           </template>
           <EmptyState v-else icon="context" title="没有选中的发现" description="请选择包含发现的变更组。" />
@@ -639,7 +650,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
     </section>
 
     <section v-else-if="activeTab === 'report'" class="review-tab-panel report-view">
-      <ReportPanel :markdown="report || task.report_markdown" :user-markdown="runtimeUserReport(task)" :comments-markdown="runtimeCommentsMarkdown(task)" :filename-prefix="`review-${task.id}`" />
+      <ReportPanel :markdown="report || task.report_markdown" :user-markdown="publicationPlan?.user_report_markdown" :summary-markdown="publicationPlan?.summary_markdown" :comments-markdown="commentsMarkdown" :filename-prefix="`review-${task.id}`" />
     </section>
     <section v-else class="review-tab-panel activity-view">
       <article class="run-manifest-card">
