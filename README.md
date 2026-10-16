@@ -69,6 +69,17 @@ npm run dev
 
 审查自动执行至最终报告，不会暂停等待人工回答。证据不足、验证失败和缺少业务规则的内容保留为未确认问题或覆盖缺口；由你在原 PR 决定是否接受、修改或合并，也可自行将报告复制到评论。
 
+### 手动发布到 GitHub（可选）
+
+默认关闭。P1 仅支持可信的本地单用户部署，发布接口要求本机连接及独立 Bearer 操作口令，不支持直接公开到公网。操作口令仅在页面内存中临时使用，不是 GitHub PAT。
+
+1. 在 `backend/.env` 中配置独立的 `REPOGUARDIAN_GITHUB_PUBLISH_TOKEN`（Fine-grained PAT，仅授权目标仓库的 **Pull requests: write**）、数字仓库 ID allowlist、PAT 用户数字 ID，以及至少 32 字符的 `REPOGUARDIAN_PUBLICATION_API_TOKEN`。不会回退使用只读 `GITHUB_TOKEN`。
+2. 在 GitHub 核对该 PAT 的权限后设置 `REPOGUARDIAN_GITHUB_PUBLISH_PULL_REQUESTS_WRITE_CONFIRMED=true`，再启用 `REPOGUARDIAN_GITHUB_PUBLISH_ENABLED=true`。预检还会读取 GitHub 身份与仓库写角色；仓库角色不等于 Token grant，实际写入的 401/403 仍会被明确拒绝。完整配置见 [`.env.example`](.env.example)。
+3. 在 `backend/` 执行 `uv run alembic upgrade head`，再重启后端。在终态审查页展开 **发布到 GitHub**，输入操作口令、选择问题并预检。确认 Summary 创建/更新、Head、Inline 行映射和已有评论后，二次确认写入。
+4. 发布状态与 Review Outcome 独立。可通过发布历史重新查看状态及 GitHub 返回的链接。`uncertain` 使用 **检查远端发布状态**：先核对已发送批次，无法确认时保留未知并要求人工处理，不盲目重发 POST。
+
+Summary 复用同一 PR、同一发布身份的主评论；Inline 按同一 Head 的严格内容和定位去重。过期 Base/Head、关闭 PR、未知作者或手工修改的摘要会阻止写入。无法精确映射的已核验问题可降为 Summary-only，需要明确确认部分发布。跨系统写入并非原子事务，不承诺 exactly-once；API 版本复查后仍存在短暂远端竞态窗口。
+
 解读结果时注意：
 
 - **覆盖情况**：覆盖按审查目标统计；只有该文件的全部目标均为 `examined` 才计为已审查。`partial`、`blocked` 或 `completed_with_warnings` 表示仍有未完整完成的检查。
@@ -114,14 +125,14 @@ REPOGUARDIAN_LANGSMITH_TRACING=false # 默认关闭追踪；启用后默认仍�
 ## 安全边界
 
 - 模型只能使用受限的只读工具，文件读取经过路径、符号链接、敏感文件与预算校验；补查不能绕过这些边界。
-- RepoGuardian 不执行目标仓库的安装、测试或构建，不自动 commit、push、创建 PR 或写回 GitHub 评论。
+- RepoGuardian 不执行目标仓库的安装、测试或构建，不自动 commit、push、创建 PR。GitHub 评论写入只由独立 Publisher 在用户预检和确认后执行，Review Agent 没有写权限。
 - 动态验证只通过显式配置的 Project CI / User Runner 发起，不接受模型生成的 shell 命令；执行端不可用时不会回退到宿主机。Fork PR 默认不触发 Project CI。
 - 审查所需的代码内容会发送给配置的模型服务。使用前确认模型服务、外部执行端与凭据的数据边界。
 - 本地 SQLite 与运行产物用于持久化和恢复，不构成多租户或生产级安全隔离。
 
 ## 当前限制
 
-- 只支持 GitHub PR 输入，暂不写回 GitHub Review、Check Run 或修复 PR。
+- 只支持 GitHub PR 输入；可显式配置本地单用户手动 Summary / Inline 发布，不自动 Approve / Request Changes，不创建 Check Run 或修复 PR。
 - 不提供本地 Sandbox 或通用命令执行能力。
 - 超大变更可能因输入、时间或模型预算限制而部分完成，需要结合覆盖范围复核。
 - 尚未完成真实样本上的协作效果对照与人工核验，不承诺召回、误报或成本收益。

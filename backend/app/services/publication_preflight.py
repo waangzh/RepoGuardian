@@ -38,6 +38,8 @@ class PublicationPreflight:
             raise GitHubPublishError("github_permission_denied")
         pr = await self.github.get(f"{path}/pulls/{number}")
         manifest = task.run_manifest
+        if manifest.repository is not None and manifest.repository.casefold() != f"{owner}/{repo}".casefold():
+            raise GitHubPublishError("repository_identity_mismatch")
         if (pr.get("number") != number or (pr.get("base", {}).get("repo") or {}).get("id") != repository_id
                 or (manifest.pr_number is not None and manifest.pr_number != number)):
             raise GitHubPublishError("repository_identity_mismatch")

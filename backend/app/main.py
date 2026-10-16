@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.reviews import get_review_service, router as reviews_router
+from app.api.publications import get_publication_service, router as publications_router
 from app.api.validation_requests import router as validation_requests_router
 from app.api.project_ci import router as project_ci_router
 from app.api.validation_backends import router as validation_backends_router
@@ -33,12 +34,17 @@ async def lifespan(_app: FastAPI):
     await maintenance.run_once()
     maintenance_task = asyncio.create_task(maintenance.run_forever())
     service._ensure_worker_started()
+    publication = get_publication_service() if settings.repoguardian_github_publish_enabled else None
+    if publication:
+        publication.start()
     project_ci = get_project_ci_service()
     if project_ci is not None:
         project_ci.start_pending_polling()
     try:
         yield
     finally:
+        if publication:
+            await publication.close()
         maintenance.stop()
         await maintenance_task
         if project_ci is not None:
@@ -75,6 +81,7 @@ app.add_middleware(
 )
 
 app.include_router(reviews_router, prefix="/api")
+app.include_router(publications_router, prefix="/api")
 app.include_router(validation_requests_router, prefix="/api")
 app.include_router(project_ci_router, prefix="/api")
 app.include_router(validation_backends_router, prefix="/api")

@@ -1,6 +1,7 @@
 """只映射当前 GitHub 完整 patch 中已验证的真实行号，不使用 position。"""
 import re
 from dataclasses import dataclass
+from app.models.review import _validate_repo_relative_path
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,10 @@ class GitHubDiffMapper:
         if len(candidates) != 1 or anchor.side not in {"head", "base"} or not anchor.start_line:
             return MappingFailure("diff_mapping_unavailable")
         file = candidates[0]
+        try:
+            _validate_repo_relative_path(file.get("filename"))
+        except (ValueError, TypeError, AttributeError):
+            return MappingFailure("diff_mapping_unavailable")
         lines = self._lines(file)
         if lines is None:
             return MappingFailure("diff_mapping_unavailable")

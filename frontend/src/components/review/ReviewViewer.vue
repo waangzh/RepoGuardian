@@ -19,6 +19,7 @@ import CrossUnitReview from "./CrossUnitReview.vue";
 import TaskRuntimePanel from "./TaskRuntimePanel.vue";
 import CommentDraftPanel from "./CommentDraftPanel.vue";
 import ReviewOutcomePanel from "./ReviewOutcomePanel.vue";
+import GitHubPublicationPanel from "./GitHubPublicationPanel.vue";
 import { usePublicationPlan } from "../../composables/usePublicationPlan";
 import { runtimeReport, runtimeLabel, taskRuntimeSummary, runtimeFindingRows, filterRuntimeFindings, type RuntimeFindingFilter } from "../../utils/taskRuntimePresentation";
 import UnitReviewRecord from "./UnitReviewRecord.vue";
@@ -444,6 +445,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
     <p v-if="publicationLoading" class="runtime-caption" role="status">正在生成发布计划…</p>
     <p v-if="publicationError" class="runtime-warning-block" role="alert">{{ publicationError }} <button type="button" class="text-button" @click="reloadPublication">重试加载发布计划</button></p>
     <ReviewOutcomePanel v-if="publicationPlan && activeTab === 'overview'" :plan="publicationPlan" />
+    <GitHubPublicationPanel v-if="isTaskRuntime && terminal && publicationPlan?.content_eligible" :review-id="task.id" :plan="publicationPlan" />
 
     <section v-if="isTaskRuntime && activeTab === 'overview'" class="review-tab-panel overview-view">
       <article class="runtime-change-summary"><span>本次变更</span><p>{{ purposeSummary }}</p></article>
