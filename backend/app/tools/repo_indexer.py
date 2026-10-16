@@ -118,6 +118,7 @@ class RepoIndexer(BaseTool):
                     "size": size,
                     "imports": sorted({item.module for item in analysis.imports}),
                     "import_refs": [item.model_dump(mode="json") for item in analysis.imports],
+                    "python_namespace": analysis.python_namespace,
                     "analysis_level": int(analysis.level),
                     "parser_id": analysis.parser_id,
                 })
