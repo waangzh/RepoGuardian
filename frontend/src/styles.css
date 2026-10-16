@@ -1,3 +1,5 @@
+@import "./styles/runtime-review.css";
+
 :root {
   color-scheme: light;
   font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
