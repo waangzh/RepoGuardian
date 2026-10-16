@@ -521,7 +521,7 @@ def test_alembic_migration_upgrades_and_rolls_back(tmp_path: Path) -> None:
     backend = Path(__file__).parents[1]
     subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "20260801_0001"],
-        cwd=backend, env=env, check=True, capture_output=True, text=True,
+        cwd=backend, env=env, check=True, capture_output=True, text=True, encoding="utf-8",
     )
     with sqlite3.connect(database) as connection:
         tables = {row[0] for row in connection.execute(
@@ -534,7 +534,7 @@ def test_alembic_migration_upgrades_and_rolls_back(tmp_path: Path) -> None:
 
     subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "head"],
-        cwd=backend, env=env, check=True, capture_output=True, text=True,
+        cwd=backend, env=env, check=True, capture_output=True, text=True, encoding="utf-8",
     )
     with sqlite3.connect(database) as connection:
         tables = {row[0] for row in connection.execute(
@@ -552,10 +552,10 @@ def test_alembic_migration_upgrades_and_rolls_back(tmp_path: Path) -> None:
         "project_ci_requests",
         "project_ci_webhook_deliveries",
     } <= tables
-    assert version == ("20260804_0002",)
+    assert version == ("20261016_0003",)
     subprocess.run(
         [sys.executable, "-m", "alembic", "downgrade", "base"],
-        cwd=backend, env=env, check=True, capture_output=True, text=True,
+        cwd=backend, env=env, check=True, capture_output=True, text=True, encoding="utf-8",
     )
     with sqlite3.connect(database) as connection:
         tables = {row[0] for row in connection.execute(
