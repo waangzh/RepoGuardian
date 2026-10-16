@@ -340,12 +340,18 @@ def test_frozen_configuration_cannot_be_replaced(persistence):
         repository.save_task(task)
 
 
-async def test_service_stream_and_retry_use_saved_snapshot_and_budget(production_input, persistence, monkeypatch):
+@pytest.mark.parametrize("connection_failure", [False, True])
+async def test_service_stream_and_retry_use_saved_snapshot_and_budget(
+        production_input, persistence, monkeypatch, caplog, connection_failure):
+    caplog.set_level("INFO", logger="RepoGuardian.Service")
     from app.services.review_service import ReviewService
     from app.tools.git_tool import GitTool
     from langgraph.checkpoint.memory import InMemorySaver
     import app.graph.review_graph as graph_module
     state, provider, calls = production_input
+    if connection_failure:
+        state["task_runtime_configuration"]["request_attempts"] = 2
+        provider._retry_backoff_seconds = 0
     repository = persistence[0]
     task = ReviewTask(id="run", pr_url=state["pr_url"], engine="task_review_v1",
                      task_runtime_configuration=state["task_runtime_configuration"])
@@ -373,6 +379,10 @@ async def test_service_stream_and_retry_use_saved_snapshot_and_budget(production
     blocked = True
     class SDK:
         async def ainvoke(self, messages):
+            if connection_failure:
+                import httpx
+                from openai import APIConnectionError
+                raise APIConnectionError(request=httpx.Request("POST", "https://example.test/secret"))
             result = await original("fixture", 4096).ainvoke(messages)
             raw = json.loads(result.content)
             if blocked:
@@ -382,6 +392,15 @@ async def test_service_stream_and_retry_use_saved_snapshot_and_budget(production
     provider._build_chat_model = lambda *args: SDK()
     await service._run_graph("run")
     current = repository.get_task("run")
+    if connection_failure:
+        assert current.status == TaskStatus.failed
+        assert "model_connection_error" in current.error and "尝试 2 次" in current.error
+        assert current.task_runtime_report["unknown_attempts"] == 2
+        assert current.task_runtime_report["total_tokens"] is None
+        assert "model_connection_error" in current.report_markdown
+        assert len(current.model_usages) == 1 and not current.model_usages[0].usage_available
+        assert "失败结束" in caplog.text and "🎉" not in caplog.text
+        return
     assert current.status == TaskStatus.completed_with_warnings
     assert not current.task_runtime_report["scope_complete"]
     unit_id = current.task_runtime_report["work_items"][0]["unit_id"]

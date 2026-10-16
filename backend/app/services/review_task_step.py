@@ -7,6 +7,7 @@ from dataclasses import asdict
 import json
 
 from app.models.review import ReviewToolScope, UnitEvidenceStore, ContextRetrievalPlan, ChangedFile
+from app.agents.providers import LLMProviderError, provider_failure_info
 from app.models.review_runtime import RuntimeReadResponse
 from app.services.evidence_store import put_chunks, store_chunks, evidence_snapshot
 from app.services.review_input_context import build_context_evidence
@@ -150,6 +151,12 @@ class InspectTaskStep:
             try:
                 with activate_run_budget(self.budget):
                     result = await self.provider.task_review_step(request)
+            except LLMProviderError as exc:
+                exc.work_item_id = executor.work_item.work_item_id
+                if exc.usage is not None:
+                    self.usages.append(exc.usage.model_copy(update={"response_metadata": {
+                        "provider_failure": provider_failure_info(exc)}}))
+                raise
             finally:
                 run_budget_attempt_observer.reset(observer)
                 run_budget_dispatch_guard.reset(dispatch_token)
