@@ -11,7 +11,24 @@ function change(value: string) {
   choice.value = value;
   const next = structuredClone(base);
   next.id = `preview-${value}`;
-  if (value === "legacy") {
+  if (value.startsWith("runtime-")) {
+    const issue = structuredClone(base.issues[0]);
+    issue.status = "confirmed";
+    next.engine = "task_review_v1";
+    next.issues = value === "runtime-mixed" ? [issue] : [];
+    next.task_runtime_report = {
+      engine: "task_review_v1", coverage_version: "task-goals-v1", execution_status: value === "runtime-failed" ? "failed" : value === "runtime-cancelled" ? "cancelled" : "completed",
+      termination_reason: value === "runtime-failed" ? "technical_failure" : value === "runtime-cancelled" ? "cancelled" : "plan_exhausted", scope_complete: true,
+      initial_scope_coverage: [{ goal_id: "g1", target_kind: "source_range", target_ref: "callee.py", start_line: 1, end_line: 20, status: "examined", reason: "已核对空值返回与调用方字段访问路径。" }],
+      admitted_investigations: [{ work_item_id: "i1", proposition: "调用方 caller.py::get_profile 对 callee.py::load_user 的调用是否保持兼容？", status: "insufficient_evidence", answer: "insufficient_evidence", reason: "缺少该调用链的业务输入前提，无法确认全部路径。", limitations: ["本轮未执行目标仓库测试。"] }],
+      findings: value === "runtime-mixed" ? [
+        { key: "confirmed", status: "confirmed", candidate: { claim: issue.title }, issue, publication: { published_text: { claim: issue.title } } },
+        { key: "pending", status: "unresolved", candidate: { claim: "待确认：上游是否允许返回空值", failure_scenario: "调用方可能收到空值，仍需确认业务约定。" }, issue: null, reason: "candidate_derivation_incomplete" },
+        { key: "dismissed", status: "dismissed", candidate: { claim: "已排除：请求参数缺少校验" }, issue: null, reason: "independent_verification_refuted" },
+      ] : [], unscheduled_leads: [], relationship_hints: [], usage_integrity: "unknown", unknown_attempts: 1, sent_calls: 4, settled_tokens: 1800, work_items: [],
+    };
+    next.status = value === "runtime-failed" ? "failed" : value === "runtime-cancelled" ? "cancelled" : "completed_with_warnings";
+  } else if (value === "legacy") {
     next.cross_unit_risk = null;
     next.coordination_plan = null;
     next.followup_results = [];
@@ -68,6 +85,8 @@ function change(value: string) {
   }
   task.value = next;
 }
+
+change(new URLSearchParams(window.location.search).get("scenario") || "completed");
 
 createApp({ setup() { return () => h("div", [
   h("div", { style: "padding:12px 24px;background:#fff3dd;display:flex;gap:18px;align-items:center;flex-wrap:wrap;font-size:13px" }, [

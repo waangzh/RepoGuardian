@@ -12,6 +12,7 @@ import ReviewPreviewPanel from "./components/review/ReviewPreviewPanel.vue";
 import ReviewViewer from "./components/review/ReviewViewer.vue";
 import type { AppPage, ProviderModelInfo } from "./types/operations";
 import type { ReviewMode, ReviewPreviewResponse, ReviewTask, ValidationBackend } from "./types/review";
+import { reviewCompletionMessage } from "./utils/taskRuntimePresentation";
 
 type NoticeTone = "info" | "success" | "warning" | "danger";
 interface TaskNotice {
@@ -323,7 +324,7 @@ function showTerminalNotice(next: ReviewTask) {
     tone: next.status === "failed" ? "danger" : next.status === "completed" ? "success" : "warning",
     title: next.status === "failed" ? "审查任务失败" : next.status === "cancelled" ? "审查任务已取消" : "审查已完成",
     message: completed
-      ? (next.issues.length ? `发现 ${next.issues.length} 个需关注的问题，报告已生成。` : "未发现达到报告门槛的问题，报告已生成。")
+      ? reviewCompletionMessage(next)
       : (next.error || "任务已停止。"),
     actionLabel: completed ? "查看结果" : undefined,
   }, 7000);

@@ -1,21 +1,18 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { TaskRuntimeReport } from "../../types/review";
-import { retryableRuntimeUnits, runtimeLabel, relationshipGroups, relationshipEvidence, investigationRelationships, taskRuntimeSummary } from "../../utils/taskRuntimePresentation";
+import { retryableRuntimeUnits, runtimeLabel, relationshipGroups, relationshipEvidence, investigationRelationships, taskRuntimeSummary, runtimeWarnings, runtimeFindingRows, filterRuntimeFindings } from "../../utils/taskRuntimePresentation";
 const props = defineProps<{ report: TaskRuntimeReport; terminal: boolean; retryingUnitId: string | null; view?: "overview" | "checks" }>();
-const emit = defineEmits<{ retry: [unitId: string]; "open-checks": [] }>();
+const emit = defineEmits<{ retry: [unitId: string]; "open-checks": []; "open-finding": [key: string] }>();
 const retryUnits = computed(() => retryableRuntimeUnits(props.report));
 const summary = computed(() => taskRuntimeSummary(props.report));
+const warnings = computed(() => runtimeWarnings(props.report));
+const activeFindings = computed(() => filterRuntimeFindings(runtimeFindingRows(props.report), "active"));
 const leadGroups = computed(() => relationshipGroups(props.report.unscheduled_leads));
 const hintGroups = computed(() => relationshipGroups(props.report.relationship_hints));
 function claim(value: Record<string, unknown>): string {
   const candidate = value.candidate as Record<string, unknown> | undefined;
   return String(candidate?.claim || "未命名候选");
-}
-function issueText(value: Record<string, unknown>, field: string): string {
-  const issue = value.issue;
-  if (!issue || typeof issue !== "object" || Array.isArray(issue)) return "";
-  return String((issue as Record<string, unknown>)[field] || "");
 }
 </script>
 
@@ -25,14 +22,15 @@ function issueText(value: Record<string, unknown>, field: string): string {
       <header><div><h2>审查结果</h2><p>{{ runtimeLabel(report.execution_status) }} · {{ report.scope_complete ? '初始范围已检查' : '初始范围存在缺口' }}</p></div></header>
       <p class="result-counts">{{ summary.findings.confirmed }} 项已确认 · {{ summary.findings.unresolved }} 项待确认 · {{ summary.scope.incomplete }} 项范围缺口</p>
       <p v-if="report.execution_status === 'failed'" role="alert">失败原因：{{ report.failure_summary || '技术失败；旧报告未记录具体原因' }}</p>
-      <h3>需要确认</h3>
-      <p v-if="!report.findings.length">当前没有候选发现；检查范围仍需根据下方状态单独判断。</p>
-      <div v-for="item in report.findings" :key="String(item.key)" class="finding-summary">
-        <strong>{{ runtimeLabel(item.status) }} · {{ claim(item) }}</strong>
-        <p v-if="issueText(item, 'failure_scenario')">{{ issueText(item, 'failure_scenario') }}</p>
-        <p v-if="item.reason">{{ item.reason }}</p>
-      </div>
-      <p v-if="summary.scope.incomplete" class="scope-warning">尚有 {{ summary.scope.incomplete }} 项初始范围未完成检查。</p>
+      <ul v-if="warnings.length" class="runtime-warnings" aria-label="审查限制与未决事项"><li v-for="warning in warnings" :key="warning">{{ warning }}</li></ul>
+      <h3>需要处理的发现</h3>
+      <p v-if="!activeFindings.length">{{ report.execution_status === 'running' ? '审查进行中，发现与检查范围仍在更新。' : '当前没有已确认或待确认的发现；检查限制以上方提示为准。' }}</p>
+      <button v-for="item in activeFindings" :key="item.key" type="button" class="finding-summary" @click="emit('open-finding', item.key)">
+        <strong>{{ runtimeLabel(item.status) }} · {{ item.title }}</strong>
+        <span v-if="item.failureScenario">{{ item.failureScenario }}</span>
+        <span v-if="item.reason">{{ item.reason }}</span>
+        <span>查看详情 →</span>
+      </button>
       <button type="button" class="text-button" @click="$emit('open-checks')">查看检查范围与证据 →</button>
     </template>
     <template v-else>
