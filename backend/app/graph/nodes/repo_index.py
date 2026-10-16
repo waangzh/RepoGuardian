@@ -18,7 +18,11 @@ async def repo_index_node(state: ReviewState) -> ReviewState:
     """
     repo_path = state.get("repo_path", "")
     logger.info("📂 [索引] 开始扫描仓库: %s", repo_path)
-    result = await RepoIndexer().execute(repo_path=repo_path)
+    options = {}
+    version = (state.get("task_runtime_configuration") or {}).get("call_resolution_version")
+    if version is not None:
+        options["call_resolution_version"] = version
+    result = await RepoIndexer().execute(repo_path=repo_path, **options)
     logger.info(
         "📂 [索引] 完成: %d 文件, %d 符号, 框架=%s",
         len(result["file_index"]),
