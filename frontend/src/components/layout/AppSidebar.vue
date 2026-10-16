@@ -14,7 +14,6 @@ const emit = defineEmits<{
 const items = () => [
   { id: "dashboard", icon: props.hasReview ? "dashboard" : "play", label: props.hasReview ? "当前审查" : "新审查" },
   { id: "history", icon: "history", label: "审查历史" },
-  { id: "validation", icon: "server", label: "验证后端" },
   { id: "settings", icon: "settings", label: "系统" },
 ] satisfies Array<{ id: AppPage; icon: string; label: string }>;
 </script>

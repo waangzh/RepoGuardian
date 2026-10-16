@@ -7,7 +7,6 @@ from importlib.metadata import PackageNotFoundError, version
 from fastapi import APIRouter, HTTPException, status
 
 from app.api.reviews import get_review_service
-from app.api.validation_backends import discover_validation_backends
 from app.core.config import settings
 from app.core.database import schema_is_current
 from app.models.operations import (
@@ -77,7 +76,6 @@ async def get_system_diagnostics() -> SystemDiagnostics:
         patch_max_files=settings.repoguardian_patch_max_files,
         patch_max_changed_lines=settings.repoguardian_patch_max_changed_lines,
         retention_days=settings.repoguardian_retention_days,
-        validation_backends=await discover_validation_backends(),
         configured_secrets={
             "github": bool(settings.github_token),
             "llm_provider": bool(settings.openai_api_key),

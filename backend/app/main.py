@@ -10,7 +10,6 @@ from app.api.reviews import get_review_service, router as reviews_router
 from app.api.publications import get_publication_service, router as publications_router
 from app.api.validation_requests import router as validation_requests_router
 from app.api.project_ci import router as project_ci_router
-from app.api.validation_backends import router as validation_backends_router
 from app.api.system import router as system_router
 from app.graph.checkpointer import close_checkpointer
 from app.services.maintenance_service import MaintenanceService
@@ -84,7 +83,6 @@ app.include_router(reviews_router, prefix="/api")
 app.include_router(publications_router, prefix="/api")
 app.include_router(validation_requests_router, prefix="/api")
 app.include_router(project_ci_router, prefix="/api")
-app.include_router(validation_backends_router, prefix="/api")
 app.include_router(system_router, prefix="/api")
 
 

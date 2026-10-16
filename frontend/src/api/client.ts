@@ -12,7 +12,6 @@ import type {
   ModelCatalogResponse,
   ReviewTaskListResponse,
   SystemDiagnostics,
-  ValidationBackendInfo,
   WorkspaceCleanupPreview,
   WorkspaceCleanupResponse,
 } from "../types/operations";
@@ -134,10 +133,6 @@ export async function listReviews(options: {
   });
   if (options.status) params.set("status", options.status);
   return request<ReviewTaskListResponse>(`/api/reviews?${params.toString()}`);
-}
-
-export async function getValidationBackends(): Promise<ValidationBackendInfo[]> {
-  return request<ValidationBackendInfo[]>("/api/validation/backends");
 }
 
 export async function getSystemDiagnostics(): Promise<SystemDiagnostics> {
