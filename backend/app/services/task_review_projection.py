@@ -145,6 +145,59 @@ def task_runtime_coverage(report, changed):
         "coordination_status": "unknown", "coordination_reason": "独立 task-goals-v1 调查口径", "files": files}
 
 
+def task_runtime_summary(report: TaskRuntimeReport | dict) -> dict:
+    """Return one semantic summary for UI and report consumers.
+
+    Findings, investigations, and scope outcomes use different state machines;
+    this summary keeps their denominators separate instead of inferring them
+    from the legacy ``ReviewTask.issues`` projection.
+    """
+    value = report if isinstance(report, TaskRuntimeReport) else TaskRuntimeReport.model_validate(report)
+    findings = value.findings
+    finding_statuses = [str(item.get("status", "unknown")) for item in findings]
+    investigations = value.admitted_investigations
+    investigation_statuses = [str(item.get("status", "unknown")) for item in investigations]
+    scope_statuses = [str(item.get("status", "unknown")) for item in value.initial_scope_coverage]
+    publishable = sum(
+        1 for item in findings
+        if item.get("status") in {"confirmed", "published"}
+        and (item.get("publication") or {}).get("published_text") is not None
+    )
+    return {
+        "execution": {
+            "status": value.execution_status,
+            "termination_reason": value.termination_reason,
+            "scope_complete": value.scope_complete,
+        },
+        "findings": {
+            "total": len(findings),
+            "confirmed": finding_statuses.count("confirmed"),
+            "dismissed": finding_statuses.count("dismissed"),
+            "unresolved": sum(status in {"candidate", "unresolved"} for status in finding_statuses),
+            "without_issue": sum(not item.get("issue") for item in findings),
+            "publishable": publishable,
+        },
+        "investigations": {
+            "total": len(investigations),
+            "answered": investigation_statuses.count("answered"),
+            "insufficient_evidence": investigation_statuses.count("insufficient_evidence"),
+            "not_executed": investigation_statuses.count("not_executed"),
+        },
+        "scope": {
+            "total": len(scope_statuses),
+            "examined": scope_statuses.count("examined"),
+            "incomplete": sum(status != "examined" for status in scope_statuses),
+            "blocked": scope_statuses.count("blocked"),
+            "unsupported": scope_statuses.count("unsupported"),
+            "not_examined": scope_statuses.count("not_examined"),
+        },
+        "usage": {
+            "integrity": value.usage_integrity,
+            "unknown_attempts": value.unknown_attempts,
+        },
+    }
+
+
 def task_runtime_issues(report):
     """仅向旧 findings 展示字段投影，绝不合成旧 Unit 成功记录。"""
     from app.models.review import ReviewIssue, IssueStatus
