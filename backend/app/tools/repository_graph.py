@@ -77,12 +77,16 @@ def build_repository_graph(
                     candidates = {(str(item["file"]), str(item["symbol"])): item
                         for item in by_name.get(simple, [])
                         if item is not caller and files[str(item["file"])].get("language") == "python"}
+                    if len(candidates) != 1 and not call_ref.get("import_binding"):
+                        continue  # 无模块绑定的多同名匹配不构成符号关系，CallRef 保留未核验原因。
                 for callee in sorted(candidates.values(), key=_symbol_id):
                     edges.append(_edge("symbol", _symbol_id(caller), "symbol", _symbol_id(callee),
                         "calls", float(call_ref.get("confidence", 0.7)), f"{caller.get('symbol')} calls {call}",
                         source_file=str(caller["file"]), target_file=str(callee["file"]),
                         resolution_status="resolved" if bound else "unresolved",
                         resolution_basis="python_lexical_import" if bound else reason,
+                        relationship_level=("symbol" if call_ref.get("import_binding")
+                            and reason != "import_module_external_or_missing" else "search_hint"),
                         call_expression=call, call_sites=[{"line": call_ref.get("line"),
                             "expression": call, "import_binding": call_ref.get("import_binding")}]))
                 continue
@@ -188,7 +192,7 @@ def _python_call_target(call, caller, files, symbols, lookup):
     paths = {path for path, confidence in resolve_import(str(caller["file"]), module, files, lookup)
              if confidence >= 0.94}
     if len(paths) != 1:
-        return None, False, "import_module_ambiguous_or_external"
+        return None, False, "import_module_ambiguous" if paths else "import_module_external_or_missing"
     targets = [symbol for symbol in symbols if symbol["file"] in paths and symbol.get("symbol") == member]
     if len(targets) != 1:
         return None, False, "import_symbol_ambiguous_or_missing"
@@ -468,9 +472,11 @@ def _test_match_score(test_path: str, source_path: str) -> int:
 
 
 def _dedupe_edges(edges: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    best: dict[tuple[str, str, str], dict[str, Any]] = {}
+    best: dict[tuple, dict[str, Any]] = {}
     for edge in edges:
         key = (str(edge["source"]), str(edge["target"]), str(edge["type"]))
+        if "call_sites" in edge:
+            key += (edge.get("relationship_level"), edge.get("resolution_status"), edge.get("resolution_basis"))
         if key in best and "call_sites" in edge:
             previous = best[key]
             previous["call_sites"].extend(site for site in edge["call_sites"] if site not in previous["call_sites"])

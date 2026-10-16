@@ -504,13 +504,13 @@ class ReviewRepository:
         runtime = dict(runtime_row.result) if runtime_row and runtime_row.result else {}
         from copy import deepcopy
         runtime = deepcopy(runtime)
-        examinations, investigations, findings, leads = {}, [], [], []
+        examinations, investigations, findings, leads, hints = {}, [], [], [], []
         def read_reference(ref):
             content = self._artifacts.read_text(ref["uri"])
             if hashlib.sha256(content.encode()).hexdigest() != ref["sha256"]:
                 raise ValueError("cancelled runtime artifact invalid")
             return json.loads(content)
-        for reference in runtime.get("sessions", {}).values():
+        for identity, reference in runtime.get("sessions", {}).items():
             try:
                 saved = read_reference(reference)
             except (OSError, ValueError, KeyError):
@@ -518,7 +518,7 @@ class ReviewRepository:
             examinations.update(saved.get("examinations", {}))
             if saved.get("investigation"):
                 answer = saved["investigation"]
-                investigations.append({**answer, "status": "answered" if answer["answer"] != "insufficient_evidence"
+                investigations.append({**answer, "work_item_id": identity, "status": "answered" if answer["answer"] != "insufficient_evidence"
                                        else "insufficient_evidence"})
         if runtime.get("derivation"):
             try:
@@ -526,6 +526,12 @@ class ReviewRepository:
                 findings = list(derived.get("candidates", {}).values())
                 leads = [{"lead_id": key, **value} for key, value in derived.get("leads", {}).items()
                          if value.get("status") == "not_scheduled"]
+                hints = [{"lead_id": key, **value} for key, value in derived.get("leads", {}).items()
+                         if value.get("status") == "hint"]
+                from app.services.task_review_projection import relationship_leads_for_item
+                for investigation in investigations:
+                    investigation["relationship_leads"] = relationship_leads_for_item(
+                        derived.get("leads", {}), investigation["work_item_id"])
             except (OSError, ValueError, KeyError):
                 pass
         outcomes = [{**goal, "status": "unsupported" if goal.get("unsupported_reason") else
@@ -539,7 +545,7 @@ class ReviewRepository:
         report = TaskRuntimeReport(execution_status="cancelled", termination_reason="cancelled",
             scope_complete=bool(outcomes) and all(value["status"] == "examined" for value in outcomes),
             initial_scope_coverage=outcomes, admitted_investigations=investigations, findings=findings,
-            unscheduled_leads=leads, usage_integrity="unknown" if unknown else "complete",
+            unscheduled_leads=leads, relationship_hints=hints, usage_integrity="unknown" if unknown else "complete",
             sent_calls=sum(attempt.sent for attempt in attempts), settled_tokens=budget.settled_actual if budget else 0,
             unknown_attempts=unknown, total_tokens=None if unknown else budget.settled_actual if budget else 0,
             work_items=runtime.get("items", []))

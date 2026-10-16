@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { TaskRuntimeReport } from "../../types/review";
-import { retryableRuntimeUnits, runtimeLabel } from "../../utils/taskRuntimePresentation";
+import { retryableRuntimeUnits, runtimeLabel, relationshipGroups, relationshipEvidence, investigationRelationships } from "../../utils/taskRuntimePresentation";
 const props = defineProps<{ report: TaskRuntimeReport; terminal: boolean; retryingUnitId: string | null }>();
 const emit = defineEmits<{ retry: [unitId: string] }>();
 const retryUnits = computed(() => retryableRuntimeUnits(props.report));
+const leadGroups = computed(() => relationshipGroups(props.report.unscheduled_leads));
+const hintGroups = computed(() => relationshipGroups(props.report.relationship_hints));
 function claim(value: Record<string, unknown>): string {
   const candidate = value.candidate as Record<string, unknown> | undefined;
   return String(candidate?.claim || "未命名候选");
@@ -26,11 +28,23 @@ function claim(value: Record<string, unknown>): string {
       :disabled="retryingUnitId === unit" @click="emit('retry', unit)">重新排队缺口 · {{ unit }}</button>
     <h3>调查命题</h3>
     <p v-if="!report.admitted_investigations.length">当前没有准入调查。</p>
-    <p v-for="item in report.admitted_investigations" :key="String(item.work_item_id)">{{ item.proposition }} · {{ runtimeLabel(item.status) }}<template v-if="item.answer"> · {{ runtimeLabel(item.answer) }}</template></p>
+    <div v-for="item in report.admitted_investigations" :key="String(item.work_item_id)">
+      <p>{{ item.proposition }} · {{ runtimeLabel(item.status) }}<template v-if="item.answer"> · {{ runtimeLabel(item.answer) }}</template></p>
+      <p v-for="lead in investigationRelationships(item)" :key="String(lead.lead_id)">{{ relationshipEvidence(lead) }}</p>
+    </div>
     <h3>缺陷结果</h3>
     <p v-if="!report.findings.length">当前没有候选发现；检查范围和缺口以上表为准。</p>
     <p v-for="item in report.findings" :key="String(item.key)">{{ runtimeLabel(item.status) }} · {{ claim(item) }}<template v-if="item.reason"> · {{ item.reason }}</template></p>
     <h3 v-if="report.unscheduled_leads.length">未执行线索</h3>
-    <p v-for="item in report.unscheduled_leads" :key="String(item.lead_id)">{{ item.proposition }} · {{ item.reason }}</p>
+    <details v-for="group in leadGroups" :key="group.key">
+      <summary>{{ group.label }} · {{ runtimeLabel(group.status) }} · {{ group.reason }} · {{ group.members.length }} 条</summary>
+      <p v-for="(item, index) in group.members" :key="String(item.lead_id || index)">{{ item.proposition }} · {{ relationshipEvidence(item) }}</p>
+    </details>
+    <h3 v-if="hintGroups.length">关系取证提示</h3>
+    <p v-if="hintGroups.length">以下关联尚未核验，不计作已完成调查。</p>
+    <details v-for="group in hintGroups" :key="group.key">
+      <summary>{{ group.label }} · {{ group.members.length }} 条</summary>
+      <p v-for="(item, index) in group.members" :key="String(item.lead_id || index)">{{ relationshipEvidence(item) }}</p>
+    </details>
   </article>
 </template>
