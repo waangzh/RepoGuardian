@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from app.languages.python_bindings import python_binding_evidence
 import re
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -131,7 +132,11 @@ class TreeSitterLanguageAdapter(RegexLanguageAdapter):
             parser_id = f"tree-sitter.{self.language_id}.v1"
             if self.language_id == "python":
                 symbols = _python_symbols(tree.root_node, source, relative_path, parser_id)
-                imports = _regex_imports(source.decode("utf-8", errors="ignore"), "python", parser_id, 0.99)
+                imports, bindings, stable = python_binding_evidence(source.decode("utf-8", errors="ignore"), parser_id)
+                for symbol in symbols:
+                    symbol.python_binding_safe = symbol.start_line in stable
+                    symbol.calls = [call.model_copy(update=bindings.get((call.line, call.callee), {}))
+                                    for call in symbol.calls]
             else:
                 symbols = _ecmascript_symbols(tree.root_node, source, relative_path, parser_id)
                 imports = _ecmascript_imports(tree.root_node, source, parser_id)

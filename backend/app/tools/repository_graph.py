@@ -23,9 +23,12 @@ _CONFIG_NAMES = {
 
 
 def build_repository_graph(
-    file_index: list[dict[str, Any]], symbol_index: list[dict[str, Any]]
+    file_index: list[dict[str, Any]], symbol_index: list[dict[str, Any]], *,
+    call_resolution_version: str = "import-evidence-v3",
 ) -> dict[str, Any]:
     """Build a serializable graph without granting any additional file access."""
+    if call_resolution_version not in {"import-evidence-v3", "import-evidence-v4"}:
+        raise ValueError("unsupported call resolution version")
     files = {str(item["path"]): item for item in file_index if item.get("path")}
     symbols = [item for item in symbol_index if item.get("file") in files]
     lookup = _build_lookup(files)
@@ -64,6 +67,26 @@ def build_repository_graph(
         for call_ref in call_refs:
             call = str(call_ref.get("callee", ""))
             simple = str(call_ref.get("simple_name") or call.rsplit(".", 1)[-1])
+            if call_resolution_version == "import-evidence-v4" and caller_language == "python":
+                if call_ref.get("scope_start_line") != caller.get("start_line"):
+                    continue  # 嵌套函数的调用不能归属外层定义。
+                target, bound, reason = _python_call_target(call_ref, caller, files, symbols, lookup)
+                if target is not None:
+                    candidates = {(_symbol_id(target),): target}
+                else:
+                    candidates = {(str(item["file"]), str(item["symbol"])): item
+                        for item in by_name.get(simple, [])
+                        if item is not caller and files[str(item["file"])].get("language") == "python"}
+                if len(candidates) == 1:
+                    callee = next(iter(candidates.values()))
+                    edges.append(_edge("symbol", _symbol_id(caller), "symbol", _symbol_id(callee),
+                        "calls", float(call_ref.get("confidence", 0.7)), f"{caller.get('symbol')} calls {call}",
+                        source_file=str(caller["file"]), target_file=str(callee["file"]),
+                        resolution_status="resolved" if bound else "unresolved",
+                        resolution_basis="python_lexical_import" if bound else reason,
+                        call_expression=call, call_sites=[{"line": call_ref.get("line"),
+                            "expression": call, "import_binding": call_ref.get("import_binding")}]))
+                continue
             candidates = {
                 (str(item["file"]), str(item["symbol"])): item
                 for item in by_name.get(simple, [])
@@ -144,9 +167,35 @@ def build_repository_graph(
             "symbol_count": len(symbols),
             "edge_count": len(deduped_edges),
             "supported_edges": ["imports", "calls", "test_of", "configures"],
-            "call_resolution_version": "import-evidence-v3",
+            "call_resolution_version": call_resolution_version,
         },
     }
+
+
+def _python_call_target(call, caller, files, symbols, lookup):
+    binding = call.get("import_binding")
+    if not binding or call.get("binding_reason"):
+        return None, False, call.get("binding_reason") or "import_binding_missing"
+    expression = call.get("callee", "")
+    module, member = binding["module"], binding.get("imported_name")
+    if member:
+        if expression != binding.get("local_name") or member == "*":
+            return None, False, "dynamic_member_access"
+    else:
+        prefix = binding.get("local_name") if binding.get("local_name") != module.split(".")[0] else module
+        if not expression.startswith(prefix + ".") or "." in expression[len(prefix) + 1:]:
+            return None, False, "dynamic_member_access"
+        member = expression[len(prefix) + 1:]
+    paths = {path for path, confidence in resolve_import(str(caller["file"]), module, files, lookup)
+             if confidence >= 0.94}
+    if len(paths) != 1:
+        return None, False, "import_module_ambiguous_or_external"
+    targets = [symbol for symbol in symbols if symbol["file"] in paths and symbol.get("symbol") == member]
+    if len(targets) != 1:
+        return None, False, "import_symbol_ambiguous_or_missing"
+    target = targets[0]
+    safe = target.get("python_binding_safe") is True
+    return target, safe, None if safe else "target_binding_unverified"
 
 
 def resolve_import(
@@ -423,6 +472,13 @@ def _dedupe_edges(edges: list[dict[str, Any]]) -> list[dict[str, Any]]:
     best: dict[tuple[str, str, str], dict[str, Any]] = {}
     for edge in edges:
         key = (str(edge["source"]), str(edge["target"]), str(edge["type"]))
+        if key in best and "call_sites" in edge:
+            previous = best[key]
+            previous["call_sites"].extend(site for site in edge["call_sites"] if site not in previous["call_sites"])
+            previous["call_sites"].sort(key=lambda site: (site.get("line") or 0, site["expression"]))
+            if edge.get("resolution_status") != "resolved":
+                previous.update(resolution_status="unresolved", resolution_basis=edge["resolution_basis"])
+            continue
         if key not in best or float(edge["confidence"]) > float(best[key]["confidence"]):
             best[key] = edge
     return sorted(best.values(), key=lambda edge: (
