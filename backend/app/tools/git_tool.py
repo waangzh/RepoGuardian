@@ -92,6 +92,18 @@ class DiffPreparationError(GitToolError):
         self.bases = bases or []
 
 
+def _normalized_commit_sha(value: str, label: str) -> str:
+    """提交标识必须是完整十六进制 object ID；拒绝 refname、缩写与非法输入。
+
+    归一化为小写规范形式：仓库既有的身份核对（如 ``rev-parse`` 输出比较）
+    均以小写 object ID 为准。
+    """
+    sha = value.strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha):
+        raise GitToolError(f"{label} 必须是完整提交 SHA，收到 {value!r}")
+    return sha
+
+
 class GitTool:
     """在临时目录中执行 Git 操作：克隆、fetch refs、生成 unified diff。
 
@@ -207,8 +219,13 @@ class GitTool:
     ) -> tuple[Path, str]:
         """核心操作：clone → fetch base/head refs → 生成 unified diff → checkout head。
 
-        返回 (仓库临时路径, diff 文本)。
+        返回 (仓库临时路径, diff 文本)。快照身份始终由 PR 元数据声明的 SHA 决定：
+        fetch 的降级路径只影响对象如何进入本地，任一请求的 SHA 无法确认时显式失败，
+        不退化为审查另一个提交。
         """
+        # 克隆前快速失败：声明 SHA 不是完整提交 ID 时，不产生任何工作区副作用。
+        base_sha = _normalized_commit_sha(pr.base.sha, "PR base")
+        head_sha = _normalized_commit_sha(pr.head.sha, "PR head")
         self._workdir.mkdir(parents=True, exist_ok=True)
         repo_dir = self._workdir / f"{pr.owner}-{pr.repo}-{pr.number}-{uuid4().hex[:8]}"
         try:
@@ -226,7 +243,7 @@ class GitTool:
             self._fetch_ref(
                 repo_dir,
                 "origin",
-                pr.base.sha,
+                base_sha,
                 pr.base.ref,
                 phase="fetch_base",
                 phase_label="正在获取 Base 分支",
@@ -236,7 +253,7 @@ class GitTool:
             self._fetch_ref(
                 repo_dir,
                 pr.head.repo_clone_url,
-                pr.head.sha,
+                head_sha,
                 pr.head.ref,
                 phase="fetch_head",
                 phase_label="正在获取 Head 分支",
@@ -245,20 +262,17 @@ class GitTool:
             )
             # 生成 unified diff（上下文 80 行，足够 LLM 理解）
             self._notify(progress_callback, "diff", "正在生成 PR Diff")
-            head_commit = self._run(
-                [self._git, "-C", str(repo_dir), "rev-parse", "FETCH_HEAD"],
-                cancel_event=cancel_event,
-            ).strip()
-            if head_commit != pr.head.sha:
+            # 快照身份以声明 SHA 为准：只有该提交真实存在才继续，FETCH_HEAD 不作为身份来源。
+            if not self._commit_exists(repo_dir, head_sha, cancel_event=cancel_event):
                 raise DiffPreparationError("fetched_head_differs_from_declared")
             effective_base_sha, diff = self.unified_diff(
-                repo_dir, pr.base.sha, head_commit, cancel_event=cancel_event
+                repo_dir, base_sha, head_sha, cancel_event=cancel_event
             )
             self._notify(progress_callback, "diff", "PR Diff 已生成", "completed", 100)
             # 检出 head 到工作树（后续静态分析/测试需要）
             self._notify(progress_callback, "checkout", "正在检出 Head 工作树")
             self._run(
-                [self._git, "-C", str(repo_dir), "checkout", "--progress", "--detach", head_commit],
+                [self._git, "-C", str(repo_dir), "checkout", "--progress", "--detach", head_sha],
                 progress_callback=progress_callback,
                 phase="checkout",
                 phase_label="正在检出 Head 工作树",
@@ -393,6 +407,29 @@ class GitTool:
             raise GitToolError(f"Repository path is not a git worktree: {repo_dir}")
         return repo_dir
 
+    def _commit_exists(
+        self, repo_dir: str | Path, sha: str, *, cancel_event: threading.Event | None = None
+    ) -> bool:
+        """判断完整 SHA 是否已在本地对象库中解析为 commit；不访问远端、不解析 refname。"""
+        if cancel_event is not None and cancel_event.is_set():
+            raise GitToolCancelled("Git 操作已取消")
+        repo_path = self._validate_worktree(repo_dir)
+        timeout = self._command_timeout_seconds if self._command_timeout_seconds > 0 else None
+        try:
+            completed = subprocess.run(
+                [self._git, "-C", str(repo_path), "rev-parse", "--verify", "--quiet",
+                 f"{sha}^{{commit}}"],
+                check=False,
+                capture_output=True,
+                timeout=timeout,
+                env=git_safety_environment(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise GitToolTimeout(f"Git rev-parse 超过 {timeout:g} 秒超时") from exc
+        if cancel_event is not None and cancel_event.is_set():
+            raise GitToolCancelled("Git 操作已取消")
+        return completed.returncode == 0
+
     def _run(
         self,
         command: list[str],
@@ -513,7 +550,12 @@ class GitTool:
         progress_callback: GitProgressCallback | None,
         cancel_event: threading.Event | None,
     ) -> None:
-        """拉取指定 SHA，失败时回退到 ref 名称重试。"""
+        """拉取指定 SHA，失败时回退到 ref 名称重试。
+
+        降级只影响如何把对象取到本地；身份语义不降级——调用方必须以请求的
+        SHA 是否真实存在为准，不能信任 ``FETCH_HEAD``（分支可能已被 force push
+        指向另一个提交，也可能只是请求的 SHA 恰好不可按 SHA 获取）。
+        """
         self._notify(progress_callback, phase, phase_label)
         command = [self._git, "-C", str(repo_dir), "fetch", "--progress", remote, sha]
         try:
@@ -527,20 +569,34 @@ class GitTool:
         except GitToolError as primary_error:
             if isinstance(primary_error, (GitToolCancelled, GitToolTimeout)):
                 raise
-            self._notify(progress_callback, phase, f"{phase_label}：按分支名重试")
-            fallback = [self._git, "-C", str(repo_dir), "fetch", "--progress", remote, ref]
-            try:
-                self._run(
-                    fallback,
-                    progress_callback=progress_callback,
-                    phase=phase,
-                    phase_label=phase_label,
-                    cancel_event=cancel_event,
+            if self._commit_exists(repo_dir, sha, cancel_event=cancel_event):
+                # 请求的 SHA 已在本地对象库（例如来自 clone 或上一次 fetch），
+                # 无需降级：分支名的当前 tip 与本次身份无关。
+                self._notify(
+                    progress_callback,
+                    phase,
+                    f"{phase_label}：按 SHA 获取失败，使用本地已有提交",
                 )
-            except GitToolError as fallback_error:
-                raise GitToolError(
-                    f"按 SHA 和分支名获取 {phase} 均失败：{fallback_error}"
-                ) from primary_error
+            else:
+                self._notify(progress_callback, phase, f"{phase_label}：按分支名重试")
+                fallback = [self._git, "-C", str(repo_dir), "fetch", "--progress", remote, ref]
+                try:
+                    self._run(
+                        fallback,
+                        progress_callback=progress_callback,
+                        phase=phase,
+                        phase_label=phase_label,
+                        cancel_event=cancel_event,
+                    )
+                except GitToolError as fallback_error:
+                    raise GitToolError(
+                        f"按 SHA 和分支名获取 {phase} 均失败：{fallback_error}"
+                    ) from primary_error
+                if not self._commit_exists(repo_dir, sha, cancel_event=cancel_event):
+                    # 降级 fetch 只把分支当前 tip 取回；请求的 SHA 仍不存在，禁止继续。
+                    raise GitToolError(
+                        f"{phase}：按分支名获取后仍缺少请求的提交 {sha}"
+                    ) from primary_error
         self._notify(
             progress_callback,
             phase,
