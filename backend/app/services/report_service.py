@@ -5,7 +5,7 @@ import html
 import re
 
 from app.models.review import ReviewTask
-from app.services.task_review_projection import group_relationship_leads, relationship_description
+from app.services.task_review_projection import group_relationship_leads, relationship_description, task_runtime_summary
 
 
 _MODE_LABELS = {
@@ -52,17 +52,28 @@ class ReportService:
 
 
 def _append_task_runtime_report(lines: list[str], report: dict) -> None:
-    lines.extend(["## task-goals-v1 运行结果", "",
+    summary = task_runtime_summary(report)
+    findings = summary["findings"]
+    investigations = summary["investigations"]
+    scope = summary["scope"]
+    lines.extend(["## 审查摘要", "",
+        f"本轮审查{('已结束' if report.get('execution_status') != 'running' else '仍在运行')}："
+        f"{findings['confirmed']} 项已确认问题，{findings['unresolved']} 项待确认候选。",
+        f"检查范围：已检查 {scope['examined']} / {scope['total']} 个目标；"
+        f"范围缺口 {scope['incomplete']} 项。",
+        f"调查：{investigations['answered']} 项已有答案，"
+        f"{investigations['insufficient_evidence']} 项证据不足，"
+        f"{investigations['not_executed']} 项未执行。", "",
+        "## task-goals-v1 运行结果", "",
         f"- 执行状态：{report.get('execution_status', 'unknown')}",
         f"- 终止原因：{report.get('termination_reason', 'unknown')}",
         f"- 初始范围覆盖：{'完整' if report.get('scope_complete') else '存在未检查范围'}",
         f"- 计量完整性：{report.get('usage_integrity', 'unknown')}",
         f"- 已发送调用：{report.get('sent_calls', 0)}；结算 Tokens：{report.get('settled_tokens', 0)}；未知用量：{report.get('unknown_attempts', 0)}", ""])
-    unresolved = [item for item in report.get("findings", []) if item.get("status") not in {"confirmed", "dismissed"}]
     if report.get("execution_status") == "failed":
         from app.services.task_review_projection import runtime_failure_summary
         lines.append(f"- 失败原因：{runtime_failure_summary(report.get('diagnostics') or [])}")
-    lines.append(f"- 新引擎发现：{len(report.get('findings', []))}；未确认/未决：{len(unresolved)}")
+    lines.append(f"- 新引擎候选：{findings['total']}；无完整 Issue：{findings['without_issue']}；可发布：{findings['publishable']}")
 
 
 def _append_task_runtime_findings(lines: list[str], report: dict) -> None:

@@ -10,6 +10,49 @@ const statusLabels: Record<string, string> = {
   no_progress: "无进展停止", technical_failure: "技术失败", cancelled: "已取消", running: "运行中",
 };
 
+export interface TaskRuntimeSummary {
+  execution: { status: string; termination_reason: string; scope_complete: boolean };
+  findings: { total: number; confirmed: number; dismissed: number; unresolved: number; without_issue: number; publishable: number };
+  investigations: { total: number; answered: number; insufficient_evidence: number; not_executed: number };
+  scope: { total: number; examined: number; incomplete: number; blocked: number; unsupported: number; not_examined: number };
+  usage: { integrity: string; unknown_attempts: number };
+}
+
+export function taskRuntimeSummary(report: TaskRuntimeReport): TaskRuntimeSummary {
+  const findings = report.findings || [];
+  const status = (item: Record<string, unknown>) => String(item.status || "unknown");
+  const investigations = report.admitted_investigations || [];
+  const scopes = report.initial_scope_coverage || [];
+  return {
+    execution: { status: report.execution_status, termination_reason: report.termination_reason, scope_complete: report.scope_complete },
+    findings: {
+      total: findings.length,
+      confirmed: findings.filter(item => status(item) === "confirmed").length,
+      dismissed: findings.filter(item => status(item) === "dismissed").length,
+      unresolved: findings.filter(item => ["candidate", "unresolved"].includes(status(item))).length,
+      without_issue: findings.filter(item => !item.issue).length,
+      publishable: findings.filter(item => ["confirmed", "published"].includes(status(item))
+        && Boolean((item.publication as Record<string, unknown> | undefined)?.published_text)).length,
+    },
+    investigations: {
+      total: investigations.length,
+      answered: investigations.filter(item => status(item) === "answered").length,
+      insufficient_evidence: investigations.filter(item => status(item) === "insufficient_evidence").length,
+      not_executed: investigations.filter(item => status(item) === "not_executed").length,
+    },
+    scope: {
+      total: scopes.length,
+      examined: scopes.filter(item => status(item) === "examined").length,
+      incomplete: scopes.filter(item => status(item) !== "examined").length,
+      blocked: scopes.filter(item => status(item) === "blocked").length,
+      unsupported: scopes.filter(item => status(item) === "unsupported").length,
+      not_examined: scopes.filter(item => status(item) === "not_examined").length,
+    },
+    usage: { integrity: report.usage_integrity, unknown_attempts: report.unknown_attempts },
+  };
+}
+
+
 export function runtimeLabel(value: unknown): string {
   const key = typeof value === "string" ? value : "unknown";
   return statusLabels[key] || key;

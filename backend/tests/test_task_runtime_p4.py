@@ -18,6 +18,7 @@ from app.graph.review_graph import build_review_graph
 from app.models.review import ReviewTask, TaskStatus
 from app.models.review_runtime import TaskRuntimeReport
 from app.services.report_service import ReportService
+from app.services.task_review_projection import task_runtime_summary
 from app.services.review_manifest import build_review_manifest
 from app.services.review_rebuild import rebuild_task_from_state
 
@@ -56,6 +57,33 @@ def test_task_runtime_report_and_manifest_keep_new_coverage_version():
     assert rebuilt.task_runtime_report["coverage_version"] == "task-goals-v1"
     manifest = build_review_manifest(state, datetime.now(timezone.utc))
     assert manifest.engine == "task_review_v1" and manifest.coverage_version == "task-goals-v1"
+
+
+def test_task_runtime_summary_keeps_candidate_and_issue_denominators_separate():
+    report = runtime_report(findings=[
+        {"status": "confirmed", "candidate": {"claim": "已核验"},
+         "issue": {"placement": "summary"}, "publication": {"published_text": {"claim": "已核验"}}, "source_candidate_ids": ["c1"]},
+        {"status": "unresolved", "candidate": {"claim": "待确认"},
+         "issue": None, "reason": "candidate_derivation_incomplete", "source_candidate_ids": ["c2"]},
+    ], initial_scope_coverage=[
+        {"goal_id": "g1", "status": "examined"},
+        {"goal_id": "g2", "status": "not_examined"},
+    ], admitted_investigations=[
+        {"status": "insufficient_evidence"}, {"status": "not_executed"},
+    ])
+
+    summary = task_runtime_summary(report)
+
+    assert summary["findings"] == {
+        "total": 2, "confirmed": 1, "dismissed": 0, "unresolved": 1,
+        "without_issue": 1, "publishable": 1,
+    }
+    assert summary["investigations"]["insufficient_evidence"] == 1
+    assert summary["investigations"]["not_executed"] == 1
+    assert summary["scope"] == {
+        "total": 2, "examined": 1, "incomplete": 1, "blocked": 0,
+        "unsupported": 0, "not_examined": 1,
+    }
 
 
 def test_task_runtime_report_does_not_become_legacy_clean_report():
