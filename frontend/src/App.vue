@@ -6,7 +6,6 @@ import AppHeader from "./components/layout/AppHeader.vue";
 import AppSidebar from "./components/layout/AppSidebar.vue";
 import ReviewHistoryPage from "./components/pages/ReviewHistoryPage.vue";
 import SettingsPage from "./components/pages/SettingsPage.vue";
-import ValidationBackendsPage from "./components/pages/ValidationBackendsPage.vue";
 import ReviewLauncher from "./components/review/ReviewLauncher.vue";
 import ReviewPreviewPanel from "./components/review/ReviewPreviewPanel.vue";
 import ReviewViewer from "./components/review/ReviewViewer.vue";
@@ -439,7 +438,6 @@ onBeforeUnmount(() => {
         <footer v-if="!task" class="app-footer"><span>Preview 零模型调用 · 审查严格只读 · 全流程可追溯</span><span><i /> RepoGuardian v0.1.0</span></footer>
       </main>
       <ReviewHistoryPage v-else-if="activePage === 'history'" @open="openHistoricalReview" @create="activePage = 'dashboard'" />
-      <ValidationBackendsPage v-else-if="activePage === 'validation'" />
       <SettingsPage v-else />
     </div>
   </div>
