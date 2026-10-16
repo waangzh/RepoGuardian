@@ -21,7 +21,7 @@ def setup_publication(persistence):
     selection = PublicationSelection(expected_plan_hash=stable_hash(plan.model_dump(mode="json")),
         expected_head_sha=plan.snapshot.head_sha, finding_keys=[plan.inline_drafts[0].finding_key])
     context = {"repository_id": 123, "pr_number": 1, "publisher_identity": "user:7", "owner": "o", "repo": "r",
-               "base_sha": task.run_manifest.base_sha, "order": "2026-10-16T00:00:00+00:00:run", "publisher_id": 7}
+               "base_sha": task.run_manifest.base_sha, "order": task.run_manifest.completed_at.isoformat() + ":" + task.id, "publisher_id": 7}
     return PublicationRepository(sessions), plan, selection, context, queue
 
 
