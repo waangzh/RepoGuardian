@@ -63,6 +63,7 @@ async def test_absent_remote_after_unknown_send_requires_manual_handling(persist
     repo.retry(attempt.id)
     await worker.run_once()
     assert repo.get(attempt.id).state == "uncertain" and not fake.reviews
+    assert repo.lookup_slot(123, 1, "user:7").pending_publication_id == attempt.id
 
 
 async def test_review_worker_and_cancel_do_not_consume_publication(persistence):
@@ -133,3 +134,34 @@ async def test_rate_limit_is_deferred_without_writing(persistence):
     with repo.sessions() as session:
         job = session.scalar(select(WorkerJobOrm).where(WorkerJobOrm.kind == "github_publication"))
         assert job.status == "retry" and job.available_at >= before + timedelta(seconds=120)
+
+
+async def test_expired_worker_recovers_committed_summary_without_reposting(persistence):
+    from datetime import timedelta
+    from app.models.orm import WorkerJobOrm, GitHubSummarySlotOrm, utcnow
+    from app.tools.github_publisher import GitHubPublishError
+    repo, attempt, fake, worker, delivery, queue = worker_setup(persistence)
+    job = queue.claim(worker_id="crashed", kinds=("github_publication",))
+    lease = repo.acquire(attempt, "crashed", job)
+    fake.timeout = True
+    with pytest.raises(GitHubPublishError):
+        await delivery.sticky.upsert(attempt, lease, "发送成功但未拿到响应")
+    with repo.sessions.begin() as session:
+        session.get(WorkerJobOrm, job.id).lease_until = utcnow() - timedelta(seconds=1)
+        session.get(GitHubSummarySlotOrm, lease.slot_id).lease_until = utcnow() - timedelta(seconds=1)
+    await worker.run_once()
+    assert repo.get(attempt.id).state == "succeeded"
+    assert len(fake.comments) == len(fake.inline) == 1
+    assert len([method for method, path in fake.writes if method == "POST" and path.endswith("/issues/1/comments")]) == 1
+
+
+async def test_lost_job_generation_blocks_writes(persistence):
+    from app.models.orm import WorkerJobOrm
+    from app.services.publication_repository import PublicationLeaseLost
+    repo, attempt, fake, worker, delivery, queue = worker_setup(persistence)
+    job = queue.claim(worker_id="old", kinds=("github_publication",))
+    with repo.sessions.begin() as session:
+        session.get(WorkerJobOrm, job.id).attempts += 1
+    with pytest.raises(PublicationLeaseLost):
+        await delivery.execute(job)
+    assert not fake.writes

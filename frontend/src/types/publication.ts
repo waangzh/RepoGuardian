@@ -54,3 +54,69 @@ export interface PublicationPlan {
   content_eligible: boolean;
   blocking_reasons: string[];
 }
+
+export type PublicationState = "queued" | "preparing" | "publishing" | "succeeded" | "partial" | "failed" | "uncertain" | "stale";
+export interface PublicationSelection {
+  expected_plan_hash: string;
+  expected_head_sha: string;
+  publish_summary: true;
+  finding_keys: string[];
+  acknowledge_partial_review: boolean;
+}
+export interface GitHubInlineLocation { path: string; line: number; side: "LEFT" | "RIGHT" }
+export interface PublicationInlinePreview {
+  finding_key: string;
+  action: "create" | "already_published" | "summary_fallback";
+  body_markdown: string;
+  location: GitHubInlineLocation | null;
+}
+export interface PublicationPreflightResult {
+  ready: boolean;
+  review_id: string;
+  plan_hash: string;
+  head_sha: string;
+  head_sha_matches: boolean;
+  pr_open: boolean;
+  permissions_ok: boolean;
+  summary_action: "create" | "update";
+  summary_comment_id: number | null;
+  finding_keys: string[];
+  inline: { selected: number; ready: number; already_published: number; summary_fallback: number; blocked: number };
+  inline_previews: PublicationInlinePreview[];
+  summary_markdown: string;
+  requires_partial_acknowledgement: boolean;
+  warnings: string[];
+}
+export interface PublicationItem {
+  id: string;
+  publication_id: string;
+  kind: "summary" | "inline";
+  finding_key: string;
+  fingerprint: string;
+  payload_hash: string;
+  state: "pending" | "publishing" | "published" | "failed" | "uncertain" | "summary_only";
+  github_comment_id: number | null;
+  github_review_id: number | null;
+  github_url: string | null;
+  last_error_code: string | null;
+}
+export interface PublicationAttempt {
+  id: string;
+  review_id: string;
+  repository_id: number;
+  pr_number: number;
+  head_sha: string;
+  plan_hash: string;
+  selection_hash: string;
+  publisher_identity: string;
+  state: PublicationState;
+  requested_at: string;
+  completed_at: string | null;
+  last_error_code: string | null;
+  items: PublicationItem[];
+}
+export interface PublicationAccepted {
+  publication_id: string;
+  state: PublicationState;
+  status_url: string;
+}
