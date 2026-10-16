@@ -1,41 +1,36 @@
 <script setup lang="ts">
 import type { AppPage } from "../../types/operations";
+import { reviewSections, type ReviewSection } from "../../types/workspace";
 import AppIcon from "../common/AppIcon.vue";
 
-const props = defineProps<{
+defineProps<{
   modelValue: AppPage;
-  hasReview?: boolean;
+  section: ReviewSection;
+  hasReview: boolean;
+  taskActive: boolean;
+  mobileOpen: boolean;
+  busy: boolean;
 }>();
 
 const emit = defineEmits<{
   "update:modelValue": [page: AppPage];
+  section: [value: ReviewSection];
+  create: [];
+  close: [];
 }>();
 
-const items = () => [
-  { id: "dashboard", icon: props.hasReview ? "dashboard" : "play", label: props.hasReview ? "当前审查" : "新审查" },
-  { id: "history", icon: "history", label: "审查历史" },
-  { id: "settings", icon: "settings", label: "系统" },
-] satisfies Array<{ id: AppPage; icon: string; label: string }>;
 </script>
 
 <template>
-  <nav class="app-sidebar" aria-label="主导航">
-    <button
-      v-for="item in items()"
-      :key="item.label"
-      type="button"
-      class="sidebar-item"
-      :class="{ 'is-active': modelValue === item.id }"
-      :aria-current="modelValue === item.id ? 'page' : undefined"
-      :title="item.label"
-      @click="emit('update:modelValue', item.id)"
-    >
-      <span><AppIcon :name="item.icon" :size="19" /></span>
-      <small>{{ item.label }}</small>
-    </button>
-    <div class="sidebar-spacer" />
-    <a class="sidebar-item sidebar-help" href="https://github.com" target="_blank" rel="noreferrer">
-      <span><AppIcon name="help" :size="19" /></span><small>帮助</small>
-    </a>
-  </nav>
+  <aside id="workspace-sidebar" class="sidebar" :class="{ 'mobile-open': mobileOpen }" @keydown.esc="emit('close')">
+    <div class="brand"><div class="brand-icon"><AppIcon name="shield" :size="22" /></div><div class="brand-word"><strong>RepoGuardian</strong><small>Evidence-first review</small></div><button type="button" class="icon-btn mobile-close" aria-label="关闭导航" @click="emit('close')"><AppIcon name="x" /></button></div>
+    <nav class="side-scroll" aria-label="主导航">
+      <div class="nav-heading">工作区</div>
+      <button type="button" class="side-link" :class="{ active: modelValue === 'dashboard' && !hasReview }" :disabled="taskActive || busy" @click="emit('create')"><AppIcon name="plus" /><span class="nav-text">新建审查</span></button>
+      <button v-for="item in ([['history', 'history', '审查历史'], ['settings', 'settings', '系统设置']] as const)" :key="item[0]" type="button" class="side-link" :class="{ active: modelValue === item[0] }" :aria-current="modelValue === item[0] ? 'page' : undefined" @click="emit('update:modelValue', item[0])"><AppIcon :name="item[1]" /><span class="nav-text">{{ item[2] }}</span></button>
+      <div class="nav-divider" /><div class="nav-heading">当前审查</div>
+      <button v-for="item in reviewSections" :key="item.id" type="button" class="side-link" :class="{ active: hasReview && modelValue === 'dashboard' && section === item.id }" :aria-current="hasReview && modelValue === 'dashboard' && section === item.id ? 'page' : undefined" :disabled="!hasReview" @click="emit('section', item.id)"><AppIcon :name="item.icon" /><span class="nav-text">{{ item.label }}</span></button>
+    </nav>
+    <footer class="sidebar-footer"><div class="local-alert"><AppIcon name="info" :size="15" /><span>静态结论以任务快照为准。未发现问题，不代表代码完全安全。</span></div><div class="mini-version">REPOGUARDIAN · WORKSPACE</div></footer>
+  </aside>
 </template>

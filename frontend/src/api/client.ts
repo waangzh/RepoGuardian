@@ -126,13 +126,14 @@ export async function listReviews(options: {
   status?: string;
   page?: number;
   pageSize?: number;
+  signal?: AbortSignal;
 } = {}): Promise<ReviewTaskListResponse> {
   const params = new URLSearchParams({
     page: String(options.page ?? 1),
     page_size: String(options.pageSize ?? 20),
   });
   if (options.status) params.set("status", options.status);
-  return request<ReviewTaskListResponse>(`/api/reviews?${params.toString()}`);
+  return request<ReviewTaskListResponse>(`/api/reviews?${params.toString()}`, { signal: options.signal });
 }
 
 export async function getSystemDiagnostics(): Promise<SystemDiagnostics> {

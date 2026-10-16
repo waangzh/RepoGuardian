@@ -11,6 +11,8 @@ import type {
 } from "../../types/operations";
 import EmptyState from "../common/EmptyState.vue";
 import StatusBadge from "../common/StatusBadge.vue";
+import { usePreferences } from "../../composables/usePreferences";
+const { theme, density } = usePreferences();
 
 const diagnostics = ref<SystemDiagnostics | null>(null);
 const loading = ref(false);
@@ -115,12 +117,19 @@ onMounted(load);
     <header class="workspace-heading">
       <div>
         <p class="eyebrow">SYSTEM OPERATIONS</p>
-        <h1>设置与诊断</h1>
+        <h1>系统设置</h1>
         <p>检查运行环境、策略版本与配置状态，并维护本机产生的临时审查工作区。</p>
       </div>
       <button type="button" class="button button--secondary" :disabled="loading" @click="load">刷新诊断</button>
     </header>
 
+    <section class="card card-pad rg-preferences">
+      <div class="card-header"><div><h2>界面偏好</h2><p>仅保存在此浏览器中，不更改服务端审查策略</p></div></div>
+      <div class="rg-preference-row"><div><strong>外观主题</strong><p>按阅读习惯切换浅色或深色</p></div><div class="segmented"><button v-for="item in ([['light', '浅色'], ['dark', '深色']] as const)" :key="item[0]" type="button" :class="{ active: theme === item[0] }" :aria-pressed="theme === item[0]" @click="theme = item[0]">{{ item[1] }}</button></div></div>
+      <div class="rg-preference-row"><div><strong>信息密度</strong><p>紧凑模式减少表格与列表的间距</p></div><div class="segmented"><button v-for="item in ([['comfortable', '舒适'], ['compact', '紧凑']] as const)" :key="item[0]" type="button" :class="{ active: density === item[0] }" :aria-pressed="density === item[0]" @click="density = item[0]">{{ item[1] }}</button></div></div>
+      <div class="rg-preference-row"><div><strong>默认审查深度</strong><p>后端尚未提供深度预设；使用服务端策略</p></div><span class="badge neutral">尚未接入，不能调整</span></div>
+      <div class="notice space-top">模型与资源上限由服务端配置管理。价格或用量不完整时费用保持未知。前端不保存 Provider 密钥或 GitHub 发布口令。</div>
+    </section>
     <p v-if="error" class="workspace-error" role="alert">{{ error }}</p>
     <section v-if="diagnostics" class="diagnostics-layout" :aria-busy="loading">
       <article class="diagnostic-hero panel">
