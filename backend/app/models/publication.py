@@ -1,6 +1,7 @@
 """只读审查结论协议；内容合格不代表已向远端发布。"""
 
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -48,3 +49,47 @@ class ReviewOutcome(BaseModel):
     total_goals: int = Field(default=0, ge=0)
     incomplete_investigations: int = Field(default=0, ge=0)
     reason_codes: list[OutcomeReason] = Field(default_factory=list)
+
+
+class PublicationSnapshot(BaseModel):
+    head_sha: str | None = None
+    effective_base_sha: str | None = None
+
+
+class PublicationAnchor(BaseModel):
+    file_path: str
+    start_line: int | None = Field(default=None, ge=1)
+    end_line: int | None = Field(default=None, ge=1)
+    side: Literal["head", "base"] | None = None
+    hunk_id: str | None = None
+
+
+class PublicationFinding(BaseModel):
+    finding_key: str
+    candidate_id: str
+    severity: Literal["critical", "high", "medium", "low"]
+    placement: Literal["inline", "summary"]
+    anchor: PublicationAnchor
+    title: str
+    body_markdown: str
+
+
+class WithheldFinding(BaseModel):
+    candidate_id: str
+    reason_code: str
+
+
+class PublicationPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["review-publication-v1"] = "review-publication-v1"
+    review_id: str
+    snapshot: PublicationSnapshot
+    outcome: ReviewOutcome
+    summary_markdown: str = ""
+    user_report_markdown: str = ""
+    inline_drafts: list[PublicationFinding] = Field(default_factory=list)
+    summary_findings: list[PublicationFinding] = Field(default_factory=list)
+    withheld_findings: list[WithheldFinding] = Field(default_factory=list)
+    content_eligible: bool = False
+    blocking_reasons: list[str] = Field(default_factory=list)
