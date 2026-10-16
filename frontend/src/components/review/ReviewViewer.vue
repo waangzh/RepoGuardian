@@ -432,6 +432,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
     </nav>
 
     <section v-if="isTaskRuntime && activeTab === 'overview'" class="review-tab-panel overview-view">
+      <article class="runtime-change-summary"><span>本次变更</span><p>{{ purposeSummary }}</p></article>
       <TaskRuntimePanel v-if="taskRuntimeReport" :report="taskRuntimeReport" :terminal="terminal"
         :retrying-unit-id="retryingUnitId" view="overview" @retry="emit('retry', $event)" @open-checks="activeTab = 'checks'" @open-finding="openRuntimeFinding" />
       <EmptyState v-else icon="context" title="任务级报告尚未生成" description="当前范围与用量仍待记录，旧覆盖结果不能作为本轮成功证据。" />
@@ -526,7 +527,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
         <label>类别<select v-model="categoryFilter"><option value="all">全部</option><option v-for="category in categories" :key="category" :value="category">{{ category }}</option></select></label>
       </div>
 
-      <div v-if="!isTaskRuntime || selectedRuntimeFinding" class="finding-workspace" :class="{ 'finding-workspace--runtime': isTaskRuntime }">
+      <div v-if="!isTaskRuntime || selectedRuntimeFinding" class="finding-workspace" :class="{ 'finding-workspace--runtime': isTaskRuntime, 'finding-workspace--no-code': isTaskRuntime && !selectedIssue }">
         <aside v-if="!isTaskRuntime" class="change-group-nav">
           <header><div><h2>变更组</h2><p>语义相关的改动故事</p></div><strong>{{ fileCoveragePercent }}%</strong></header>
           <button v-for="unit in task.review_units" :key="unit.id" type="button" :class="{ 'is-active': selectedUnit?.id === unit.id }" @click="chooseUnit(unit.id)">
@@ -538,7 +539,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
           </div>
         </aside>
 
-        <article class="diff-viewer">
+        <article v-if="!isTaskRuntime || selectedIssue" class="diff-viewer">
           <header><code>{{ selectedChangedFile?.file_path || selectedIssue?.primary_evidence.file_path || "选择一个发现查看代码" }}</code><span v-if="selectedChangedFile">+{{ selectedChangedFile.additions }} −{{ selectedChangedFile.deletions }}</span></header>
           <div v-if="selectedIssue && codeRows.length" class="code-table" role="table" aria-label="问题代码证据">
             <div v-for="row in codeRows" :key="row.key" class="code-row" :data-kind="row.kind" :class="{ 'is-highlighted': row.highlighted }" role="row">
@@ -556,15 +557,14 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
         <aside class="finding-evidence-panel">
           <template v-if="selectedIssue">
             <header><div><h2>发现与证据</h2><p>{{ selectedIssue.category }}</p></div><StatusBadge :status="selectedIssue.severity" :label="severityLabel(selectedIssue.severity)" /></header>
-            <div class="finding-badges"><StatusBadge :status="selectedIssue.status" /><StatusBadge :status="selectedIssue.placement" /></div>
+            <div class="finding-badges"><StatusBadge :status="selectedIssue.status" /><StatusBadge :status="selectedIssue.placement" :label="({ inline: '代码定位', summary: '摘要定位', unresolved: '尚未充分定位', needs_human: '尚未定位', suppressed: '证据无效' })[selectedIssue.placement]" /></div>
             <h3>{{ selectedIssue.title }}</h3>
-            <p class="finding-confidence">模型置信度 {{ Math.round(selectedIssue.confidence * 100) }}% · 未经校准</p>
             <dl class="evidence-facts">
-              <div><dt>证据定位</dt><dd>{{ selectedIssue.primary_evidence.resolution_status }} · {{ selectedIssue.primary_evidence.resolution_method }} · {{ selectedIssue.primary_evidence.provenance || '未知来源' }}</dd></div>
               <div><dt>为什么重要</dt><dd>{{ selectedIssue.affected_behavior }}</dd></div>
               <div><dt>失败场景</dt><dd>{{ selectedIssue.failure_scenario }}</dd></div>
               <div><dt>建议</dt><dd>{{ selectedIssue.recommendation }}</dd></div>
             </dl>
+            <details class="runtime-technical finding-technical"><summary>证据定位与模型详情</summary><p>{{ selectedIssue.primary_evidence.resolution_status }} · {{ selectedIssue.primary_evidence.resolution_method }} · {{ selectedIssue.primary_evidence.provenance || '未知来源' }}</p><p>模型置信度 {{ Math.round(selectedIssue.confidence * 100) }}% · 未经校准</p></details>
             <section v-if="selectedIssue.supporting_evidence.length" class="supporting-evidence">
               <h4>辅助证据</h4>
               <article v-for="evidence in selectedIssue.supporting_evidence" :key="`${evidence.file_path}:${evidence.resolved_start_line}`"><code>{{ evidence.file_path }}<template v-if="evidence.resolved_start_line">:{{ evidence.resolved_start_line }}</template></code><pre>{{ evidence.existing_code }}</pre></article>
