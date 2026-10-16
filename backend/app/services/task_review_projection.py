@@ -161,7 +161,7 @@ def task_runtime_summary(report: TaskRuntimeReport | dict) -> dict:
     publishable = sum(
         1 for item in findings
         if item.get("status") in {"confirmed", "published"}
-        and (item.get("publication") or {}).get("published_text") is not None
+        and bool((item.get("publication") or {}).get("published_text"))
     )
     return {
         "execution": {
@@ -171,7 +171,9 @@ def task_runtime_summary(report: TaskRuntimeReport | dict) -> dict:
         },
         "findings": {
             "total": len(findings),
-            "confirmed": finding_statuses.count("confirmed"),
+            "active": sum(status != "dismissed" for status in finding_statuses),
+            "unknown": sum(status not in {"confirmed", "published", "candidate", "unresolved", "dismissed"} for status in finding_statuses),
+            "confirmed": sum(status in {"confirmed", "published"} for status in finding_statuses),
             "dismissed": finding_statuses.count("dismissed"),
             "unresolved": sum(status in {"candidate", "unresolved"} for status in finding_statuses),
             "without_issue": sum(not item.get("issue") for item in findings),

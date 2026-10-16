@@ -75,7 +75,7 @@ def test_task_runtime_summary_keeps_candidate_and_issue_denominators_separate():
     summary = task_runtime_summary(report)
 
     assert summary["findings"] == {
-        "total": 2, "confirmed": 1, "dismissed": 0, "unresolved": 1,
+        "total": 2, "active": 2, "unknown": 0, "confirmed": 1, "dismissed": 0, "unresolved": 1,
         "without_issue": 1, "publishable": 1,
     }
     assert summary["investigations"]["insufficient_evidence"] == 1
