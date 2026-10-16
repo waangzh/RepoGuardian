@@ -149,7 +149,6 @@ onMounted(load);
           <div><dt>单补丁文件上限</dt><dd>{{ diagnostics.patch_max_files }} 个</dd></div>
           <div><dt>单补丁变更行上限</dt><dd>{{ diagnostics.patch_max_changed_lines }} 行</dd></div>
           <div><dt>记录保留</dt><dd>{{ diagnostics.retention_days }} 天</dd></div>
-          <div><dt>验证后端</dt><dd>{{ diagnostics.validation_backends.filter(item => item.available).length }} / {{ diagnostics.validation_backends.length }} 可用</dd></div>
         </dl>
       </article>
 
