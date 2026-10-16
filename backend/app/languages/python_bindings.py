@@ -20,11 +20,11 @@ class _Scope:
         self.bindings.setdefault(name, []).append(value)
 
 
-def python_binding_evidence(content: str, parser_id: str):
+def python_binding_evidence(content: str, parser_id: str, *, include_namespace=False):
     try:
         tree = ast.parse(content)
     except (SyntaxError, ValueError):
-        return [], {}, set()
+        return ([], {}, set(), {}) if include_namespace else ([], {}, set())
     root = _Scope(tree)
     scope = root
     imports, calls, definitions = [], [], []
@@ -168,4 +168,7 @@ def python_binding_evidence(content: str, parser_id: str):
     stable = {node.lineno for node, owner in definitions if owner is root
               and node in tree.body and len(root.bindings[node.name]) == 1
               and not root.dynamic and node.name not in root.opaque and not node.decorator_list}
-    return imports, evidence, stable
+    result = (imports, evidence, stable)
+    namespace = {"complete": True, "bound_names": sorted(root.bindings),
+                 "opaque_names": sorted(root.opaque), "dynamic": root.dynamic}
+    return (*result, namespace) if include_namespace else result

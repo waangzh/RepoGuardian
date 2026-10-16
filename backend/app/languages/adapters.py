@@ -130,9 +130,11 @@ class TreeSitterLanguageAdapter(RegexLanguageAdapter):
             if tree.root_node.has_error:
                 raise ValueError("tree-sitter produced an error node")
             parser_id = f"tree-sitter.{self.language_id}.v1"
+            namespace = {}
             if self.language_id == "python":
                 symbols = _python_symbols(tree.root_node, source, relative_path, parser_id)
-                imports, bindings, stable = python_binding_evidence(source.decode("utf-8", errors="ignore"), parser_id)
+                imports, bindings, stable, namespace = python_binding_evidence(
+                    source.decode("utf-8", errors="ignore"), parser_id, include_namespace=True)
                 for symbol in symbols:
                     symbol.python_binding_safe = symbol.start_line in stable
                     symbol.calls = [call.model_copy(update=bindings.get((call.line, call.callee), {}))
@@ -146,6 +148,7 @@ class TreeSitterLanguageAdapter(RegexLanguageAdapter):
                 parser_id=parser_id,
                 imports=imports,
                 symbols=symbols,
+                python_namespace=namespace,
             )
         except Exception as exc:
             fallback = super().analyze(file_path, relative_path)

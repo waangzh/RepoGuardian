@@ -176,7 +176,7 @@ def validate_experiment_plan(plan, lock_bytes, diff_bytes, group, stage, sample_
     if versions is not None:
         if (not isinstance(versions, dict) or set(versions) != {"prompt_version", "risk_planner_version"}
                 or versions.get("prompt_version") not in {f"task-review-prompt-v{index}" for index in range(1, 6)}
-                or versions.get("risk_planner_version") not in {"legacy", "risk-planner-v2", "risk-planner-v3", "risk-planner-v4", "risk-planner-v5"}):
+                or versions.get("risk_planner_version") not in {"legacy", "risk-planner-v2", "risk-planner-v3", "risk-planner-v4", "risk-planner-v5", "risk-planner-v6"}):
             raise ValueError("experiment runtime versions invalid")
     if group not in GROUPS or stage not in {"first", "remaining"}:
         raise ValueError("unknown experiment group or stage")

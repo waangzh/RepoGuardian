@@ -15,6 +15,7 @@ def indexed_graph(tmp_path, source, *, caller="caller.py", target="src/pkg/stats
         analysis = adapter.analyze(file, path)
         assert not analysis.diagnostics
         files.append({"path": path, "language": "python",
+                      "python_namespace": analysis.python_namespace,
                       "import_refs": [ref.model_dump(mode="json") for ref in analysis.imports]})
         symbols.extend(symbol.to_index_entry() for symbol in analysis.symbols)
     return build_repository_graph(files, symbols, call_resolution_version=version), symbols
@@ -98,3 +99,31 @@ def test_unproven_name_hint_cannot_replace_a_proven_call_to_same_target(tmp_path
     hinted = next(edge for edge in edges if edge["relationship_level"] == "search_hint")
     assert resolved["call_sites"][0]["line"] == 4
     assert hinted["call_sites"][0]["line"] == 3
+
+
+@pytest.mark.parametrize("statement,expression,caller", [
+    ("from pkg import hardware", "hardware.demo", "caller.py"),
+    ("from pkg import hardware as hw", "hw.demo", "caller.py"),
+    ("from . import hardware", "hardware.demo", "src/pkg/caller.py"),
+])
+def test_submodule_import_never_binds_to_other_modules_same_demo(tmp_path, statement, expression, caller):
+    graph, _ = indexed_graph(tmp_path, f"{statement}\ndef run():\n    return {expression}()\n",
+        caller=caller, target="src/pkg/hardware.py", target_source="def demo():\n    return 1\n",
+        extra={"src/pkg/__init__.py": "", "src/pkg/stats.py": "def demo():\n    return 2\n"},
+        version="import-evidence-v5")
+    edges = [edge for edge in graph["edges"] if edge["type"] == "calls"]
+    assert len(edges) == 1 and edges[0]["target"] == "src/pkg/hardware.py::demo"
+    assert edges[0]["resolution_status"] == "resolved"
+
+
+@pytest.mark.parametrize("initializer", [
+    "hardware = replacement\n", "from elsewhere import hardware\n",
+    "def __getattr__(name):\n    return replacement\n", "__path__ = replacement\n",
+])
+def test_package_attributes_cannot_be_guessed_as_submodules(tmp_path, initializer):
+    graph, _ = indexed_graph(tmp_path, "from pkg import hardware\ndef run():\n    return hardware.demo()\n",
+        target="src/pkg/hardware.py", target_source="def demo():\n    return 1\n",
+        extra={"src/pkg/__init__.py": initializer, "src/pkg/stats.py": "def demo():\n    return 2\n"},
+        version="import-evidence-v5")
+    assert not [edge for edge in graph["edges"] if edge.get("resolution_status") == "resolved"]
+    assert all(edge.get("relationship_level") != "symbol" for edge in graph["edges"] if edge["type"] == "calls")

@@ -27,7 +27,7 @@ def build_repository_graph(
     call_resolution_version: str = "import-evidence-v3",
 ) -> dict[str, Any]:
     """Build a serializable graph without granting any additional file access."""
-    if call_resolution_version not in {"import-evidence-v3", "import-evidence-v4"}:
+    if call_resolution_version not in {"import-evidence-v3", "import-evidence-v4", "import-evidence-v5"}:
         raise ValueError("unsupported call resolution version")
     files = {str(item["path"]): item for item in file_index if item.get("path")}
     symbols = [item for item in symbol_index if item.get("file") in files]
@@ -67,10 +67,12 @@ def build_repository_graph(
         for call_ref in call_refs:
             call = str(call_ref.get("callee", ""))
             simple = str(call_ref.get("simple_name") or call.rsplit(".", 1)[-1])
-            if call_resolution_version == "import-evidence-v4" and caller_language == "python":
+            if call_resolution_version in {"import-evidence-v4", "import-evidence-v5"} and caller_language == "python":
                 if call_ref.get("scope_start_line") != caller.get("start_line"):
                     continue  # 嵌套函数的调用不能归属外层定义。
-                target, bound, reason = _python_call_target(call_ref, caller, files, symbols, lookup)
+                modern = call_resolution_version == "import-evidence-v5"
+                target, bound, reason = _python_call_target(call_ref, caller, files, symbols, lookup,
+                                                           submodules=modern)
                 if target is not None:
                     candidates = {(_symbol_id(target),): target}
                 else:
@@ -85,8 +87,8 @@ def build_repository_graph(
                         source_file=str(caller["file"]), target_file=str(callee["file"]),
                         resolution_status="resolved" if bound else "unresolved",
                         resolution_basis="python_lexical_import" if bound else reason,
-                        relationship_level=("symbol" if call_ref.get("import_binding")
-                            and reason != "import_module_external_or_missing" else "search_hint"),
+                        relationship_level=("symbol" if (target is not None if modern else call_ref.get("import_binding")
+                            and reason != "import_module_external_or_missing") else "search_hint"),
                         call_expression=call, call_sites=[{"line": call_ref.get("line"),
                             "expression": call, "import_binding": call_ref.get("import_binding")}]))
                 continue
@@ -175,7 +177,7 @@ def build_repository_graph(
     }
 
 
-def _python_call_target(call, caller, files, symbols, lookup):
+def _python_call_target(call, caller, files, symbols, lookup, *, submodules=False):
     binding = call.get("import_binding")
     if not binding or call.get("binding_reason"):
         return None, False, call.get("binding_reason") or "import_binding_missing"
@@ -183,7 +185,23 @@ def _python_call_target(call, caller, files, symbols, lookup):
     module, member = binding["module"], binding.get("imported_name")
     if member:
         if expression != binding.get("local_name") or member == "*":
-            return None, False, "dynamic_member_access"
+            prefix = str(binding.get("local_name")) + "."
+            if (not submodules or member == "*" or not expression.startswith(prefix)
+                    or "." in expression[len(prefix):]):
+                return None, False, "dynamic_member_access"
+            packages = {path for path, confidence in resolve_import(str(caller["file"]), module, files, lookup)
+                        if confidence >= 0.94}
+            if len(packages) > 1:
+                return None, False, "package_module_ambiguous"
+            for package in packages:
+                namespace = files[package].get("python_namespace") or {}
+                bound_names = {*namespace.get("bound_names", []), *namespace.get("opaque_names", [])}
+                if (not package.endswith("/__init__.py") or namespace.get("complete") is not True
+                        or namespace.get("dynamic") or member in bound_names
+                        or bound_names & {"__getattr__", "__getattribute__", "__path__", "__builtins__"}):
+                    return None, False, "package_member_binding_unverified"
+            module = module + ("" if module.endswith(".") else ".") + member
+            member = expression[len(prefix):]
     else:
         prefix = binding.get("local_name") if binding.get("local_name") != module.split(".")[0] else module
         if not expression.startswith(prefix + ".") or "." in expression[len(prefix) + 1:]:

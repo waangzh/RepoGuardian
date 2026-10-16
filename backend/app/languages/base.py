@@ -90,6 +90,7 @@ class FileAnalysis(BaseModel):
     imports: list[ImportRef] = Field(default_factory=list)
     symbols: list[SymbolRef] = Field(default_factory=list)
     diagnostics: list[str] = Field(default_factory=list)
+    python_namespace: dict = Field(default_factory=dict)
 
 
 class LanguageAnalysisAdapter(Protocol):
