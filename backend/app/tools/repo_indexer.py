@@ -64,8 +64,11 @@ class RepoIndexer(BaseTool):
         repo_path = kwargs["repo_path"]
         file_index = await self.build_file_index(repo_path)
         symbol_index = await self.build_symbol_index(repo_path)
+        options = {}
+        if "call_resolution_version" in kwargs:
+            options["call_resolution_version"] = kwargs["call_resolution_version"]
         repository_graph = await asyncio.to_thread(
-            build_repository_graph, file_index, symbol_index
+            build_repository_graph, file_index, symbol_index, **options
         )
         project_meta = await self.detect_project_meta(repo_path, file_index)
         return {

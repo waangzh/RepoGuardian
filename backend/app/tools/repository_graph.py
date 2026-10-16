@@ -77,8 +77,7 @@ def build_repository_graph(
                     candidates = {(str(item["file"]), str(item["symbol"])): item
                         for item in by_name.get(simple, [])
                         if item is not caller and files[str(item["file"])].get("language") == "python"}
-                if len(candidates) == 1:
-                    callee = next(iter(candidates.values()))
+                for callee in sorted(candidates.values(), key=_symbol_id):
                     edges.append(_edge("symbol", _symbol_id(caller), "symbol", _symbol_id(callee),
                         "calls", float(call_ref.get("confidence", 0.7)), f"{caller.get('symbol')} calls {call}",
                         source_file=str(caller["file"]), target_file=str(callee["file"]),

@@ -51,6 +51,8 @@ def project_task_runtime(runtime, steps, goals, *, termination_reason, budget=No
         scope_complete=all(value["status"] == "examined" for value in outcomes),
         initial_scope_coverage=outcomes, admitted_investigations=investigations,
         unscheduled_leads=leads, findings=findings, usage_integrity=integrity,
+        relationship_hints=[{"lead_id": key, **value} for key, value in derivation.data["leads"].items()
+                            if value["status"] == "hint"] if derivation else [],
         sent_calls=sum(attempt.sent for attempt in attempts), settled_tokens=budget.settled_actual if budget else 0,
         unknown_attempts=len(unknown), total_tokens=budget.settled_actual if budget and integrity == "complete" else None,
         diagnostics=runtime.failures,
