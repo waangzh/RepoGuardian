@@ -1,0 +1,52 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createServer } from "vite";
+import { createSSRApp, effectScope, nextTick, ref } from "vue";
+import { renderToString } from "@vue/server-renderer";
+
+test("Outcome 显示后端数量，不根据问题列表推断 Clean", async () => {
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  try {
+    const { default: component } = await server.ssrLoadModule("/src/components/review/ReviewOutcomePanel.vue");
+    for (const [kind, label] of [["clean", "未发现可行动问题"], ["findings", "发现已确认问题"], ["inconclusive", "审查结论不确定"], ["failed", "审查失败"], ["cancelled", "审查已取消"]]) {
+      const plan = { outcome: { kind, coverage: "partial", confirmed_count: 3, publishable_count: 2, unresolved_count: 1,
+        examined_goals: 8, total_goals: 10, incomplete_investigations: 1, reason_codes: ["scope_incomplete"] },
+        withheld_findings: [{ candidate_id: "c1", reason_code: "snapshot_mismatch" }] };
+      const html = await renderToString(createSSRApp(component, { plan }));
+      for (const expected of [label, "3", "2", "1", "8 / 10", "scope_incomplete", "snapshot_mismatch"]) assert.ok(html.includes(expected));
+      assert.match(html, /尚未发布到 GitHub/);
+    }
+  } finally { await server.close(); }
+});
+
+test("切换任务、重试与卸载丢弃旧请求；失败不产生本地草稿", async () => {
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const scope = effectScope();
+  try {
+    const { usePublicationPlan } = await server.ssrLoadModule("/src/composables/usePublicationPlan.ts");
+    const task = ref({ id: "one", status: "completed" });
+    const pending = [];
+    const load = (id, signal) => new Promise((resolve, reject) => pending.push({ id, signal, resolve, reject }));
+    const state = scope.run(() => usePublicationPlan(() => task.value, load));
+    task.value = { id: "two", status: "completed" };
+    await nextTick();
+    assert.equal(pending[0].signal.aborted, true);
+    pending[0].resolve({ review_id: "one", schema_version: "review-publication-v1" });
+    pending[1].reject(new Error("offline"));
+    await nextTick(); await nextTick();
+    assert.equal(state.plan.value, null);
+    assert.match(state.error.value, /加载失败/);
+    state.reload(); await nextTick();
+    pending[2].resolve({ review_id: "two", schema_version: "review-publication-v1", outcome: { kind: "inconclusive" } });
+    await nextTick(); await nextTick();
+    assert.equal(state.plan.value.outcome.kind, "inconclusive");
+    task.value = { id: "two", status: "reviewing" }; await nextTick();
+    assert.equal(state.plan.value, null);
+    task.value = { id: "three", status: "cancelled" }; await nextTick();
+    scope.stop();
+    assert.equal(pending[3].signal.aborted, true);
+    pending[3].resolve({ review_id: "three", schema_version: "review-publication-v1" });
+    await nextTick(); await nextTick();
+    assert.equal(state.plan.value, null);
+  } finally { scope.stop(); await server.close(); }
+});

@@ -11,17 +11,17 @@ from app.services.review_publication import publication_view, verification_subje
 from test_review_outcome import completed_task
 
 
-def publishable_task(*, placement="inline", side="head", claim="空返回值破坏调用方契约"):
+def publishable_task(*, placement="inline", side="head", claim="空返回值破坏调用方契约", candidate_id="candidate-a", severity="medium"):
     task = completed_task()
     task.review_units = [ReviewUnit(id="u1", primary_files=["src/a.py"], related_files=[], rule_ids=[],
         estimated_tokens=0, complexity="small", fingerprint="fixture", grouping_reason="fixture")]
-    candidate = Candidate(candidate_id="candidate-a", claim=claim, primary_anchor="g1", supporting_evidence=["e1"],
+    candidate = Candidate(candidate_id=candidate_id, severity=severity, claim=claim, primary_anchor="g1", supporting_evidence=["e1"],
         source_result_ids=["r1"], affected_behavior="调用方字段读取失败", failure_scenario="服务返回空值时直接读取字段", recommendation="先处理空值")
     spec = SimpleNamespace(snapshot_head_sha=task.run_manifest.head_sha, snapshot_base_sha=task.run_manifest.effective_base_sha)
     verification = VerificationResult(candidate_id=candidate.candidate_id, decision="supported", evidence_ids=["e1"],
         reason="独立核对主张", request_id="req1", attempt_id="attempt1", work_item_id="verify1",
         snapshot_head_sha=spec.snapshot_head_sha, subject_hash=verification_subject_hash(candidate, spec), publication_action="retain")
-    issue = ReviewIssue(id=candidate.candidate_id, review_unit_id="u1", title=claim, category="correctness", severity="medium", confidence=0.5,
+    issue = ReviewIssue(id=candidate.candidate_id, review_unit_id="u1", title=claim, category="correctness", severity=severity, confidence=0.5,
         affected_behavior=candidate.affected_behavior, failure_scenario=candidate.failure_scenario, recommendation=candidate.recommendation,
         placement=placement, primary_evidence=EvidenceAnchor(file_path="src/a.py", existing_code="return None",
         resolved_start_line=7, resolved_end_line=7, resolved_side=side, resolution_method="diff_exact", resolution_status="exact",
@@ -94,6 +94,18 @@ def test_summary_routing_duplicates_conflicts_and_order():
     plan = PublicationPlanner().build(task)
     assert not plan.summary_findings
     assert all(item.reason_code == "duplicate_finding_conflict" for item in plan.withheld_findings)
+    task.task_runtime_report["findings"].reverse()
+    assert plan == PublicationPlanner().build(task)
+
+
+def test_severity_sort_is_stable_across_inline_and_summary():
+    task = publishable_task(claim="低等级问题", severity="low")
+    summary_record = publishable_task(placement="summary", claim="中等级问题", candidate_id="candidate-b").task_runtime_report["findings"][0]
+    summary_record["key"] = "key-b"
+    task.task_runtime_report["findings"].append(summary_record)
+    plan = PublicationPlanner().build(task)
+    assert plan.outcome.publishable_count == 2
+    assert plan.summary_markdown.index("中等级问题") < plan.summary_markdown.index("低等级问题")
     task.task_runtime_report["findings"].reverse()
     assert plan == PublicationPlanner().build(task)
 
