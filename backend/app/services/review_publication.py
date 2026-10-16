@@ -1,6 +1,5 @@
 """绑定被核验的原主张与发布文本；哈希只证明身份，不证明语义。"""
 
-from app.services.fingerprints import stable_hash
 from types import SimpleNamespace
 
 from pydantic import ValidationError
@@ -8,6 +7,7 @@ from pydantic import ValidationError
 from app.models.review import ReviewIssue
 from app.models.review_runtime import Candidate, VerificationResult
 from app.services.issue_policy import IssuePolicyService
+from app.services.fingerprints import stable_hash
 
 
 TEXT_FIELDS = ("claim", "affected_behavior", "failure_scenario", "recommendation")
@@ -90,3 +90,30 @@ def publication_issue(task, record):
             (evidence.file_path, evidence.resolved_start_line, evidence.resolved_end_line, evidence.resolved_side)):
         return None, "issue_policy_failed"
     return issue.model_copy(update={"severity": check.normalized_severity}), None
+
+
+def select_publication_findings(task, findings):
+    """同一快照内去重；相同 key 的冲突记录一律扣留。"""
+    groups = {}
+    for record in findings:
+        candidate = record.get("candidate")
+        candidate_id = candidate.get("candidate_id") if isinstance(candidate, dict) else None
+        key = record.get("key") or candidate_id or stable_hash(record)
+        groups.setdefault(str(key), []).append(record)
+    selected, withheld = [], []
+    for key, records in sorted(groups.items()):
+        if len({stable_hash(record) for record in records}) != 1:
+            for record in records:
+                candidate = record.get("candidate")
+                identity = candidate.get("candidate_id") if isinstance(candidate, dict) else None
+                withheld.append((str(identity or key), "duplicate_finding_conflict"))
+            continue
+        record = records[0]
+        issue, reason = publication_issue(task, record)
+        candidate = record.get("candidate")
+        identity = candidate.get("candidate_id") if isinstance(candidate, dict) else None
+        if issue is None:
+            withheld.append((str(identity or key), reason))
+        else:
+            selected.append((key, record, issue))
+    return selected, sorted(set(withheld))

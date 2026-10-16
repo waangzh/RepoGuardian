@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from app.models.publication import CoverageKind, OutcomeReason as Reason, ReviewOutcome, ReviewOutcomeKind as Kind
 from app.models.review import ReviewTask
 from app.models.review_runtime import TaskRuntimeReport
-from app.services.review_publication import publication_issue
+from app.services.review_publication import select_publication_findings
 
 
 def snapshot_valid(task: ReviewTask) -> bool:
@@ -18,7 +18,7 @@ def snapshot_valid(task: ReviewTask) -> bool:
                         for sha in (manifest.head_sha, manifest.effective_base_sha)))
 
 
-def derive_review_outcome(task: ReviewTask) -> ReviewOutcome:
+def derive_review_outcome(task: ReviewTask, *, publishable_count: int | None = None) -> ReviewOutcome:
     reasons = []
     report = None
     if task.engine != "task_review_v1":
@@ -42,13 +42,13 @@ def derive_review_outcome(task: ReviewTask) -> ReviewOutcome:
     if report is None:
         return ReviewOutcome(kind=kind, coverage=CoverageKind.UNKNOWN, reason_codes=reasons)
 
-    confirmed = sum(item.get("status") in {"confirmed", "published"} for item in report.findings)
-    unresolved = sum(item.get("status") in {"candidate", "unresolved", "needs_human"} for item in report.findings)
-    unknown = any(item.get("status") not in {"confirmed", "published", "candidate", "unresolved", "needs_human", "dismissed"}
+    confirmed = sum(str(item.get("status")) in {"confirmed", "published"} for item in report.findings)
+    unresolved = sum(str(item.get("status")) in {"candidate", "unresolved", "needs_human"} for item in report.findings)
+    unknown = any(str(item.get("status")) not in {"confirmed", "published", "candidate", "unresolved", "needs_human", "dismissed"}
                   for item in report.findings)
     total = len(report.initial_scope_coverage)
     examined = sum(item.get("status") == "examined" for item in report.initial_scope_coverage)
-    investigations = sum(item.get("status") != "answered" or item.get("answer") not in {"supported", "refuted"}
+    investigations = sum(item.get("status") != "answered" or str(item.get("answer")) not in {"supported", "refuted"}
                          for item in report.admitted_investigations)
     if not total:
         reasons.append(Reason.SCOPE_EMPTY)
@@ -73,8 +73,8 @@ def derive_review_outcome(task: ReviewTask) -> ReviewOutcome:
     publishable = 0
     if not cancelled and not failed and snapshot_valid(task):
         # Planner 使用同一个准入函数；原始确认数始终保留，不因扣留而减少。
-        publishable = len({str(item.get("key") or (item.get("candidate") or {}).get("candidate_id"))
-                           for item in report.findings if publication_issue(task, item)[0] is not None})
+        publishable = (publishable_count if publishable_count is not None
+                       else len(select_publication_findings(task, report.findings)[0]))
     return ReviewOutcome(kind=kind, coverage=CoverageKind.PARTIAL if reasons else CoverageKind.COMPLETE,
                          confirmed_count=confirmed, publishable_count=publishable, unresolved_count=unresolved,
                          total_goals=total, examined_goals=examined, incomplete_investigations=investigations,
