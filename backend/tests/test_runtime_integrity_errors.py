@@ -2,12 +2,16 @@ import asyncio
 import sqlite3
 import traceback
 from dataclasses import asdict
+from copy import deepcopy
+from datetime import timedelta
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
-from app.models.review import ReviewTask
+from app.models.orm import SideEffectOrm, WorkerJobOrm, utcnow
+from app.models.review import ReviewTask, TaskStatus
 from app.services.coordination_runtime import CoordinationLeaseLost
 from app.services.review_repository import _runtime_integrity_error
 from test_phase6a_persistence import persistence as persistence
@@ -68,3 +72,70 @@ def test_unknown_integrity_error_remains_integrity_error_without_driver_text():
     assert isinstance(translated, IntegrityError)
     assert "INTEGRITY_ERROR" in str(translated)
     assert "private" not in str(translated)
+
+
+@pytest.mark.parametrize("operation", ["runtime", "budget", "coordination"])
+def test_repository_insert_race_is_lease_loss_and_preserves_committed_record(
+    persistence, monkeypatch, operation,
+):
+    repository, _, sessions = persistence
+    repository.create_task(ReviewTask(id="run", pr_url="https://github.com/o/r/pull/1",
+                                     engine="task_review_v1"))
+    if operation == "runtime":
+        payload = runtime_payload("run", None)
+        payload["sessions"] = {}
+        key = "task-review-v1:run"
+        def save():
+            repository.save_task_review_runtime("run", payload, -1)
+    elif operation == "budget":
+        payload = {"revision": 0}
+        key = "run-budget:run"
+        def save():
+            repository.save_run_budget("run", payload, -1)
+    else:
+        payload = {"revision": 0, "status": "active", "budget": {}}
+        key = "cross-unit:run:fingerprint"
+        def save():
+            repository.save_coordination_runtime("run", "fingerprint", payload, -1, None)
+    save()
+    original = Session.get
+    def miss_snapshot(session, entity, identity, *args, **kwargs):
+        # 模拟 SELECT 未看到竞争写者，而 INSERT 时该主键已提交的边界。
+        if entity is SideEffectOrm and identity == key:
+            return None
+        return original(session, entity, identity, *args, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(Session, "get", miss_snapshot)
+        with pytest.raises(CoordinationLeaseLost, match="concurrent writer"):
+            save()
+    with sessions() as session:
+        assert session.get(SideEffectOrm, key).result == payload
+
+
+@pytest.mark.parametrize("rejection", ["cancelled", "expired", "wrong-owner", "stale-revision"])
+def test_runtime_rejects_cancelled_expired_or_stale_writer(persistence, rejection):
+    repository, _, sessions = persistence
+    repository.create_task(ReviewTask(id="run", pr_url="https://github.com/o/r/pull/1",
+                                     engine="task_review_v1"))
+    payload = runtime_payload("run", None)
+    payload["sessions"] = {}
+    repository.save_task_review_runtime("run", payload, -1)
+    before = deepcopy(repository.load_task_review_runtime("run"))
+    if rejection == "cancelled":
+        repository.cancel_task("run")
+        before = repository.load_task_review_runtime("run")
+        assert repository.get_task("run").status == TaskStatus.cancelled
+    lease = None
+    if rejection in {"expired", "wrong-owner"}:
+        with sessions.begin() as session:
+            session.add(WorkerJobOrm(id="job", task_id="run", kind="review", status="leased",
+                idempotency_key="job-key", lease_owner="worker", attempts=1,
+                lease_until=utcnow() + timedelta(seconds=-1 if rejection == "expired" else 30)))
+        lease = {"job_id": "job", "owner": "other" if rejection == "wrong-owner" else "worker",
+                 "attempt": 1}
+    outgoing = {**payload, "revision": 1}
+    if rejection == "stale-revision":
+        outgoing = payload
+    with pytest.raises(CoordinationLeaseLost):
+        repository.save_task_review_runtime("run", outgoing, outgoing["revision"] - 1, lease)
+    assert repository.load_task_review_runtime("run") == before
