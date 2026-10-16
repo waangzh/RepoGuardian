@@ -124,10 +124,15 @@ class ReviewGoal(BaseModel):
     target_ref: str = Field(min_length=1, max_length=1_000)
     required: bool = True
     origin: Literal["initial", "derived"] = "initial"
-    target_kind: Literal["source_range", "file_change"] = "source_range"
+    target_kind: Literal["source_range", "file_change", "base_source_range"] = "source_range"
     start_line: int = Field(default=1, ge=1)
     end_line: int = Field(default=1, ge=1)
     unsupported_reason: str | None = None
+
+    @property
+    def base_side(self) -> bool:
+        """目标范围以删除前源码行号为准；范围与证据必须在 Base 侧核对。"""
+        return self.target_kind == "base_source_range"
 
     @model_validator(mode="after")
     def valid_source_range(self) -> "ReviewGoal":

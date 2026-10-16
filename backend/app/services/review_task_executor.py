@@ -169,7 +169,10 @@ class ReviewTaskExecutor:
         if work_item.readable_scope_hash is not None:
             if work_item.readable_scope_hash != spec.readable_scope_hash:
                 raise ValueError("frozen_readable_scope_hash_mismatch")
-            if set(work_item.scope_files) - set(spec.readable_scope_files):
+            if set(work_item.scope_files) - set(spec.readable_scope_files) - {
+                    goal.target_ref for goal in goals if goal.target_kind == "base_source_range"}:
+                # 删除目标不在 Head 跟踪范围内，允许作为种子以便服务端读取 Base 原文；
+                # 模型可读范围仍由 readable_files 与 base_readable_files 分别判定。
                 raise ValueError("task_seed_outside_frozen_readable_scope")
         if set(work_item.related_goal_ids) - set(goal_map):
             raise ValueError("work item references unknown related goal")
@@ -189,6 +192,12 @@ class ReviewTaskExecutor:
     def readable_files(self) -> set[str]:
         return set(self.spec.readable_scope_files if self.work_item.readable_scope_hash is not None
                    else self.work_item.scope_files)
+
+    @property
+    def base_readable_files(self) -> set[str]:
+        """Base 侧证据只服务已冻结的删除目标；由 goal 推导，不扩为任意路径。"""
+        return {goal.target_ref for goal in self.goals.values()
+                if goal.target_kind == "base_source_range"}
 
     def bind_pages(self, pages) -> None:
         if self.work_item.attempt_count or self.projection.examinations or self.pages:
@@ -447,7 +456,10 @@ class ReviewTaskExecutor:
             if (evidence.get("head_sha") != self.spec.snapshot_head_sha
                     or evidence.get("base_sha") != self.spec.snapshot_base_sha):
                 return "stale_evidence_snapshot"
-            if (evidence.get("file_path") not in self.readable_files
+            if evidence.get("side", "head") not in {"head", "base"}:
+                return "unknown_evidence_side"
+            allowed = self.base_readable_files if evidence.get("side", "head") == "base" else self.readable_files
+            if (evidence.get("file_path") not in allowed
                     or is_sensitive_repository_path(evidence.get("file_path", ""))):
                 return "evidence_outside_scope"
             content = evidence.get("content")
@@ -461,12 +473,19 @@ class ReviewTaskExecutor:
                 return "invalid_evidence_source_range"
         return None
 
+    @staticmethod
+    def goal_side(goal: ReviewGoal) -> str:
+        return "base" if goal.target_kind == "base_source_range" else "head"
+
     def _covers(self, goal: ReviewGoal, identities: list[str]) -> bool:
-        if goal.target_kind != "source_range":
+        if goal.target_kind not in {"source_range", "base_source_range"}:
             return False  # metadata/impact 覆盖在规划器接入后显式计算。
+        side = self.goal_side(goal)
+        # Base 与 Head 行号域不同，只有同一侧的证据才能覆盖目标区间。
         ranges = sorted((self.evidence_catalog[e]["start_line"],
                          self.evidence_catalog[e]["end_line"])
-                        for e in identities if self.evidence_catalog[e]["file_path"] == goal.target_ref)
+                        for e in identities if self.evidence_catalog[e]["file_path"] == goal.target_ref
+                        and self.evidence_catalog[e].get("side", "head") == side)
         cursor = goal.start_line
         for start, end in ranges:
             if start > cursor:
