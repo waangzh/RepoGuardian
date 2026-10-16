@@ -99,6 +99,8 @@ class StickySummary:
             return
         _, _, context = await asyncio.to_thread(self.repo.frozen, attempt.id)
         item = next(item for item in (await asyncio.to_thread(self.repo.get, attempt.id)).items if item.kind == "summary")
+        if item.state not in {"publishing", "uncertain"}:
+            return  # 此占位属于 Inline Batch，由批次对账负责释放。
         expected = await asyncio.to_thread(self.repo.item_payload, item.id)
         comment, _ = await self.remote(context, slot)
         if not comment or comment["body"] != expected.get("body"):

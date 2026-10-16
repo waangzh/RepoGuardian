@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 from uuid import uuid4
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select, update, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -26,6 +26,8 @@ from app.models.orm import (
     SideEffectOrm,
     ValidationOrm,
     WorkerJobOrm,
+    PublicationAttemptOrm,
+    GitHubSummarySlotOrm,
     utcnow,
 )
 from app.models.persistence import (
@@ -480,6 +482,7 @@ class ReviewRepository:
                 self._cancel_task_runtime(session, task, payload)
             session.execute(update(WorkerJobOrm).where(
                 WorkerJobOrm.task_id == task_id,
+                WorkerJobOrm.kind.in_(["review", "unit_retry"]),
                 WorkerJobOrm.status.in_(["queued", "retry", "leased"]),
             ).values(status="cancelled", lease_owner=None, lease_until=None, updated_at=now))
             session.execute(update(HumanRequestOrm).where(
@@ -572,6 +575,11 @@ class ReviewRepository:
                 raise ValueError("only terminal tasks can be deleted")
             if _as_utc(task.retention_until) > now:
                 raise ValueError("task retention period has not elapsed")
+            if session.scalar(select(PublicationAttemptOrm.id).where(
+                    PublicationAttemptOrm.review_id == task_id,
+                    or_(PublicationAttemptOrm.state.in_(["queued", "preparing", "publishing", "uncertain"]),
+                        PublicationAttemptOrm.id.in_(select(GitHubSummarySlotOrm.pending_publication_id))))):
+                return False  # 未确认的外部副作用需要保留任务与对账证据。
             task.deleted_at = now
             task.status = "deleted"
             task.task_snapshot = {"id": task.id, "deleted": True}

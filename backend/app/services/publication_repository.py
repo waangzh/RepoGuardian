@@ -81,6 +81,19 @@ class PublicationRepository:
                 select(Item).where(Item.publication_id == identity).order_by(Item.kind, Item.finding_key))]
             return result
 
+    def existing_request(self, review_id, selection, publisher_identity, key):
+        selected = selection.model_dump(mode="json")
+        selected["finding_keys"] = sorted(set(selected["finding_keys"]))
+        logical = stable_hash([review_id, publisher_identity, selection.expected_plan_hash, stable_hash(selected)])
+        with self.sessions() as session:
+            request = session.get(RequestKey, stable_hash([publisher_identity, key]))
+            if request is None:
+                return None
+            if request.request_hash != logical:
+                raise PublicationConflict("idempotency_key_conflict")
+            identity = request.publication_id
+        return self.get(identity)
+
     def frozen(self, identity):
         with self.sessions() as session:
             row = session.get(Attempt, identity)
@@ -208,6 +221,10 @@ class PublicationRepository:
 
     def prepare_batch(self, identity, publication_id, item_ids, payload, *, lease):
         with self.locked(lease) as session:
+            slot = session.get(Slot, lease.slot_id)
+            if slot.pending_publication_id not in {None, publication_id}:
+                raise PublicationConflict("summary_operation_uncertain")
+            slot.pending_publication_id = publication_id
             row = session.get(Batch, identity)
             if row is not None and row.state != "failed":
                 raise PublicationConflict("batch_already_sent")
@@ -223,6 +240,9 @@ class PublicationRepository:
         with self.locked(lease) as session:
             row = session.get(Batch, identity)
             row.state, row.last_error_code = state, error
+            slot = session.get(Slot, lease.slot_id)
+            if state in {"published", "failed"} and slot.pending_publication_id == row.publication_id:
+                slot.pending_publication_id = None
             for item_id in row.item_ids:
                 item = session.get(Item, item_id)
                 if item_id in receipts:

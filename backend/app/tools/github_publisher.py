@@ -52,7 +52,10 @@ class GitHubPublisher:
             raise GitHubPublishError("github_response_invalid", uncertain=write) from None
 
     async def get(self, path):
-        return await self._request("GET", path)
+        value = await self._request("GET", path)
+        if not isinstance(value, dict):
+            raise GitHubPublishError("github_response_invalid")
+        return value
 
     async def paginate(self, path):
         output = []

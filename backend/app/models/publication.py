@@ -162,3 +162,53 @@ class GitHubSummarySlot(BaseModel):
     last_payload_hash: str | None = None
     pending_publication_id: str | None = None
     revision: int = 0
+
+
+class PublicationPreflightRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    finding_keys: list[str] | None = Field(default=None, max_length=100)
+
+
+class GitHubInlineLocation(BaseModel):
+    path: str
+    line: int = Field(ge=1)
+    side: Literal["LEFT", "RIGHT"]
+
+
+class PublicationInlineCounts(BaseModel):
+    selected: int = Field(ge=0)
+    ready: int = Field(ge=0)
+    already_published: int = Field(ge=0)
+    summary_fallback: int = Field(ge=0)
+    blocked: int = Field(ge=0)
+
+
+class PublicationInlinePreview(BaseModel):
+    finding_key: str
+    action: Literal["create", "already_published", "summary_fallback"]
+    body_markdown: str
+    location: GitHubInlineLocation | None = None
+
+
+class PublicationPreflightResult(BaseModel):
+    ready: bool
+    review_id: str
+    plan_hash: str
+    head_sha: str
+    head_sha_matches: bool
+    pr_open: bool
+    permissions_ok: bool
+    summary_action: Literal["create", "update"]
+    summary_comment_id: int | None = None
+    finding_keys: list[str]
+    inline: PublicationInlineCounts
+    inline_previews: list[PublicationInlinePreview]
+    summary_markdown: str
+    requires_partial_acknowledgement: bool
+    warnings: list[str]
+
+
+class PublicationAccepted(BaseModel):
+    publication_id: str
+    state: PublicationState
+    status_url: str

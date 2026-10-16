@@ -55,6 +55,37 @@ def test_pr_lock_is_shared_across_attempts_and_fences_old_writer(persistence):
     repo.release(next_lease)
 
 
+def test_queue_failure_rolls_back_attempt_items_and_request_key(persistence):
+    from sqlalchemy import event
+    repo, plan, selection, context, _ = setup_publication(persistence)
+    def reject_job(session, *_):
+        if any(isinstance(row, WorkerJobOrm) for row in session.new):
+            raise RuntimeError("queue unavailable")
+    event.listen(repo.sessions.class_, "before_flush", reject_job)
+    try:
+        with pytest.raises(RuntimeError, match="queue unavailable"):
+            repo.create(plan, selection, context, "key")
+    finally:
+        event.remove(repo.sessions.class_, "before_flush", reject_job)
+    assert not repo.list(plan.review_id)
+    assert repo.existing_request(plan.review_id, selection, context["publisher_identity"], "key") is None
+
+
+def test_retention_keeps_active_publications_and_summary_slot_survives_task_cleanup(persistence):
+    from datetime import timedelta
+    from app.models.orm import ReviewTaskOrm, utcnow
+    repo, plan, selection, context, _ = setup_publication(persistence)
+    attempt = repo.create(plan, selection, context, "key")
+    with repo.sessions.begin() as session:
+        session.get(ReviewTaskOrm, plan.review_id).retention_until = utcnow() - timedelta(days=1)
+    assert not persistence[0].delete_task_if_retention_elapsed(plan.review_id)
+    lease = repo.acquire(attempt, "worker")
+    repo.set_state(attempt.id, "failed", lease=lease)
+    repo.release(lease)
+    assert persistence[0].delete_task_if_retention_elapsed(plan.review_id)
+    assert repo.lookup_slot(123, 1, "user:7") is not None
+
+
 def test_migration_upgrade_and_downgrade_preserve_review_and_slot_has_no_review_fk(tmp_path):
     path = tmp_path / "migration.db"
     migrate(path, "20261016_0003")
