@@ -2,6 +2,11 @@
 .runtime-change-summary > span { color: var(--primary); font-size: 13px; font-weight: 700; }
 .runtime-change-summary p { margin: 0; max-width: 85ch; color: var(--text-secondary); font-size: 14px; line-height: 1.8; overflow-wrap: anywhere; }
 .runtime-panel { min-width: 0; }
+.publication-outcome { margin-bottom: 20px; }
+.publication-outcome > header { padding: 20px 24px; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.publication-outcome > header h2 { margin: 0; font-size: 20px; }
+.publication-outcome > header p { color: var(--text-secondary); font-size: 13px; line-height: 1.8; }
+.publication-outcome > header code { color: var(--text-muted); }
 .overview-card.runtime-panel > header { padding: 20px 24px; gap: 16px; }
 .overview-card.runtime-panel > header h2 { font-size: 18px; }
 .overview-card.runtime-panel > header p { margin-top: 6px; font-size: 13px; line-height: 1.6; }

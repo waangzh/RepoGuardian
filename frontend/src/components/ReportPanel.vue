@@ -9,15 +9,18 @@ import PanelHeader from "./common/PanelHeader.vue";
 const props = defineProps<{
   markdown: string | null | undefined;
   userMarkdown?: string | null;
+  summaryMarkdown?: string | null;
   commentsMarkdown?: string;
   filenamePrefix?: string;
 }>();
 
 const copied = ref(false);
 const feedback = ref("");
-const reportView = ref<"user" | "audit">("user");
-const currentMarkdown = computed(() => props.userMarkdown && reportView.value === "user" ? props.userMarkdown : props.markdown);
-const currentLabel = computed(() => props.userMarkdown && reportView.value === "user" ? "用户审查报告" : "原始审计报告");
+const reportView = ref<"user" | "summary" | "audit">("user");
+const currentMarkdown = computed(() => reportView.value === "summary" ? props.summaryMarkdown
+  : props.userMarkdown && reportView.value === "user" ? props.userMarkdown : props.markdown);
+const currentLabel = computed(() => reportView.value === "summary" ? "PR Summary 草稿"
+  : props.userMarkdown && reportView.value === "user" ? "用户审查报告" : "原始审计报告");
 watch(currentMarkdown, () => { copied.value = false; feedback.value = ""; });
 const reportDialog = ref<HTMLDialogElement | null>(null);
 
@@ -46,7 +49,7 @@ function exportMarkdown(comments = false) {
   const content = comments ? props.commentsMarkdown : currentMarkdown.value;
   if (!content) return;
   const prefix = (props.filenamePrefix || "repoguardian").replace(/[^a-z0-9_-]/gi, "-").slice(0, 80);
-  const kind = comments ? "comments" : props.userMarkdown && reportView.value === "user" ? "report" : "audit";
+  const kind = comments ? "comments" : reportView.value === "summary" ? "summary" : props.userMarkdown && reportView.value === "user" ? "report" : "audit";
   const url = URL.createObjectURL(new Blob([content], { type: "text/markdown;charset=utf-8" }));
   const link = document.createElement("a");
   link.href = url;
@@ -65,11 +68,11 @@ function exportMarkdown(comments = false) {
         <button type="button" class="button button--primary button--compact" :disabled="!currentMarkdown" @click="exportMarkdown()">导出当前报告</button>
       </div>
     </PanelHeader>
-    <div v-if="userMarkdown" class="report-mode-switch" aria-label="报告内容选择"><button type="button" :aria-pressed="reportView === 'user'" @click="reportView = 'user'">用户报告</button><button type="button" :aria-pressed="reportView === 'audit'" @click="reportView = 'audit'">完整审计</button><span>{{ reportView === 'user' ? '结论、位置、影响与建议' : '保留运行、关系与追踪信息；历史报告保持原样' }}</span></div>
+    <div v-if="userMarkdown || summaryMarkdown" class="report-mode-switch" aria-label="报告内容选择"><button v-if="userMarkdown" type="button" :aria-pressed="reportView === 'user'" @click="reportView = 'user'">用户报告</button><button v-if="summaryMarkdown" type="button" :aria-pressed="reportView === 'summary'" @click="reportView = 'summary'">PR Summary 草稿</button><button type="button" :aria-pressed="reportView === 'audit'" @click="reportView = 'audit'">完整审计</button><span>{{ reportView === 'summary' ? '后端生成，可复制，尚未发布' : reportView === 'user' ? '结论、位置、影响与建议' : '保留运行、关系与追踪信息；历史报告保持原样' }}</span></div>
     <p v-if="feedback" class="report-feedback" role="status">{{ feedback }}</p>
     <EmptyState v-if="!currentMarkdown" icon="report" title="报告尚未生成" description="当前没有可用的报告记录；请结合任务状态判断。" />
     <article v-else class="report-document markdown-body" v-html="renderedMarkdown" />
-    <details v-if="commentsMarkdown" class="report-comment-export"><summary>已确认问题的评论草稿</summary><p>只包含具备完整问题、有效证据和建议的已确认发现，未发布到 GitHub。</p><button type="button" class="button button--secondary button--compact" @click="exportMarkdown(true)">导出评论草稿</button><textarea readonly aria-label="全部评论草稿 Markdown" :value="commentsMarkdown" /></details>
+    <details v-if="commentsMarkdown" class="report-comment-export"><summary>已确认问题的评论草稿</summary><p>仅展示后端发布计划中通过内容检查的草稿，尚未发布到 GitHub。</p><button type="button" class="button button--secondary button--compact" @click="exportMarkdown(true)">导出评论草稿</button><textarea readonly aria-label="全部评论草稿 Markdown" :value="commentsMarkdown" /></details>
     <dialog ref="reportDialog" class="report-dialog" @click.self="reportDialog?.close()">
       <header><strong>完整 Markdown 报告</strong><button type="button" class="icon-button" aria-label="关闭报告" @click="reportDialog?.close()"><AppIcon name="x" :size="16" /></button></header>
       <article class="report-document report-document--full markdown-body" v-html="renderedMarkdown" />

@@ -44,3 +44,21 @@ def test_review_mode_enum_is_kept_in_frontend_contract() -> None:
     assert declaration is not None
     frontend_values = set(re.findall(r'"([^"]+)"', declaration.group("body")))
     assert frontend_values == {item.value for item in ReviewMode}
+
+
+def test_publication_interfaces_cover_backend_fields() -> None:
+    from app.models.publication import (PublicationPlan, PublicationFinding, PublicationAnchor,
+        PublicationSnapshot, ReviewOutcome, WithheldFinding)
+    source = FRONTEND_TYPES.with_name("publication.ts").read_text(encoding="utf-8")
+    for model in (PublicationPlan, PublicationFinding, PublicationAnchor, PublicationSnapshot, ReviewOutcome, WithheldFinding):
+        body = _interface_body(source, model.__name__)
+        assert all(re.search(rf"\b{name}\??\s*:", body) for name in model.model_fields)
+
+
+def test_browser_publication_fixtures_reproduce_backend_plan() -> None:
+    import json
+    from app.services.publication_planner import PublicationPlanner
+    path = FRONTEND_TYPES.parents[2] / "tests" / "fixtures" / "publication-plans.json"
+    for fixture in json.loads(path.read_text(encoding="utf-8")).values():
+        task = ReviewTask.model_validate(fixture["task"])
+        assert PublicationPlanner().build(task).model_dump(mode="json") == fixture["plan"]

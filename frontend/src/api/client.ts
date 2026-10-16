@@ -16,8 +16,13 @@ import type {
   WorkspaceCleanupPreview,
   WorkspaceCleanupResponse,
 } from "../types/operations";
+import type { PublicationPlan } from "../types/publication";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
+
+export function getPublicationPlan(taskId: string, signal?: AbortSignal): Promise<PublicationPlan> {
+  return request<PublicationPlan>(`/api/reviews/${encodeURIComponent(taskId)}/publication-plan`, { signal });
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {

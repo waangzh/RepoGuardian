@@ -46,7 +46,9 @@ def render_summary(plan: PublicationPlan) -> str:
              f"- 已确认问题：{outcome.confirmed_count}", f"- 可生成草稿：{outcome.publishable_count}",
              f"- 未决候选：{outcome.unresolved_count}", f"- 未完成调查：{outcome.incomplete_investigations}",
              f"- 覆盖状态：{outcome.coverage.value}"]
-    findings = [*plan.inline_drafts, *plan.summary_findings]
+    rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    findings = sorted([*plan.inline_drafts, *plan.summary_findings], key=lambda item: (
+        rank[item.severity], item.anchor.file_path, item.anchor.start_line or 0, item.finding_key))
     if findings:
         lines += ["", "### 问题索引", ""]
         for index, finding in enumerate(findings, 1):
