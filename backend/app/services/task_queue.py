@@ -18,6 +18,10 @@ from app.core.database import sync_session
 from app.models.orm import ReviewTaskOrm, WorkerJobOrm, utcnow
 
 
+class NonRetryableJobError(ValueError):
+    """作业不适用于当前执行环境；保留原因并直接进入死信队列。"""
+
+
 @dataclass(frozen=True)
 class ClaimedJob:
     id: str
@@ -239,7 +243,8 @@ class ReviewWorker:
                 raise
         except Exception as exc:
             await asyncio.to_thread(
-                self.queue.fail, job.id, self.worker_id, str(exc), retry=True
+                self.queue.fail, job.id, self.worker_id, str(exc),
+                retry=not isinstance(exc, NonRetryableJobError),
             )
         else:
             await asyncio.to_thread(self.queue.complete, job.id, self.worker_id)

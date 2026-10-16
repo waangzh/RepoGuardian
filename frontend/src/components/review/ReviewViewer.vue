@@ -398,10 +398,11 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
         </div>
         <div class="review-hero__actions">
           <a v-if="task.pr?.html_url" class="button button--secondary button--compact" :href="task.pr.html_url" target="_blank" rel="noreferrer">在 GitHub 查看 ↗</a>
-          <button v-if="!terminal" type="button" class="button button--secondary button--compact" :disabled="cancelling" @click="emit('cancel')">{{ cancelling ? "取消中…" : "取消审查" }}</button>
+          <button v-if="!terminal && isTaskRuntime" type="button" class="button button--secondary button--compact" :disabled="cancelling" @click="emit('cancel')">{{ cancelling ? "取消中…" : "取消审查" }}</button>
           <button v-else type="button" class="button button--primary button--compact" @click="emit('newReview')">＋ 新建审查</button>
         </div>
       </div>
+      <p v-if="!isTaskRuntime" class="historical-review-notice">此任务使用的审查引擎已退役，仅供查看历史结果。请新建审查以使用当前引擎。</p>
     </header>
 
     <nav class="review-tabs" aria-label="审查结果导航">
@@ -497,7 +498,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
           </button>
           <div v-if="selectedUnit" class="change-group-files">
             <span>组内文件</span><code v-for="file in unitFiles(selectedUnit)" :key="file">{{ file }}</code>
-            <details><summary>运行细节</summary><p>{{ selectedUnit.complexity }} · {{ selectedUnit.estimated_tokens.toLocaleString() }} 估算 tokens</p><p>{{ selectedUnit.risk_tags.join(' · ') || '无风险标签' }}</p><button v-if="['failed', 'timed_out'].includes(selectedUnitResult?.status || '')" type="button" class="button button--secondary button--compact" :disabled="retryingUnitId === selectedUnit.id" @click="emit('retry', selectedUnit.id)">{{ retryingUnitId === selectedUnit.id ? '重试中…' : '重试变更组' }}</button></details>
+            <details><summary>运行细节</summary><p>{{ selectedUnit.complexity }} · {{ selectedUnit.estimated_tokens.toLocaleString() }} 估算 tokens</p><p>{{ selectedUnit.risk_tags.join(' · ') || '无风险标签' }}</p></details>
           </div>
         </aside>
 
@@ -610,6 +611,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
 </template>
 
 <style scoped>
+.historical-review-notice { margin: 16px 0 0; color: var(--text-secondary); line-height: 1.7; }
 .review-tabs { overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
 .review-tabs button { flex-shrink: 0; }
 .cross-unit-overview { display: flex; align-items: center; gap: 14px; width: 100%; padding: 16px 20px; margin-bottom: 20px; border: 1px solid var(--border); border-left: 3px solid var(--primary); background: var(--surface); border-radius: var(--radius-md); text-align: left; color: var(--text-primary); cursor: pointer; }

@@ -1,5 +1,8 @@
 """旧引擎下线后的历史数据只读契约与拒绝路径。"""
 
+from datetime import timedelta
+from unittest.mock import AsyncMock, Mock
+
 import pytest
 
 from app.models.review import (
@@ -10,6 +13,8 @@ from app.models.review import (
 )
 from app.services.report_service import ReportService
 from app.services.review_service import ReviewService
+from app.models.orm import WorkerJobOrm, utcnow
+from app.services.task_queue import NonRetryableJobError
 from test_phase6a_persistence import persistence as persistence
 
 
@@ -117,3 +122,79 @@ def test_production_graph_exposes_no_legacy_entry_point():
 
     with pytest.raises(TypeError):
         build_review_graph(phase=2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("job_kind", ["review", "unit_retry"])
+@pytest.mark.parametrize("job_status", ["queued", "retry", "leased"])
+async def test_worker_retires_old_jobs_without_changing_historical_task(
+    persistence, monkeypatch, job_kind, job_status,
+):
+    repository, queue, sessions = persistence
+    snapshot = _legacy_snapshot()
+    snapshot["status"] = {"queued": "queued", "retry": "failed", "leased": "reviewing"}[job_status]
+    snapshot["review"].update(status=snapshot["status"], completed=False)
+    task = ReviewTask.model_validate(snapshot)
+    repository.create_task(task)
+    before = repository.get_task(task.id).model_dump(mode="json")
+    job_id = queue.enqueue(task_id=task.id, kind=job_kind, payload={"unit_id": "unit-1"})
+    with sessions.begin() as session:
+        row = session.get(WorkerJobOrm, job_id)
+        row.status = job_status
+        if job_status == "leased":
+            row.lease_owner = "previous-worker"
+            row.lease_until = utcnow() - timedelta(seconds=1)
+    build = Mock(side_effect=AssertionError("retired jobs must not build a graph"))
+    load_budget = AsyncMock(side_effect=AssertionError("retired jobs must not load a budget"))
+    cleanup = AsyncMock()
+    monkeypatch.setattr("app.services.review_service.build_review_graph", build)
+    monkeypatch.setattr("app.services.review_service.ReviewRunBudget.load_or_create", load_budget)
+    monkeypatch.setattr("app.services.review_service.delete_thread_checkpoints", cleanup)
+    service = ReviewService(None, None, None, None, None, repository=repository, task_queue=queue)
+
+    assert await service._worker.run_once()
+
+    assert repository.get_task(task.id).model_dump(mode="json") == before
+    with sessions() as session:
+        row = session.get(WorkerJobOrm, job_id)
+        assert row.status == "dead_letter"
+        assert row.attempts == 1
+        assert "retired" in row.last_error
+        assert row.lease_owner is None and row.lease_until is None
+    assert not await service._worker.run_once()
+    build.assert_not_called()
+    load_budget.assert_not_awaited()
+    cleanup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_direct_legacy_execution_is_rejected_before_mutating_task():
+    service = ReviewService(None, None, None, None, None)
+    task = ReviewTask.model_validate(_legacy_snapshot())
+    service._tasks[task.id] = task
+    before = task.model_dump(mode="json")
+
+    with pytest.raises(NonRetryableJobError, match="historical tasks are read-only"):
+        await service._run_graph(task.id)
+
+    assert task.model_dump(mode="json") == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("execution_error", [None, RuntimeError("temporary failure")])
+async def test_current_engine_jobs_still_complete_or_retry(persistence, monkeypatch, execution_error):
+    repository, queue, sessions = persistence
+    task = ReviewTask(id="current-task", pr_url="https://github.com/local/sample/pull/1",
+                      engine="task_review_v1")
+    repository.create_task(task)
+    job_id = queue.enqueue(task_id=task.id)
+    service = ReviewService(None, None, None, None, None, repository=repository, task_queue=queue)
+    execute = AsyncMock(side_effect=execution_error)
+    monkeypatch.setattr(service, "_run_graph", execute)
+
+    assert await service._worker.run_once()
+
+    execute.assert_awaited_once()
+    with sessions() as session:
+        row = session.get(WorkerJobOrm, job_id)
+        assert row.status == ("retry" if execution_error else "completed")
