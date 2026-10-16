@@ -8,7 +8,7 @@ const statusLabels: Record<string, string> = {
   supported: "支持命题", refuted: "反驳命题", complete: "完整", unknown: "未知", inconsistent: "不一致",
   plan_exhausted: "计划处理结束", budget_exhausted: "预算耗尽", deadline: "运行超时",
   no_progress: "无进展停止", technical_failure: "技术失败", cancelled: "已取消", running: "运行中",
-  completed: "本轮审查已结束", failed: "审查失败", published: "已确认",
+  completed: "本轮审查已结束", failed: "审查失败", published: "已发布（报告）",
 };
 
 export interface TaskRuntimeSummary {
@@ -74,7 +74,7 @@ function text(value: unknown): string { return typeof value === "string" ? value
 export interface RuntimeFindingRow {
   key: string; status: string; group: RuntimeFindingGroup; title: string;
   failureScenario: string; affectedBehavior: string; recommendation: string;
-  reason: string; rawReason: string; filePath: string; line: number | null; issue: ReviewIssue | null;
+  reason: string; rawReason: string; filePath: string; line: number | null; issue: ReviewIssue | null; draftEligible: boolean;
 }
 
 export function runtimeFindingRows(report: TaskRuntimeReport, issues: ReviewIssue[] = []): RuntimeFindingRow[] {
@@ -101,6 +101,10 @@ export function runtimeFindingRows(report: TaskRuntimeReport, issues: ReviewIssu
       rawReason, filePath: text(evidence.file_path),
       line: typeof evidence.resolved_start_line === "number" && Number.isInteger(evidence.resolved_start_line) && evidence.resolved_start_line > 0 ? evidence.resolved_start_line : null,
       issue,
+      draftEligible: findingGroup(status) === "confirmed" && ["inline", "summary"].includes(text(rawIssue.placement))
+        && Boolean(text(evidence.file_path)) && ["exact", "relocated", "symbol_resolved", "context_resolved"].includes(text(evidence.resolution_status))
+        && Boolean(field("failure_scenario")) && Boolean(field("recommendation"))
+        && (!value.publication || Object.keys(publication).length > 0),
     };
   });
 }
@@ -135,6 +139,54 @@ export function reviewCompletionMessage(task: ReviewTask): string {
   const summary = taskRuntimeSummary(report);
   return `${summary.findings.confirmed} 项已确认问题，${summary.findings.unresolved} 项待确认候选。`
     + (runtimeWarnings(report).join(" ") || "约定范围已检查，报告已生成。");
+}
+
+export function markdownText(value: string): string {
+  return value.replace(/\s+/g, " ").trim().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/([\\`*_{}\[\]|#])/g, "\\$1");
+}
+
+function findingMarkdown(row: RuntimeFindingRow): string {
+  const location = row.filePath ? `${row.filePath}${row.line ? `:${row.line}` : '（未定位到具体代码行）'}` : "尚无可靠代码定位";
+  const side = row.issue?.primary_evidence.resolved_side || row.issue?.primary_evidence.expected_side;
+  return [`### ${markdownText(row.title)}`, "", `- 位置：${markdownText(location)}${side ? `（${markdownText(side)} 侧证据）` : ''}`,
+    row.affectedBehavior ? `- 影响：${markdownText(row.affectedBehavior)}` : "",
+    row.failureScenario ? `- 触发场景：${markdownText(row.failureScenario)}` : "",
+    row.recommendation ? `- 建议：${markdownText(row.recommendation)}` : "",
+    row.reason ? `- 限制：${markdownText(row.reason)}` : ""].filter(Boolean).join("\n");
+}
+
+export function runtimeCommentDraft(row: RuntimeFindingRow, headSha?: string): string | null {
+  if (!row.draftEligible) return null;
+  return `${findingMarkdown(row)}\n\n审查快照：${markdownText(headSha || '未记录，请核对原 PR 版本')}。本条为静态审查结论。`;
+}
+
+export function runtimeCommentsMarkdown(task: ReviewTask): string {
+  const report = runtimeReport(task);
+  if (!report) return "";
+  return runtimeFindingRows(report, task.issues).map(row => runtimeCommentDraft(row, task.pr?.head.sha)).filter(Boolean).join("\n\n---\n\n");
+}
+
+export function runtimeUserReport(task: ReviewTask): string | null {
+  const report = runtimeReport(task);
+  if (!report) return null;
+  const summary = taskRuntimeSummary(report);
+  const rows = runtimeFindingRows(report, task.issues);
+  const lines = ["# RepoGuardian 审查报告", "", task.pr ? `PR：${markdownText(task.pr.title)}（#${task.pr.number}）` : "PR 信息未记录。",
+    `审查快照：${markdownText(task.pr?.head.sha || '未记录')}`, "", "## 审查结论", "", runtimeLabel(report.execution_status),
+    `${summary.findings.confirmed} 项已确认问题，${summary.findings.unresolved} 项待确认候选。`,
+    `约定目标：已检查 ${summary.scope.examined} / ${summary.scope.total} 项；${summary.scope.incomplete} 项范围缺口。`, "",
+    "检查范围、调查回答与缺陷结论分别记录；本报告不代表所有业务路径均已验证。", ""];
+  const warnings = runtimeWarnings(report);
+  if (warnings.length) lines.push("## 限制与未决事项", "", ...warnings.map(warning => `- ${markdownText(warning)}`), "");
+  for (const [group, label] of [["confirmed", "已确认问题"], ["unresolved", "待确认候选"], ["unknown", "状态未知的记录"]] as const) {
+    const selected = filterRuntimeFindings(rows, group);
+    lines.push(`## ${label}`, "");
+    if (!selected.length) lines.push("当前没有此类发现。", "");
+    if (group === "unresolved" && selected.length) lines.push("以下描述尚未确认是缺陷，需要补充证据。", "");
+    for (const row of selected) lines.push(findingMarkdown(row), "");
+  }
+  if (summary.findings.dismissed) lines.push(`${summary.findings.dismissed} 项候选已排除，不计入待处理问题。`, "");
+  return lines.join("\n");
 }
 
 export function runtimeLabel(value: unknown): string {
