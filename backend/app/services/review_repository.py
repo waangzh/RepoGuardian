@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import hashlib
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 from uuid import uuid4
 
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -61,6 +63,28 @@ TERMINAL_TASK_STATUSES = {
 
 class DatabaseNotMigratedError(RuntimeError):
     pass
+
+
+def _runtime_integrity_error(exc: IntegrityError, operation: str) -> BaseException:
+    """只将 SQLite SideEffect 幂等主键竞争视为失租，其他约束错误脱敏传播。"""
+    from app.services.coordination_runtime import CoordinationLeaseLost
+
+    code = getattr(exc.orig, "sqlite_errorcode", None)
+    if (isinstance(exc.orig, sqlite3.IntegrityError)
+            and code == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY
+            and str(exc.orig) == "UNIQUE constraint failed: side_effects.idempotency_key"):
+        return CoordinationLeaseLost(f"{operation} concurrent writer")
+    names = {
+        sqlite3.SQLITE_CONSTRAINT_UNIQUE: "SQLITE_CONSTRAINT_UNIQUE",
+        sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY: "SQLITE_CONSTRAINT_PRIMARYKEY",
+        sqlite3.SQLITE_CONSTRAINT_FOREIGNKEY: "SQLITE_CONSTRAINT_FOREIGNKEY",
+        sqlite3.SQLITE_CONSTRAINT_NOTNULL: "SQLITE_CONSTRAINT_NOTNULL",
+        sqlite3.SQLITE_CONSTRAINT_CHECK: "SQLITE_CONSTRAINT_CHECK",
+    }
+    detail = names.get(code, "INTEGRITY_ERROR") if isinstance(code, int) else "INTEGRITY_ERROR"
+    # 原异常包含 SQL/JSON 参数，不能进入 Service 的 str(exc) 或 traceback。
+    return IntegrityError(None, None, sqlite3.IntegrityError(
+        f"{operation}: database integrity violation [{detail}]"), hide_parameters=True)
 
 
 class ReviewRepository:
@@ -605,7 +629,6 @@ class ReviewRepository:
                                  lease: dict | None = None) -> None:
         """新引擎独立 namespace；任何取消/过期 lease 都不能继续发布。"""
         from app.services.coordination_runtime import CoordinationLeaseLost
-        from sqlalchemy.exc import IntegrityError
         if (payload.get("version") != "task-review-runtime-v1"
                 or payload.get("spec", {}).get("run_id") != task_id
                 or payload.get("revision") != expected_revision + 1):
@@ -662,13 +685,12 @@ class ReviewRepository:
                         raise ValueError("task runtime artifact hash mismatch")
                     self._record_artifact(session, task_id, "task-review-v1", ref["uri"])
         except IntegrityError as exc:
-            raise CoordinationLeaseLost("concurrent task runtime writer") from exc
+            raise _runtime_integrity_error(exc, "task runtime") from None
 
     def save_run_budget(self, task_id: str, payload: dict, expected_revision: int,
                         lease: dict | None = None) -> None:
         """以 SideEffect CAS 持久化运行预算；旧 worker 无法覆盖新 revision。"""
         from app.services.coordination_runtime import CoordinationLeaseLost
-        from sqlalchemy.exc import IntegrityError
         try:
             with self._session_factory.begin() as session:
                 task = session.get(ReviewTaskOrm, task_id)
@@ -698,14 +720,13 @@ class ReviewRepository:
                     if changed.rowcount != 1:
                         raise CoordinationLeaseLost("run budget revision changed")
         except IntegrityError as exc:
-            raise CoordinationLeaseLost("run budget revision changed") from exc
+            raise _runtime_integrity_error(exc, "run budget") from None
 
     def save_coordination_runtime(self, task_id: str, fingerprint: str, payload: dict,
                                   expected_revision: int, expected_budget: dict | None,
                                   lease: dict | None = None) -> None:
         """运行账本与任务共享预算在一个事务内 CAS；旧 worker 不能预留或发布。"""
         from app.services.coordination_runtime import CoordinationLeaseLost
-        from sqlalchemy.exc import IntegrityError
 
         try:
             with self._session_factory.begin() as session:
@@ -757,7 +778,7 @@ class ReviewRepository:
                     if changed.rowcount != 1:
                         raise CoordinationLeaseLost("shared coordination budget changed")
         except IntegrityError as exc:
-            raise CoordinationLeaseLost("concurrent coordination runtime writer") from exc
+            raise _runtime_integrity_error(exc, "coordination runtime") from None
 
     def begin_side_effect(
         self, *, task_id: str, effect_type: str, target: str, payload: dict[str, Any]
