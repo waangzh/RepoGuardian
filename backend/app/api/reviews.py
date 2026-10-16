@@ -26,6 +26,7 @@ from app.models.review import (
     TaskStatus,
 )
 from app.models.review_runtime import TaskRuntimeRetryResult
+from app.models.publication import PublicationPlan
 from app.models.persistence import (
     PatchDetail,
     ReviewIssueDetail,
@@ -34,6 +35,7 @@ from app.models.persistence import (
     ValidationDetail,
 )
 from app.services.report_service import ReportService
+from app.services.publication_planner import PublicationPlanner
 from app.services.review_service import ReviewService
 from app.services.review_repository import ReviewRepository
 from app.services.task_queue import DatabaseTaskQueue
@@ -167,6 +169,19 @@ async def get_review(task_id: str) -> ReviewTask:
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
     return task
+
+
+@router.get("/{task_id}/publication-plan", response_model=PublicationPlan, responses={
+    404: {"description": "Task not found"}, 409: {"description": "Review is not finished"},
+})
+async def get_publication_plan(task_id: str) -> PublicationPlan:
+    """从保存的终态快照生成草稿，不调用模型或 GitHub，不持久化发布状态。"""
+    task = await asyncio.to_thread(get_review_service().get_task, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.status not in {TaskStatus.completed, TaskStatus.completed_with_warnings, TaskStatus.failed, TaskStatus.cancelled}:
+        raise HTTPException(status_code=409, detail="Review is not finished")
+    return await asyncio.to_thread(PublicationPlanner().build, task.model_copy(deep=True))
 
 
 @router.get("/{task_id}/report")
