@@ -41,7 +41,7 @@ class TaskReviewV1Protocol:
 
     @staticmethod
     def change_context(goals, active, catalog):
-        """固定规范 hunk 的双侧片段；分页只呈现当前 Head 范围对应行。"""
+        """固定规范 hunk 的双侧片段；分页只呈现当前目标范围对应行。"""
         goal_map = {goal.goal_id: goal for goal in goals}
         output = {}
         for identity in active:
@@ -49,6 +49,15 @@ class TaskReviewV1Protocol:
             if not change or change["goal_id"] not in goal_map:
                 continue
             goal = goal_map[change["goal_id"]]
+            if goal.base_side:
+                # Base 目标按删除前行号筛选；删除行没有 Head 行号，只能比对 Base 侧。
+                lines = [line for line in change["lines"]
+                         if line["old_line_no"] is not None
+                         and goal.start_line <= line["old_line_no"] <= goal.end_line]
+                output[change["goal_id"]] = {**change, "lines": lines,
+                    "visible_base_start": goal.start_line, "visible_base_end": goal.end_line,
+                    "source": "canonical_diff_context_not_source_anchor"}
+                continue
             cursor, lines = change["new_start"], []
             last_head = change["new_start"] + change["new_length"] - 1
             for line in change["lines"]:

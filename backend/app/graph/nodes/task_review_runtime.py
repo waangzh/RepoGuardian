@@ -17,12 +17,14 @@ from app.graph.state import ReviewState, ReviewRunContext
 from app.models.review import ChangedFile, ReviewPlan, ReviewToolScope
 from app.models.review_runtime import ReviewGoal, ReviewRunSpec, ReviewWorkItem
 from app.review.diff_base import review_diff_base
-from app.review.tool_scope import validate_repository_file, is_sensitive_repository_path, list_git_tracked_files
+from app.review.tool_scope import (validate_repository_base_file, validate_repository_file,
+                                  is_sensitive_repository_path, list_git_tracked_files)
 from app.services.fingerprints import stable_hash
 from app.services.model_request_budgeter import ModelRequestProfile, RequestAdmissionError
 from app.services.review_run_budget import current_run_budget, ReviewRepositoryRunBudgetStore, ReviewRunBudget
 from app.services.review_runtime import TaskReviewRuntime
-from app.services.review_task_derivation import TaskReviewDerivation, build_task_risk_catalog
+from app.services.review_task_derivation import (TaskReviewDerivation, build_task_risk_catalog,
+                                                dangling_deleted_references)
 from app.services.review_task_executor import ReviewTaskExecutor
 from app.services.review_task_step import InspectTaskStep
 from app.services.task_runtime_checkpoint import TaskRuntimeCheckpoint
@@ -99,17 +101,33 @@ def plan_runtime_goals(changed, plan):
             selected = [(index, hunk) for index, hunk in enumerate(file.hunks)
                         if not unit.diff_hunk_ids or DeterministicReviewPlanner.hunk_id(
                             file.file_path, index, hunk.model_dump(mode="json")) in unit.diff_hunk_ids]
-            if not selected or file.is_binary or file.change_type == "deleted":
+            if file.is_binary or not selected:
                 goals.append(ReviewGoal(goal_id="file-" + stable_hash([unit.id, file.model_dump(mode="json")])[:32],
                     unit_id=unit.id, kind="inspect", target_ref=file.file_path, target_kind="file_change",
                     unsupported_reason="non_head_text_change"))
                 continue
+            if file.change_type == "deleted":
+                # 整文件删除与文件清空只有 Base 侧文本；unidiff 会同样判为 deleted。
+                # 范围按删除前行号，不构造 Head 零长度区间。
+                for index, hunk in selected:
+                    identity = DeterministicReviewPlanner.hunk_id(file.file_path, index, hunk.model_dump(mode="json"))
+                    goals.append(ReviewGoal(goal_id="goal-" + stable_hash([unit.id, identity])[:32],
+                        unit_id=unit.id, kind="inspect", target_ref=file.file_path,
+                        target_kind="base_source_range", start_line=max(1, hunk.old_start),
+                        end_line=max(1, hunk.old_start + hunk.old_length - 1)))
+                continue
             for index, hunk in selected:
                 identity = DeterministicReviewPlanner.hunk_id(file.file_path, index, hunk.model_dump(mode="json"))
+                if hunk.new_length == 0 or hunk.new_start < 1:
+                    # 纯删除 hunk 没有 Head 行；改在 Base 侧核对被删原文。
+                    goals.append(ReviewGoal(goal_id="goal-" + stable_hash([unit.id, identity])[:32],
+                        unit_id=unit.id, kind="inspect", target_ref=file.file_path,
+                        target_kind="base_source_range", start_line=max(1, hunk.old_start),
+                        end_line=max(1, hunk.old_start + hunk.old_length - 1)))
+                    continue
                 goals.append(ReviewGoal(goal_id="goal-" + stable_hash([unit.id, identity])[:32],
                     unit_id=unit.id, kind="inspect", target_ref=file.file_path,
-                    start_line=max(1, hunk.new_start), end_line=max(1, hunk.new_start + hunk.new_length - 1),
-                    unsupported_reason="no_head_lines" if hunk.new_length == 0 else None))
+                    start_line=hunk.new_start, end_line=hunk.new_start + hunk.new_length - 1))
     # 排除文件仍可见，不能变成零分母的完整结果。
     for file in changed:
         if file.file_path not in owned:
@@ -141,12 +159,19 @@ async def source_catalog(goals, spec, root, git, changed_files=None):
     for goal in goals:
         if goal.unsupported_reason:
             continue
-        if goal.target_ref not in bodies:
-            # realpath/tracked/sensitive 防线在 Git blob 读取之前执行。
-            await asyncio.to_thread(validate_repository_file, root, goal.target_ref)
-            bodies[goal.target_ref] = await asyncio.to_thread(git.get_file_content_at_revision,
-                root, spec.snapshot_head_sha, goal.target_ref)
-        body = bodies[goal.target_ref]
+        # Base 侧目标读取删除前的固定快照；工作树可能已无该路径，故走 tree 校验。
+        revision = spec.snapshot_base_sha if goal.base_side else spec.snapshot_head_sha
+        key = (goal.target_ref, revision)
+        if key not in bodies:
+            if goal.base_side:
+                await asyncio.to_thread(validate_repository_base_file, root, goal.target_ref,
+                    base_sha=spec.snapshot_base_sha, tree_entries=git.get_tree_entries)
+            else:
+                # realpath/tracked/sensitive 防线在 Git blob 读取之前执行。
+                await asyncio.to_thread(validate_repository_file, root, goal.target_ref)
+            bodies[key] = await asyncio.to_thread(git.get_file_content_at_revision,
+                root, revision, goal.target_ref)
+        body = bodies[key]
         if body is None or "\x00" in body:
             continue
         lines = body.splitlines()
@@ -157,6 +182,7 @@ async def source_catalog(goals, spec, root, git, changed_files=None):
             content += "\n"  # 保留末尾空白物理行，splitlines 不能少算一行。
         value = {"file_path": goal.target_ref, "start_line": goal.start_line, "end_line": goal.end_line,
             "head_sha": spec.snapshot_head_sha, "base_sha": spec.snapshot_base_sha,
+            "side": "base" if goal.base_side else "head",
             "content": content, "content_hash": hashlib.sha256(content.encode()).hexdigest(),
             "source": "fixed_snapshot", "hunk_id": goal.goal_id}
         for (path, identity), hunk in changes.items():
@@ -258,16 +284,22 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
             if not expanded_scope:
                 paths += [path for path in sorted(readable) if path not in paths][:max(0, 40 - len(paths))]
             paths = paths[:40]
+            # 删除路径只作 Base 取证种子，不在模型可读/可评论范围内。
+            base_targets = {goal.target_ref for goal in selected if goal.base_side}
+            readable_paths = set(readable if expanded_scope else paths) - base_targets
+            seed_paths = set(paths) - base_targets
             identity = "inspect-" + stable_hash([unit.id, [goal.goal_id for goal in selected]])[:32]
             item = ReviewWorkItem(work_item_id=identity, unit_id=unit.id, kind="inspect",
-                goal_ids=[goal.goal_id for goal in selected], scope_files=paths, sequence=len(items),
+                goal_ids=[goal.goal_id for goal in selected], scope_files=sorted(seed_paths), sequence=len(items),
                 readable_scope_hash=spec.readable_scope_hash if expanded_scope else None)
             initial = {key: deepcopy(value) for key, value in catalog.items()
                        if any(value["hunk_id"] == goal.goal_id for goal in selected)}
             executor = ReviewTaskExecutor(spec, item, selected, active_evidence_ids=set(initial),
                                           evidence_catalog=initial, request_id="not-dispatched")
-            scope = ReviewToolScope(review_unit_id=identity, commentable_files={goal.target_ref for goal in selected},
-                readable_files=readable if expanded_scope else set(paths), seed_files=set(paths), repository_root=state["repo_path"],
+            scope = ReviewToolScope(review_unit_id=identity,
+                # 删除行无法在 Head 侧做行内评论定位；结论按 summary 呈现，不写入 commentable。
+                commentable_files={goal.target_ref for goal in selected} - base_targets,
+                readable_files=readable_paths, seed_files=seed_paths, repository_root=state["repo_path"],
                 max_lines_per_read=configuration["max_lines_per_read"],
                 max_search_results=configuration["max_search_results"])
             steps[identity] = InspectTaskStep(executor, provider, budget, scope, git_tool=git,
@@ -299,7 +331,11 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
             risk_catalog=build_task_risk_catalog([goal for goal in goals if not goal.unsupported_reason],
                                                items, state.get("repository_graph") or {},
                                                planner_version=risk_planner_version,
-                                               max_lines_per_read=configuration["max_lines_per_read"]))
+                                               max_lines_per_read=configuration["max_lines_per_read"],
+                                               dangling_references=dangling_deleted_references(
+                                                   [file.file_path for file in changed
+                                                    if file.change_type == "deleted"],
+                                                   state.get("file_index"))))
         checkpoint = TaskRuntimeCheckpoint(queue, steps, repository, lease=lease) if repository else None
         if checkpoint:
             await checkpoint.restore()

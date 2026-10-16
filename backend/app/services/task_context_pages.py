@@ -25,14 +25,17 @@ def build_context_pages(work_item, goals, catalog, *, capacity_chars: int,
     for goal in goals:
         if goal.goal_id not in work_item.goal_ids:
             continue
-        if goal.target_kind != "source_range":
+        if goal.target_kind not in {"source_range", "base_source_range"}:
             raise ValueError("context page requires source range goal")
+        side = "base" if goal.target_kind == "base_source_range" else "head"
         source = next((value for value in catalog.values()
                        if value["file_path"] == goal.target_ref
+                       and value.get("side", "head") == side
                        and value["start_line"] <= goal.start_line
                        and value["end_line"] >= goal.end_line), None)
         if source is None:
             pieces = sorted((value for value in catalog.values() if value["file_path"] == goal.target_ref
+                and value.get("side", "head") == side
                 and value["start_line"] <= goal.end_line and value["end_line"] >= goal.start_line),
                 key=lambda value: value["start_line"])
             by_line = {}
