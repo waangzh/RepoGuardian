@@ -87,3 +87,14 @@ def test_legacy_resolution_remains_frozen(tmp_path):
                               version="import-evidence-v3")
     edge = next(edge for edge in graph["edges"] if edge["type"] == "calls")
     assert edge["resolution_status"] == "unresolved" and edge["resolution_basis"] == "unique_name"
+
+
+def test_unproven_name_hint_cannot_replace_a_proven_call_to_same_target(tmp_path):
+    graph, _ = indexed_graph(tmp_path,
+        "from pkg.stats import measure\ndef run(external):\n    external.measure([])\n    return measure([])\n")
+    edges = [edge for edge in graph["edges"] if edge["type"] == "calls"]
+    assert len(edges) == 2
+    resolved = next(edge for edge in edges if edge["resolution_status"] == "resolved")
+    hinted = next(edge for edge in edges if edge["relationship_level"] == "search_hint")
+    assert resolved["call_sites"][0]["line"] == 4
+    assert hinted["call_sites"][0]["line"] == 3

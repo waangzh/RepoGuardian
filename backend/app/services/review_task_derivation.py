@@ -406,10 +406,15 @@ class TaskReviewDerivation:
                     self.data["leads"][risk["id"]] = {"status": "not_scheduled",
                         "reason": risk["not_scheduled_reason"], "proposition": risk["proposition"],
                         "source": "deterministic_risk", "related_goal_ids": risk["related_goal_ids"]}
+                    if risk.get("relationship"):
+                        self.data["leads"][risk["id"]]["relationship"] = deepcopy(risk["relationship"])
                     continue
                 self._investigation(risk["origin_work_item_id"], risk["id"], risk["proposition"],
                     risk["related_goal_ids"], [RuntimeReadArguments.model_validate(v) for v in risk["evidence_requests"]],
                     source="deterministic_risk")
+                if risk.get("relationship"):
+                    self.data["leads"][risk["id"]].update(relationship=deepcopy(risk["relationship"]),
+                        related_goal_ids=risk["related_goal_ids"])
         for lead in self.data["leads"].values():
             identity = lead.get("work_item_id")
             if identity and lead["status"] != "duplicate":
@@ -587,12 +592,13 @@ def build_task_risk_catalog(goals, work_items, repository_graph, *, planner_vers
             "source": edge.get("source"), "target": edge.get("target"),
             "resolution_status": edge.get("resolution_status"),
             "resolution_basis": edge.get("resolution_basis"),
+            "relationship_level": edge.get("relationship_level"),
             "call_sites": edge.get("call_sites", [])}
-        if planner_version == "risk-planner-v5" and edge["type"] != "calls":
+        if planner_version == "risk-planner-v5" and (edge["type"] != "calls" or edge.get("relationship_level") == "search_hint"):
             related = sorted(goal.goal_id for path in (source, target) for goal in by_path.get(path, []))
             key = "relationship-hint-" + stable_hash([relationship, related])[:32]
             output[key] = {"id": key, "hint": True, "related_goal_ids": related,
-                "proposition": f"{source} → {target}（{edge['type']}，文件级取证提示，尚未核验）",
+                "proposition": f"{source} → {target}（{edge['type']}，取证提示，尚未核验）",
                 "relationship": relationship, "evidence_requests": []}
             continue
         missing_changed_binding = not (callers or callees) if single_changed_side else not callers or not callees
@@ -617,6 +623,8 @@ def build_task_risk_catalog(goals, work_items, repository_graph, *, planner_vers
             related = sorted(goal.goal_id for goal in changed)
             key = "risk-unbound-" + stable_hash([edge.get("type"), edge.get("source"), edge.get("target"),
                                                related, planner_version])[:32]
+            if planner_version == "risk-planner-v5":
+                key = "risk-unbound-" + stable_hash([relationship, related, planner_version])[:32]
             output[key] = {"id": key, "origin_work_item_id": origin,
                     "related_goal_ids": related,
                     "proposition": f"{source} 与 {target} 的 {edge['type']} 关系缺少可绑定的具体符号与变更范围",
@@ -626,6 +634,7 @@ def build_task_risk_catalog(goals, work_items, repository_graph, *, planner_vers
                         ("resolution_status", "resolution_basis", "call_expression")}}
             if planner_version == "risk-planner-v5":
                 output[key]["relationship"] = relationship
+                output[key]["proposition"] = f"待核验调用：{edge.get('source')} → {edge.get('target')}"
             continue
         bindings = ([sorted([*callers, *callees], key=lambda goal: goal.goal_id)] if single_changed_side else
                     [[caller, callee] for caller in callers for callee in callees if caller.unit_id != callee.unit_id])

@@ -250,6 +250,11 @@ async def test_production_v3_reads_unchanged_caller_and_preserves_coverage_on_re
     assert len(calls) == 2 and restored["settled_tokens"] == 30
     assert restored["initial_scope_coverage"] == report["initial_scope_coverage"]
     if version == "risk-planner-v5":
+        relations = report["admitted_investigations"][0]["relationship_leads"]
+        assert relations[0]["relationship"]["source"] == "a.py::answer"
+        assert relations[0]["relationship"]["target"] == "b.py::other"
+        assert relations[0]["relationship"]["call_sites"][0]["line"] == 3
+        assert restored["admitted_investigations"][0]["relationship_leads"] == relations
         state["task_runtime_configuration"]["call_resolution_version"] = "import-evidence-v3"
         with pytest.raises(ValueError, match="resolution version mismatch"):
             await task_review_runtime_node(state)

@@ -1014,6 +1014,7 @@ export interface TaskRuntimeReport {
   initial_scope_coverage: Array<Record<string, unknown>>;
   admitted_investigations: Array<Record<string, unknown>>;
   unscheduled_leads: Array<Record<string, unknown>>;
+  relationship_hints?: Array<Record<string, unknown>>;
   findings: Array<Record<string, unknown>>;
   usage_integrity: "complete" | "unknown" | "inconsistent";
   sent_calls: number;
