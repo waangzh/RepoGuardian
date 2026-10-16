@@ -127,6 +127,46 @@ class PublicationRepository:
         with self.locked(lease) as session:
             return GitHubSummarySlot.model_validate(session.get(Slot, lease.slot_id))
 
+    def lookup_slot(self, repository_id, pr_number, publisher_identity):
+        with self.sessions() as session:
+            row = session.get(Slot, stable_hash([repository_id, pr_number, publisher_identity]))
+            return GitHubSummarySlot.model_validate(row) if row else None
+
+    def item_payload(self, identity):
+        with self.sessions() as session:
+            return dict(session.get(Item, identity).payload)
+
+    def summary_intent(self, attempt, item, body, *, lease):
+        with self.locked(lease) as session:
+            slot = session.get(Slot, lease.slot_id)
+            if slot.pending_publication_id not in {None, attempt.id}:
+                raise PublicationConflict("summary_operation_uncertain")
+            slot.pending_publication_id = attempt.id
+            row = session.get(Item, item.id)
+            row.payload, row.payload_hash, row.state = {"body": body}, stable_hash(body), "publishing"
+            row.last_attempt_at = utcnow()
+
+    def summary_finish(self, attempt, item, comment, body, context, *, lease):
+        with self.locked(lease) as session:
+            slot = session.get(Slot, lease.slot_id)
+            if slot.latest_order > context["order"]:
+                raise PublicationConflict("summary_newer_review")
+            slot.github_comment_id, slot.github_url = comment["id"], comment["html_url"]
+            slot.latest_review_id, slot.latest_head_sha = attempt.review_id, attempt.head_sha
+            slot.latest_order, slot.last_payload_hash = context["order"], stable_hash(body)
+            slot.pending_publication_id = None
+            row = session.get(Item, item.id)
+            row.state, row.github_comment_id, row.github_url = "published", comment["id"], comment["html_url"]
+            row.last_error_code = None
+
+    def summary_rejected(self, attempt, item, code, *, lease):
+        with self.locked(lease) as session:
+            slot = session.get(Slot, lease.slot_id)
+            if slot.pending_publication_id == attempt.id:
+                slot.pending_publication_id = None
+            row = session.get(Item, item.id)
+            row.state, row.last_error_code = "failed", code
+
     def release(self, lease):
         with self.sessions.begin() as session:
             session.execute(update(Slot).where(Slot.id == lease.slot_id, Slot.lease_owner == lease.owner,
