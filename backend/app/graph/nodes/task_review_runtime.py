@@ -73,8 +73,8 @@ def task_runtime_configuration(model=None, *, provider=None):
         "prompt_version": "task-review-prompt-v5",
         "publication_contract": "claim-publication-v1",
         # 新任务冻结具体关系规划；历史手工配置缺省为 legacy，恢复时不能静默换规划器。
-        "risk_planner_version": "risk-planner-v5",
-        "call_resolution_version": "import-evidence-v4",
+        "risk_planner_version": "risk-planner-v6",
+        "call_resolution_version": "import-evidence-v5",
         "readable_scope_version": "repository-tracked-v1",
         "endpoint": getattr(provider, "_base_url", settings.openai_base_url),
         "limits": settings.run_budget_limits(), "policy_version": settings.repoguardian_review_policy_version,
@@ -188,10 +188,11 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
     if not configuration:
         raise ValueError("task runtime frozen configuration missing")
     risk_planner_version = configuration.get("risk_planner_version", "legacy")
-    if risk_planner_version not in {"legacy", "risk-planner-v2", "risk-planner-v3", "risk-planner-v4", "risk-planner-v5"}:
+    if risk_planner_version not in {"legacy", "risk-planner-v2", "risk-planner-v3", "risk-planner-v4", "risk-planner-v5", "risk-planner-v6"}:
         raise ValueError("unsupported risk planner version")
-    if (risk_planner_version == "risk-planner-v5"
-            and configuration.get("call_resolution_version") != "import-evidence-v4"):
+    expected_resolution = {"risk-planner-v5": "import-evidence-v4", "risk-planner-v6": "import-evidence-v5"}
+    if (risk_planner_version in expected_resolution
+            and configuration.get("call_resolution_version") != expected_resolution[risk_planner_version]):
         raise ValueError("risk planner call resolution version mismatch")
     context = (runtime.context or {}) if runtime else {}
     repository = context.get("coordination_repository") or state.get("_coordination_repository")
