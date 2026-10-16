@@ -136,8 +136,9 @@ async def test_unknown_planner_version_rejected_before_any_dispatch(production_i
     assert not calls
 
 
-def test_new_task_configuration_freezes_v3():
-    assert task_runtime_configuration()["risk_planner_version"] == "risk-planner-v4"
+def test_new_task_configuration_freezes_v5_and_call_resolution():
+    assert task_runtime_configuration()["risk_planner_version"] == "risk-planner-v5"
+    assert task_runtime_configuration()["call_resolution_version"] == "import-evidence-v4"
 
 
 @pytest.mark.parametrize("changed_side", ["caller", "callee", "both"])
@@ -186,7 +187,8 @@ def test_v3_unchanged_endpoint_cannot_expand_frozen_permissions(tmp_path, target
     assert report.unscheduled_leads[0]["reason"] == "no_legal_evidence_path"
 
 
-async def test_production_v3_reads_unchanged_caller_and_preserves_coverage_on_restore(production_input, persistence):
+@pytest.mark.parametrize("version", ["risk-planner-v3", "risk-planner-v5"])
+async def test_production_v3_reads_unchanged_caller_and_preserves_coverage_on_restore(production_input, persistence, version):
     state, provider, _ = production_input
     root = Path(state["repo_path"])
     def git(*args):
@@ -209,7 +211,12 @@ async def test_production_v3_reads_unchanged_caller_and_preserves_coverage_on_re
         {"id": "a.py::answer", "file": "a.py", "start_line": 2, "end_line": 3},
         {"id": "b.py::other", "file": "b.py", "start_line": 1, "end_line": 2}],
         "edges": [{"type": "calls", "source": "a.py::answer", "target": "b.py::other"}]}
-    state["task_runtime_configuration"].update(risk_planner_version="risk-planner-v3", prompt_version="task-review-prompt-v5")
+    state["task_runtime_configuration"].update(risk_planner_version=version, prompt_version="task-review-prompt-v5")
+    if version == "risk-planner-v5":
+        from app.tools.repo_indexer import RepoIndexer
+        indexed = await RepoIndexer().execute(repo_path=str(root), call_resolution_version="import-evidence-v4")
+        state["repository_graph"] = indexed["repository_graph"]
+        state["task_runtime_configuration"]["call_resolution_version"] = "import-evidence-v4"
     calls = []
     class SDK:
         async def ainvoke(self, messages):
@@ -242,6 +249,11 @@ async def test_production_v3_reads_unchanged_caller_and_preserves_coverage_on_re
     restored = (await task_review_runtime_node(state))["task_runtime_report"]
     assert len(calls) == 2 and restored["settled_tokens"] == 30
     assert restored["initial_scope_coverage"] == report["initial_scope_coverage"]
+    if version == "risk-planner-v5":
+        state["task_runtime_configuration"]["call_resolution_version"] = "import-evidence-v3"
+        with pytest.raises(ValueError, match="resolution version mismatch"):
+            await task_review_runtime_node(state)
+        assert len(calls) == 2
 
 
 async def test_production_v2_investigation_binds_both_files_and_restores_without_resend(production_input, persistence):

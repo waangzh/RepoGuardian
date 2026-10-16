@@ -376,6 +376,7 @@ class TaskRuntimeReport(BaseModel):
     initial_scope_coverage: list[dict] = Field(default_factory=list)
     admitted_investigations: list[dict] = Field(default_factory=list)
     unscheduled_leads: list[dict] = Field(default_factory=list)
+    relationship_hints: list[dict] = Field(default_factory=list)
     findings: list[dict] = Field(default_factory=list)
     usage_integrity: Literal["complete", "unknown", "inconsistent"] = "unknown"
     sent_calls: int = Field(default=0, ge=0)
