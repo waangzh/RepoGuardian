@@ -17,6 +17,7 @@ function claim(value: Record<string, unknown>): string {
   <article class="overview-card">
     <header><div><h2>约定范围检查</h2><p>task-goals-v1 · {{ report.scope_complete ? '初始范围已检查' : '初始范围存在缺口' }}</p></div></header>
     <p>{{ runtimeLabel(report.termination_reason) }} · 计量{{ runtimeLabel(report.usage_integrity) }}</p>
+    <p v-if="report.execution_status === 'failed'" role="alert">失败原因：{{ report.failure_summary || '技术失败；旧报告未记录具体原因' }}</p>
     <p>已发送 {{ report.sent_calls }} 次 · 已结算 {{ report.settled_tokens.toLocaleString() }} tokens · {{ report.unknown_attempts }} 次用量未知</p>
     <div class="files-table-wrap"><table class="files-table"><thead><tr><th>固定范围</th><th>状态</th><th>说明</th></tr></thead><tbody>
       <tr v-for="goal in report.initial_scope_coverage" :key="String(goal.goal_id)">

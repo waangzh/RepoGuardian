@@ -546,7 +546,14 @@ class ReviewService:
             self._persist(task)
             if self._repository:
                 self._repository.save_issue_lifecycle(task_id, result)
-            logger.info("🎉 审查任务 %s 完成", task_id[:8])
+            if task.status == TaskStatus.failed:
+                logger.error("❌ 审查任务 %s 失败结束：%s", task_id[:8], task.error)
+            elif task.status == TaskStatus.completed_with_warnings:
+                logger.warning("审查任务 %s 已完成，有警告", task_id[:8])
+            elif task.status == TaskStatus.completed:
+                logger.info("🎉 审查任务 %s 完成", task_id[:8])
+            else:
+                logger.info("审查任务 %s 结束，状态：%s", task_id[:8], task.status.value)
         except asyncio.CancelledError:
             current = self.get_task(task_id)
             user_cancelled = current is not None and current.status == TaskStatus.cancelled
@@ -791,6 +798,11 @@ class ReviewService:
         task.report_markdown = rebuilt.report_markdown
         task.task_runtime_configuration = rebuilt.task_runtime_configuration
         task.task_runtime_report = rebuilt.task_runtime_report
+        if task.status == TaskStatus.failed and task.task_runtime_report:
+            from app.services.task_review_projection import runtime_failure_summary
+            task.error = runtime_failure_summary(task.task_runtime_report.get("diagnostics") or [])
+        else:
+            task.error = rebuilt.error
         task.task_runtime_retry_unit_id = rebuilt.task_runtime_retry_unit_id
         task.warnings = rebuilt.warnings
         task.steps = [

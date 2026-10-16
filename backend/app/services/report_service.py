@@ -59,6 +59,9 @@ def _append_task_runtime_report(lines: list[str], report: dict) -> None:
         f"- 计量完整性：{report.get('usage_integrity', 'unknown')}",
         f"- 已发送调用：{report.get('sent_calls', 0)}；结算 Tokens：{report.get('settled_tokens', 0)}；未知用量：{report.get('unknown_attempts', 0)}", ""])
     unresolved = [item for item in report.get("findings", []) if item.get("status") not in {"confirmed", "dismissed"}]
+    if report.get("execution_status") == "failed":
+        from app.services.task_review_projection import runtime_failure_summary
+        lines.append(f"- 失败原因：{runtime_failure_summary(report.get('diagnostics') or [])}")
     lines.append(f"- 新引擎发现：{len(report.get('findings', []))}；未确认/未决：{len(unresolved)}")
 
 

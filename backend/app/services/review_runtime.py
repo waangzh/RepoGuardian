@@ -230,8 +230,14 @@ class TaskReviewRuntime:
         while trace is not None:
             frames.append({"function": trace.tb_frame.f_code.co_name, "line": trace.tb_lineno})
             trace = trace.tb_next
-        self.failures.append({"stage": stage, "error_type": type(exc).__name__, "frames": frames,
-            "detail": "exception_text_omitted_for_safety"})
+        failure = {"stage": stage, "error_type": type(exc).__name__, "frames": frames,
+                   "detail": "exception_text_omitted_for_safety"}
+        from app.agents.providers import LLMProviderError, provider_failure_info
+        if isinstance(exc, LLMProviderError):
+            failure["provider_failure"] = provider_failure_info(exc)
+            if exc.work_item_id in self._items:
+                failure["work_item_id"] = exc.work_item_id
+        self.failures.append(failure)
 
     async def run(self, steps: dict[str, Any], *, deadline_seconds: float) -> str:
         """运行期限作用于唯一队列，不复制旧 Unit 生命周期。"""

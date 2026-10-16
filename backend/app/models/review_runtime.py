@@ -370,6 +370,7 @@ class TaskRuntimeReport(BaseModel):
     coverage_version: Literal["task-goals-v1"] = "task-goals-v1"
     execution_status: Literal["running", "completed", "failed", "cancelled"]
     termination_reason: str
+    failure_summary: str | None = None
     readable_scope_hash: str | None = None
     readable_file_count: int | None = Field(default=None, ge=0)
     scope_complete: bool = False

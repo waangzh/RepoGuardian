@@ -1008,6 +1008,7 @@ export interface TaskRuntimeReport {
   coverage_version: "task-goals-v1";
   execution_status: "running" | "completed" | "failed" | "cancelled";
   termination_reason: string;
+  failure_summary?: string | null;
   readable_scope_hash?: string | null;
   readable_file_count?: number | null;
   scope_complete: boolean;
