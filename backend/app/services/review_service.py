@@ -47,7 +47,7 @@ from app.services.review_run_budget import (
     activate_run_budget,
 )
 from app.services.review_repository import ReviewRepository
-from app.services.task_queue import ClaimedJob, DatabaseTaskQueue, ReviewWorker
+from app.services.task_queue import ClaimedJob, DatabaseTaskQueue, NonRetryableJobError, ReviewWorker
 from app.services.patch_presentation import build_patch_presentation
 from app.tools.diff_parser import DiffParser
 from app.tools.git_tool import GitTool
@@ -371,6 +371,8 @@ class ReviewService:
         if job.kind == "review":
             await self._run_graph(job.task_id, job=job)
             return
+        if job.kind == "unit_retry":
+            raise NonRetryableJobError("legacy unit_retry jobs are retired; historical tasks are read-only")
         raise ValueError(f"unsupported worker job kind: {job.kind}")
 
     def _ensure_worker_started(self) -> None:
@@ -388,6 +390,8 @@ class ReviewService:
         5. 始终清理临时克隆仓库
         """
         task = self.get_task(task_id) or self._tasks[task_id]
+        if task.engine != "task_review_v1":
+            raise NonRetryableJobError("legacy_units engine is retired; historical tasks are read-only")
         if task.status == TaskStatus.cancelled:
             return
         if (task.engine == "task_review_v1" and self._repository is None
