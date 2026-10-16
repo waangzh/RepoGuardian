@@ -45,6 +45,40 @@ async def configured(tmp_path, persistence, *, responses=None, restore=False):
     return runtime, checkpoint, step, messages
 
 
+async def test_connection_failure_persists_safe_usage_and_keeps_unknown_attempts(tmp_path, persistence):
+    import httpx
+    from openai import APIConnectionError
+    from app.services.task_review_projection import project_task_runtime
+    runtime, _, step, messages = await configured(tmp_path / "first", persistence)
+    step.provider._request_attempts = 2
+    step.provider._retry_backoff_seconds = 0
+    class SDK:
+        async def ainvoke(self, payload):
+            messages.append(payload)
+            raise APIConnectionError(request=httpx.Request("POST", "https://example.test/secret")) from httpx.ConnectError(
+                "https://proxy-user:proxy-secret@example.test api-key=private")
+    step.provider._build_chat_model = lambda *args: SDK()
+    assert await runtime.run({"w1": step}, deadline_seconds=10) == "technical_failure"
+    report = project_task_runtime(runtime, {"w1": step}, list(step.executor.goals.values()),
+                                  termination_reason="technical_failure")
+    assert report.execution_status == "failed" and report.usage_integrity == "unknown"
+    assert report.unknown_attempts == 2 and report.sent_calls == 2 and report.total_tokens is None
+    assert "model_connection_error" in report.failure_summary
+    assert "尝试 2 次" in report.failure_summary
+    assert runtime.failures[0]["work_item_id"] == "w1"
+    failure = runtime.failures[0]["provider_failure"]
+    assert failure["cause_types"] == ["APIConnectionError", "ConnectError"]
+    assert len(step.usages) == 1 and not step.usages[0].usage_available
+    assert step.usages[0].response_metadata == {"provider_failure": failure}
+    restored, _, restored_step, new_messages = await configured(tmp_path / "second", persistence, restore=True)
+    assert restored_step.usages == step.usages
+    assert restored_step.budget.unknown_reserved > 0
+    assert all(not attempt.usage_available for attempt in restored_step.budget.attempts.values())
+    assert await restored.advance_one({"w1": restored_step}) is None and not new_messages
+    exported = json.dumps([report.model_dump(mode="json"), [usage.model_dump(mode="json") for usage in restored_step.usages]])
+    assert "proxy-secret" not in exported and "proxy-user" not in exported and "private" not in exported
+
+
 @pytest.mark.parametrize("boundary", ["reserve", "dispatch", "settled", "applied", "response_before_settle"])
 async def test_crash_boundaries_reconcile_without_duplicate_send(tmp_path, persistence, boundary):
     runtime, checkpoint, step, messages = await configured(tmp_path / "first", persistence)

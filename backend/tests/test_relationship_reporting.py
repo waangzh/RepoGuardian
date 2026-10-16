@@ -9,6 +9,21 @@ from test_phase6a_persistence import persistence as persistence
 from test_relationship_admission_v5 import v5_graph
 from test_task_runtime_p3 import configured
 from test_task_runtime_p4 import runtime_report
+from app.services.task_review_projection import runtime_failure_summary
+
+
+def test_failed_report_exports_fixed_summary_and_preserves_partial_results():
+    report = runtime_report(execution_status="failed", termination_reason="technical_failure",
+        diagnostics=[{"provider_failure": {"category": "model_connection_error", "attempts": 2,
+            "error_detail": "proxy-secret", "error_type": "malicious-secret"}}]).model_dump()
+    task = ReviewTask(id="run", engine="task_review_v1", pr_url="https://github.com/o/r/pull/1",
+                      task_runtime_report=report)
+    markdown = ReportService().generate(task)
+    assert "model_connection_error" in markdown and "尝试 2 次" in markdown
+    assert "候选命题" in markdown
+    assert "proxy-secret" not in markdown and "malicious-secret" not in markdown
+    assert "technical_failure" in runtime_failure_summary([])
+    assert "technical_failure" in runtime_failure_summary([{"provider_failure": {"category": "external-secret"}}])
 
 
 def leads():

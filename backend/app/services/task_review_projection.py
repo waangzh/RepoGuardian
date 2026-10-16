@@ -3,6 +3,29 @@
 from app.models.review_runtime import TaskRuntimeReport
 
 
+def runtime_failure_summary(diagnostics):
+    messages = {
+        "model_connection_error": "模型服务连接失败（model_connection_error）",
+        "model_timeout": "模型请求超时（model_timeout）",
+        "model_authentication_error": "模型服务认证失败（model_authentication_error）",
+        "model_permission_denied": "模型服务拒绝访问（model_permission_denied）",
+        "model_rate_limited": "模型服务限流（model_rate_limited）",
+        "model_request_rejected": "模型服务拒绝请求（model_request_rejected）",
+        "model_server_error": "模型服务内部错误（model_server_error）",
+        "model_request_failed": "模型请求失败（model_request_failed）",
+    }
+    for diagnostic in reversed(diagnostics):
+        failure = diagnostic.get("provider_failure")
+        if not isinstance(failure, dict) or failure.get("category") not in messages:
+            continue
+        summary = messages[failure["category"]]
+        attempts = failure.get("attempts")
+        if type(attempts) is int and 0 <= attempts <= 1000:
+            summary += f"；本次请求已尝试 {attempts} 次"
+        return summary
+    return "审查遇到技术故障（technical_failure）；未记录可分类的失败原因"
+
+
 def project_task_runtime(runtime, steps, goals, *, termination_reason, budget=None):
     outcomes = []
     for goal in goals:
@@ -48,6 +71,7 @@ def project_task_runtime(runtime, steps, goals, *, termination_reason, budget=No
                  else "running" if termination_reason == "running" else "completed")
     spec = next(iter(steps.values())).executor.spec if steps else None
     return TaskRuntimeReport(execution_status=execution, termination_reason=termination_reason,
+        failure_summary=runtime_failure_summary(runtime.failures) if execution == "failed" else None,
         readable_scope_hash=spec.readable_scope_hash if spec and spec.readable_scope_files else None,
         readable_file_count=len(spec.readable_scope_files) if spec else None,
         scope_complete=all(value["status"] == "examined" for value in outcomes),

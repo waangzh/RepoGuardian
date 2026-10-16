@@ -33,6 +33,43 @@ class LLMProviderError(RuntimeError):
     def __init__(self, message: str, *, usage: ModelUsage | None = None) -> None:
         super().__init__(message)
         self.usage = usage
+        self.work_item_id: str | None = None
+
+
+def provider_failure_info(exc: LLMProviderError) -> dict:
+    """只导出固定分类、计数和异常类型，不导出异常文本、URL 或请求内容。"""
+    categories = {
+        "APIConnectionError": "model_connection_error", "APITimeoutError": "model_timeout",
+        "AuthenticationError": "model_authentication_error", "PermissionDeniedError": "model_permission_denied",
+        "RateLimitError": "model_rate_limited", "BadRequestError": "model_request_rejected",
+        "NotFoundError": "model_request_rejected", "UnprocessableEntityError": "model_request_rejected",
+        "InternalServerError": "model_server_error",
+    }
+    metadata = exc.usage.response_metadata if exc.usage else {}
+    errors = metadata.get("request_errors") or []
+    last = errors[-1] if isinstance(errors, list) and errors and isinstance(errors[-1], dict) else {}
+    error_type = last.get("error_type")
+    info = {"category": categories.get(error_type, "model_request_failed"),
+            "error_type": error_type if error_type in categories else "LLMProviderError"}
+    for key, value, lower, upper in (("attempts", metadata.get("request_attempts"), 0, 1000),
+                                     ("status_code", last.get("status_code"), 100, 599)):
+        if type(value) is int and lower <= value <= upper:
+            info[key] = value
+    allowed_causes = set(categories) | {
+        "ConnectError", "ProxyError", "ConnectTimeout", "ReadTimeout", "WriteTimeout", "PoolTimeout",
+        "ReadError", "WriteError", "RemoteProtocolError", "LocalProtocolError",
+        "ConnectionRefusedError", "ConnectionResetError", "SSLCertVerificationError", "SSLError", "gaierror",
+    }
+    causes, seen = [], set()
+    cause = exc.__cause__
+    while cause is not None and id(cause) not in seen and len(seen) < 12:
+        seen.add(id(cause))
+        name = type(cause).__name__
+        if name in allowed_causes:
+            causes.append(name)
+        cause = cause.__cause__ or (None if cause.__suppress_context__ else cause.__context__)
+    info["cause_types"] = causes
+    return info
 
 
 class LLMProvider(ABC):
