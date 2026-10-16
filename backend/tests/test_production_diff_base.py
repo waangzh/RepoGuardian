@@ -176,3 +176,122 @@ def test_production_and_evaluation_share_one_diff_function(tmp_path: Path) -> No
     expected = production._run(["git", "-C", str(production_repo), "diff", "--no-ext-diff",
                                 f"--unified={DIFF_CONTEXT_LINES}", root, head])
     assert expected == production_diff
+
+
+def _head_and_base_repo(tmp_path: Path) -> tuple[Path, str, str]:
+    """构造 base → head 的线性历史，返回 (source, base, head)。"""
+    source = tmp_path / "source"
+    source.mkdir()
+    _git(source, "init", "-b", "main")
+    (source / "x.py").write_text("x = 1\n", encoding="utf-8")
+    base = _commit(source, "base")
+    (source / "x.py").write_text("x = 2\n", encoding="utf-8")
+    head = _commit(source, "head")
+    return source, base, head
+
+
+def _pr_with_heads(source: Path, base: str, head: str, base_sha=None, head_sha=None):
+    base_sha = base_sha if base_sha is not None else base
+    head_sha = head_sha if head_sha is not None else head
+    return SimpleNamespace(
+        owner="local", repo="sample", number=1, clone_url=str(source),
+        base=SimpleNamespace(sha=base_sha, ref="main", repo_clone_url=str(source)),
+        head=SimpleNamespace(sha=head_sha, ref="main", repo_clone_url=str(source)),
+    )
+
+
+def test_missing_declared_head_fails_instead_of_reviewing_another_commit(tmp_path: Path) -> None:
+    """声明的 head 无法获得时明确失败，禁止降级后按分支新 tip 继续审查。"""
+    source, base, head = _head_and_base_repo(tmp_path)
+    # 该提交在远端与本地对象库都不存在：按 SHA fetch 失败，按分支名 fetch 只能取回当前 tip。
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    _git(elsewhere, "init", "-b", "main")
+    (elsewhere / "y.py").write_text("y = 1\n", encoding="utf-8")
+    missing_head = _commit(elsewhere, "unrelated")
+    assert missing_head != head
+
+    tool = GitTool(tmp_path / "workspaces", command_timeout_seconds=30)
+    with pytest.raises(GitToolError, match="缺少请求的提交"):
+        tool.clone_and_diff(_pr_with_heads(source, base, head, head_sha=missing_head))
+    # 失败路径不保留工作区，也没有把另一个提交当成本次快照。
+    assert list((tmp_path / "workspaces").iterdir()) == []
+
+
+def test_fetch_ref_uses_local_commit_without_branch_fallback(tmp_path: Path) -> None:
+    """请求的提交已在本地对象库时直接使用，不因远端不可用而降级到分支名。"""
+    source, base, head = _head_and_base_repo(tmp_path)
+    tool = GitTool(tmp_path / "workspaces", command_timeout_seconds=30)
+    repo_path, _ = tool.clone_and_diff(_pr_with_heads(source, base, head))
+
+    # 远端不可达：按 SHA fetch 必然失败，但请求的提交已在本地，不得再尝试分支名。
+    tool._fetch_ref(
+        repo_path, str(tmp_path / "missing-remote"), head, "main",
+        phase="fetch_head", phase_label="正在获取 Head 分支",
+        progress_callback=None, cancel_event=None,
+    )
+    # 本地也不存在该提交时，同样不降级到分支名（远端不可用），必须失败。
+    with pytest.raises(GitToolError):
+        tool._fetch_ref(
+            repo_path, str(tmp_path / "missing-remote"), "f" * 40, "missing-branch",
+            phase="fetch_head", phase_label="正在获取 Head 分支",
+            progress_callback=None, cancel_event=None,
+        )
+
+
+def test_branch_fallback_identity_follows_declared_sha_not_fetch_head(tmp_path: Path) -> None:
+    """分支降级取回后的身份由声明 SHA 决定，FETCH_HEAD 指向分支新 tip 也不改变快照。"""
+    upstream = tmp_path / "upstream"
+    upstream.mkdir()
+    _git(upstream, "init", "-b", "main")
+    (upstream / "x.py").write_text("x = 1\n", encoding="utf-8")
+    base = _commit(upstream, "base")
+
+    # fork 的 feature 分支：声明的 head 之后又前进了一个提交，两者都只存在于 fork。
+    fork = tmp_path / "fork"
+    _git(tmp_path, "clone", "--no-checkout", str(upstream), str(fork))
+    _git(fork, "checkout", "-q", "-b", "feature")
+    (fork / "x.py").write_text("x = 2\n", encoding="utf-8")
+    head = _commit(fork, "head")
+    (fork / "x.py").write_text("x = 3\n", encoding="utf-8")
+    newer = _commit(fork, "head moved on")
+    assert newer != head
+
+    class ShaFetchRejected(GitTool):
+        """模拟远端拒绝按 SHA 获取：声明 head 只随分支名进入本地。"""
+
+        def _run(self, command, **kwargs):
+            if "fetch" in command and command[-1] == head:
+                raise GitToolError("simulated: server rejects fetch by sha")
+            return super()._run(command, **kwargs)
+
+    pr = SimpleNamespace(
+        owner="local", repo="sample", number=1, clone_url=str(upstream),
+        base=SimpleNamespace(sha=base, ref="main", repo_clone_url=str(upstream)),
+        head=SimpleNamespace(sha=head, ref="feature", repo_clone_url=str(fork)),
+    )
+    tool = ShaFetchRejected(tmp_path / "workspaces", command_timeout_seconds=30)
+    repo_path, diff = tool.clone_and_diff(pr)
+
+    # 降级 fetch 成功，但 FETCH_HEAD 是分支新 tip；身份必须仍是声明的 head。
+    assert tool._run(["git", "-C", str(repo_path), "rev-parse", "FETCH_HEAD"]).strip() == newer
+    assert tool._run(["git", "-C", str(repo_path), "rev-parse", "HEAD"]).strip() == head
+    assert "+x = 2" in diff and "+x = 3" not in diff
+
+
+def test_clone_and_diff_rejects_declared_sha_that_is_not_a_commit(tmp_path: Path) -> None:
+    """声明字段不是完整提交 ID 时在 clone 前失败，不产生工作区副作用。"""
+    source, base, head = _head_and_base_repo(tmp_path)
+    workspaces = tmp_path / "workspaces"
+
+    for field, value, expected in [
+        ("head", "feature", "PR head"),
+        ("base", base[:12], "PR base"),
+    ]:
+        pull_request = _pr_with_heads(source, base, head)
+        setattr(pull_request, field, SimpleNamespace(sha=value, ref="main",
+                                                    repo_clone_url=str(source)))
+        tool = GitTool(workspaces, command_timeout_seconds=30)
+        with pytest.raises(GitToolError, match=expected):
+            tool.clone_and_diff(pull_request)
+    assert not workspaces.exists()
