@@ -30,6 +30,84 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class PublicationAttemptOrm(Base):
+    __tablename__ = "github_publication_attempts"
+    __table_args__ = (UniqueConstraint("logical_key", name="uq_publication_logical"),
+                      Index("ix_publication_state_time", "state", "requested_at"))
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    review_id: Mapped[str] = mapped_column(ForeignKey("review_tasks.id", ondelete="CASCADE"), index=True)
+    repository_id: Mapped[int] = mapped_column(Integer)
+    pr_number: Mapped[int] = mapped_column(Integer)
+    publisher_identity: Mapped[str] = mapped_column(String(128))
+    head_sha: Mapped[str] = mapped_column(String(64))
+    plan_hash: Mapped[str] = mapped_column(String(64))
+    selection_hash: Mapped[str] = mapped_column(String(64))
+    logical_key: Mapped[str] = mapped_column(String(64))
+    state: Mapped[str] = mapped_column(String(32), default="queued")
+    plan: Mapped[dict] = mapped_column(JSON)
+    selection: Mapped[dict] = mapped_column(JSON)
+    context: Mapped[dict] = mapped_column(JSON)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_code: Mapped[str | None] = mapped_column(String(128))
+
+
+class PublicationRequestOrm(Base):
+    __tablename__ = "github_publication_requests"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    request_hash: Mapped[str] = mapped_column(String(64))
+    publication_id: Mapped[str] = mapped_column(ForeignKey("github_publication_attempts.id", ondelete="CASCADE"))
+
+
+class PublicationItemOrm(Base):
+    __tablename__ = "github_publication_items"
+    __table_args__ = (UniqueConstraint("publication_id", "kind", "finding_key", name="uq_publication_item"),
+                      Index("ix_publication_fingerprint", "fingerprint", "state"))
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    publication_id: Mapped[str] = mapped_column(ForeignKey("github_publication_attempts.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(16))
+    finding_key: Mapped[str] = mapped_column(String(128), default="")
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    state: Mapped[str] = mapped_column(String(32), default="pending")
+    github_comment_id: Mapped[int | None] = mapped_column(Integer)
+    github_review_id: Mapped[int | None] = mapped_column(Integer)
+    github_url: Mapped[str | None] = mapped_column(String(2048))
+    last_error_code: Mapped[str | None] = mapped_column(String(128))
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PublicationBatchOrm(Base):
+    __tablename__ = "github_publication_batches"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    publication_id: Mapped[str] = mapped_column(ForeignKey("github_publication_attempts.id", ondelete="CASCADE"), index=True)
+    state: Mapped[str] = mapped_column(String(32), default="pending")
+    item_ids: Mapped[list] = mapped_column(JSON)
+    payload: Mapped[dict] = mapped_column(JSON)
+    github_review_id: Mapped[int | None] = mapped_column(Integer)
+    last_error_code: Mapped[str | None] = mapped_column(String(128))
+
+
+class GitHubSummarySlotOrm(Base):
+    __tablename__ = "github_summary_slots"
+    __table_args__ = (UniqueConstraint("repository_id", "pr_number", "publisher_identity", name="uq_summary_slot"),)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    repository_id: Mapped[int] = mapped_column(Integer)
+    pr_number: Mapped[int] = mapped_column(Integer)
+    publisher_identity: Mapped[str] = mapped_column(String(128))
+    github_comment_id: Mapped[int | None] = mapped_column(Integer)
+    github_url: Mapped[str | None] = mapped_column(String(2048))
+    latest_review_id: Mapped[str | None] = mapped_column(String(32))
+    latest_head_sha: Mapped[str | None] = mapped_column(String(64))
+    latest_order: Mapped[str] = mapped_column(String(128), default="")
+    last_payload_hash: Mapped[str | None] = mapped_column(String(64))
+    pending_publication_id: Mapped[str | None] = mapped_column(String(32))
+    revision: Mapped[int] = mapped_column(Integer, default=0)
+    lease_owner: Mapped[str | None] = mapped_column(String(128))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class ReviewTaskOrm(Base):
     __tablename__ = "review_tasks"
     __table_args__ = (
