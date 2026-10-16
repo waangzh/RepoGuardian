@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from app.services.model_request_budgeter import ModelRequestProfile
 
@@ -12,6 +12,28 @@ class Settings(BaseSettings):
     """应用配置，自动读取项目根目录的 .env 文件。"""
     # ---- API 密钥 ----
     github_token: str | None = None
+    repoguardian_github_publish_enabled: bool = False
+    repoguardian_github_publish_token: SecretStr | None = None
+    repoguardian_publication_api_token: SecretStr | None = None
+    repoguardian_github_publish_allowed_repositories: str = ""
+    repoguardian_github_publish_publisher_id: int | None = Field(default=None, ge=1)
+    # Fine-grained PAT 没有通用的自身权限查询端点，部署者须核对 PR write grant。
+    repoguardian_github_publish_pull_requests_write_confirmed: bool = False
+    repoguardian_github_publish_max_inline: int = Field(default=30, ge=1, le=100)
+    repoguardian_github_publish_batch_size: int = Field(default=15, ge=1, le=30)
+
+    @model_validator(mode="after")
+    def validate_publication_config(self):
+        if self.repoguardian_github_publish_enabled:
+            token = self.repoguardian_publication_api_token
+            if (not self.repoguardian_github_publish_token or not token or len(token.get_secret_value()) < 32
+                    or not self.repoguardian_github_publish_publisher_id
+                    or not self.repoguardian_github_publish_pull_requests_write_confirmed
+                    or not self.repoguardian_github_publish_allowed_repositories.strip()):
+                raise ValueError("publication requires dedicated credentials, publisher ID, allowlist and confirmed PR write grant")
+            if any(not value.strip().isdigit() or int(value) < 1 for value in self.repoguardian_github_publish_allowed_repositories.split(",")):
+                raise ValueError("publication allowlist must contain numeric GitHub repository IDs")
+        return self
     openai_api_key: str | None = None
 
     # ---- LLM Provider ----
