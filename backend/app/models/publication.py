@@ -1,6 +1,7 @@
 """只读审查结论协议；内容合格不代表已向远端发布。"""
 
 from enum import StrEnum
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -93,3 +94,71 @@ class PublicationPlan(BaseModel):
     withheld_findings: list[WithheldFinding] = Field(default_factory=list)
     content_eligible: bool = False
     blocking_reasons: list[str] = Field(default_factory=list)
+
+
+class PublicationState(StrEnum):
+    QUEUED = "queued"
+    PREPARING = "preparing"
+    PUBLISHING = "publishing"
+    SUCCEEDED = "succeeded"
+    PARTIAL = "partial"
+    FAILED = "failed"
+    UNCERTAIN = "uncertain"
+    STALE = "stale"
+
+
+class PublicationSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_plan_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    expected_head_sha: str = Field(pattern=r"^[a-f0-9]{40,64}$")
+    publish_summary: Literal[True] = True
+    finding_keys: list[str] = Field(default_factory=list, max_length=100)
+    acknowledge_partial_review: bool = False
+
+
+class PublicationItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    publication_id: str
+    kind: Literal["summary", "inline"]
+    finding_key: str
+    fingerprint: str
+    payload_hash: str
+    state: Literal["pending", "publishing", "published", "failed", "uncertain", "summary_only"]
+    github_comment_id: int | None = None
+    github_review_id: int | None = None
+    github_url: str | None = None
+    last_error_code: str | None = None
+
+
+class PublicationAttempt(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    review_id: str
+    repository_id: int
+    pr_number: int
+    head_sha: str
+    plan_hash: str
+    selection_hash: str
+    publisher_identity: str
+    state: PublicationState
+    requested_at: datetime
+    completed_at: datetime | None = None
+    last_error_code: str | None = None
+    items: list[PublicationItem] = Field(default_factory=list)
+
+
+class GitHubSummarySlot(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    repository_id: int
+    pr_number: int
+    publisher_identity: str
+    github_comment_id: int | None = None
+    github_url: str | None = None
+    latest_review_id: str | None = None
+    latest_head_sha: str | None = None
+    latest_order: str = ""
+    last_payload_hash: str | None = None
+    pending_publication_id: str | None = None
+    revision: int = 0
