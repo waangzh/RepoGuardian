@@ -6,9 +6,11 @@ import AppHeader from "./components/layout/AppHeader.vue";
 import AppSidebar from "./components/layout/AppSidebar.vue";
 import ReviewHistoryPage from "./components/pages/ReviewHistoryPage.vue";
 import SettingsPage from "./components/pages/SettingsPage.vue";
-import ReviewLauncher from "./components/review/ReviewLauncher.vue";
-import ReviewPreviewPanel from "./components/review/ReviewPreviewPanel.vue";
-import ReviewViewer from "./components/review/ReviewViewer.vue";
+import NewReviewPage from "./components/pages/NewReviewPage.vue";
+import ReviewPlanPage from "./components/pages/ReviewPlanPage.vue";
+import ReviewWorkspace from "./components/review/ReviewWorkspace.vue";
+import { reviewSections, type ReviewSection } from "./types/workspace";
+import { validPullRequestUrl } from "./utils/workspacePresentation";
 import type { AppPage, ProviderModelInfo } from "./types/operations";
 import type { ReviewMode, ReviewPreviewResponse, ReviewTask, ValidationBackend } from "./types/review";
 import { reviewCompletionMessage } from "./utils/taskRuntimePresentation";
@@ -22,6 +24,12 @@ interface TaskNotice {
 }
 
 const activePage = ref<AppPage>("dashboard");
+const reviewSection = ref<ReviewSection>("overview");
+const mobileOpen = ref(false);
+const opening = ref(false);
+const pageTitle = computed(() => activePage.value === 'history' ? '审查历史' : activePage.value === 'settings' ? '系统设置' : task.value ? reviewSections.find(item => item.id === reviewSection.value)?.label || '当前审查' : preview.value ? '审查方案' : '新建审查');
+watch([activePage, reviewSection], () => { mobileOpen.value = false; });
+function navigateReview(section: ReviewSection) { activePage.value = 'dashboard'; reviewSection.value = section; mobileOpen.value = false; }
 const prUrl = ref("");
 const model = ref("");
 const models = ref<ProviderModelInfo[]>([]);
@@ -91,14 +99,6 @@ const statusText = computed(() => {
   return labels[task.value.status] ?? `未知状态：${task.value.status}`;
 });
 
-const statusEnglish = computed(() => {
-  if (!task.value) return "Ready";
-  if (["completed", "completed_with_warnings"].includes(task.value.status)) return "Completed";
-  if (["failed", "cancelled"].includes(task.value.status)) return "Attention";
-  if (task.value.status === "waiting_for_human") return "Attention";
-  return "Running";
-});
-
 const taskActive = computed(() => Boolean(task.value && !isTerminalStatus(task.value.status)));
 const taskTerminal = computed(() => Boolean(task.value && isTerminalStatus(task.value.status)));
 const taskDuration = computed(() => {
@@ -111,12 +111,13 @@ const taskDuration = computed(() => {
 });
 
 async function submitReview() {
-  if (submitting.value || previewing.value || taskActive.value || !prUrl.value.trim()) return;
+  if (submitting.value || previewing.value || taskActive.value || !preview.value || !validPullRequestUrl(prUrl.value)) return;
   clearAll();
   error.value = null;
   report.value = null;
   task.value = null;
   submitting.value = true;
+  reviewSection.value = "overview";
   try {
     const created = await createReview(prUrl.value.trim(), model.value.trim(), mode.value, generatePatches.value, validationBackend.value);
     trackingTaskId = created.task_id;
@@ -149,7 +150,7 @@ async function cancelCurrentReview() {
 }
 
 async function loadPreview() {
-  if (previewing.value || submitting.value || taskActive.value || !prUrl.value.trim()) return;
+  if (previewing.value || submitting.value || taskActive.value || !validPullRequestUrl(prUrl.value)) return;
   error.value = null;
   cancelPreview();
   const requestId = ++previewRequestId;
@@ -191,6 +192,9 @@ async function retryUnit(unitId: string) {
 }
 
 async function openHistoricalReview(taskId: string) {
+  if (submitting.value || opening.value) return;
+  opening.value = true;
+  reviewSection.value = 'overview';
   clearAll();
   trackingTaskId = taskId;
   activePage.value = "dashboard";
@@ -199,6 +203,7 @@ async function openHistoricalReview(taskId: string) {
   task.value = null;
   const currentTask = await refreshTask(taskId, false);
   if (currentTask !== null && !isTerminalStatus(currentTask.status)) subscribeOrPoll(taskId);
+  opening.value = false;
 }
 
 function subscribeOrPoll(taskId: string) {
@@ -286,6 +291,7 @@ async function performRefresh(taskId: string, notifyLifecycle: boolean): Promise
     }
     return next;
   } catch (err) {
+    if (trackingTaskId !== taskId) return null;
     clearPolling();
     error.value = err instanceof Error ? err.message : "读取任务失败";
     return null;
@@ -310,10 +316,10 @@ async function loadReportOnce(next: ReviewTask): Promise<void> {
       return markdown;
     })
     .catch((err) => {
-      error.value = err instanceof Error ? `任务已完成，但报告加载失败：${err.message}` : "任务已完成，但报告加载失败";
+      if (trackingTaskId === next.id) error.value = err instanceof Error ? `任务已完成，但报告加载失败：${err.message}` : "任务已完成，但报告加载失败";
       return null;
     })
-    .finally(() => { reportPromise = null; });
+    .finally(() => { if (reportTaskId === next.id) reportPromise = null; });
   await reportPromise;
 }
 
@@ -347,11 +353,13 @@ function dismissNotice() {
 
 function showReviewResult() {
   activePage.value = "dashboard";
+  reviewSection.value = "overview";
   window.scrollTo({ top: 0, behavior: "smooth" });
   dismissNotice();
 }
 
 function startNewReview() {
+  if (taskActive.value || submitting.value || opening.value) return;
   clearAll();
   task.value = null;
   report.value = null;
@@ -359,6 +367,8 @@ function startNewReview() {
   error.value = null;
   prUrl.value = "";
   activePage.value = "dashboard";
+  reviewSection.value = "overview";
+  mobileOpen.value = false;
 }
 
 function clearPolling() {
@@ -395,7 +405,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-shell">
+  <div class="app rg-app" @keydown.esc="mobileOpen = false">
     <div class="toast-region" aria-live="polite" aria-atomic="true">
       <section v-if="notice" class="task-toast" :data-tone="notice.tone">
         <span class="task-toast__icon"><AppIcon :name="notice.tone === 'success' ? 'check-circle' : notice.tone === 'info' ? 'info' : 'alert'" :size="19" /></span>
@@ -404,40 +414,18 @@ onBeforeUnmount(() => {
         <button type="button" class="icon-button task-toast__close" aria-label="关闭通知" @click="dismissNotice"><AppIcon name="x" :size="15" /></button>
       </section>
     </div>
-    <AppHeader :status-text="statusText" :status-english="statusEnglish" :status="task?.status || 'idle'" />
-    <div class="app-body" :class="{ 'app-body--wide': activePage !== 'dashboard' || task }">
-      <AppSidebar v-model="activePage" :has-review="Boolean(task)" />
-      <ReviewLauncher
-        v-if="activePage === 'dashboard' && !task"
-        v-model:pr-url="prUrl"
-        v-model:model="model"
-        v-model:mode="mode"
-        v-model:generate-patches="generatePatches"
-        v-model:validation-backend="validationBackend"
-        :previewing="previewing"
-        :submitting="submitting"
-        :active="taskActive"
-        :cancelling="cancelling"
-        :error="error"
-        :models="models"
-        :default-model="defaultModel"
-        :models-loading="modelsLoading"
-        :models-error="modelsError"
-        @preview="loadPreview"
-        @submit="submitReview"
-        @cancel="cancelCurrentReview"
-      />
-
-      <main v-if="activePage === 'dashboard'" class="dashboard-main" :class="{ 'dashboard-main--viewer': task }">
-        <header v-if="!task" class="dashboard-heading">
-          <div><p class="eyebrow">DETERMINISTIC REVIEW PLANNING</p><h1>启动新审查</h1><p>先预览确定性变更范围，再启动一次严格只读、证据可追溯的代码审查。</p></div>
-        </header>
-
-        <ReviewPreviewPanel v-if="!task" :preview="preview" :previewing="previewing" />
-        <ReviewViewer v-else :task="task" :report="report" :status-text="statusText" :task-duration="taskDuration" :cancelling="cancelling" :retrying-unit-id="retryingUnitId" @cancel="cancelCurrentReview" @new-review="startNewReview" @retry="retryUnit" />
-        <footer v-if="!task" class="app-footer"><span>Preview 零模型调用 · 审查严格只读 · 全流程可追溯</span><span><i /> RepoGuardian v0.1.0</span></footer>
+    <button v-if="mobileOpen" type="button" class="rg-nav-backdrop" aria-label="关闭导航遮罩" @click="mobileOpen = false" />
+    <AppSidebar v-model="activePage" :section="reviewSection" :has-review="Boolean(task)" :task-active="taskActive" :mobile-open="mobileOpen" :busy="submitting || opening" @section="navigateReview" @create="startNewReview" @close="mobileOpen = false" />
+    <div class="main">
+      <AppHeader :title="pageTitle" :status-text="statusText" :menu-open="mobileOpen" @menu="mobileOpen = !mobileOpen" />
+      <main v-if="activePage === 'dashboard'" id="workspace-content" class="page">
+        <p v-if="error" class="notice danger" role="alert">{{ error }}</p>
+        <div v-if="opening || (submitting && !task)" class="card card-pad" role="status">{{ opening ? '正在打开审查记录…' : '正在创建真实审查任务…' }}</div>
+        <ReviewWorkspace v-else-if="task" :key="task.id" :task="task" :report="report" :section="reviewSection" :status-text="statusText" :duration="taskDuration" :cancelling="cancelling" :retrying-unit-id="retryingUnitId" @navigate="navigateReview" @cancel="cancelCurrentReview" @create="startNewReview" @retry="retryUnit" />
+        <ReviewPlanPage v-else-if="preview" v-model:model="model" :preview="preview" :pr-url="prUrl" :models="models" :default-model="defaultModel" :models-loading="modelsLoading" :models-error="modelsError" :submitting="submitting" @submit="submitReview" @back="preview = null" />
+        <NewReviewPage v-else v-model:pr-url="prUrl" :loading="previewing" :busy="submitting || opening" @preview="loadPreview" @open="openHistoricalReview" @history="activePage = 'history'" />
       </main>
-      <ReviewHistoryPage v-else-if="activePage === 'history'" @open="openHistoricalReview" @create="activePage = 'dashboard'" />
+      <ReviewHistoryPage v-else-if="activePage === 'history'" :busy="submitting || opening || taskActive" @open="openHistoricalReview" @create="startNewReview" />
       <SettingsPage v-else />
     </div>
   </div>

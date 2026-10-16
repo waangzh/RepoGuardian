@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { listReviews } from "../../api/client";
 import type { ReviewTask } from "../../types/review";
 import AppSelect from "../common/AppSelect.vue";
 import EmptyState from "../common/EmptyState.vue";
 import StatusBadge from "../common/StatusBadge.vue";
+import { runtimeReport, taskRuntimeSummary } from "../../utils/taskRuntimePresentation";
+defineProps<{ busy?: boolean }>();
 
 const emit = defineEmits<{
   open: [taskId: string];
@@ -18,6 +20,10 @@ const pageSize = 12;
 const status = ref("");
 const loading = ref(false);
 const error = ref<string | null>(null);
+const search = ref("");
+const visibleTasks = computed(() => tasks.value.filter(task => `${task.pr_url} ${task.pr?.title || ''} ${task.pr?.owner || ''}/${task.pr?.repo || ''} ${task.id}`.toLowerCase().includes(search.value.toLowerCase())));
+let controller: AbortController | null = null;
+onBeforeUnmount(() => controller?.abort());
 
 const statusOptions = [
   { value: "", label: "全部状态" },
@@ -25,6 +31,9 @@ const statusOptions = [
   { value: "completed_with_warnings", label: "存在警告" },
   { value: "failed", label: "失败" },
   { value: "pending", label: "等待中" },
+  { value: "queued", label: "已入队" },
+  { value: "running", label: "运行中" },
+  { value: "planning", label: "规划中" },
   { value: "reviewing", label: "审查中" },
   { value: "validating", label: "验证中" },
   { value: "cancelled", label: "已取消" },
@@ -33,20 +42,26 @@ const statusOptions = [
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / pageSize)));
 
 async function load() {
+  controller?.abort();
+  const pending = new AbortController();
+  controller = pending;
   loading.value = true;
   error.value = null;
   try {
-    const result = await listReviews({ status: status.value || undefined, page: page.value, pageSize });
+    const result = await listReviews({ status: status.value || undefined, page: page.value, pageSize, signal: pending.signal });
+    if (pending.signal.aborted) return;
     tasks.value = result.items;
     total.value = result.total;
   } catch (err) {
+    if (pending.signal.aborted) return;
     error.value = err instanceof Error ? err.message : "读取审查历史失败";
   } finally {
-    loading.value = false;
+    if (controller === pending) loading.value = false;
   }
 }
 
 function formatDate(value: string) {
+  if (!Number.isFinite(new Date(value).getTime())) return "时间未知";
   return new Intl.DateTimeFormat("zh-CN", {
     month: "2-digit",
     day: "2-digit",
@@ -64,11 +79,21 @@ function taskRepo(task: ReviewTask) {
 }
 
 function taskCoverage(task: ReviewTask) {
+  if (task.engine === "task_review_v1") {
+    const report = runtimeReport(task);
+    if (!report) return "未知";
+    const scope = taskRuntimeSummary(report).scope;
+    return `${scope.examined} / ${scope.total} 目标`;
+  }
   const coverage = task.coverage;
   return coverage?.eligible_files ? `${coverage.reviewed_files} / ${coverage.eligible_files}` : "—";
 }
 
 function unresolvedCount(task: ReviewTask) {
+  if (task.engine === "task_review_v1") {
+    const report = runtimeReport(task);
+    return report ? taskRuntimeSummary(report).findings.unresolved : "未知";
+  }
   return task.issues.filter((issue) => ["candidate", "unresolved", "needs_human"].includes(issue.status)).length;
 }
 
@@ -96,11 +121,12 @@ onMounted(load);
         <h1>审查历史</h1>
         <p>按任务回看审查状态、问题与验证结果。所有记录均来自后端持久化存储。</p>
       </div>
-      <button type="button" class="button button--primary" @click="emit('create')">发起新审查</button>
+      <button type="button" class="button button--primary" :disabled="busy" @click="emit('create')">发起新审查</button>
     </header>
 
     <section class="workspace-toolbar" aria-label="审查历史筛选">
       <div class="workspace-stat"><strong>{{ total }}</strong><span>累计任务</span></div>
+      <label class="rg-history-search"><span>搜索当前页</span><input v-model="search" class="input" type="search" placeholder="PR、仓库、标题或任务 ID" /></label>
       <div class="compact-field">
         <span>任务状态</span>
         <AppSelect v-model="status" :options="statusOptions" compact aria-label="任务状态" />
@@ -112,7 +138,7 @@ onMounted(load);
     <section class="history-panel panel" :aria-busy="loading">
       <div v-if="loading && tasks.length === 0" class="workspace-loading">正在读取审查记录…</div>
       <EmptyState
-        v-else-if="tasks.length === 0"
+        v-else-if="visibleTasks.length === 0"
         icon="history"
         title="暂无匹配的审查任务"
         description="创建第一条审查任务，或调整当前状态筛选。"
@@ -120,21 +146,21 @@ onMounted(load);
         @action="emit('create')"
       />
       <div v-else class="history-list">
-        <article v-for="task in tasks" :key="task.id" class="history-row">
+        <article v-for="task in visibleTasks" :key="task.id" class="history-row">
           <div class="history-row__state"><StatusBadge :status="task.status" /></div>
           <div class="history-row__identity">
             <span>{{ taskRepo(task) }}</span>
             <strong>{{ taskTitle(task) }}</strong>
-            <code>{{ task.id }}</code>
+            <code>{{ task.id }} · Head {{ task.pr?.head.sha?.slice(0, 12) || '未知' }}</code>
           </div>
           <dl class="history-row__metrics">
             <div><dt>覆盖</dt><dd>{{ taskCoverage(task) }}</dd></div>
-            <div><dt>发现</dt><dd>{{ task.issues.length }}</dd></div>
+            <div><dt>发现记录</dt><dd>{{ task.engine === 'task_review_v1' ? runtimeReport(task)?.findings.length ?? '未知' : task.issues.length }}</dd></div>
             <div><dt>未确认</dt><dd>{{ unresolvedCount(task) }}</dd></div>
             <div><dt>验证</dt><dd class="history-validation">{{ validationStatus(task) }}</dd></div>
           </dl>
           <div class="history-row__time"><span>{{ formatDate(task.updated_at) }}</span><small>最近更新</small></div>
-          <button type="button" class="button button--secondary button--compact" @click="emit('open', task.id)">查看详情</button>
+          <button type="button" class="button button--secondary button--compact" :disabled="busy" @click="emit('open', task.id)">查看详情</button>
         </article>
       </div>
     </section>
