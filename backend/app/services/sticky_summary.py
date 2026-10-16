@@ -92,6 +92,19 @@ class StickySummary:
             raise GitHubPublishError("summary_modified_remotely")
         return {"summary_action": "update" if comment else "create", "summary_comment_id": comment["id"] if comment else None}
 
+    async def reconcile(self, attempt, lease):
+        """即使 PR 已移动也允许只读对账，避免旧未知请求永久占住 Slot。"""
+        slot = await asyncio.to_thread(self.repo.slot, lease)
+        if slot.pending_publication_id != attempt.id:
+            return
+        _, _, context = await asyncio.to_thread(self.repo.frozen, attempt.id)
+        item = next(item for item in (await asyncio.to_thread(self.repo.get, attempt.id)).items if item.kind == "summary")
+        expected = await asyncio.to_thread(self.repo.item_payload, item.id)
+        comment, _ = await self.remote(context, slot)
+        if not comment or comment["body"] != expected.get("body"):
+            raise GitHubPublishError("summary_operation_uncertain", uncertain=True)
+        await asyncio.to_thread(self.repo.summary_finish, attempt, item, comment, comment["body"], context, lease=lease)
+
     async def upsert(self, attempt, lease, content):
         _, _, context = await asyncio.to_thread(self.repo.frozen, attempt.id)
         slot = await asyncio.to_thread(self.repo.slot, lease)

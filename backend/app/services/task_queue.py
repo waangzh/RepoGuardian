@@ -22,6 +22,12 @@ class NonRetryableJobError(ValueError):
     """作业不适用于当前执行环境；保留原因并直接进入死信队列。"""
 
 
+class RetryAfterJobError(ValueError):
+    def __init__(self, code, retry_after):
+        super().__init__(code)
+        self.retry_after = retry_after
+
+
 @dataclass(frozen=True)
 class ClaimedJob:
     id: str
@@ -180,7 +186,7 @@ class DatabaseTaskQueue:
             )
             return result.rowcount == 1
 
-    def fail(self, job_id: str, worker_id: str, error: str, *, retry: bool = True) -> str:
+    def fail(self, job_id: str, worker_id: str, error: str, *, retry: bool = True, retry_after: int | None = None) -> str:
         now = utcnow()
         with self._session_factory.begin() as session:
             row = session.get(WorkerJobOrm, job_id)
@@ -188,7 +194,7 @@ class DatabaseTaskQueue:
                 raise ValueError("worker does not own the job lease")
             can_retry = retry and row.attempts < row.max_attempts
             row.status = "retry" if can_retry else "dead_letter"
-            row.available_at = now + timedelta(seconds=min(2 ** row.attempts, 60))
+            row.available_at = now + timedelta(seconds=retry_after if retry_after is not None else min(2 ** row.attempts, 60))
             row.last_error = error[:8000]
             row.lease_owner = None
             row.lease_until = None
@@ -201,6 +207,7 @@ class DatabaseTaskQueue:
                 update(WorkerJobOrm)
                 .where(
                     WorkerJobOrm.task_id == task_id,
+                    WorkerJobOrm.kind.in_(["review", "unit_retry"]),
                     WorkerJobOrm.status.in_(["queued", "retry", "leased"]),
                 )
                 .values(status="cancelled", lease_owner=None, lease_until=None, updated_at=utcnow())
@@ -215,20 +222,24 @@ class ReviewWorker:
         handler: Callable[[ClaimedJob], Awaitable[None]],
         *,
         worker_id: str | None = None,
+        kinds: tuple[str, ...] = ("review", "unit_retry"),
     ) -> None:
         self.queue = queue
         self.handler = handler
+        self.kinds = kinds
         self.worker_id = worker_id or f"worker-{uuid4().hex[:12]}"
         self._stopping = asyncio.Event()
         self._active: dict[str, asyncio.Task[None]] = {}
+        self._active_task_ids: dict[str, str] = {}
 
     async def run_once(self) -> bool:
-        job = await asyncio.to_thread(self.queue.claim, worker_id=self.worker_id)
+        job = await asyncio.to_thread(self.queue.claim, worker_id=self.worker_id, kinds=self.kinds)
         if job is None:
             return False
         handler_task = asyncio.create_task(self.handler(job))
         heartbeat = asyncio.create_task(self._heartbeat(job.id, handler_task))
-        self._active[job.task_id] = handler_task
+        self._active[job.id] = handler_task
+        self._active_task_ids[job.id] = job.task_id
         try:
             await handler_task
         except asyncio.CancelledError:
@@ -245,11 +256,13 @@ class ReviewWorker:
             await asyncio.to_thread(
                 self.queue.fail, job.id, self.worker_id, str(exc),
                 retry=not isinstance(exc, NonRetryableJobError),
+                retry_after=exc.retry_after if isinstance(exc, RetryAfterJobError) else None,
             )
         else:
             await asyncio.to_thread(self.queue.complete, job.id, self.worker_id)
         finally:
-            self._active.pop(job.task_id, None)
+            self._active.pop(job.id, None)
+            self._active_task_ids.pop(job.id, None)
             heartbeat.cancel()
             await asyncio.gather(heartbeat, return_exceptions=True)
         return True
@@ -269,11 +282,13 @@ class ReviewWorker:
         self._stopping.set()
 
     def cancel_task(self, task_id: str) -> bool:
-        task = self._active.get(task_id)
-        if task is None or task.done():
-            return False
-        task.cancel()
-        return True
+        cancelled = False
+        for job_id, active_task_id in list(self._active_task_ids.items()):
+            task = self._active.get(job_id)
+            if active_task_id == task_id and task is not None and not task.done():
+                task.cancel()
+                cancelled = True
+        return cancelled
 
     async def _heartbeat(self, job_id: str, handler_task: asyncio.Task | None = None) -> None:
         interval = max(1.0, settings.repoguardian_worker_lease_seconds / 3)

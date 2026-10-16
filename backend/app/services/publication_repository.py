@@ -9,7 +9,7 @@ from sqlalchemy.dialects.sqlite import insert
 
 from app.core.database import sync_session
 from app.models.orm import (PublicationAttemptOrm as Attempt, PublicationItemOrm as Item,
-    PublicationRequestOrm as RequestKey, GitHubSummarySlotOrm as Slot, WorkerJobOrm, utcnow)
+    PublicationRequestOrm as RequestKey, PublicationBatchOrm as Batch, GitHubSummarySlotOrm as Slot, WorkerJobOrm, utcnow)
 from app.models.publication import PublicationAttempt, PublicationItem, GitHubSummarySlot
 from app.services.fingerprints import stable_hash
 
@@ -199,3 +199,36 @@ class PublicationRepository:
             job.lease_owner, job.lease_until = None, None
             row.state, row.completed_at = "queued", None
         return self.get(identity)
+
+    def batches(self, identity):
+        with self.sessions() as session:
+            return [{"id": row.id, "item_ids": list(row.item_ids), "payload": dict(row.payload),
+                     "state": row.state, "github_review_id": row.github_review_id}
+                    for row in session.scalars(select(Batch).where(Batch.publication_id == identity).order_by(Batch.id))]
+
+    def prepare_batch(self, identity, publication_id, item_ids, payload, *, lease):
+        with self.locked(lease) as session:
+            row = session.get(Batch, identity)
+            if row is not None and row.state != "failed":
+                raise PublicationConflict("batch_already_sent")
+            if row is None:
+                row = Batch(id=identity, publication_id=publication_id, item_ids=item_ids, payload=payload)
+                session.add(row)
+            row.state, row.last_error_code = "publishing", None
+            for item_id in item_ids:
+                item = session.get(Item, item_id)
+                item.state, item.last_attempt_at = "publishing", utcnow()
+
+    def finish_batch(self, identity, receipts, state, error=None, *, lease):
+        with self.locked(lease) as session:
+            row = session.get(Batch, identity)
+            row.state, row.last_error_code = state, error
+            for item_id in row.item_ids:
+                item = session.get(Item, item_id)
+                if item_id in receipts:
+                    remote = receipts[item_id]
+                    item.state, item.github_comment_id, item.github_review_id = "published", remote["id"], remote["pull_request_review_id"]
+                    item.github_url, item.last_error_code = remote["html_url"], None
+                    row.github_review_id = item.github_review_id
+                elif item.state != "published":
+                    item.state, item.last_error_code = ("failed" if state == "failed" else "uncertain"), error

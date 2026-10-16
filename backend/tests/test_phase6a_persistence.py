@@ -552,7 +552,7 @@ def test_alembic_migration_upgrades_and_rolls_back(tmp_path: Path) -> None:
         "project_ci_requests",
         "project_ci_webhook_deliveries",
     } <= tables
-    assert version == ("20261016_0003",)
+    assert version == ("20261016_0004",)
     subprocess.run(
         [sys.executable, "-m", "alembic", "downgrade", "base"],
         cwd=backend, env=env, check=True, capture_output=True, text=True, encoding="utf-8",
