@@ -25,6 +25,10 @@ class ImportRef(BaseModel):
     line: int | None = Field(default=None, ge=1)
     confidence: float = Field(ge=0, le=1)
     parser_id: str
+    imported_name: str | None = None
+    local_name: str | None = None
+    scope_start_line: int | None = None
+    scope_end_line: int | None = None
 
 
 class CallRef(BaseModel):
@@ -35,6 +39,9 @@ class CallRef(BaseModel):
     line: int | None = Field(default=None, ge=1)
     confidence: float = Field(ge=0, le=1)
     parser_id: str
+    import_binding: ImportRef | None = None
+    binding_reason: str | None = None
+    scope_start_line: int | None = None
 
 
 class SymbolRef(BaseModel):
@@ -52,6 +59,7 @@ class SymbolRef(BaseModel):
     parser_id: str
     exported: bool | None = None
     container: str | None = None
+    python_binding_safe: bool = False
 
     def to_index_entry(self) -> dict[str, object]:
         """保留旧索引字段，同时公开带置信度的统一 CallRef。"""
@@ -69,6 +77,7 @@ class SymbolRef(BaseModel):
             "parser_id": self.parser_id,
             "exported": self.exported,
             "container": self.container,
+            "python_binding_safe": self.python_binding_safe,
         }
 
 
