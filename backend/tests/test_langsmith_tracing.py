@@ -112,7 +112,7 @@ def graph_service(monkeypatch: pytest.MonkeyPatch) -> tuple[ReviewService, FakeC
         provider=object(),  # type: ignore[arg-type]
         report_service=ReportService(),
     )
-    task = ReviewTask(id="task-123", pr_url="https://example.test/pull/1", model="override-model")
+    task = ReviewTask(id="task-123", pr_url="https://example.test/pull/1", model="override-model", engine="task_review_v1")
     service._tasks[task.id] = task
     monkeypatch.setattr(service, "_sync_result_to_task", lambda task, result: None)
     return service, compiled
@@ -167,7 +167,7 @@ async def test_graph_stream_persists_running_and_completed_node_progress(
         provider=object(),  # type: ignore[arg-type]
         report_service=ReportService(),
     )
-    task = ReviewTask(id="task-stream", pr_url="https://example.test/pull/1")
+    task = ReviewTask(id="task-stream", pr_url="https://example.test/pull/1", engine="task_review_v1")
     service._tasks[task.id] = task
     snapshots: list[ReviewTask] = []
     original_persist = service._persist

@@ -517,7 +517,7 @@ async def test_langgraph_interrupt_resumes_after_checkpointer_reopen(tmp_path: P
 
 def test_alembic_migration_upgrades_and_rolls_back(tmp_path: Path) -> None:
     database = tmp_path / "migration.db"
-    env = {**os.environ, "REPOGUARDIAN_DB_PATH": str(database)}
+    env = {**os.environ, "REPOGUARDIAN_DB_PATH": str(database), "PYTHONIOENCODING": "utf-8"}
     backend = Path(__file__).parents[1]
     subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "20260801_0001"],
@@ -551,8 +551,10 @@ def test_alembic_migration_upgrades_and_rolls_back(tmp_path: Path) -> None:
         "runner_result_idempotency",
         "project_ci_requests",
         "project_ci_webhook_deliveries",
+        "review_previews",
+        "finding_dispositions",
     } <= tables
-    assert version == ("20261016_0004",)
+    assert version == ("20261016_0005",)
     subprocess.run(
         [sys.executable, "-m", "alembic", "downgrade", "base"],
         cwd=backend, env=env, check=True, capture_output=True, text=True, encoding="utf-8",

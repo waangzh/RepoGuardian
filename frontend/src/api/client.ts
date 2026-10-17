@@ -19,6 +19,16 @@ import type { PublicationPlan } from "../types/publication";
 import type { PublicationSelection, PublicationPreflightResult, PublicationAccepted, PublicationAttempt } from "../types/publication";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
+import type { ReviewCapabilities, ReviewPlanOptions, FindingView, FindingDisposition } from '../types/reviewPlan';
+
+export function getReviewCapabilities() { return request<ReviewCapabilities>('/api/system/review-capabilities'); }
+export function getFindings(id: string, signal?: AbortSignal) {
+  return request<{ items: FindingView[] }>(`${publicationPath(id)}/findings`, { signal });
+}
+export function setFindingDisposition(id: string, finding: string, value: FindingDisposition) {
+  return request<{ items: FindingView[] }>(`${publicationPath(id)}/findings/${encodeURIComponent(finding)}/disposition`,
+    { method: 'PATCH', body: JSON.stringify(value) });
+}
 
 async function publicationRequest<T>(path: string, token: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, { ...init, headers: {
@@ -73,8 +83,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init
   });
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `请求失败：${response.status}`);
+    const payload = await response.json().catch(() => null);
+    const detail = payload?.detail;
+    const message = response.status === 409 ? '方案已失效或任务状态冲突，请重新预览后确认。' :
+      typeof detail === 'string' ? detail : Array.isArray(detail) ? detail.map(item => item.msg).join('；') : `请求失败：${response.status}`;
+    throw new Error(message);
   }
   return response.json() as Promise<T>;
 }
@@ -85,6 +98,7 @@ export async function createReview(
   mode: ReviewMode = "review",
   generatePatches = false,
   validationBackend: ValidationBackend = "none",
+  preview?: ReviewPreviewResponse,
 ): Promise<ReviewCreateResponse> {
   // 引擎由服务端冻结为 task_review_v1；客户端不再选择引擎。
   return request<ReviewCreateResponse>("/api/reviews", {
@@ -95,6 +109,9 @@ export async function createReview(
       mode,
       generate_patches: generatePatches,
       validation_backend: validationBackend,
+      ...(preview ? { preview_id: preview.preview_id, plan_hash: preview.plan_hash,
+        expected_head_sha: preview.snapshot?.head_sha,
+        expected_effective_base_sha: preview.snapshot?.effective_base_sha } : {}),
     })
   });
 }
@@ -105,12 +122,16 @@ export async function previewReview(
   generatePatches = false,
   validationBackend: ValidationBackend = "none",
   signal?: AbortSignal,
+  model?: string,
+  plan?: ReviewPlanOptions,
 ): Promise<ReviewPreviewResponse> {
   return request<ReviewPreviewResponse>("/api/reviews/preview", {
     method: "POST",
     signal,
     body: JSON.stringify({
       pr_url: prUrl,
+      model: model || null,
+      ...(plan ? { plan } : {}),
       mode,
       generate_patches: generatePatches,
       validation_backend: validationBackend,
@@ -123,6 +144,7 @@ export async function getReview(taskId: string): Promise<ReviewTask> {
 }
 
 export async function listReviews(options: {
+  q?: string;
   status?: string;
   page?: number;
   pageSize?: number;
@@ -133,6 +155,7 @@ export async function listReviews(options: {
     page_size: String(options.pageSize ?? 20),
   });
   if (options.status) params.set("status", options.status);
+  if (options.q) params.set('q', options.q);
   return request<ReviewTaskListResponse>(`/api/reviews?${params.toString()}`, { signal: options.signal });
 }
 

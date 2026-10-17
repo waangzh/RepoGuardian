@@ -1,0 +1,27 @@
+export interface ReviewLimits {
+  max_model_calls: number | null;
+  max_tokens: number | null;
+  max_cost_microusd: number | null;
+  timeout_seconds: number | null;
+}
+export interface ReviewPlanOptions {
+  version: 'review-plan-v1';
+  depth: 'quick' | 'standard' | 'deep';
+  focus: ('correctness' | 'security' | 'performance' | 'compatibility')[];
+  scope: { mode: 'all' | 'selected'; primary_files: string[] };
+  limits: ReviewLimits;
+}
+export interface PlanSnapshot { head_sha: string; effective_base_sha: string; declared_base_sha: string }
+export interface ReviewCapabilities {
+  plan_version: string;
+  depth_presets: { id: ReviewPlanOptions['depth']; label: string; limits: ReviewLimits }[];
+  focus_categories: ReviewPlanOptions['focus'];
+  scope_selection_supported: boolean;
+  limits: { defaults: ReviewLimits; maxima: ReviewLimits };
+}
+export interface FindingDisposition { status: 'open' | 'confirmed' | 'ignored' | 'resolved'; reason: string }
+export interface FindingView {
+  id: string; status: string; evidence_status: 'verified' | 'insufficient' | 'unresolved' | 'unknown';
+  human_confirmation_reason: string | null; dynamic_validation_status: string;
+  limitations: string[]; disposition: FindingDisposition | null; updated_at: string | null;
+}

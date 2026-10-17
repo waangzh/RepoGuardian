@@ -41,7 +41,13 @@ export type ReviewPhase =
 export type StepStatus = "pending" | "running" | "completed" | "failed";
 export type Severity = "low" | "medium" | "high" | "critical";
 
+export type { ReviewPlanOptions, PlanSnapshot } from './reviewPlan';
+import type { ReviewPlanOptions, PlanSnapshot } from './reviewPlan';
+
 export interface ReviewCreateResponse {
+  confirmed_plan?: ReviewPlanOptions | null;
+  snapshot?: PlanSnapshot | null;
+  plan_hash?: string | null;
   task_id: string;
   status: TaskStatus;
 }
@@ -166,6 +172,12 @@ export interface ReviewUnit {
 }
 
 export interface ReviewPreviewResponse {
+  preview_id?: string | null;
+  plan_hash?: string | null;
+  snapshot?: PlanSnapshot | null;
+  effective_plan?: ReviewPlanOptions | null;
+  expires_at?: string | null;
+  estimates?: { scope: string; total_usage_prediction: boolean };
   mode: ReviewMode;
   changed_file_count: number;
   included_file_count: number;
@@ -948,6 +960,9 @@ export interface ModelUsageSummary {
 }
 
 export interface ReviewTask {
+  confirmed_plan?: ReviewPlanOptions | null;
+  snapshot?: PlanSnapshot | null;
+  plan_hash?: string | null;
   id: string;
   status: TaskStatus;
   phase: ReviewPhase;

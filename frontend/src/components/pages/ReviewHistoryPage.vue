@@ -21,7 +21,7 @@ const status = ref("");
 const loading = ref(false);
 const error = ref<string | null>(null);
 const search = ref("");
-const visibleTasks = computed(() => tasks.value.filter(task => `${task.pr_url} ${task.pr?.title || ''} ${task.pr?.owner || ''}/${task.pr?.repo || ''} ${task.id}`.toLowerCase().includes(search.value.toLowerCase())));
+const visibleTasks = computed(() => tasks.value);
 let controller: AbortController | null = null;
 onBeforeUnmount(() => controller?.abort());
 
@@ -48,7 +48,7 @@ async function load() {
   loading.value = true;
   error.value = null;
   try {
-    const result = await listReviews({ status: status.value || undefined, page: page.value, pageSize, signal: pending.signal });
+    const result = await listReviews({ q: search.value.trim() || undefined, status: status.value || undefined, page: page.value, pageSize, signal: pending.signal });
     if (pending.signal.aborted) return;
     tasks.value = result.items;
     total.value = result.total;
@@ -105,7 +105,7 @@ function validationStatus(task: ReviewTask) {
     : "—";
 }
 
-watch(status, () => {
+watch([status, search], () => {
   page.value = 1;
   void load();
 });
@@ -126,7 +126,7 @@ onMounted(load);
 
     <section class="workspace-toolbar" aria-label="审查历史筛选">
       <div class="workspace-stat"><strong>{{ total }}</strong><span>累计任务</span></div>
-      <label class="rg-history-search"><span>搜索当前页</span><input v-model="search" class="input" type="search" placeholder="PR、仓库、标题或任务 ID" /></label>
+      <label class="rg-history-search"><span>搜索全部历史</span><input v-model="search" class="input" type="search" placeholder="PR 链接、仓库、标题或任务 ID" /></label>
       <div class="compact-field">
         <span>任务状态</span>
         <AppSelect v-model="status" :options="statusOptions" compact aria-label="任务状态" />

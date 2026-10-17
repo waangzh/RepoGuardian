@@ -21,7 +21,8 @@ from test_runtime_integrity_errors import runtime_payload
 
 
 @pytest.mark.parametrize("revision,expected", [(None, False), ("20260804_0002", False),
-                                              ("20261016_0003", False), ("20261016_0004", True)])
+                                              ("20261016_0003", False), ("20261016_0004", False),
+                                              ("20261016_0005", True)])
 def test_schema_gate_requires_artifact_migration(tmp_path, monkeypatch, revision, expected):
     engine = create_engine(f"sqlite:///{(tmp_path / 'gate.db').as_posix()}")
     with engine.begin() as connection:
@@ -40,7 +41,7 @@ def migrate(path, target, *, direction="upgrade"):
     return subprocess.run(
         [sys.executable, "-m", "alembic", direction, target],
         cwd=Path(__file__).parents[1],
-        env={**os.environ, "REPOGUARDIAN_DB_PATH": str(path)},
+        env={**os.environ, "REPOGUARDIAN_DB_PATH": str(path), "PYTHONIOENCODING": "utf-8"},
         check=True, capture_output=True, text=True, encoding="utf-8",
     )
 

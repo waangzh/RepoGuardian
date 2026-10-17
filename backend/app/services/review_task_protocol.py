@@ -123,6 +123,15 @@ class TaskReviewV1Protocol:
                 "reason": "State the concrete behavior checked"}], "candidates": [], "leads": []}
                 if selected and work_item.kind.value == "inspect" else None),
         }
+        if self.spec.review_strategy:
+            payload["review_strategy"] = self.spec.review_strategy
+            payload["review_instructions"] = {
+                "focus": "Prioritize the selected categories in their listed order; retain other concrete defects.",
+                "depth": {"quick": "Triage direct changed behavior. Do not request speculative broad investigations.",
+                          "standard": "Inspect changed behavior and concrete caller/callee contracts.",
+                          "deep": "Actively seek counter-evidence, boundary conditions, compatibility regressions and related tests "
+                                  "using controlled read tools before submitting. Never execute repository code."}[
+                                      self.spec.review_strategy["depth"]]}
         for evidence in payload["active_evidence"]:
             evidence.pop("canonical_change", None)
         if work_item.kind.value == "investigate":
