@@ -105,3 +105,11 @@ class FileDiffResponse(PlanModel):
     metadata: dict
     next_cursor: int | None
     truncated: bool
+
+
+class FileContextResponse(PlanModel):
+    file_id: int
+    file_path: str
+    snapshot: PlanSnapshot
+    base_lines: list[str]
+    head_lines: list[str]

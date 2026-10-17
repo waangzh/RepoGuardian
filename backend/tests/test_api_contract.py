@@ -25,6 +25,7 @@ def test_frontend_response_interfaces_cover_backend_contract() -> None:
 def test_openapi_exposes_preview_and_retry_contracts() -> None:
     schema = app.openapi()
     assert "/api/reviews/preview" in schema["paths"]
+    assert "/api/reviews/{task_id}/files/{file_id}/context" in schema["paths"]
     assert "/api/reviews/{task_id}/units/{unit_id}/retry" in schema["paths"]
     assert "/api/validation-requests/{request_id}/claim" in schema["paths"]
     assert "/api/validation-requests/{request_id}/result" in schema["paths"]
