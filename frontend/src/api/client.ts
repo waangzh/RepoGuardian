@@ -19,6 +19,10 @@ import type { PublicationPlan } from "../types/publication";
 import type { PublicationSelection, PublicationPreflightResult, PublicationAccepted, PublicationAttempt } from "../types/publication";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
+import type { FileContext } from "../utils/diffContext";
+export function getFileContext(taskId: string, fileId: number, signal?: AbortSignal) {
+  return request<FileContext>(`/api/reviews/${encodeURIComponent(taskId)}/files/${fileId}/context`, { signal }, null);
+}
 import type { ReviewCapabilities, ReviewPlanOptions, FindingView, FindingDisposition } from '../types/reviewPlan';
 
 export function getReviewCapabilities() { return request<ReviewCapabilities>('/api/system/review-capabilities'); }
@@ -74,7 +78,7 @@ export function getPublicationPlan(taskId: string, signal?: AbortSignal): Promis
   return request<PublicationPlan>(`/api/reviews/${encodeURIComponent(taskId)}/publication-plan`, { signal });
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, conflictMessage: string | null = '方案已失效或任务状态冲突，请重新预览后确认。'): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: {
       "Content-Type": "application/json",
@@ -85,7 +89,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
     const detail = payload?.detail;
-    const message = response.status === 409 ? '方案已失效或任务状态冲突，请重新预览后确认。' :
+    const message = response.status === 409 && conflictMessage ? conflictMessage :
       typeof detail === 'string' ? detail : Array.isArray(detail) ? detail.map(item => item.msg).join('；') : `请求失败：${response.status}`;
     throw new Error(message);
   }
