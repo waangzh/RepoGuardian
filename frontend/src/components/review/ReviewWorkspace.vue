@@ -36,7 +36,7 @@ const githubLink = computed(() => {
   <p v-if="legacy" class="notice warn">此任务来自已退役的历史引擎，仅供查看；不会提供取消或重试。完整历史证据可在技术记录中展开。</p>
   <p v-if="loading" class="muted small space-bottom" role="status">正在读取后端结论与发布计划…</p><p v-if="error" class="notice warn" role="alert">{{ error }} <button type="button" class="link" @click="reload">重试加载</button></p>
   <ReviewProgressPage v-if="section === 'overview' && !terminal && !legacy" :task="task" :runtime="runtime" :cancelling="cancelling" @cancel="emit('cancel')" @activity="emit('navigate', 'activity')" />
-  <ReviewOverviewPage v-else-if="section === 'overview'" :task="task" :plan="plan" :summary="summary" :findings="findings" :warnings="warnings" :terminal="terminal" @navigate="emit('navigate', $event)" @finding="openFinding" />
+  <ReviewOverviewPage v-else-if="section === 'overview'" :task="task" :report="report" :plan="plan" :summary="summary" :findings="findings" :warnings="warnings" :terminal="terminal" @navigate="emit('navigate', $event)" @finding="openFinding" />
   <ReviewFindingsPage v-else-if="section === 'findings'" :key="task.id" :task="task" :findings="findings" :focus-key="focusKey" :publication-findings="publicationFindings" @activity="emit('navigate', 'activity')" />
   <ReviewScopePage v-else-if="section === 'scope'" :task="task" :runtime="runtime" :terminal="terminal && !legacy" :retrying-unit-id="retryingUnitId" @retry="emit('retry', $event)" />
   <ReviewFilesPage v-else-if="section === 'files'" :key="task.id" :task="task" :findings="findings" @finding="openFinding" />
