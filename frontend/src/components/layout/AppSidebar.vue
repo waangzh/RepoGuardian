@@ -31,6 +31,5 @@ const emit = defineEmits<{
       <div class="nav-divider" /><div class="nav-heading">当前审查</div>
       <button v-for="item in reviewSections" :key="item.id" type="button" class="side-link" :class="{ active: hasReview && modelValue === 'dashboard' && section === item.id }" :aria-current="hasReview && modelValue === 'dashboard' && section === item.id ? 'page' : undefined" :disabled="!hasReview" @click="emit('section', item.id)"><AppIcon :name="item.icon" /><span class="nav-text">{{ item.label }}</span></button>
     </nav>
-    <footer class="sidebar-footer"><div class="local-alert"><AppIcon name="info" :size="15" /><span>静态结论以任务快照为准。未发现问题，不代表代码完全安全。</span></div><div class="mini-version">REPOGUARDIAN · WORKSPACE</div></footer>
   </aside>
 </template>

@@ -13,9 +13,8 @@ const { theme, toggleTheme } = usePreferences();
       <span class="crumb-parent">RepoGuardian</span><span class="sep">/</span><strong>{{ title }}</strong>
     </div>
     <div class="top-actions">
-      <span class="environment">● 只读静态审查</span><span class="top-status" role="status">{{ statusText }}</span>
+      <span class="top-status" role="status">{{ statusText }}</span>
       <button type="button" class="icon-btn" :aria-label="theme === 'light' ? '切换深色主题' : '切换浅色主题'" @click="toggleTheme"><AppIcon :name="theme === 'light' ? 'moon' : 'sun'" /></button>
-      <span class="avatar" aria-label="本地工作区">RG</span>
     </div>
   </header>
 </template>
