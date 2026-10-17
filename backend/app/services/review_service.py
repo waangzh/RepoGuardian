@@ -127,6 +127,7 @@ class ReviewService:
         self._run_tasks: dict[str, asyncio.Task[None]] = {}
         self._repo_paths: dict[str, Path] = {}
         self._previews: dict[str, dict] = {}
+        self._preview_prepare_lock = asyncio.Lock()
         self._dispositions: dict[str, dict] = {}
 
     def create_task(self, request: ReviewCreateRequest, *, configuration=None, preview_id=None,
@@ -343,105 +344,158 @@ class ReviewService:
         self._touch(task)
         self._persist(task)
 
-    async def preview(self, request: ReviewPreviewRequest, *, persist=True) -> ReviewPreviewResponse:
+    async def _prepare_preview_inputs(self, pr, configuration, progress, cancel_event):
+        from app.services.preview_input_cache import PreviewInputCache, input_cache_key
+
+        async def report(phase, message, **extra):
+            if progress:
+                await asyncio.to_thread(progress, phase, message, **extra)
+
+        await report("cache", "等待并检查固定快照准备缓存")
+        async with self._preview_prepare_lock:
+            cache = PreviewInputCache(self._repository) if self._repository else None
+            key = input_cache_key(pr, configuration)
+            try:
+                cached = await asyncio.to_thread(cache.get, key) if cache else None
+            except Exception as exc:
+                logger.warning("读取预览缓存失败：%s", type(exc).__name__)
+                cached = None
+            if cached is not None:
+                await report("cache", "已复用相同快照的仓库输入与索引", cache_hit=True)
+                return cached
+
+            def git_progress(event):
+                if progress:
+                    progress(event.phase, event.message, percent=event.percent, operation=event.operation)
+
+            await report("clone", "正在克隆仓库")
+            # 无回调时保持旧工具适配器签名兼容。
+            options = {"progress_callback": git_progress, "cancel_event": cancel_event} if progress or cancel_event else {}
+            repo_path, diff_text = await asyncio.to_thread(self._git_tool.clone_and_diff, pr, **options)
+            try:
+                options = {"call_resolution_version": configuration["call_resolution_version"]}
+                if progress:
+                    options["progress"] = progress
+                index = await RepoIndexer().execute(repo_path=str(repo_path), **options)
+                diff_context = await self._diff_context(repo_path, pr)
+                prepared = {"diff": diff_text, "index": index, "diff_context": diff_context}
+            finally:
+                # 取消／失租时也必须清理；不能让进度回调异常跳过清理。
+                try:
+                    await report("cleanup", "正在清理临时仓库")
+                finally:
+                    await _cleanup_repo(Path(repo_path))
+            if cache:
+                try:
+                    await asyncio.to_thread(cache.put, key, prepared)
+                except Exception as exc:
+                    logger.warning("写入预览缓存失败：%s", type(exc).__name__)
+            return prepared
+
+    async def preview(self, request: ReviewPreviewRequest, *, persist=True,
+                      progress=None, cancel_event=None) -> ReviewPreviewResponse:
         """只执行 PR 获取、diff 解析和确定性规划。"""
         pr_url = str(request.pr_url)
         from app.graph.nodes.task_review_runtime import task_runtime_configuration
-        from app.services.review_plan import normalize_plan, apply_scope, configure_runtime, preview_hash
-        from app.services.review_input_context import build_pr_intent
+        from app.services.review_plan import normalize_plan
         configuration = task_runtime_configuration(request.model)
         options = normalize_plan(request.plan, configuration["model"])
+        if progress:
+            await asyncio.to_thread(progress, "github", "正在获取 PR 信息")
         pr = await self._github_tool.fetch_pr(pr_url)
         # Preview 与正式执行共享 clone + 只读索引输入，保证 related_files 和
         # fingerprint 一致；这一过程不运行仓库代码。
-        repo_path, diff_text = await asyncio.to_thread(self._git_tool.clone_and_diff, pr)
-        try:
-            changed_files = self._diff_parser.parse(diff_text)
-            index = await RepoIndexer().execute(repo_path=str(repo_path),
-                call_resolution_version=configuration["call_resolution_version"])
-            planner = DeterministicReviewPlanner()
-            # Preview 与正式执行使用同一内容基准：声明 base 只保留 PR 身份。
-            diff_context = await self._diff_context(repo_path, pr)
-            plan = planner.plan(
-                changed_files,
-                base_sha=diff_context.get("effective_base_sha") or pr.base.sha,
-                head_sha=pr.head.sha,
-                file_index=index["file_index"],
-                symbol_index=index["symbol_index"],
-                repository_graph=index["repository_graph"],
-                model=configuration["model"],
-                provider=configuration["provider"],
-                pr_intent_hash=build_pr_intent(pr.model_dump(mode="json"))["intent_hash"],
-            )
-            plan = apply_scope(plan, options)
-            snapshot = {"head_sha": pr.head.sha,
-                        "effective_base_sha": diff_context.get("effective_base_sha") or pr.base.sha,
-                        "declared_base_sha": pr.base.sha}
-            plan_hash = preview_hash(options, snapshot, configuration, plan)
-            frozen = configure_runtime(configuration, options, snapshot, plan_hash)
-            from app.services.fingerprints import stable_hash
-            frozen["initial_plan_hash"] = stable_hash(plan.model_dump(mode="json"))
-            backend = self._validation_backend_selector.select(
-                request.validation_backend.value,
-                request.mode,
-            )
-            capabilities = await backend.capabilities(RepositorySnapshot(
-                language=index.get("project_meta", {}).get("language", "unknown"),
-                languages=list(index.get("project_meta", {}).get("languages") or []),
-                language_counts=dict(
-                    index.get("project_meta", {}).get("language_counts") or {}
-                ),
-                is_mixed_language=bool(
-                    index.get("project_meta", {}).get("is_mixed_language", False)
-                ),
-                framework=index.get("project_meta", {}).get("framework"),
-                test_framework=index.get("project_meta", {}).get("test_framework"),
-                total_files=len(index["file_index"]),
-            ))
-            response = ReviewPreviewResponse(
-                preview_id=uuid4().hex, plan_hash=plan_hash, snapshot=snapshot,
-                effective_plan=options, expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
-                mode=request.mode,
-                changed_file_count=len(plan.changed_files),
-                included_file_count=sum(item.included for item in plan.changed_files),
-                changed_files=plan.changed_files,
-                review_units=plan.review_units,
-                excluded_files=plan.excluded_files,
-                matched_rules=plan.matched_rules,
-                risk_tags=plan.risk_tags,
-                planning_model_calls=sum(
-                    planner.planning_model_calls(unit, changed_files)
-                    for unit in plan.review_units
-                ),
-                estimated_model_calls=sum(
-                    planner.estimated_model_calls(unit, changed_files)
-                    for unit in plan.review_units
-                ),
-                max_model_calls=sum(
-                    planner.max_model_calls(unit) for unit in plan.review_units
-                ),
-                estimated_tokens=sum(unit.estimated_tokens for unit in plan.review_units),
-                # Repair is an independent workflow and never part of previewed
-                # production Review Plane capacity.
-                patch_generation_enabled=False,
-                validation_backend=ValidationBackendPreview(
-                    name=ValidationBackend(backend.name),
-                    available=capabilities.available,
-                    unavailable_reason=capabilities.unavailable_reason,
-                ),
-                warnings=plan.warnings,
-            )
-            if persist:
-                record = {"pr_url": pr_url, "response": response.model_dump(mode="json"),
-                          "configuration": frozen}
-                if self._repository:
-                    await asyncio.to_thread(self._repository.save_preview, response.preview_id,
-                                            record, response.expires_at)
-                else:
-                    self._previews[response.preview_id] = record
-            return response
-        finally:
-            await _cleanup_repo(Path(repo_path))
+        prepared = await self._prepare_preview_inputs(pr, configuration, progress, cancel_event)
+        if progress:
+            await asyncio.to_thread(progress, "planning", "正在生成审查方案")
+        return await self._build_preview(request, pr_url, pr, configuration, options, prepared, persist)
+
+    async def _build_preview(self, request, pr_url, pr, configuration, options, prepared, persist):
+        from app.services.review_plan import apply_scope, configure_runtime, preview_hash
+        from app.services.review_input_context import build_pr_intent
+        changed_files = self._diff_parser.parse(prepared["diff"])
+        index = prepared["index"]
+        planner = DeterministicReviewPlanner()
+        # Preview 与正式执行使用同一内容基准：声明 base 只保留 PR 身份。
+        diff_context = prepared["diff_context"]
+        plan = planner.plan(
+            changed_files,
+            base_sha=diff_context.get("effective_base_sha") or pr.base.sha,
+            head_sha=pr.head.sha,
+            file_index=index["file_index"],
+            symbol_index=index["symbol_index"],
+            repository_graph=index["repository_graph"],
+            model=configuration["model"],
+            provider=configuration["provider"],
+            pr_intent_hash=build_pr_intent(pr.model_dump(mode="json"))["intent_hash"],
+        )
+        plan = apply_scope(plan, options)
+        snapshot = {"head_sha": pr.head.sha,
+                    "effective_base_sha": diff_context.get("effective_base_sha") or pr.base.sha,
+                    "declared_base_sha": pr.base.sha}
+        plan_hash = preview_hash(options, snapshot, configuration, plan)
+        frozen = configure_runtime(configuration, options, snapshot, plan_hash)
+        from app.services.fingerprints import stable_hash
+        frozen["initial_plan_hash"] = stable_hash(plan.model_dump(mode="json"))
+        backend = self._validation_backend_selector.select(
+            request.validation_backend.value,
+            request.mode,
+        )
+        capabilities = await backend.capabilities(RepositorySnapshot(
+            language=index.get("project_meta", {}).get("language", "unknown"),
+            languages=list(index.get("project_meta", {}).get("languages") or []),
+            language_counts=dict(
+                index.get("project_meta", {}).get("language_counts") or {}
+            ),
+            is_mixed_language=bool(
+                index.get("project_meta", {}).get("is_mixed_language", False)
+            ),
+            framework=index.get("project_meta", {}).get("framework"),
+            test_framework=index.get("project_meta", {}).get("test_framework"),
+            total_files=len(index["file_index"]),
+        ))
+        response = ReviewPreviewResponse(
+            preview_id=uuid4().hex, plan_hash=plan_hash, snapshot=snapshot,
+            effective_plan=options, expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
+            mode=request.mode,
+            changed_file_count=len(plan.changed_files),
+            included_file_count=sum(item.included for item in plan.changed_files),
+            changed_files=plan.changed_files,
+            review_units=plan.review_units,
+            excluded_files=plan.excluded_files,
+            matched_rules=plan.matched_rules,
+            risk_tags=plan.risk_tags,
+            planning_model_calls=sum(
+                planner.planning_model_calls(unit, changed_files)
+                for unit in plan.review_units
+            ),
+            estimated_model_calls=sum(
+                planner.estimated_model_calls(unit, changed_files)
+                for unit in plan.review_units
+            ),
+            max_model_calls=sum(
+                planner.max_model_calls(unit) for unit in plan.review_units
+            ),
+            estimated_tokens=sum(unit.estimated_tokens for unit in plan.review_units),
+            # Repair is an independent workflow and never part of previewed
+            # production Review Plane capacity.
+            patch_generation_enabled=False,
+            validation_backend=ValidationBackendPreview(
+                name=ValidationBackend(backend.name),
+                available=capabilities.available,
+                unavailable_reason=capabilities.unavailable_reason,
+            ),
+            warnings=plan.warnings,
+        )
+        if persist:
+            record = {"pr_url": pr_url, "response": response.model_dump(mode="json"),
+                      "configuration": frozen}
+            if self._repository:
+                await asyncio.to_thread(self._repository.save_preview, response.preview_id,
+                                        record, response.expires_at)
+            else:
+                self._previews[response.preview_id] = record
+        return response
 
     async def _diff_context(self, repo_path: str | Path, pr: Any) -> dict[str, str]:
         """按 PR 身份重新计算内容基准；共享 Git 实例不保存跨任务的基准状态。
@@ -487,6 +541,8 @@ class ReviewService:
             return
         task.status = TaskStatus.planning
         task.review.status = task.status
+        task.phase = ReviewPhase.prepare
+        task.error = None
         self._touch(task)
         self._persist(task)
 
@@ -677,12 +733,25 @@ class ReviewService:
                 self._persist(task)
             raise
         except Exception as exc:
-            logger.error("❌ 审查任务 %s 执行失败: %s", task_id[:8], exc)
-            task.status = TaskStatus.failed
-            task.phase = ReviewPhase.failed
-            task.error = str(exc)
+            message = str(exc).strip() or type(exc).__name__
+            retrying = bool(job and job.attempts < job.max_attempts
+                            and not isinstance(exc, NonRetryableJobError))
+            logger.error("审查任务 %s 本次执行异常（%s），%s：%s", task_id[:8],
+                         type(exc).__name__, "等待自动重试" if retrying else "任务失败", message)
+            task.status = TaskStatus.queued if retrying else TaskStatus.failed
+            task.phase = ReviewPhase.prepare if retrying else ReviewPhase.failed
+            task.review.status = task.status
+            task.review.completed = False
+            task.error = message
+            if retrying:
+                task.steps.append(TaskStep(name=f"worker_retry_{job.attempts}", status=StepStatus.pending,
+                    message=f"第 {job.attempts}/{job.max_attempts} 次执行未完成，将自动重试：{message}"))
             self._touch(task)
-            self._persist(task)
+            if job and self._repository:
+                await asyncio.to_thread(self._repository.save_task, task, lease={
+                    "job_id": job.id, "owner": job.lease_owner, "attempt": job.attempts})
+            else:
+                self._persist(task)
             if self._repository:
                 raise
         finally:
