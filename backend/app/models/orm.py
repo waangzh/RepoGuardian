@@ -108,6 +108,22 @@ class GitHubSummarySlotOrm(Base):
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class ReviewPreviewOrm(Base):
+    __tablename__ = "review_previews"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    consumed_task_id: Mapped[str | None] = mapped_column(String(32))
+
+
+class FindingDispositionOrm(Base):
+    __tablename__ = "finding_dispositions"
+    task_id: Mapped[str] = mapped_column(ForeignKey("review_tasks.id", ondelete="CASCADE"), primary_key=True)
+    finding_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class ReviewTaskOrm(Base):
     __tablename__ = "review_tasks"
     __table_args__ = (

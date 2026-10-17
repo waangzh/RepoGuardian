@@ -16,6 +16,7 @@ from pathlib import PurePosixPath
 from typing import Any, Generic, Iterator, Literal, TypeVar
 from uuid import uuid4
 from pydantic_core import PydanticCustomError
+from app.models.review_plan import ReviewPlanOptions, PlanSnapshot
 
 from pydantic import (
     model_serializer,
@@ -679,6 +680,10 @@ class ReviewCreateRequest(BaseModel):
     """POST /api/reviews 请求体。"""
     pr_url: HttpUrl
     model: str | None = None
+    preview_id: str | None = Field(default=None, min_length=1, max_length=64)
+    plan_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    expected_head_sha: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
+    expected_effective_base_sha: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
     engine: Literal["task_review_v1"] = Field(default_factory=_default_review_engine)
     mode: ReviewMode = Field(default_factory=_default_review_mode)
     generate_patches: bool = False
@@ -689,6 +694,9 @@ class ReviewCreateRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_product_policy(self) -> "ReviewCreateRequest":
+        confirmation = [self.preview_id, self.plan_hash, self.expected_head_sha, self.expected_effective_base_sha]
+        if any(confirmation) and not all(confirmation):
+            raise ValueError("preview confirmation requires preview_id, plan_hash and both expected SHAs")
         if self.generate_patches or self.validation_backend != ValidationBackend.none:
             raise ValueError("task_review_v1 only supports read-only inspect tasks")
         if self.mode == ReviewMode.review:
@@ -709,12 +717,17 @@ class ReviewCreateResponse(BaseModel):
     """POST /api/reviews 响应体。"""
     task_id: str
     status: TaskStatus
+    confirmed_plan: ReviewPlanOptions | None = None
+    snapshot: PlanSnapshot | None = None
+    plan_hash: str | None = None
 
 
 class ReviewPreviewRequest(BaseModel):
     """仅执行确定性 PR 分析，不创建任务或调用模型。"""
 
     pr_url: HttpUrl
+    model: str | None = Field(default=None, min_length=1, max_length=200)
+    plan: ReviewPlanOptions = Field(default_factory=ReviewPlanOptions)
     engine: Literal["task_review_v1"] = Field(default_factory=_default_review_engine)
     mode: ReviewMode = Field(default_factory=_default_review_mode)
     generate_patches: bool = False
@@ -970,6 +983,12 @@ class ReviewPlan(BaseModel):
 
 
 class ReviewPreviewResponse(BaseModel):
+    preview_id: str | None = None
+    plan_hash: str | None = None
+    snapshot: PlanSnapshot | None = None
+    effective_plan: ReviewPlanOptions | None = None
+    expires_at: datetime | None = None
+    estimates: dict = Field(default_factory=lambda: {"scope": "initial_only", "total_usage_prediction": False})
     mode: ReviewMode
     changed_file_count: int = Field(ge=0)
     included_file_count: int = Field(ge=0)
@@ -2599,4 +2618,21 @@ class ReviewTask(BaseModel):
     error: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @computed_field
+    @property
+    def confirmed_plan(self) -> ReviewPlanOptions | None:
+        value = (self.task_runtime_configuration or {}).get("effective_plan")
+        return ReviewPlanOptions.model_validate(value) if value else None
+
+    @computed_field
+    @property
+    def snapshot(self) -> PlanSnapshot | None:
+        value = (self.task_runtime_configuration or {}).get("snapshot")
+        return PlanSnapshot.model_validate(value) if value else None
+
+    @computed_field
+    @property
+    def plan_hash(self) -> str | None:
+        return (self.task_runtime_configuration or {}).get("plan_hash")
 

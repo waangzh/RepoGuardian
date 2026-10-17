@@ -19,10 +19,16 @@ from app.models.operations import (
 )
 from app.services.maintenance_service import workspace_cleanup_lock, workspace_ttl_seconds
 from app.services.model_catalog import ModelCatalogError, fetch_model_catalog
+from app.models.review_plan import ReviewCapabilities
+from app.services.review_plan import capabilities
 from app.tools.workspace_cleanup import inspect_orphaned_workspaces, reap_orphaned_workspaces
 
 
 router = APIRouter(prefix="/system", tags=["system"])
+
+@router.get("/review-capabilities", response_model=ReviewCapabilities)
+async def get_review_capabilities() -> ReviewCapabilities:
+    return capabilities()
 
 
 def _active_workspace_paths() -> tuple[object, ...]:

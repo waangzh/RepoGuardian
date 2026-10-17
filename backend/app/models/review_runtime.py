@@ -12,7 +12,7 @@ import json
 from pathlib import PurePosixPath
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator, model_serializer
 from app.models.review import (FileReadRequest, FileFindRequest, CodeSearchRequest,
                               FileReadDiffRequest, IssueCategory, Severity)
 
@@ -99,6 +99,14 @@ class ReviewRunSpec(BaseModel):
     max_tokens: int = Field(ge=0)
     max_calls: int = Field(ge=0)
     readable_scope_files: tuple[RelativePath, ...] = ()
+    review_strategy: dict = Field(default_factory=dict)
+
+    @model_serializer(mode="wrap")
+    def serialize_strategy(self, handler):
+        value = handler(self)
+        if not self.review_strategy:
+            value.pop("review_strategy", None)
+        return value
 
     @property
     def readable_scope_hash(self) -> str:

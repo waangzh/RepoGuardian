@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from contextlib import AbstractContextManager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -85,6 +85,10 @@ _TASK_STATUS_BY_GRAPH_NODE = {
 }
 
 
+class ReviewDeadlineExceeded(TimeoutError):
+    """冻结方案的总期限，区别于上游网络超时。"""
+
+
 class ReviewService:
     """
     审查服务：协调从任务创建到图执行的完整生命周期。
@@ -122,8 +126,11 @@ class ReviewService:
         self._tasks: dict[str, ReviewTask] = {}
         self._run_tasks: dict[str, asyncio.Task[None]] = {}
         self._repo_paths: dict[str, Path] = {}
+        self._previews: dict[str, dict] = {}
+        self._dispositions: dict[str, dict] = {}
 
-    def create_task(self, request: ReviewCreateRequest) -> ReviewTask:
+    def create_task(self, request: ReviewCreateRequest, *, configuration=None, preview_id=None,
+                    dispatch=True) -> ReviewTask:
         """创建审查任务并异步启动图执行。"""
         from app.graph.nodes.task_review_runtime import task_runtime_configuration
         task = ReviewTask(
@@ -132,7 +139,7 @@ class ReviewService:
             pr_url=str(request.pr_url),
             model=request.model,
             engine=request.engine,
-            task_runtime_configuration=(task_runtime_configuration(request.model)
+            task_runtime_configuration=(configuration or task_runtime_configuration(request.model)
                                         if request.engine == "task_review_v1" else None),
             mode=request.mode,
             generate_patches=request.generate_patches,
@@ -142,32 +149,86 @@ class ReviewService:
             validation=[],
             steps=[TaskStep(name="queued", message="任务已创建")],
         )
-        self._tasks[task.id] = task
         logger.info("📋 创建审查任务 %s（PR: %s, 模型: %s）", task.id[:8], request.pr_url, request.model or "默认")
         if self._repository and self._task_queue:
-            self._repository.create_task(task)
-            self._task_queue.enqueue(task_id=task.id, idempotency_key=f"review:{task.id}:initial")
+            if preview_id:
+                self._repository.create_task(task, preview_id=preview_id, enqueue=True)
+            else:
+                self._repository.create_task(task)
+                self._task_queue.enqueue(task_id=task.id, idempotency_key=f"review:{task.id}:initial")
+            if dispatch:
+                self._ensure_worker_started()
+        else:
+            self._tasks[task.id] = task
+            if preview_id:
+                self._previews[preview_id]["consumed_task_id"] = task.id
+            if dispatch:
+                self._run_tasks[task.id] = asyncio.create_task(self._run_graph(task.id))
+        return task
+
+    async def _create_and_dispatch(self, request, *, configuration=None, preview_id=None):
+        task = await asyncio.to_thread(self.create_task, request, configuration=configuration,
+                                       preview_id=preview_id, dispatch=False)
+        if self._repository and self._task_queue:
             self._ensure_worker_started()
         else:
             self._run_tasks[task.id] = asyncio.create_task(self._run_graph(task.id))
         return task
+
+    async def create_confirmed_task(self, request: ReviewCreateRequest) -> ReviewTask:
+        if not request.preview_id:
+            return await self._create_and_dispatch(request)
+        record = (await asyncio.to_thread(self._repository.get_preview, request.preview_id)
+                  if self._repository else self._previews.get(request.preview_id))
+        if not record or record["pr_url"] != str(request.pr_url) or record["response"]["plan_hash"] != request.plan_hash:
+            raise ValueError("review_plan_stale")
+        expected = record["response"]["snapshot"]
+        if (expected["head_sha"] != request.expected_head_sha
+                or expected["effective_base_sha"] != request.expected_effective_base_sha):
+            raise ValueError("review_plan_stale")
+        if record.get("consumed_task_id"):
+            task = await asyncio.to_thread(self.get_task, record["consumed_task_id"])
+            if task is None:
+                raise ValueError("review_plan_stale")
+            return task
+        if datetime.fromisoformat(record["response"]["expires_at"]) <= datetime.now(timezone.utc):
+            raise ValueError("review_plan_expired")
+        if request.model and request.model != record["configuration"]["model"]:
+            raise ValueError("review_plan_model_mismatch")
+        fresh = await self.preview(ReviewPreviewRequest(pr_url=request.pr_url,
+            model=record["configuration"]["model"], plan=record["response"]["effective_plan"]), persist=False)
+        if fresh.plan_hash != request.plan_hash:
+            raise ValueError("review_plan_stale")
+        return await self._create_and_dispatch(request.model_copy(update={"model": record["configuration"]["model"]}),
+                                configuration=record["configuration"], preview_id=request.preview_id)
 
     def get_task(self, task_id: str) -> ReviewTask | None:
         if self._repository:
             return self._repository.get_task(task_id)
         return self._tasks.get(task_id)
 
-    def list_tasks(self, *, status: str | None, page: int, page_size: int):
+    def list_tasks(self, *, status: str | None, page: int, page_size: int,
+                   q=None, repository=None, pr_number=None, head_sha=None):
         if not self._repository:
             items = list(self._tasks.values())
             if status:
                 items = [item for item in items if item.status.value == status]
+            if q:
+                items = [item for item in items if q.casefold() in (item.pr_url + item.id).casefold()]
+            if repository:
+                items = [item for item in items if f"github.com/{repository}/pull/" in item.pr_url]
+            if pr_number is not None:
+                items = [item for item in items if item.pr_url.endswith(f"/pull/{pr_number}")]
+            if head_sha:
+                items = [item for item in items if item.pr and item.pr.head.sha == head_sha]
+            items.sort(key=lambda item: item.created_at, reverse=True)
             start = (page - 1) * page_size
             from app.models.persistence import ReviewTaskListResponse
             return ReviewTaskListResponse(
                 items=items[start:start + page_size], total=len(items), page=page, page_size=page_size
             )
-        return self._repository.list_tasks(status=status, page=page, page_size=page_size)
+        return self._repository.list_tasks(status=status, page=page, page_size=page_size,
+            q=q, repository=repository, pr_number=pr_number, head_sha=head_sha)
 
     def get_unit_detail(self, task_id: str, unit_id: str):
         return self._repository.get_unit(task_id, unit_id) if self._repository else None
@@ -282,16 +343,22 @@ class ReviewService:
         self._touch(task)
         self._persist(task)
 
-    async def preview(self, request: ReviewPreviewRequest) -> ReviewPreviewResponse:
+    async def preview(self, request: ReviewPreviewRequest, *, persist=True) -> ReviewPreviewResponse:
         """只执行 PR 获取、diff 解析和确定性规划。"""
         pr_url = str(request.pr_url)
+        from app.graph.nodes.task_review_runtime import task_runtime_configuration
+        from app.services.review_plan import normalize_plan, apply_scope, configure_runtime, preview_hash
+        from app.services.review_input_context import build_pr_intent
+        configuration = task_runtime_configuration(request.model)
+        options = normalize_plan(request.plan, configuration["model"])
         pr = await self._github_tool.fetch_pr(pr_url)
         # Preview 与正式执行共享 clone + 只读索引输入，保证 related_files 和
         # fingerprint 一致；这一过程不运行仓库代码。
         repo_path, diff_text = await asyncio.to_thread(self._git_tool.clone_and_diff, pr)
         try:
             changed_files = self._diff_parser.parse(diff_text)
-            index = await RepoIndexer().execute(repo_path=str(repo_path))
+            index = await RepoIndexer().execute(repo_path=str(repo_path),
+                call_resolution_version=configuration["call_resolution_version"])
             planner = DeterministicReviewPlanner()
             # Preview 与正式执行使用同一内容基准：声明 base 只保留 PR 身份。
             diff_context = await self._diff_context(repo_path, pr)
@@ -302,9 +369,18 @@ class ReviewService:
                 file_index=index["file_index"],
                 symbol_index=index["symbol_index"],
                 repository_graph=index["repository_graph"],
-                model=getattr(request, "model", None) or settings.repoguardian_model,
-                provider=settings.repoguardian_provider,
+                model=configuration["model"],
+                provider=configuration["provider"],
+                pr_intent_hash=build_pr_intent(pr.model_dump(mode="json"))["intent_hash"],
             )
+            plan = apply_scope(plan, options)
+            snapshot = {"head_sha": pr.head.sha,
+                        "effective_base_sha": diff_context.get("effective_base_sha") or pr.base.sha,
+                        "declared_base_sha": pr.base.sha}
+            plan_hash = preview_hash(options, snapshot, configuration, plan)
+            frozen = configure_runtime(configuration, options, snapshot, plan_hash)
+            from app.services.fingerprints import stable_hash
+            frozen["initial_plan_hash"] = stable_hash(plan.model_dump(mode="json"))
             backend = self._validation_backend_selector.select(
                 request.validation_backend.value,
                 request.mode,
@@ -322,7 +398,9 @@ class ReviewService:
                 test_framework=index.get("project_meta", {}).get("test_framework"),
                 total_files=len(index["file_index"]),
             ))
-            return ReviewPreviewResponse(
+            response = ReviewPreviewResponse(
+                preview_id=uuid4().hex, plan_hash=plan_hash, snapshot=snapshot,
+                effective_plan=options, expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
                 mode=request.mode,
                 changed_file_count=len(plan.changed_files),
                 included_file_count=sum(item.included for item in plan.changed_files),
@@ -353,6 +431,15 @@ class ReviewService:
                 ),
                 warnings=plan.warnings,
             )
+            if persist:
+                record = {"pr_url": pr_url, "response": response.model_dump(mode="json"),
+                          "configuration": frozen}
+                if self._repository:
+                    await asyncio.to_thread(self._repository.save_preview, response.preview_id,
+                                            record, response.expires_at)
+                else:
+                    self._previews[response.preview_id] = record
+            return response
         finally:
             await _cleanup_repo(Path(repo_path))
 
@@ -534,9 +621,23 @@ class ReviewService:
                             else:
                                 await delete_thread_checkpoints(task_id)
                     if result is None:
-                        result = await self._invoke_graph_with_progress(
-                            compiled, graph_input, run_config, task
-                        )
+                        configuration = task.task_runtime_configuration or {}
+                        if configuration.get("effective_plan"):
+                            from app.services.review_plan import remaining_review_seconds
+                            remaining = remaining_review_seconds(configuration, task.created_at)
+                            if remaining <= 0:
+                                raise ReviewDeadlineExceeded("review_deadline")
+                            deadline = asyncio.timeout(remaining)
+                            try:
+                                async with deadline:
+                                    result = await self._invoke_graph_with_progress(compiled, graph_input, run_config, task)
+                            except TimeoutError:
+                                if deadline.expired():
+                                    raise ReviewDeadlineExceeded("review_deadline") from None
+                                raise
+                        else:
+                            result = await self._invoke_graph_with_progress(
+                                compiled, graph_input, run_config, task)
                 if isinstance(result, dict):
                     result["run_budget"] = run_budget.snapshot()
             if result.get("__interrupt__"):
@@ -554,6 +655,17 @@ class ReviewService:
                 logger.info("🎉 审查任务 %s 完成", task_id[:8])
             else:
                 logger.info("审查任务 %s 结束，状态：%s", task_id[:8], task.status.value)
+        except ReviewDeadlineExceeded:
+            task.status = TaskStatus.completed_with_warnings
+            task.review.status = task.status
+            task.review.completed = False
+            task.warnings.append("review_deadline: 已达到冻结方案期限，未完成范围仍未检查，用量可能未知。")
+            if task.task_runtime_report:
+                task.task_runtime_report.update(execution_status="completed", termination_reason="deadline",
+                                                scope_complete=False, usage_integrity="unknown")
+            task.report_markdown = self._report_service.generate(task)
+            self._touch(task)
+            self._persist(task)
         except asyncio.CancelledError:
             current = self.get_task(task_id)
             user_cancelled = current is not None and current.status == TaskStatus.cancelled
