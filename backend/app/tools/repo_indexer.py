@@ -62,11 +62,18 @@ class RepoIndexer(BaseTool):
     async def execute(self, **kwargs: Any) -> dict[str, Any]:
         """执行完整扫描，返回三层索引。"""
         repo_path = kwargs["repo_path"]
+        progress = kwargs.get("progress")
+        if progress:
+            await asyncio.to_thread(progress, "index_files", "正在建立文件索引")
         file_index = await self.build_file_index(repo_path)
+        if progress:
+            await asyncio.to_thread(progress, "index_symbols", "正在建立符号索引")
         symbol_index = await self.build_symbol_index(repo_path)
         options = {}
         if "call_resolution_version" in kwargs:
             options["call_resolution_version"] = kwargs["call_resolution_version"]
+        if progress:
+            await asyncio.to_thread(progress, "index_relationships", "正在建立调用关系图")
         repository_graph = await asyncio.to_thread(
             build_repository_graph, file_index, symbol_index, **options
         )

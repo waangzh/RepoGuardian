@@ -554,7 +554,8 @@ def test_alembic_migration_upgrades_and_rolls_back(tmp_path: Path) -> None:
         "review_previews",
         "finding_dispositions",
     } <= tables
-    assert version == ("20261016_0005",)
+    assert {"preview_jobs", "preview_input_cache"} <= tables
+    assert version == ("20261017_0006",)
     subprocess.run(
         [sys.executable, "-m", "alembic", "downgrade", "base"],
         cwd=backend, env=env, check=True, capture_output=True, text=True, encoding="utf-8",

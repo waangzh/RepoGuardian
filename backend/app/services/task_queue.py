@@ -39,6 +39,7 @@ class ClaimedJob:
     attempts: int
     lease_owner: str
     lease_until: datetime
+    max_attempts: int = 3
 
 
 class DatabaseTaskQueue:
@@ -144,6 +145,7 @@ class DatabaseTaskQueue:
                     attempts=row.attempts,
                     lease_owner=worker_id,
                     lease_until=lease_until,
+                    max_attempts=row.max_attempts,
                 )
         return None
 
@@ -256,7 +258,7 @@ class ReviewWorker:
                 raise
         except Exception as exc:
             await asyncio.to_thread(
-                self.queue.fail, job.id, self.worker_id, str(exc),
+                self.queue.fail, job.id, self.worker_id, str(exc).strip() or type(exc).__name__,
                 retry=not isinstance(exc, NonRetryableJobError),
                 retry_after=exc.retry_after if isinstance(exc, RetryAfterJobError) else None,
             )

@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.reviews import get_review_service, router as reviews_router
+from app.api.reviews import get_review_service, get_preview_jobs, router as reviews_router
 from app.api.publications import get_publication_service, router as publications_router
 from app.api.validation_requests import router as validation_requests_router
 from app.api.project_ci import router as project_ci_router
@@ -33,6 +33,8 @@ async def lifespan(_app: FastAPI):
     await maintenance.run_once()
     maintenance_task = asyncio.create_task(maintenance.run_forever())
     service._ensure_worker_started()
+    previews = get_preview_jobs()
+    previews.start()
     publication = get_publication_service() if settings.repoguardian_github_publish_enabled else None
     if publication:
         publication.start()
@@ -42,6 +44,7 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        await previews.close()
         if publication:
             await publication.close()
         maintenance.stop()
