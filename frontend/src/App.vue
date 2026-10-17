@@ -14,6 +14,8 @@ import { validPullRequestUrl } from "./utils/workspacePresentation";
 import type { AppPage, ProviderModelInfo } from "./types/operations";
 import type { ReviewMode, ReviewPreviewResponse, ReviewTask, ValidationBackend } from "./types/review";
 import { reviewCompletionMessage } from "./utils/taskRuntimePresentation";
+import { usePreferences } from "./composables/usePreferences";
+const { initialReviewPlan } = usePreferences();
 
 type NoticeTone = "info" | "success" | "warning" | "danger";
 interface TaskNotice {
@@ -172,7 +174,7 @@ async function loadPreview() {
       validationBackend.value,
       controller.signal,
       model.value.trim(),
-      draftPlan.value,
+      draftPlan.value ?? initialReviewPlan(capabilities.value),
     );
     if (previewRequestId === requestId) { preview.value = next; draftPlan.value = next.effective_plan || undefined; planDirty.value = false; }
   } catch (err) {
@@ -437,7 +439,7 @@ onBeforeUnmount(() => {
         <NewReviewPage v-else v-model:pr-url="prUrl" :loading="previewing" :busy="submitting || opening" @preview="loadPreview" @open="openHistoricalReview" @history="activePage = 'history'" />
       </main>
       <ReviewHistoryPage v-else-if="activePage === 'history'" :busy="submitting || opening || taskActive" @open="openHistoricalReview" @create="startNewReview" />
-      <SettingsPage v-else />
+      <SettingsPage v-else :capabilities="capabilities" />
     </div>
   </div>
 </template>
