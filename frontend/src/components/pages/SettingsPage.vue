@@ -12,7 +12,13 @@ import type {
 import EmptyState from "../common/EmptyState.vue";
 import StatusBadge from "../common/StatusBadge.vue";
 import { usePreferences } from "../../composables/usePreferences";
-const { theme, density } = usePreferences();
+import ReviewDepthSelector from "../review/ReviewDepthSelector.vue";
+import type { ReviewCapabilities } from "../../types/reviewPlan";
+const props = defineProps<{ capabilities: ReviewCapabilities | null }>();
+const { theme, density, defaultReviewDepth } = usePreferences();
+const currentDepthLabel = computed(() => defaultReviewDepth.value === "server"
+  ? "跟随服务端默认"
+  : props.capabilities?.depth_presets.find(preset => preset.id === defaultReviewDepth.value)?.label ?? "等待加载深度选项");
 
 const diagnostics = ref<SystemDiagnostics | null>(null);
 const loading = ref(false);
@@ -127,8 +133,14 @@ onMounted(load);
       <div class="card-header"><div><h2>界面偏好</h2><p>仅保存在此浏览器中，不更改服务端审查策略</p></div></div>
       <div class="rg-preference-row"><div><strong>外观主题</strong><p>按阅读习惯切换浅色或深色</p></div><div class="segmented"><button v-for="item in ([['light', '浅色'], ['dark', '深色']] as const)" :key="item[0]" type="button" :class="{ active: theme === item[0] }" :aria-pressed="theme === item[0]" @click="theme = item[0]">{{ item[1] }}</button></div></div>
       <div class="rg-preference-row"><div><strong>信息密度</strong><p>紧凑模式减少表格与列表的间距</p></div><div class="segmented"><button v-for="item in ([['comfortable', '舒适'], ['compact', '紧凑']] as const)" :key="item[0]" type="button" :class="{ active: density === item[0] }" :aria-pressed="density === item[0]" @click="density = item[0]">{{ item[1] }}</button></div></div>
-      <div class="rg-preference-row"><div><strong>默认审查深度</strong><p>后端尚未提供深度预设；使用服务端策略</p></div><span class="badge neutral">尚未接入，不能调整</span></div>
-      <div class="notice space-top">模型与资源上限由服务端配置管理。价格或用量不完整时费用保持未知。前端不保存 Provider 密钥或 GitHub 发布口令。</div>
+      <details class="rg-preference-row rg-depth-preference">
+        <summary :aria-label="`默认审查深度：${currentDepthLabel}`">
+          <div><strong>默认审查深度</strong><p>自动保存于此浏览器，仅用于新建方案；可在单次审查中调整，不影响已有方案或任务，不跨设备同步。</p></div>
+          <span class="rg-depth-current">{{ currentDepthLabel }}<span class="rg-depth-chevron" aria-hidden="true">⌄</span></span>
+        </summary>
+        <ReviewDepthSelector v-if="capabilities" v-model="defaultReviewDepth" class="space-top" :presets="capabilities.depth_presets" allow-server-default label="默认审查深度" />
+        <p v-else>深度能力尚未加载，请刷新页面重试。</p>
+      </details>
     </section>
     <p v-if="error" class="workspace-error" role="alert">{{ error }}</p>
     <section v-if="diagnostics" class="diagnostics-layout" :aria-busy="loading">
@@ -215,3 +227,13 @@ onMounted(load);
     <footer class="app-footer"><span>秘密不回显 · 工作区安全回收 · 配置由环境管理</span><span><i /> System Health</span></footer>
   </main>
 </template>
+
+<style scoped>
+.rg-depth-preference { display: block; }
+.rg-depth-preference > summary { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; list-style: none; cursor: pointer; }
+.rg-depth-preference > summary::-webkit-details-marker { display: none; }
+.rg-depth-preference > summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 4px; border-radius: 4px; }
+.rg-depth-current { display: inline-flex; align-items: center; gap: 10px; color: var(--muted); font-size: .875rem; }
+.rg-depth-chevron { display: inline-block; }
+.rg-depth-preference[open] .rg-depth-chevron { transform: rotate(180deg); }
+</style>

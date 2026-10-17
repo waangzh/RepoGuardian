@@ -19,5 +19,6 @@ test('冻结方案显示真实限额，修改后不能直接创建', async () =>
     assert.match(html, /配置已变化，请先校验并保存方案/);
     assert.match(html, /<button[^>]*disabled[^>]*>(?:(?!<\/button>)[\s\S])*确认方案并开始审查/);
     assert.doesNotMatch(html, /预览估算仍使用服务端默认模型/);
+    assert.doesNotMatch(html, /费用上限|费用留空|缺少价格|USD/);
   } finally { await server.close(); }
 });
