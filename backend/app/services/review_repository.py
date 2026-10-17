@@ -29,6 +29,8 @@ from app.models.orm import (
     PublicationAttemptOrm,
     GitHubSummarySlotOrm,
     utcnow,
+    ReviewPreviewOrm,
+    FindingDispositionOrm,
 )
 from app.models.persistence import (
     HumanRequestAnswer,
@@ -104,10 +106,19 @@ class ReviewRepository:
                 "database is not migrated; run `cd backend; uv run alembic upgrade head`"
             )
 
-    def create_task(self, task: ReviewTask) -> ReviewTask:
+    def create_task(self, task: ReviewTask, *, preview_id: str | None = None,
+                    enqueue: bool = False) -> ReviewTask:
         now = utcnow()
         snapshot, snapshot_uri = self._serialize_task_snapshot(task)
         with self._session_factory.begin() as session:
+            if preview_id:
+                claimed = session.execute(update(ReviewPreviewOrm).where(
+                    ReviewPreviewOrm.id == preview_id,
+                    ReviewPreviewOrm.consumed_task_id.is_(None),
+                    ReviewPreviewOrm.expires_at > now,
+                ).values(consumed_task_id=task.id))
+                if claimed.rowcount != 1:
+                    raise ValueError("review_plan_stale_or_consumed")
             row = ReviewTaskOrm(
                 id=task.id,
                 repository=_repository_from_pr_url(task.pr_url),
@@ -138,8 +149,33 @@ class ReviewRepository:
                 retention_until=now + timedelta(days=settings.repoguardian_retention_days),
             )
             session.add(row)
+            if enqueue:
+                from app.services.task_queue import DatabaseTaskQueue
+                session.flush()
+                DatabaseTaskQueue(self._session_factory).enqueue(task_id=task.id,
+                    idempotency_key=f"review:{task.id}:initial", session=session)
             self._record_artifact(session, task.id, "task-snapshot", snapshot_uri)
         return task
+
+    def save_preview(self, preview_id, payload, expires_at):
+        with self._session_factory.begin() as session:
+            session.add(ReviewPreviewOrm(id=preview_id, payload=payload, expires_at=expires_at))
+
+    def get_preview(self, preview_id):
+        with self._session_factory() as session:
+            row = session.get(ReviewPreviewOrm, preview_id)
+            return {**row.payload, "consumed_task_id": row.consumed_task_id} if row else None
+
+    def finding_dispositions(self, task_id):
+        with self._session_factory() as session:
+            return {row.finding_id: {**row.payload, "updated_at": row.updated_at}
+                    for row in session.scalars(select(FindingDispositionOrm).where(
+                        FindingDispositionOrm.task_id == task_id))}
+
+    def save_finding_disposition(self, task_id, finding_id, value):
+        with self._session_factory.begin() as session:
+            session.merge(FindingDispositionOrm(task_id=task_id, finding_id=finding_id,
+                                                payload=value, updated_at=utcnow()))
 
     def save_task(self, task: ReviewTask, *, checkpoint_id: str | None = None) -> None:
         snapshot, snapshot_uri = self._serialize_task_snapshot(task)
@@ -195,7 +231,9 @@ class ReviewRepository:
             return ReviewTask.model_validate(snapshot)
 
     def list_tasks(
-        self, *, status: str | None = None, page: int = 1, page_size: int = 20
+        self, *, status: str | None = None, page: int = 1, page_size: int = 20,
+        q: str | None = None, repository: str | None = None,
+        pr_number: int | None = None, head_sha: str | None = None,
     ) -> ReviewTaskListResponse:
         page = max(page, 1)
         page_size = min(max(page_size, 1), 100)
@@ -203,6 +241,33 @@ class ReviewRepository:
             filters = [ReviewTaskOrm.deleted_at.is_(None)]
             if status:
                 filters.append(ReviewTaskOrm.status == status)
+            if q:
+                filters.append(or_(ReviewTaskOrm.id.contains(q, autoescape=True),
+                    ReviewTaskOrm.pr_url.icontains(q, autoescape=True),
+                    ReviewTaskOrm.task_snapshot["pr"]["title"].as_string().icontains(q, autoescape=True),
+                    ReviewTaskOrm.task_snapshot_artifact_uri.is_not(None),
+                    ReviewTaskOrm.repository.icontains(q, autoescape=True)))
+            if repository:
+                filters.append(ReviewTaskOrm.repository == repository)
+            if pr_number is not None:
+                filters.append(or_(ReviewTaskOrm.pr_number == pr_number,
+                    ReviewTaskOrm.pr_url.endswith(f"/pull/{pr_number}")))
+            if head_sha:
+                filters.append(ReviewTaskOrm.head_sha == head_sha)
+            if q:
+                # 旧外置快照的数据库 stub 没有标题，必须在服务端读取真实标题后再分页。
+                candidates = session.scalars(select(ReviewTaskOrm).where(*filters)
+                    .order_by(ReviewTaskOrm.created_at.desc())).all()
+                matched = []
+                for row in candidates:
+                    payload = self._load_task_snapshot(row)
+                    title = (payload.get("pr") or {}).get("title") or ""
+                    text = " ".join([row.id, row.pr_url, row.repository or "", title])
+                    if q.casefold() in text.casefold():
+                        matched.append(payload)
+                start = (page - 1) * page_size
+                return ReviewTaskListResponse(items=[ReviewTask.model_validate(item)
+                    for item in matched[start:start + page_size]], total=len(matched), page=page, page_size=page_size)
             total = session.scalar(select(func.count()).select_from(ReviewTaskOrm).where(*filters)) or 0
             rows = session.scalars(
                 select(ReviewTaskOrm)

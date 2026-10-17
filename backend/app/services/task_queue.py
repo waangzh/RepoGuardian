@@ -6,6 +6,7 @@ claim 使用带资格条件的原子 UPDATE；即使两个 worker 先读到同�
 from __future__ import annotations
 
 import asyncio
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable
@@ -54,9 +55,10 @@ class DatabaseTaskQueue:
         idempotency_key: str | None = None,
         priority: int = 0,
         available_at: datetime | None = None,
+        session=None,
     ) -> str:
         key = idempotency_key or f"{kind}:{task_id}:{unit_id or 'task'}"
-        with self._session_factory.begin() as session:
+        with (self._session_factory.begin() if session is None else nullcontext(session)) as session:
             existing = session.scalar(
                 select(WorkerJobOrm).where(WorkerJobOrm.idempotency_key == key)
             )

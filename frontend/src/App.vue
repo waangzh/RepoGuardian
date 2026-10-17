@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { cancelReview, createReview, getAvailableModels, getReport, getReview, previewReview, retryReviewUnit, subscribeToEvents } from "./api/client";
+import { getReviewCapabilities, cancelReview, createReview, getAvailableModels, getReport, getReview, previewReview, retryReviewUnit, subscribeToEvents } from "./api/client";
 import AppIcon from "./components/common/AppIcon.vue";
 import AppHeader from "./components/layout/AppHeader.vue";
 import AppSidebar from "./components/layout/AppSidebar.vue";
@@ -39,7 +39,14 @@ const modelsError = ref<string | null>(null);
 const mode = ref<ReviewMode>("review");
 const generatePatches = ref(false);
 const validationBackend = ref<ValidationBackend>("none");
+import type { ReviewCapabilities, ReviewPlanOptions } from './types/reviewPlan';
+const capabilities = ref<ReviewCapabilities | null>(null);
+const draftPlan = ref<ReviewPlanOptions | undefined>();
+const planDirty = ref(false);
+watch(model, () => { planDirty.value = true; cancelPreview(); });
+watch(prUrl, () => { draftPlan.value = undefined; planDirty.value = true; });
 const preview = ref<ReviewPreviewResponse | null>(null);
+function changePlan(plan: ReviewPlanOptions) { draftPlan.value = plan; planDirty.value = true; }
 const previewing = ref(false);
 const retryingUnitId = ref<string | null>(null);
 const task = ref<ReviewTask | null>(null);
@@ -86,7 +93,7 @@ async function loadAvailableModels() {
   }
 }
 
-onMounted(() => void loadAvailableModels());
+onMounted(() => { void loadAvailableModels(); void getReviewCapabilities().then(value => { capabilities.value = value; }).catch(() => { error.value = '能力声明加载失败，请刷新后重试。'; }); });
 
 const statusText = computed(() => {
   if (!task.value) return "等待输入";
@@ -111,7 +118,7 @@ const taskDuration = computed(() => {
 });
 
 async function submitReview() {
-  if (submitting.value || previewing.value || taskActive.value || !preview.value || !validPullRequestUrl(prUrl.value)) return;
+  if (submitting.value || previewing.value || taskActive.value || !preview.value || planDirty.value || !preview.value.preview_id || !validPullRequestUrl(prUrl.value)) return;
   clearAll();
   error.value = null;
   report.value = null;
@@ -119,7 +126,7 @@ async function submitReview() {
   submitting.value = true;
   reviewSection.value = "overview";
   try {
-    const created = await createReview(prUrl.value.trim(), model.value.trim(), mode.value, generatePatches.value, validationBackend.value);
+    const created = await createReview(prUrl.value.trim(), model.value.trim(), mode.value, generatePatches.value, validationBackend.value, preview.value);
     trackingTaskId = created.task_id;
     showNotice({
       tone: "info",
@@ -164,8 +171,10 @@ async function loadPreview() {
       generatePatches.value,
       validationBackend.value,
       controller.signal,
+      model.value.trim(),
+      draftPlan.value,
     );
-    if (previewRequestId === requestId) preview.value = next;
+    if (previewRequestId === requestId) { preview.value = next; draftPlan.value = next.effective_plan || undefined; planDirty.value = false; }
   } catch (err) {
     if (controller.signal.aborted) return;
     error.value = err instanceof Error ? err.message : "Preview 失败";
@@ -366,6 +375,8 @@ function startNewReview() {
   preview.value = null;
   error.value = null;
   prUrl.value = "";
+  draftPlan.value = undefined;
+  planDirty.value = false;
   activePage.value = "dashboard";
   reviewSection.value = "overview";
   mobileOpen.value = false;
@@ -422,7 +433,7 @@ onBeforeUnmount(() => {
         <p v-if="error" class="notice danger" role="alert">{{ error }}</p>
         <div v-if="opening || (submitting && !task)" class="card card-pad" role="status">{{ opening ? '正在打开审查记录…' : '正在创建真实审查任务…' }}</div>
         <ReviewWorkspace v-else-if="task" :key="task.id" :task="task" :report="report" :section="reviewSection" :status-text="statusText" :duration="taskDuration" :cancelling="cancelling" :retrying-unit-id="retryingUnitId" @navigate="navigateReview" @cancel="cancelCurrentReview" @create="startNewReview" @retry="retryUnit" />
-        <ReviewPlanPage v-else-if="preview" v-model:model="model" :preview="preview" :pr-url="prUrl" :models="models" :default-model="defaultModel" :models-loading="modelsLoading" :models-error="modelsError" :submitting="submitting" @submit="submitReview" @back="preview = null" />
+        <ReviewPlanPage v-else-if="preview" v-model:model="model" :preview="preview" :capabilities="capabilities" :dirty="planDirty" :previewing="previewing" @change="changePlan" @repreview="loadPreview" :pr-url="prUrl" :models="models" :default-model="defaultModel" :models-loading="modelsLoading" :models-error="modelsError" :submitting="submitting" @submit="submitReview" @back="preview = null" />
         <NewReviewPage v-else v-model:pr-url="prUrl" :loading="previewing" :busy="submitting || opening" @preview="loadPreview" @open="openHistoricalReview" @history="activePage = 'history'" />
       </main>
       <ReviewHistoryPage v-else-if="activePage === 'history'" :busy="submitting || opening || taskActive" @open="openHistoricalReview" @create="startNewReview" />

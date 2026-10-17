@@ -23,6 +23,15 @@ async def review_plan_node(state: ReviewState) -> ReviewState:
         provider=(state.get("task_runtime_configuration") or {}).get("provider", settings.repoguardian_provider),
         pr_intent_hash=build_pr_intent(state.get("pr_info"))["intent_hash"],
     )
+    configuration = state.get("task_runtime_configuration") or {}
+    if configuration.get("effective_plan"):
+        from app.models.review_plan import ReviewPlanOptions
+        from app.services.review_plan import apply_scope
+        from app.services.fingerprints import stable_hash
+        options = ReviewPlanOptions.model_validate(configuration["effective_plan"])
+        plan = apply_scope(plan, options)
+        if configuration.get("initial_plan_hash") != stable_hash(plan.model_dump(mode="json")):
+            raise ValueError("review_plan_stale: deterministic plan changed")
     return ReviewState(
         review_plan=plan.model_dump(mode="json"),
         review_units=[unit.model_dump(mode="json") for unit in plan.review_units],

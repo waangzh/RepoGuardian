@@ -145,7 +145,9 @@ def frozen_runtime_spec(state, configuration, budget, *, readable_files=()):
         policy_version=configuration["policy_version"], max_tokens=budget.max_tokens, max_calls=budget.max_calls,
         prompt_version=configuration.get("prompt_version", "task-review-prompt-v1"),
         publication_contract=configuration.get("publication_contract", "legacy"),
-        readable_scope_files=tuple(sorted(readable_files)))
+        readable_scope_files=tuple(sorted(readable_files)),
+        review_strategy={key: value for key, value in (configuration.get("effective_plan") or {}).items()
+                         if key in {"depth", "focus"}})
 
 
 async def source_catalog(goals, spec, root, git, changed_files=None):
@@ -310,6 +312,8 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
                 fit_context_pages(executor, steps[identity], configuration)
             items.append(item)
     experiment = configuration.get("experiment") or {}
+    strategy = configuration.get("effective_plan") or {}
+    from app.services.review_plan import DEPTHS
     queue = TaskReviewRuntime(items, concurrency=configuration["concurrency"],
                              unit_timeout_seconds=experiment.get("unit_timeout_seconds"))
     try:
@@ -326,7 +330,8 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
     if steps:
         TaskReviewDerivation(queue, steps, changed_files=changed,
             risk_planner_version=risk_planner_version,
-            investigations_enabled=experiment.get("investigations_enabled", True),
+            investigations_enabled=(strategy.get("depth") != "quick" and experiment.get("investigations_enabled", True)),
+            max_derived_items=DEPTHS.get(strategy.get("depth", "standard"), DEPTHS["standard"])[2],
             rule_ids={unit.id: unit.rule_ids for unit in plan.review_units},
             risk_catalog=build_task_risk_catalog([goal for goal in goals if not goal.unsupported_reason],
                                                items, state.get("repository_graph") or {},
@@ -347,6 +352,9 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
             remaining = deadline_at - time.time()
         else:
             remaining = configuration["deadline_seconds"]
+        if strategy:
+            from app.services.review_plan import remaining_review_seconds
+            remaining = min(remaining, remaining_review_seconds(configuration, state["created_at"]))
         retry_id = state.get("task_runtime_retry_unit_id")
         if retry_id:
             if not any(item.unit_id == retry_id for item in items):

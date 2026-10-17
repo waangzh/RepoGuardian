@@ -42,6 +42,8 @@ from app.services.task_queue import DatabaseTaskQueue
 from app.tools.diff_parser import DiffParser
 from app.tools.git_tool import GitTool
 from app.tools.github_tool import GitHubTool
+from app.models.review_plan import FindingDisposition, FindingsResponse, FileDiffResponse
+from app.services.review_findings import finding_views
 
 router = APIRouter(prefix="/reviews", tags=["reviews"])
 
@@ -69,8 +71,12 @@ def get_review_service() -> ReviewService:
 @router.post("", response_model=ReviewCreateResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_review(request: ReviewCreateRequest) -> ReviewCreateResponse:
     """创建审查任务，后台启动 LangGraph 执行，立即返回 202。"""
-    task = get_review_service().create_task(request)
-    return ReviewCreateResponse(task_id=task.id, status=task.status)
+    try:
+        task = await get_review_service().create_confirmed_task(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail={"code": str(exc)}) from exc
+    return ReviewCreateResponse(task_id=task.id, status=task.status,
+        confirmed_plan=task.confirmed_plan, snapshot=task.snapshot, plan_hash=task.plan_hash)
 
 
 @router.get("", response_model=ReviewTaskListResponse)
@@ -78,16 +84,23 @@ async def list_reviews(
     task_status: str | None = Query(default=None, alias="status"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    q: str | None = Query(default=None, max_length=200),
+    repository: str | None = Query(default=None, max_length=512),
+    pr_number: int | None = Query(default=None, ge=1),
+    head_sha: str | None = Query(default=None, pattern=r"^[0-9a-f]{40}$"),
 ) -> ReviewTaskListResponse:
-    return get_review_service().list_tasks(
-        status=task_status, page=page, page_size=page_size
-    )
+    return await asyncio.to_thread(get_review_service().list_tasks,
+        status=task_status, page=page, page_size=page_size, q=q,
+        repository=repository, pr_number=pr_number, head_sha=head_sha)
 
 
 @router.post("/preview", response_model=ReviewPreviewResponse)
 async def preview_review(request: ReviewPreviewRequest) -> ReviewPreviewResponse:
     """返回确定性 Review Unit 计划；不会调用 LLM、执行器或目标代码。"""
-    return await get_review_service().preview(request)
+    try:
+        return await get_review_service().preview(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/{task_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
@@ -169,6 +182,51 @@ async def get_review(task_id: str) -> ReviewTask:
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
     return task
+
+
+@router.get("/{task_id}/findings", response_model=FindingsResponse)
+async def get_findings(task_id: str) -> FindingsResponse:
+    service = get_review_service()
+    task = await asyncio.to_thread(service.get_task, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    saved = (await asyncio.to_thread(service._repository.finding_dispositions, task_id)
+             if service._repository else service._dispositions.get(task_id, {}))
+    return FindingsResponse(items=finding_views(task, saved))
+
+
+@router.patch("/{task_id}/findings/{finding_id}/disposition", response_model=FindingsResponse)
+async def update_finding_disposition(task_id: str, finding_id: str, value: FindingDisposition) -> FindingsResponse:
+    from datetime import datetime, timezone
+    service = get_review_service()
+    task = await asyncio.to_thread(service.get_task, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.status not in {TaskStatus.completed, TaskStatus.completed_with_warnings, TaskStatus.failed, TaskStatus.cancelled}:
+        raise HTTPException(status_code=409, detail="Review must be terminal before human disposition")
+    if finding_id not in {item.id for item in finding_views(task, {})}:
+        raise HTTPException(status_code=404, detail="Finding not found")
+    current = value.model_dump(mode="json")
+    if service._repository:
+        await asyncio.to_thread(service._repository.save_finding_disposition, task_id, finding_id, {"current": current})
+    else:
+        service._dispositions.setdefault(task_id, {})[finding_id] = {
+            "current": current, "updated_at": datetime.now(timezone.utc)}
+    return await get_findings(task_id)
+
+
+@router.get("/{task_id}/files/{file_id}/diff", response_model=FileDiffResponse)
+async def get_file_diff(task_id: str, file_id: int, cursor: int = Query(default=0, ge=0),
+                        limit: int = Query(default=20, ge=1, le=100)) -> FileDiffResponse:
+    task = await asyncio.to_thread(get_review_service().get_task, task_id)
+    if task is None or file_id < 0 or file_id >= len(task.changed_files):
+        raise HTTPException(status_code=404, detail="Task or file not found")
+    file = task.changed_files[file_id]
+    end = min(len(file.hunks), cursor + limit)
+    return FileDiffResponse(file_id=file_id, file_path=file.file_path, old_file_path=file.old_file_path,
+        snapshot=task.snapshot, hunks=[hunk.model_dump(mode="json") for hunk in file.hunks[cursor:end]],
+        metadata={"change_type": file.change_type, "is_binary": file.is_binary, "hunk_count": len(file.hunks)},
+        next_cursor=end if end < len(file.hunks) else None, truncated=end < len(file.hunks))
 
 
 @router.get("/{task_id}/publication-plan", response_model=PublicationPlan, responses={
