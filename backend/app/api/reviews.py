@@ -39,6 +39,8 @@ from app.services.report_service import ReportService
 from app.services.publication_planner import PublicationPlanner
 from app.services.review_service import ReviewService
 from app.services.review_repository import ReviewRepository
+from app.models.preview_job import PreviewJobCreate, PreviewJobResponse
+from app.services.preview_jobs import PreviewJobs
 from app.services.task_queue import DatabaseTaskQueue
 from app.tools.diff_parser import DiffParser
 from app.tools.git_tool import GitTool
@@ -68,6 +70,37 @@ def get_review_service() -> ReviewService:
         repository=ReviewRepository(),
         task_queue=DatabaseTaskQueue(),
     )
+
+
+@lru_cache
+def get_preview_jobs() -> PreviewJobs:
+    return PreviewJobs(get_review_service())
+
+
+@router.post("/preview-jobs", response_model=PreviewJobResponse, status_code=202)
+async def create_preview_job(request: PreviewJobCreate):
+    jobs = get_preview_jobs()
+    try:
+        await asyncio.to_thread(jobs.store.create, request.id, request.request)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    jobs.start()
+    return await asyncio.to_thread(jobs.store.get, request.id)
+
+
+@router.get("/preview-jobs/{identity}", response_model=PreviewJobResponse)
+async def get_preview_job(identity: str):
+    value = await asyncio.to_thread(get_preview_jobs().store.get, identity)
+    if value is None:
+        raise HTTPException(status_code=404, detail="预览不存在，请重新分析 PR。")
+    return value
+
+
+@router.post("/preview-jobs/{identity}/cancel", response_model=PreviewJobResponse)
+async def cancel_preview_job(identity: str):
+    store = get_preview_jobs().store
+    await asyncio.to_thread(store.cancel, identity)
+    return await get_preview_job(identity)
 
 
 @router.post("", response_model=ReviewCreateResponse, status_code=status.HTTP_202_ACCEPTED)

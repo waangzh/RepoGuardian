@@ -1,6 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { getReviewCapabilities, cancelReview, createReview, getAvailableModels, getReport, getReview, previewReview, retryReviewUnit, subscribeToEvents } from "./api/client";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { getReviewCapabilities, cancelReview, createReview, getAvailableModels, getReport, getReview, retryReviewUnit, subscribeToEvents } from "./api/client";
+import { usePreviewJob } from './composables/usePreviewJob';
+import PreviewProgress from './components/review/PreviewProgress.vue';
+import type { PreviewJob } from './types/previewJob';
 import AppIcon from "./components/common/AppIcon.vue";
 import AppHeader from "./components/layout/AppHeader.vue";
 import AppSidebar from "./components/layout/AppSidebar.vue";
@@ -45,11 +48,13 @@ import type { ReviewCapabilities, ReviewPlanOptions } from './types/reviewPlan';
 const capabilities = ref<ReviewCapabilities | null>(null);
 const draftPlan = ref<ReviewPlanOptions | undefined>();
 const planDirty = ref(false);
-watch(model, () => { planDirty.value = true; cancelPreview(); });
-watch(prUrl, () => { draftPlan.value = undefined; planDirty.value = true; });
+let restoringPreview = false;
+watch(model, () => { if (!restoringPreview) { planDirty.value = true; cancelPreview(); } });
+watch(prUrl, () => { if (!restoringPreview) { draftPlan.value = undefined; planDirty.value = true; } });
 const preview = ref<ReviewPreviewResponse | null>(null);
 function changePlan(plan: ReviewPlanOptions) { draftPlan.value = plan; planDirty.value = true; }
-const previewing = ref(false);
+const previewTracker = usePreviewJob();
+const { job: previewJob, tracking: previewing, connectionError: previewConnectionError } = previewTracker;
 const retryingUnitId = ref<string | null>(null);
 const task = ref<ReviewTask | null>(null);
 const report = ref<string | null>(null);
@@ -66,16 +71,17 @@ let refreshTaskId: string | null = null;
 let reportPromise: Promise<string | null> | null = null;
 let reportTaskId: string | null = null;
 let trackingTaskId: string | null = null;
-let previewController: AbortController | null = null;
 let previewRequestId = 0;
 const terminalNotifiedTaskIds = new Set<string>();
 
 watch(mode, (next) => {
+  if (restoringPreview) return;
   generatePatches.value = next !== "review";
   validationBackend.value = "none";
 });
 
 watch([prUrl, mode, generatePatches, validationBackend], () => {
+  if (restoringPreview) return;
   preview.value = null;
   cancelPreview();
 });
@@ -95,7 +101,7 @@ async function loadAvailableModels() {
   }
 }
 
-onMounted(() => { void loadAvailableModels(); void getReviewCapabilities().then(value => { capabilities.value = value; }).catch(() => { error.value = '能力声明加载失败，请刷新后重试。'; }); });
+onMounted(() => { void restorePreview(); void loadAvailableModels(); void getReviewCapabilities().then(value => { capabilities.value = value; }).catch(() => { error.value = '能力声明加载失败，请刷新后重试。'; }); });
 
 const statusText = computed(() => {
   if (!task.value) return "等待输入";
@@ -121,7 +127,7 @@ const taskDuration = computed(() => {
 
 async function submitReview() {
   if (submitting.value || previewing.value || taskActive.value || !preview.value || planDirty.value || !preview.value.preview_id || !validPullRequestUrl(prUrl.value)) return;
-  clearAll();
+  clearAll(false);
   error.value = null;
   report.value = null;
   task.value = null;
@@ -129,6 +135,7 @@ async function submitReview() {
   reviewSection.value = "overview";
   try {
     const created = await createReview(prUrl.value.trim(), model.value.trim(), mode.value, generatePatches.value, validationBackend.value, preview.value);
+    previewTracker.detach(true);
     trackingTaskId = created.task_id;
     showNotice({
       tone: "info",
@@ -163,29 +170,55 @@ async function loadPreview() {
   error.value = null;
   cancelPreview();
   const requestId = ++previewRequestId;
-  const controller = new AbortController();
-  previewController = controller;
-  previewing.value = true;
   try {
-    const next = await previewReview(
-      prUrl.value.trim(),
-      mode.value,
-      generatePatches.value,
-      validationBackend.value,
-      controller.signal,
-      model.value.trim(),
-      draftPlan.value ?? initialReviewPlan(capabilities.value),
-    );
-    if (previewRequestId === requestId) { preview.value = next; draftPlan.value = next.effective_plan || undefined; planDirty.value = false; }
+    const next = await previewTracker.start({ pr_url: prUrl.value.trim(), mode: mode.value,
+      generate_patches: generatePatches.value, validation_backend: validationBackend.value,
+      model: model.value.trim() || null, plan: draftPlan.value ?? initialReviewPlan(capabilities.value) });
+    if (previewRequestId === requestId && next) applyPreviewJob(next);
   } catch (err) {
-    if (controller.signal.aborted) return;
+    if (previewRequestId !== requestId) return;
     error.value = err instanceof Error ? err.message : "Preview 失败";
-  } finally {
-    if (previewController === controller) {
-      previewController = null;
-      previewing.value = false;
-    }
   }
+}
+
+function applyPreviewJob(value: PreviewJob) {
+  if (value.status === 'completed' && value.result) {
+    preview.value = value.result;
+    draftPlan.value = value.result.effective_plan || undefined;
+    planDirty.value = false;
+  } else if (value.status === 'consumed' && value.consumed_task_id) {
+    previewTracker.detach(true);
+    void openHistoricalReview(value.consumed_task_id);
+  } else {
+    error.value = value.error || (value.status === 'cancelled' ? '预览已取消，可重新分析。' : null);
+  }
+}
+
+async function restorePreview() {
+  const requestId = ++previewRequestId;
+  error.value = null;
+  try {
+    const value = await previewTracker.resume(async current => {
+      restoringPreview = true;
+      try {
+        prUrl.value = current.request.pr_url;
+        model.value = current.request.model || '';
+        mode.value = current.request.mode;
+        generatePatches.value = current.request.generate_patches;
+        validationBackend.value = current.request.validation_backend;
+        draftPlan.value = current.request.plan;
+        await nextTick();
+      } finally { restoringPreview = false; }
+    });
+    if (previewRequestId === requestId && value) applyPreviewJob(value);
+  } catch (err) {
+    if (previewRequestId === requestId) error.value = err instanceof Error ? err.message : '恢复预览失败';
+  }
+}
+
+async function cancelPreviewJob() {
+  try { await previewTracker.cancel(); }
+  catch (err) { error.value = err instanceof Error ? err.message : '取消预览失败'; }
 }
 
 async function retryUnit(unitId: string) {
@@ -206,7 +239,7 @@ async function openHistoricalReview(taskId: string) {
   if (submitting.value || opening.value) return;
   opening.value = true;
   reviewSection.value = 'overview';
-  clearAll();
+  clearAll(false);
   trackingTaskId = taskId;
   activePage.value = "dashboard";
   error.value = null;
@@ -396,8 +429,8 @@ function clearPolling() {
   clearScheduledRefresh();
 }
 
-function clearAll() {
-  cancelPreview();
+function clearAll(forgetPreview = true) {
+  cancelPreview(forgetPreview);
   clearPolling();
   trackingTaskId = null;
   reportTaskId = null;
@@ -405,14 +438,12 @@ function clearAll() {
   document.title = "RepoGuardian";
 }
 
-function cancelPreview() {
+function cancelPreview(forget = true) {
   previewRequestId += 1;
-  previewController?.abort();
-  previewController = null;
-  previewing.value = false;
+  previewTracker.detach(forget);
 }
 onBeforeUnmount(() => {
-  clearAll();
+  clearAll(false);
   dismissNotice();
 });
 </script>
@@ -433,7 +464,8 @@ onBeforeUnmount(() => {
       <AppHeader :title="pageTitle" :status-text="statusText" :menu-open="mobileOpen" @menu="mobileOpen = !mobileOpen" />
       <main v-if="activePage === 'dashboard'" id="workspace-content" class="page">
         <p v-if="error" class="notice danger" role="alert">{{ error }}</p>
-        <div v-if="opening || (submitting && !task)" class="card card-pad" role="status">{{ opening ? '正在打开审查记录…' : '正在创建真实审查任务…' }}</div>
+        <PreviewProgress v-if="!task && !submitting" :job="previewJob" :tracking="previewing" :connection-error="previewConnectionError" @resume="restorePreview" @cancel="cancelPreviewJob" />
+        <div v-if="opening || (submitting && !task)" class="card card-pad" role="status">{{ opening ? '正在打开审查记录…' : '正在校验 PR 快照并创建审查任务…' }}</div>
         <ReviewWorkspace v-else-if="task" :key="task.id" :task="task" :report="report" :section="reviewSection" :status-text="statusText" :duration="taskDuration" :cancelling="cancelling" :retrying-unit-id="retryingUnitId" @navigate="navigateReview" @cancel="cancelCurrentReview" @create="startNewReview" @retry="retryUnit" />
         <ReviewPlanPage v-else-if="preview" v-model:model="model" :preview="preview" :capabilities="capabilities" :dirty="planDirty" :previewing="previewing" @change="changePlan" @repreview="loadPreview" :pr-url="prUrl" :models="models" :default-model="defaultModel" :models-loading="modelsLoading" :models-error="modelsError" :submitting="submitting" @submit="submitReview" @back="preview = null" />
         <NewReviewPage v-else v-model:pr-url="prUrl" :loading="previewing" :busy="submitting || opening" @preview="loadPreview" @open="openHistoricalReview" @history="activePage = 'history'" />

@@ -177,13 +177,21 @@ class ReviewRepository:
             session.merge(FindingDispositionOrm(task_id=task_id, finding_id=finding_id,
                                                 payload=value, updated_at=utcnow()))
 
-    def save_task(self, task: ReviewTask, *, checkpoint_id: str | None = None) -> None:
+    def save_task(self, task: ReviewTask, *, checkpoint_id: str | None = None,
+                  lease: dict | None = None) -> None:
         snapshot, snapshot_uri = self._serialize_task_snapshot(task)
         now = utcnow()
         with self._session_factory.begin() as session:
             row = session.get(ReviewTaskOrm, task.id)
             if row is None:
                 raise KeyError(task.id)
+            if lease:
+                job = session.get(WorkerJobOrm, lease["job_id"])
+                if (job is None or job.task_id != task.id or job.status != "leased"
+                        or job.lease_owner != lease["owner"] or job.attempts != lease["attempt"]
+                        or job.lease_until is None
+                        or job.lease_until.replace(tzinfo=timezone.utc) <= now):
+                    return  # 旧执行者不能将新执行中的任务改为等待重试或失败。
             persisted_snapshot = self._load_task_snapshot(row)
             persisted_engine = persisted_snapshot.get("engine", "legacy_units")
             if task.engine != persisted_engine:

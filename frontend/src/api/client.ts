@@ -19,6 +19,19 @@ import type { PublicationPlan } from "../types/publication";
 import type { PublicationSelection, PublicationPreflightResult, PublicationAccepted, PublicationAttempt } from "../types/publication";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
+import type { PreviewJob, PreviewRequest } from '../types/previewJob';
+
+export function createPreviewJob(id: string, input: PreviewRequest, signal?: AbortSignal) {
+  return request<PreviewJob>('/api/reviews/preview-jobs', {
+    method: 'POST', body: JSON.stringify({ id, request: input }), signal,
+  }, '预览标识对应不同请求，请重新分析 PR。');
+}
+export function getPreviewJob(id: string, signal?: AbortSignal) {
+  return request<PreviewJob>(`/api/reviews/preview-jobs/${encodeURIComponent(id)}`, { signal });
+}
+export function cancelPreviewJob(id: string) {
+  return request<PreviewJob>(`/api/reviews/preview-jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
+}
 import type { FileContext } from "../utils/diffContext";
 export function getFileContext(taskId: string, fileId: number, signal?: AbortSignal) {
   return request<FileContext>(`/api/reviews/${encodeURIComponent(taskId)}/files/${fileId}/context`, { signal }, null);

@@ -116,6 +116,31 @@ class ReviewPreviewOrm(Base):
     consumed_task_id: Mapped[str | None] = mapped_column(String(32))
 
 
+class PreviewJobOrm(Base):
+    __tablename__ = "preview_jobs"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    request: Mapped[dict] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
+    stages: Mapped[list] = mapped_column(JSON, default=list)
+    preview_id: Mapped[str | None] = mapped_column(String(32))
+    error: Mapped[str | None] = mapped_column(String(512))
+    cache_hit: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_owner: Mapped[str | None] = mapped_column(String(32))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PreviewInputCacheOrm(Base):
+    __tablename__ = "preview_input_cache"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    digest: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class FindingDispositionOrm(Base):
     __tablename__ = "finding_dispositions"
     task_id: Mapped[str] = mapped_column(ForeignKey("review_tasks.id", ondelete="CASCADE"), primary_key=True)
