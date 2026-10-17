@@ -9,6 +9,7 @@
 
 import asyncio
 import json
+import httpx
 from functools import lru_cache
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
@@ -42,7 +43,8 @@ from app.services.task_queue import DatabaseTaskQueue
 from app.tools.diff_parser import DiffParser
 from app.tools.git_tool import GitTool
 from app.tools.github_tool import GitHubTool
-from app.models.review_plan import FindingDisposition, FindingsResponse, FileDiffResponse
+from app.models.review_plan import FindingDisposition, FindingsResponse, FileDiffResponse, FileContextResponse
+from app.services.file_context import FileContextError, load_file_context
 from app.services.review_findings import finding_views
 
 router = APIRouter(prefix="/reviews", tags=["reviews"])
@@ -227,6 +229,24 @@ async def get_file_diff(task_id: str, file_id: int, cursor: int = Query(default=
         snapshot=task.snapshot, hunks=[hunk.model_dump(mode="json") for hunk in file.hunks[cursor:end]],
         metadata={"change_type": file.change_type, "is_binary": file.is_binary, "hunk_count": len(file.hunks)},
         next_cursor=end if end < len(file.hunks) else None, truncated=end < len(file.hunks))
+
+
+@router.get("/{task_id}/files/{file_id}/context", response_model=FileContextResponse)
+async def get_file_context(task_id: str, file_id: int) -> FileContextResponse:
+    task = await asyncio.to_thread(get_review_service().get_task, task_id)
+    if task is None or file_id < 0 or file_id >= len(task.changed_files):
+        raise HTTPException(status_code=404, detail="Task or file not found")
+    headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+    if settings.github_token:
+        headers["Authorization"] = f"Bearer {settings.github_token}"
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=False, trust_env=False,
+                                     headers=headers) as client:
+            return await load_file_context(task, file_id, client)
+    except FileContextError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (httpx.HTTPError, TimeoutError) as exc:
+        raise HTTPException(status_code=502, detail="读取固定快照上下文失败，请稍后重试") from exc
 
 
 @router.get("/{task_id}/publication-plan", response_model=PublicationPlan, responses={
