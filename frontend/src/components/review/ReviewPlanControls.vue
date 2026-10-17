@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import type { ReviewPlanOptions, ReviewCapabilities, ReviewLimits } from '../../types/reviewPlan';
 import type { ReviewPreviewResponse } from '../../types/review';
+import ReviewDepthSelector from './ReviewDepthSelector.vue';
 const props = defineProps<{ preview: ReviewPreviewResponse; capabilities: ReviewCapabilities | null; busy: boolean }>();
 const emit = defineEmits<{ change: [plan: ReviewPlanOptions] }>();
 const draft = ref<ReviewPlanOptions | null>(null);
@@ -11,7 +12,7 @@ const modulePrefix = ref('');
 const categories = { correctness: '正确性', security: '安全', performance: '性能', compatibility: '兼容性' };
 const resources: { key: keyof ReviewLimits; label: string }[] = [
   { key: 'max_model_calls', label: '最大模型调用次数' }, { key: 'max_tokens', label: '最大 Token' },
-  { key: 'max_cost_microusd', label: '费用上限（微美元，1 USD = 1,000,000）' }, { key: 'timeout_seconds', label: '最大运行时间（秒）' }];
+  { key: 'timeout_seconds', label: '最大运行时间（秒）' }];
 function changed() { if (draft.value) emit('change', JSON.parse(JSON.stringify(draft.value)) as ReviewPlanOptions); }
 function depth(value: ReviewPlanOptions['depth']) {
   if (!draft.value) return;
@@ -41,10 +42,10 @@ function selectModule() {
 <template>
   <div v-if="draft && capabilities" :aria-busy="busy">
     <fieldset :disabled="busy" style="border:0;padding:0;min-width:0">
-      <div class="setting-section"><h3>1. 审查深度</h3><div class="option-grid"><button v-for="preset in capabilities.depth_presets" :key="preset.id" type="button" class="option-card" :class="{selected: draft.depth === preset.id}" @click="depth(preset.id)">{{ preset.label }}</button></div><p class="field-hint">快速初筛限制派生调查；标准审查核对关联契约；深度核验扩大调查容量并主动寻找反证。所有深度均保留独立证据核验。</p></div>
+      <div class="setting-section"><h3>1. 审查深度</h3><ReviewDepthSelector :model-value="draft.depth" :presets="capabilities.depth_presets" :disabled="busy" @update:model-value="value => value !== 'server' && depth(value)" /></div>
       <div class="setting-section"><h3>2. 审查重点</h3><div class="hstack wrap"><label v-for="category in capabilities.focus_categories" :key="category" class="check-chip"><input v-model="draft.focus" type="checkbox" :value="category" @change="changed" />{{ categories[category] }}</label><button class="btn soft sm" type="button" @click="draft.focus = [...capabilities.focus_categories]; changed()">全部</button></div><p class="field-hint">重点按选择顺序传入检查策略；其他具体缺陷仍会保留。</p></div>
       <div class="setting-section"><h3>3. 主审范围</h3><div class="segmented"><button type="button" :class="{active: draft.scope.mode === 'all'}" @click="scope('all')">全部变更</button><button type="button" :class="{active: draft.scope.mode === 'selected'}" @click="scope('selected')">自定义文件 / 模块</button></div><template v-if="draft.scope.mode === 'selected'"><div class="hstack"><input v-model="modulePrefix" class="input" placeholder="模块目录，例如 src/api" aria-label="模块目录" /><button class="btn secondary sm" type="button" @click="selectModule">选择模块</button></div><label v-for="file in eligible" :key="file.file_path" class="check-row"><input v-model="draft.scope.primary_files" type="checkbox" :value="file.file_path" @change="changed" /><span class="mono break-anywhere">{{ file.file_path }}</span></label></template><p class="field-hint">未选变更会标记未主审；关联上下文可读取服务端允许的 Git 文件，敏感路径与越界链接仍拒绝。</p></div>
-      <div class="setting-section"><h3>4. 单次资源约束</h3><label v-for="resource in resources" :key="resource.key" class="budget-row"><span>{{ resource.label }}</span><input :value="draft.limits[resource.key] ?? ''" type="number" class="input" :min="resource.key === 'timeout_seconds' ? 1 : 0" :max="capabilities.limits.maxima[resource.key] ?? undefined" :aria-label="resource.label" placeholder="服务端默认" @input="limit(resource.key, $event)" /></label><p class="field-hint">费用留空表示使用服务端策略；缺少价格时不能设置费用限额。限额包含核验与重试，达到上限保留成果和未检查范围。</p></div>
+      <div class="setting-section"><h3>4. 单次资源约束</h3><label v-for="resource in resources" :key="resource.key" class="budget-row"><span>{{ resource.label }}</span><input :value="draft.limits[resource.key] ?? ''" type="number" class="input" :min="resource.key === 'timeout_seconds' ? 1 : 0" :max="capabilities.limits.maxima[resource.key] ?? undefined" :aria-label="resource.label" placeholder="服务端默认" @input="limit(resource.key, $event)" /></label><p class="field-hint">限额包含核验与重试，达到上限保留成果和未检查范围。</p></div>
     </fieldset>
   </div><p v-else class="notice">能力声明未加载，方案配置暂不可用，请刷新重试。</p>
 </template>
