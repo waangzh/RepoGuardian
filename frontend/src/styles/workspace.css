@@ -69,7 +69,12 @@ button { color: inherit; }
 .rg-boundary-row strong { font-size: 12px; }
 .rg-boundary-row p { color: var(--muted); font-size: 12px; margin-top: 4px; }
 .rg-limitations { padding-left: 18px; font-size: 12px; line-height: 1.8; color: var(--amber); }
-.rg-pr-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; }
+.rg-change-summary { min-height: 220px; }
+.rg-pr-summary { overflow-wrap: anywhere; line-height: 1.8; }
+.rg-pr-original { margin-top: 18px; font-size: 12px; color: var(--muted); }
+.rg-pr-original > summary { cursor: pointer; }
+.rg-pr-original__body { max-height: 360px; overflow: auto; padding: 16px 0 0; color: var(--ink); }
+.rg-pr-original__body :is(pre,table) { max-width: 100%; overflow: auto; }
 .rg-findings { display: grid; grid-template-columns: minmax(230px,.85fr) minmax(320px,1.35fr) minmax(280px,1.05fr); gap: 15px; align-items: start; }
 .rg-findings > * { min-width: 0; }
 .rg-filters { display: flex; gap: 8px; margin-bottom: 14px; }
