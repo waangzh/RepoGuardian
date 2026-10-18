@@ -14,6 +14,7 @@ import AppIcon from "../common/AppIcon.vue";
 import EmptyState from "../common/EmptyState.vue";
 import StatusBadge from "../common/StatusBadge.vue";
 import ReportPanel from "../ReportPanel.vue";
+import { groupingReasonText, unitTitle } from "../../utils/unitPresentation";
 import ExecutionTimeline from "./ExecutionTimeline.vue";
 import CrossUnitReview from "./CrossUnitReview.vue";
 import TaskRuntimePanel from "./TaskRuntimePanel.vue";
@@ -192,13 +193,6 @@ function basename(path: string): string {
   return path.split(/[\\/]/).pop() || path;
 }
 
-function unitTitle(unit: ReviewUnit): string {
-  const symbol = unit.changed_symbols.find(Boolean);
-  if (symbol) return symbol.length > 42 ? `${symbol.slice(0, 39)}…` : symbol;
-  const name = basename(unit.primary_files[0] || unit.id).replace(/\.[^.]+$/, "");
-  return name.replace(/[-_]+/g, " ");
-}
-
 function unitFiles(unit: ReviewUnit): string[] {
   return Array.from(new Set([...unit.primary_files, ...unit.related_files]));
 }
@@ -340,7 +334,7 @@ function unitNames(unitIds: string[]): string {
   return unitIds
     .map((id) => props.task.review_units.find((unit) => unit.id === id))
     .filter((unit): unit is ReviewUnit => Boolean(unit))
-    .map(unitTitle)
+    .map((unit) => unitTitle(unit))
     .join("、") || "—";
 }
 
@@ -498,9 +492,9 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
 
         <article class="overview-card overview-card--groups">
           <header><div><h2>变更组</h2><p>按代码意图组织，而不是按文件名排序</p></div><span>{{ task.review_units.length }} 组</span></header>
-          <button v-for="unit in task.review_units" :key="unit.id" type="button" class="overview-group-row" @click="openUnit(unit.id)">
+          <button v-for="(unit, index) in task.review_units" :key="unit.id" type="button" class="overview-group-row" :title="unit.primary_files[0]" @click="openUnit(unit.id)">
             <span class="overview-group-row__mark"><AppIcon name="units" :size="15" /></span>
-            <span><strong>{{ unitTitle(unit) }}</strong><small>{{ unitResult(unit.id)?.plan?.change_summary || unit.grouping_reason }}</small></span>
+            <span><strong>{{ unitTitle(unit, index, task.review_units.length) }}</strong><small>{{ unitResult(unit.id)?.plan?.change_summary || groupingReasonText(unit.grouping_reason) }}</small></span>
             <span>{{ unitFiles(unit).length }} 文件</span>
             <b>{{ unitFindingLabel(unitResult(unit.id), issueCountForUnit(unit.id)) }}</b>
           </button>
@@ -546,8 +540,8 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
       <div v-if="!isTaskRuntime || selectedRuntimeFinding" class="finding-workspace" :class="{ 'finding-workspace--runtime': isTaskRuntime, 'finding-workspace--no-code': isTaskRuntime && !selectedIssue }">
         <aside v-if="!isTaskRuntime" class="change-group-nav">
           <header><div><h2>变更组</h2><p>语义相关的改动故事</p></div><strong>{{ fileCoveragePercent }}%</strong></header>
-          <button v-for="unit in task.review_units" :key="unit.id" type="button" :class="{ 'is-active': selectedUnit?.id === unit.id }" @click="chooseUnit(unit.id)">
-            <strong>{{ unitTitle(unit) }}</strong><p>{{ unitResult(unit.id)?.plan?.change_summary || unit.grouping_reason }}</p><span>{{ unitFiles(unit).length }} 文件 · {{ unitFindingLabel(unitResult(unit.id), issueCountForUnit(unit.id)) }}</span>
+          <button v-for="(unit, index) in task.review_units" :key="unit.id" type="button" :class="{ 'is-active': selectedUnit?.id === unit.id }" :title="unit.primary_files[0]" @click="chooseUnit(unit.id)">
+            <strong>{{ unitTitle(unit, index, task.review_units.length) }}</strong><p>{{ unitResult(unit.id)?.plan?.change_summary || groupingReasonText(unit.grouping_reason) }}</p><span>{{ unitFiles(unit).length }} 文件 · {{ unitFindingLabel(unitResult(unit.id), issueCountForUnit(unit.id)) }}</span>
           </button>
           <div v-if="selectedUnit" class="change-group-files">
             <span>组内文件</span><code v-for="file in unitFiles(selectedUnit)" :key="file">{{ file }}</code>
@@ -629,7 +623,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
         <aside class="coverage-navigator">
           <header><h2>覆盖导航</h2><p>按变更组和状态筛选</p></header>
           <button type="button" :class="{ 'is-active': fileGroupFilter === 'all' }" @click="fileGroupFilter = 'all'">全部文件 <b>{{ task.changed_files.length }}</b></button>
-          <button v-for="unit in task.review_units" :key="unit.id" type="button" :class="{ 'is-active': fileGroupFilter === unit.id }" @click="fileGroupFilter = unit.id">{{ unitTitle(unit) }} <b>{{ unitFiles(unit).length }}</b></button>
+          <button v-for="(unit, index) in task.review_units" :key="unit.id" type="button" :class="{ 'is-active': fileGroupFilter === unit.id }" :title="unit.primary_files[0]" @click="fileGroupFilter = unit.id">{{ unitTitle(unit, index, task.review_units.length) }} <b>{{ unitFiles(unit).length }}</b></button>
           <hr><span>文件状态</span>
           <button v-for="state in ([['reviewed', '已审查'], ['partial', '部分完成'], ['unsupported', '需人工复核'], ['excluded_sensitive', '敏感排除'], ['timed_out', '已超时']] as const)" :key="state[0]" type="button" :class="{ 'is-active': fileStatusFilter === state[0] }" @click="fileStatusFilter = fileStatusFilter === state[0] ? 'all' : state[0]">{{ state[1] }} <b>{{ coverage.files.filter(item => item.status === state[0]).length }}</b></button>
         </aside>

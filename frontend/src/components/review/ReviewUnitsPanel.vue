@@ -5,6 +5,7 @@ import EmptyState from "../common/EmptyState.vue";
 import PanelHeader from "../common/PanelHeader.vue";
 import StatusBadge from "../common/StatusBadge.vue";
 import { unitCoverageComplete } from "../../utils/unitCoverage";
+import { groupingReasonText, unitSymbolSummary, unitTitle } from "../../utils/unitPresentation";
 
 const props = defineProps<{
   units: ReviewUnit[];
@@ -39,10 +40,10 @@ const skipReasonLabel: Record<string, string> = {
     </PanelHeader>
     <EmptyState v-if="!units.length" icon="units" title="正在规划审查单元" description="系统会根据文件、Hunk、符号与风险拆分可独立审查的单元。" />
     <div v-else class="unit-list">
-      <article v-for="unit in units" :key="unit.id" class="unit-item">
+      <article v-for="(unit, index) in units" :key="unit.id" class="unit-item">
         <div class="unit-item__main">
-          <code>{{ unit.primary_files[0] }}</code>
-          <p>{{ unit.grouping_reason }}</p>
+          <code :title="unit.primary_files[0]">{{ unitTitle(unit, index, units.length) }}</code>
+          <p>{{ groupingReasonText(unit.grouping_reason) }}<template v-if="unitSymbolSummary(unit)"> · {{ unitSymbolSummary(unit) }}</template></p>
           <span>{{ unit.related_files.length }} 个关联文件 · {{ unit.complexity }} · {{ unit.estimated_tokens.toLocaleString() }} tokens</span>
           <details v-if="resultMap.get(unit.id)?.plan_status" class="unit-plan">
             <summary>
