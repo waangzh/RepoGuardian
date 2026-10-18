@@ -3,6 +3,7 @@
 import html
 import re
 import unicodedata
+from urllib.parse import quote
 
 from pydantic import ValidationError
 
@@ -144,24 +145,46 @@ def _goal_lines(goals, title, *, limit=20, include_reason=True):
 
 def render_user_report(task, plan: PublicationPlan) -> str:
     outcome = plan.outcome
-    lines = ["# RepoGuardian 用户审查报告", "", f"**{OUTCOME_LABELS[outcome.kind]}**", "",
-        OUTCOME_DESCRIPTIONS[outcome.kind], "", "## 本轮检查了什么", "",
-        f"- 审查目标完成：{outcome.examined_goals} / {outcome.total_goals}",
-        f"- 已确认问题：{outcome.confirmed_count}；未决候选：{outcome.unresolved_count}"]
-    lines += _goal_lines(plan.digest.examined_goals, "已检查目标", limit=None)
-    lines += _goal_lines(plan.digest.incomplete_goals, "未完成目标", limit=None)
-    if not plan.digest.examined_goals and not plan.digest.incomplete_goals:
-        lines += ["", "缺少有效目标记录，不能判断检查范围。"]
-    if plan.digest.excluded_files:
-        lines += ["", "未纳入本轮审查的文件：", *[
-            f"- {markdown_text(item.path, 500)}：{markdown_text(item.reason)}" for item in plan.digest.excluded_files]]
+    lines = ["# RepoGuardian 详细审查报告", "", "## 审查结论", "", f"**{OUTCOME_LABELS[outcome.kind]}**", "",
+        OUTCOME_DESCRIPTIONS[outcome.kind], "", merge_advice(plan), "", *_validation_lines(plan)]
+    lines += _change_understanding(plan)
+    lines += ["", "## 发现的问题", ""]
+    findings = _ordered_findings(plan)
+    if not findings:
+        lines.append("当前没有通过发布准入的已核验问题；以下机器记录与未决风险需分别核对。")
+    for finding in findings:
+        lines += ["", f"### {finding.title}", "", finding_location(plan, finding), "", render_finding(finding)]
+        view = next((item for item in plan.digest.findings if item.id == finding.finding_key), None)
+        if view:
+            lines += _human_lines(view)
+    published_keys = {item.finding_key for item in findings}
+    for heading, states in (("机器已确认但未生成发布评论", {"confirmed"}),
+                            ("需要人工确认的疑点（尚未确认缺陷）", {"candidate", "unresolved", "unknown"}),
+                            ("已排除的候选", {"dismissed"})):
+        views = [item for item in plan.digest.findings if item.id not in published_keys and item.review_status in states]
+        if views:
+            lines += ["", f"### {heading}", ""]
+        for view in views:
+            lines += [f"#### {markdown_text(view.title or '未命名记录')}", "",
+                f"- AI 判定：{ {'confirmed': '机器已确认，发布准入未通过', 'candidate': '候选', 'unresolved': '尚未确认', 'dismissed': '已排除', 'unknown': '未知'}[view.review_status]}",
+                f"- 严重程度：{markdown_text(view.severity or '未知')}",
+                f"- 位置：{markdown_text(view.location.path + ':' + str(view.location.start_line)) + '（' + view.location.side + '）' if view.location else '尚无可靠代码定位'}"]
+            for label, value in (("影响", view.impact), ("触发场景", view.message), ("建议", view.recommendation)):
+                if value:
+                    lines.append(f"- {label}：{markdown_text(value)}")
+            lines += _human_lines(view)
+            if view.review_status != "confirmed":
+                lines.append("以上为候选或排除记录，不能作为已核验的发布评论。")
+    lines += ["", "## 尚未确认的风险", ""]
+    if outcome.reason_codes:
+        lines += [f"- {REASON_LABELS[reason]}" for reason in outcome.reason_codes]
     report = None
     if task.engine == "task_review_v1" and task.task_runtime_report is not None:
         try:
             report = TaskRuntimeReport.model_validate(task.task_runtime_report)
         except ValidationError:
             pass  # Outcome 已明确保留报告无效原因，不能从无效内容拼出完成结论。
-    lines += ["", "## 哪些调查没有得到答案", ""]
+    lines += ["", "### 哪些调查没有得到答案", ""]
     if report is None:
         lines.append("缺少有效任务运行报告，调查状态未知。")
     else:
@@ -172,7 +195,7 @@ def render_user_report(task, plan: PublicationPlan) -> str:
         work_items = {item.get("work_item_id"): item for item in report.work_items}
         for index, item in enumerate(pending, 1):
             lines += ["", f"### {index}. {markdown_text(item.get('proposition') or '未记录调查命题')}", "",
-                f"- 状态：{markdown_text(str(item.get('status') or 'unknown'))} / {markdown_text(str(item.get('answer') or '尚无答案'))}",
+                "- 调查结论：尚未取得足够证据回答此问题。",
                 f"- 未决原因：{markdown_text(item.get('reason') or '尚未记录明确原因，需查看原始审计记录。')}"]
             limitations = item.get("limitations") or []
             lines += [f"- 缺失证据或限制：{markdown_text(value)}" for value in limitations]
@@ -184,23 +207,28 @@ def render_user_report(task, plan: PublicationPlan) -> str:
                              f"{markdown_text(str(request.get('start_line')))}–{markdown_text(str(request.get('end_line')))}"
                              "（请求范围不代表已读取或已核验）")
             lines += ["- 下一步：补读上述缺失实现、调用方或返回值消费者，再重新核对原命题；证据仍不足时保留未决。",
-                      f"- 调查记录：{markdown_text(item.get('work_item_id') or '未记录', 160)}"]
+                      ""]
         if report.unscheduled_leads:
             outstanding = [item for item in report.unscheduled_leads if item.get("status") != "duplicate"]
             if outstanding:
                 lines += ["", "尚未完成调度的线索：", *[
                     f"- {markdown_text(item.get('proposition') or item.get('lead_id') or '未命名线索')}："
                     f"{markdown_text(item.get('reason') or '未记录原因')}" for item in outstanding]]
-    lines += ["", "## 问题与处理建议", ""]
-    if not plan.inline_drafts and not plan.summary_findings:
-        lines.append("当前没有可发布的已确认问题；未决调查不作为已确认缺陷呈现。")
-    for finding in [*plan.inline_drafts, *plan.summary_findings]:
-        lines += ["", f"### {finding.title}", "", render_finding(finding)]
+    lines += ["", "## 审查范围与限制", "",
+        f"- 审查目标完成：{outcome.examined_goals} / {outcome.total_goals}",
+        f"- 已确认问题：{outcome.confirmed_count}；未决候选：{outcome.unresolved_count}"]
+    lines += _goal_lines(plan.digest.examined_goals, "已检查目标", limit=None)
+    lines += _goal_lines(plan.digest.incomplete_goals, "未完成目标", limit=None)
+    if not plan.digest.examined_goals and not plan.digest.incomplete_goals:
+        lines += ["", "缺少有效目标记录，不能判断检查范围。"]
+    if plan.digest.excluded_files:
+        lines += ["", "未纳入本轮审查的文件：", *[
+            f"- {markdown_text(item.path, 500)}：{markdown_text(item.reason)}" for item in plan.digest.excluded_files]]
     if plan.withheld_findings:
         lines += ["", "未进入发布正文的记录：", *[
             f"- {markdown_text(item.candidate_id, 160)}：{markdown_text(item.reason_code)}"
             for item in plan.withheld_findings]]
-    lines += ["", "## 下一步怎么办", ""]
+    lines += ["", "## 下一步建议", "", merge_advice(plan)]
     if outcome.confirmed_count:
         lines.append("- 逐项核对已确认问题，结合触发场景和代码证据处理；被扣留的记录仍需单独核验。")
     if plan.digest.incomplete_goals:
@@ -216,8 +244,85 @@ def render_user_report(task, plan: PublicationPlan) -> str:
     if report is not None:
         lines += ["", f"实际运行记录：{markdown_text(report.execution_status, 100)} / "
                   f"{markdown_text(report.termination_reason, 160)}。"]
-    lines += ["", "## 验证边界", "", *_validation_lines(plan),
+    lines += ["", "## 验证边界", "", *_validation_lines(plan), "", "## 附录：技术信息", "",
         "", f"审查 Commit：{markdown_text(plan.snapshot.head_sha or '未记录', 64)}。",
         f"审查记录：{markdown_text(plan.review_id, 160)}。", "",
-        "完整证据、被扣留记录与运行过程请查看原始审计报告。"]
+        "运行过程与证据追踪请查看技术审计记录；此 Markdown 不代表全部原始事件。"]
+    if task.run_manifest:
+        lines.append(f"模型：{markdown_text(task.run_manifest.provider)} / {markdown_text(task.run_manifest.model)}。")
+    return "\n".join(lines)
+
+
+def _ordered_findings(plan):
+    rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    return sorted([*plan.inline_drafts, *plan.summary_findings], key=lambda item: (
+        rank[item.severity], item.anchor.file_path, item.anchor.start_line or 0, item.finding_key))
+
+
+def merge_advice(plan):
+    if plan.outcome.kind in {"failed", "cancelled"}:
+        return "建议：本轮未完成有效审查，请解决运行限制并重新审查后再判断是否合并。"
+    if any(item.severity in {"critical", "high"} for item in _ordered_findings(plan)):
+        return "建议：优先修复上述高风险问题并复核触发场景，再考虑合并。"
+    if plan.outcome.confirmed_count:
+        return "建议：逐项处理已确认问题；当前没有足够依据自动判断其合并阻断属性，需结合影响、CI 与必要审批决策。"
+    if plan.outcome.kind != "clean":
+        return "建议：先补齐未决证据或运行限制，当前结果不足以支持合并判断。"
+    return "建议：本轮静态审查未发现达到报告门槛的问题；确认相关测试、CI 与必要审批满足要求后，可以考虑进入合并流程。"
+
+
+def _change_understanding(plan):
+    return ["", "## PR 变更理解", "",
+        "**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** " + markdown_text(plan.digest.author_goal or "未记录作者声明"),
+        "", "**实际改动（固定 Diff 事实）：**", "",
+        *(["- " + markdown_text(item, 1000) for item in plan.digest.actual_changes] or ["未保存变更明细，无法归纳实际修改。"]),
+        "", "**目标符合性：** " + markdown_text(plan.digest.intent_alignment)]
+
+
+def _human_lines(view):
+    if not view.disposition:
+        return ["- 人工处理：尚未记录。"]
+    label = {"open": "重新打开", "confirmed": "人工确认", "ignored": "已忽略", "resolved": "已处理"}[view.disposition.status]
+    return [f"- 人工处理：{label}；原因：{markdown_text(view.disposition.reason)}；"
+        f"时间：{markdown_text(view.updated_at.isoformat() if view.updated_at else '未记录')}。机器结论与发布资格保持独立。"]
+
+
+def finding_location(plan, finding):
+    anchor = finding.anchor
+    label = markdown_text(anchor.file_path, 1000)
+    if anchor.start_line:
+        label += f":{anchor.start_line}" + (f"–{anchor.end_line}" if anchor.end_line and anchor.end_line != anchor.start_line else "")
+    label += f"（{anchor.side or '代码侧未知'}）"
+    # 仅从严格解析的 GitHub PR 身份生成链接，不接受仓库提供的 URL。
+    from app.tools.github_tool import parse_pr_url
+    try:
+        owner, repo, _ = parse_pr_url(plan.digest.pr_url or "")
+    except ValueError:
+        owner = repo = None
+    sha = plan.snapshot.effective_base_sha if anchor.side == "base" else plan.snapshot.head_sha
+    if owner and repo and sha and re.fullmatch(r"[a-f0-9]{40,64}", sha) and anchor.start_line and anchor.side:
+        url = f"https://github.com/{quote(owner, safe='')}/{quote(repo, safe='')}/blob/{sha}/{quote(anchor.file_path, safe='/')}#L{anchor.start_line}"
+        return f"**代码位置：** [{label}]({url})"
+    return f"**代码位置：** {label}"
+
+
+def render_review_comment(plan):
+    lines = ["## RepoGuardian · PR 审查评论", "", f"**审查结论：{OUTCOME_LABELS[plan.outcome.kind]}**", "", merge_advice(plan)]
+    lines += _change_understanding(plan)
+    lines += ["", "### 发现的问题", ""]
+    for finding in _ordered_findings(plan):
+        lines += [finding_location(plan, finding), "", finding.body_markdown, ""]
+        view = next((item for item in plan.digest.findings if item.id == finding.finding_key), None)
+        if view and view.disposition:
+            lines += _human_lines(view)
+    if not _ordered_findings(plan):
+        lines.append("当前没有通过发布准入的已核验问题正文。")
+    withheld = max(0, plan.outcome.confirmed_count - plan.outcome.publishable_count)
+    if withheld:
+        lines.append(f"另有 {withheld} 项机器确认记录未通过发布准入，请在详细报告中核对；当前评论未将其描述为已核验问题。")
+    lines += ["", "### 其他审查结果与限制", "",
+        f"约定目标已检查 {plan.outcome.examined_goals} / {plan.outcome.total_goals}；"
+        f"未决候选 {plan.outcome.unresolved_count} 项；未完成调查 {plan.outcome.incomplete_investigations} 项。",
+        *[f"- {REASON_LABELS[reason]}" for reason in plan.outcome.reason_codes], "", *_validation_lines(plan), "",
+        f"审查 Commit：{markdown_text(plan.snapshot.head_sha or '未记录', 64)}。"]
     return "\n".join(lines)

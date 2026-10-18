@@ -31,6 +31,11 @@ export interface DigestExcludedFile {
   reason: string;
 }
 export interface ReviewDigest {
+  pr_url?: string | null;
+  author_goal?: string | null;
+  actual_changes?: string[];
+  intent_alignment?: string;
+  findings?: import('./reviewPlan').FindingView[];
   examined_goals: DigestGoal[];
   incomplete_goals: DigestGoal[];
   reviewed_files: string[];
@@ -79,11 +84,21 @@ export interface PublicationPlan {
   digest: ReviewDigest;
   summary_markdown: string;
   user_report_markdown: string;
+  review_comment_markdown?: string;
   inline_drafts: PublicationFinding[];
   summary_findings: PublicationFinding[];
   withheld_findings: WithheldFinding[];
   content_eligible: boolean;
   blocking_reasons: string[];
+}
+
+export interface ReviewCommentCheck {
+  review_id: string;
+  status: "current" | "stale" | "unknown";
+  reviewed_head_sha: string | null;
+  latest_head_sha: string | null;
+  checked_at: string;
+  review_comment_markdown: string;
 }
 
 export type PublicationState = "queued" | "preparing" | "publishing" | "succeeded" | "partial" | "failed" | "uncertain" | "stale";
