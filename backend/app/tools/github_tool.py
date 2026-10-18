@@ -88,3 +88,19 @@ class GitHubTool:
                 f"GitHub diff 请求失败：{response.status_code} {response.text[:300]}"
             )
         return response.text
+
+    async def fetch_file_overview(self, pr_url: str) -> tuple[list[dict], bool]:
+        """只取首100项文件的增删元数据，不向概览消费者返回 patch。"""
+        owner, repo, number = parse_pr_url(pr_url)
+        headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{number}/files"
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.get(url, headers=headers, params={"per_page": 100, "page": 1})
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, list) or len(payload) > 100:
+            raise GitHubToolError("invalid_file_overview")
+        # 恰好达到页上限时也保守标为不完整；不追下一页而阻塞概览。
+        return payload, len(payload) < 100 and "next" not in response.links

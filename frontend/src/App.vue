@@ -3,6 +3,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { getReviewCapabilities, cancelReview, createReview, getAvailableModels, getReport, getReview, retryReviewUnit, subscribeToEvents } from "./api/client";
 import { hasSavedPreview, usePreviewJob } from './composables/usePreviewJob';
 import PreviewPage from './components/pages/PreviewPage.vue';
+import QuickPreviewPage from './components/pages/QuickPreviewPage.vue';
+import { useQuickPreview } from './composables/useQuickPreview';
 import type { PreviewJob } from './types/previewJob';
 import AppIcon from "./components/common/AppIcon.vue";
 import AppHeader from "./components/layout/AppHeader.vue";
@@ -32,7 +34,7 @@ const activePage = ref<AppPage>("dashboard");
 const reviewSection = ref<ReviewSection>("overview");
 const mobileOpen = ref(false);
 const opening = ref(false);
-const pageTitle = computed(() => activePage.value === 'history' ? '审查历史' : activePage.value === 'settings' ? '系统设置' : task.value ? reviewSections.find(item => item.id === reviewSection.value)?.label || '当前审查' : preview.value ? '审查方案' : previewStage.value ? '分析 PR' : '新建审查');
+const pageTitle = computed(() => activePage.value === 'history' ? '审查历史' : activePage.value === 'settings' ? '系统设置' : task.value ? reviewSections.find(item => item.id === reviewSection.value)?.label || '当前审查' : preview.value ? '审查方案' : previewStage.value ? '分析 PR' : quickOverview.value || quickLoading.value || quickError.value ? 'PR 概览' : '新建审查');
 watch([activePage, reviewSection], () => { mobileOpen.value = false; });
 function navigateReview(section: ReviewSection) { activePage.value = 'dashboard'; reviewSection.value = section; mobileOpen.value = false; }
 const prUrl = ref("");
@@ -54,6 +56,8 @@ watch(prUrl, () => { if (!restoringPreview) { draftPlan.value = undefined; planD
 const preview = ref<ReviewPreviewResponse | null>(null);
 function changePlan(plan: ReviewPlanOptions) { draftPlan.value = plan; planDirty.value = true; }
 const previewTracker = usePreviewJob();
+const quickTracker = useQuickPreview();
+const { overview: quickOverview, loading: quickLoading, error: quickError } = quickTracker;
 const { job: previewJob, tracking: previewing, connectionError: previewConnectionError } = previewTracker;
 const resumingPreview = ref(hasSavedPreview());
 let restoredOnce = false;
@@ -123,6 +127,8 @@ const statusText = computed(() => {
   if (!task.value) {
     if (submitting.value) return "正在创建审查任务";
     if (opening.value) return "正在打开审查记录";
+    if (quickLoading.value) return "正在读取 PR 概览";
+    if (quickOverview.value) return "等待准备完整审查方案";
     if (previewStage.value) {
       if (!previewJob.value) return "正在连接预览服务";
       return previewJob.value.status === "running" || previewJob.value.status === "queued" ? "正在准备审查方案" : "预览需要关注";
@@ -193,6 +199,13 @@ async function cancelCurrentReview() {
   }
 }
 
+async function loadQuickPreview() {
+  if (quickLoading.value || previewing.value || submitting.value || taskActive.value || !validPullRequestUrl(prUrl.value)) return;
+  error.value = null;
+  cancelPreview();
+  await quickTracker.load(prUrl.value.trim());
+}
+
 async function loadPreview() {
   if (previewing.value || submitting.value || taskActive.value || !validPullRequestUrl(prUrl.value)) return;
   error.value = null;
@@ -259,6 +272,7 @@ async function cancelPreviewJob() {
 }
 
 function backToInput() {
+  quickTracker.reset();
   // 仅解绑本地跟踪；按现有约定，只有显式取消才调用服务端取消接口。
   previewTracker.detach(true);
   preview.value = null;
@@ -509,6 +523,7 @@ function clearAll(forgetPreview = true) {
 }
 
 function cancelPreview(forget = true) {
+  quickTracker.reset();
   previewRequestId += 1;
   previewTracker.detach(forget);
 }
@@ -536,8 +551,9 @@ onBeforeUnmount(() => {
         <ReviewWorkspace v-if="task" :key="task.id" :task="task" :report="report" :section="reviewSection" :status-text="statusText" :duration="taskDuration" :cancelling="cancelling" :retrying-unit-id="retryingUnitId" @navigate="navigateReview" @cancel="cancelCurrentReview" @create="startNewReview" @retry="retryUnit" />
         <ReviewPlanPage v-else-if="preview" v-model:model="model" :preview="preview" :capabilities="capabilities" :dirty="planDirty" :previewing="previewing" @change="changePlan" @repreview="loadPreview" :pr-url="prUrl" :models="models" :default-model="defaultModel" :models-loading="modelsLoading" :models-error="modelsError" :submitting="submitting || Boolean(createdTaskId && !task)" :created="Boolean(createdTaskId && !task && !submitting)" @submit="submitReview" @back="backToInput" @open-created="createdTaskId && openHistoricalReview(createdTaskId)" />
         <section v-else-if="opening" class="card card-pad workspace-loading" role="status" aria-live="polite">正在打开审查记录…</section>
+        <QuickPreviewPage v-else-if="quickOverview || quickLoading || quickError" :overview="quickOverview" :loading="quickLoading" :error="quickError" :pr-url="prUrl" @prepare="loadPreview" @retry="loadQuickPreview" @back="backToInput" />
         <PreviewPage v-else-if="previewStage" :job="previewJob" :tracking="previewing" :connection-error="previewConnectionError" :pr-url="prUrl" :model="model" :default-model="defaultModel" @resume="restorePreview" @cancel="cancelPreviewJob" @retry="loadPreview" @back="backToInput" />
-        <NewReviewPage v-else v-model:pr-url="prUrl" :loading="previewing" :busy="submitting || opening" @preview="loadPreview" @open="openHistoricalReview" @history="activePage = 'history'" />
+        <NewReviewPage v-else v-model:pr-url="prUrl" :loading="quickLoading" :busy="submitting || opening" @preview="loadQuickPreview" @open="openHistoricalReview" @history="activePage = 'history'" />
       </main>
       <ReviewHistoryPage v-else-if="activePage === 'history'" :busy="submitting || opening || taskActive" @open="openHistoricalReview" @create="startNewReview" />
       <SettingsPage v-else :capabilities="capabilities" />
