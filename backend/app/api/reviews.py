@@ -27,6 +27,7 @@ from app.models.review import (
     TaskStatus,
 )
 from app.models.review_runtime import TaskRuntimeRetryResult
+from app.models.quick_preview import QuickPreviewRequest, QuickPreviewResponse
 from app.models.publication import PublicationPlan
 from app.models.persistence import (
     PatchDetail,
@@ -127,6 +128,25 @@ async def list_reviews(
     return await asyncio.to_thread(get_review_service().list_tasks,
         status=task_status, page=page, page_size=page_size, q=q,
         repository=repository, pr_number=pr_number, head_sha=head_sha)
+
+
+@router.post("/preview/quick", response_model=QuickPreviewResponse)
+async def quick_preview_review(request: QuickPreviewRequest) -> QuickPreviewResponse:
+    from app.services.quick_preview import quick_preview, QuickPreviewStale
+    from app.tools.github_tool import parse_pr_url
+    try:
+        parse_pr_url(str(request.pr_url))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="请输入合法的 GitHub PR URL。") from None
+    try:
+        return await quick_preview(get_review_service()._github_tool, str(request.pr_url))
+    except QuickPreviewStale:
+        raise HTTPException(status_code=409, detail="PR快照已变化，请重新获取概览。") from None
+    except (TimeoutError, httpx.TimeoutException):
+        raise HTTPException(status_code=504, detail="获取 PR 概览超时，请重试或准备完整方案。") from None
+    except Exception:
+        # GitHub响应可能包含凭据、私有仓库信息或错误正文，不回显上游文本。
+        raise HTTPException(status_code=502, detail="获取 PR 概览失败，请检查 GitHub 访问权限后重试。") from None
 
 
 @router.post("/preview", response_model=ReviewPreviewResponse)

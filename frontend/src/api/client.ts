@@ -20,6 +20,13 @@ import type { PublicationSelection, PublicationPreflightResult, PublicationAccep
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 import type { PreviewJob, PreviewRequest } from '../types/previewJob';
+import type { QuickPreview } from '../types/quickPreview';
+
+export function getQuickPreview(prUrl: string, signal?: AbortSignal) {
+  return request<QuickPreview>('/api/reviews/preview/quick', {
+    method: 'POST', body: JSON.stringify({ pr_url: prUrl }), signal,
+  }, 'PR 快照已变化，请重新获取概览。');
+}
 
 export function createPreviewJob(id: string, input: PreviewRequest, signal?: AbortSignal) {
   return request<PreviewJob>('/api/reviews/preview-jobs', {

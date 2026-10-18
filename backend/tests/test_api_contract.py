@@ -78,3 +78,15 @@ def test_public_finding_schema_and_frontend_fields_are_explicit():
     assert set(schema["FindingView"]["properties"]["review_status"]["enum"]) == {
         "candidate", "confirmed", "unresolved", "dismissed", "unknown"}
     assert schema["FindingLocation"]["properties"]["side"]["enum"] == ["left", "right"]
+
+
+def test_quick_preview_has_a_separate_non_plan_contract():
+    from app.models.quick_preview import QuickPreviewResponse, QuickPreviewFile
+    source = FRONTEND_TYPES.with_name("quickPreview.ts").read_text(encoding="utf-8")
+    for model, name in ((QuickPreviewResponse, "QuickPreview"), (QuickPreviewFile, "QuickPreviewFile")):
+        body = _interface_body(source, name)
+        assert all(re.search(rf"\b{field}\??\s*:", body) for field in model.model_fields)
+    schema = app.openapi()
+    assert "/api/reviews/preview/quick" in schema["paths"]
+    properties = schema["components"]["schemas"]["QuickPreviewResponse"]["properties"]
+    assert "preview_id" not in properties and "plan_hash" not in properties
