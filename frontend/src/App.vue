@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { getReviewCapabilities, cancelReview, createReview, getAvailableModels, getReport, getReview, retryReviewUnit, subscribeToEvents } from "./api/client";
-import { usePreviewJob } from './composables/usePreviewJob';
-import PreviewProgress from './components/review/PreviewProgress.vue';
+import { hasSavedPreview, usePreviewJob } from './composables/usePreviewJob';
+import PreviewPage from './components/pages/PreviewPage.vue';
 import type { PreviewJob } from './types/previewJob';
 import AppIcon from "./components/common/AppIcon.vue";
 import AppHeader from "./components/layout/AppHeader.vue";
@@ -32,7 +32,7 @@ const activePage = ref<AppPage>("dashboard");
 const reviewSection = ref<ReviewSection>("overview");
 const mobileOpen = ref(false);
 const opening = ref(false);
-const pageTitle = computed(() => activePage.value === 'history' ? '审查历史' : activePage.value === 'settings' ? '系统设置' : task.value ? reviewSections.find(item => item.id === reviewSection.value)?.label || '当前审查' : preview.value ? '审查方案' : '新建审查');
+const pageTitle = computed(() => activePage.value === 'history' ? '审查历史' : activePage.value === 'settings' ? '系统设置' : task.value ? reviewSections.find(item => item.id === reviewSection.value)?.label || '当前审查' : preview.value ? '审查方案' : previewStage.value ? '分析 PR' : '新建审查');
 watch([activePage, reviewSection], () => { mobileOpen.value = false; });
 function navigateReview(section: ReviewSection) { activePage.value = 'dashboard'; reviewSection.value = section; mobileOpen.value = false; }
 const prUrl = ref("");
@@ -55,10 +55,26 @@ const preview = ref<ReviewPreviewResponse | null>(null);
 function changePlan(plan: ReviewPlanOptions) { draftPlan.value = plan; planDirty.value = true; }
 const previewTracker = usePreviewJob();
 const { job: previewJob, tracking: previewing, connectionError: previewConnectionError } = previewTracker;
+const resumingPreview = ref(hasSavedPreview());
+let restoredOnce = false;
+const createdTaskId = ref<string | null>(null);
+// completed-with-result 和 consumed-with-task 都交给后续页面，避免预览页残留。
+const previewStage = computed(() => {
+  if (activePage.value !== 'dashboard' || task.value || opening.value || preview.value || submitting.value) return false;
+  if (resumingPreview.value || previewing.value || previewConnectionError.value) return true;
+  // 刷新时首帧尚未发起恢复请求：有本地标识就先进入预览页，避免闪回新建页。
+  if (!restoredOnce) return hasSavedPreview();
+  const job = previewJob.value;
+  if (!job) return false;
+  if (job.status === 'completed') return !job.result;
+  if (job.status === 'consumed') return !job.consumed_task_id;
+  return true;
+});
 const retryingUnitId = ref<string | null>(null);
 const task = ref<ReviewTask | null>(null);
 const report = ref<string | null>(null);
 const error = ref<string | null>(null);
+const errorDialog = ref<HTMLDialogElement | null>(null);
 const submitting = ref(false);
 const cancelling = ref(false);
 const notice = ref<TaskNotice | null>(null);
@@ -104,7 +120,15 @@ async function loadAvailableModels() {
 onMounted(() => { void restorePreview(); void loadAvailableModels(); void getReviewCapabilities().then(value => { capabilities.value = value; }).catch(() => { error.value = '能力声明加载失败，请刷新后重试。'; }); });
 
 const statusText = computed(() => {
-  if (!task.value) return "等待输入";
+  if (!task.value) {
+    if (submitting.value) return "正在创建审查任务";
+    if (opening.value) return "正在打开审查记录";
+    if (previewStage.value) {
+      if (!previewJob.value) return "正在连接预览服务";
+      return previewJob.value.status === "running" || previewJob.value.status === "queued" ? "正在准备审查方案" : "预览需要关注";
+    }
+    return "等待输入";
+  }
   const labels: Record<string, string> = {
     pending: "等待审查", queued: "等待审查", planning: "正在准备", reviewing: "正在审查",
     resolving_evidence: "解析证据", verifying_issues: "核验问题", generating_patches: "生成补丁",
@@ -126,7 +150,7 @@ const taskDuration = computed(() => {
 });
 
 async function submitReview() {
-  if (submitting.value || previewing.value || taskActive.value || !preview.value || planDirty.value || !preview.value.preview_id || !validPullRequestUrl(prUrl.value)) return;
+  if (submitting.value || previewing.value || taskActive.value || createdTaskId.value || !preview.value || planDirty.value || !preview.value.preview_id || !validPullRequestUrl(prUrl.value)) return;
   clearAll(false);
   error.value = null;
   report.value = null;
@@ -135,6 +159,7 @@ async function submitReview() {
   reviewSection.value = "overview";
   try {
     const created = await createReview(prUrl.value.trim(), model.value.trim(), mode.value, generatePatches.value, validationBackend.value, preview.value);
+    createdTaskId.value = created.task_id;
     previewTracker.detach(true);
     trackingTaskId = created.task_id;
     showNotice({
@@ -144,7 +169,10 @@ async function submitReview() {
     });
     const currentTask = await refreshTask(created.task_id);
     if (currentTask !== null && !isTerminalStatus(currentTask.status)) subscribeOrPoll(created.task_id);
+    window.scrollTo({ top: 0 });
   } catch (err) {
+    // 方案版本或快照变化后，必须先重新校验才能再次提交。
+    if (err instanceof Error && err.message.includes("方案已失效")) planDirty.value = true;
     error.value = err instanceof Error ? err.message : "创建任务失败";
   } finally {
     submitting.value = false;
@@ -189,7 +217,12 @@ function applyPreviewJob(value: PreviewJob) {
   } else if (value.status === 'consumed' && value.consumed_task_id) {
     previewTracker.detach(true);
     void openHistoricalReview(value.consumed_task_id);
-  } else {
+  } else if (value.status === 'completed') {
+    error.value = '预览已完成但未返回方案，请重新分析 PR。';
+  }
+  // failed/cancelled/expired 由预览页展示 job.error，避免顶部重复报错；
+  // 方案页重新校验失败时 preview 仍存在，才把错误交给页面顶部。
+  else if (preview.value) {
     error.value = value.error || (value.status === 'cancelled' ? '预览已取消，可重新分析。' : null);
   }
 }
@@ -197,6 +230,7 @@ function applyPreviewJob(value: PreviewJob) {
 async function restorePreview() {
   const requestId = ++previewRequestId;
   error.value = null;
+  resumingPreview.value = true;
   try {
     const value = await previewTracker.resume(async current => {
       restoringPreview = true;
@@ -212,13 +246,26 @@ async function restorePreview() {
     });
     if (previewRequestId === requestId && value) applyPreviewJob(value);
   } catch (err) {
-    if (previewRequestId === requestId) error.value = err instanceof Error ? err.message : '恢复预览失败';
+    // 预览页会展示连接状态，避免顶部与页内重复报错；失败后仍停留在预览页。
+    if (previewRequestId === requestId && preview.value) error.value = err instanceof Error ? err.message : '恢复预览失败';
+  } finally {
+    if (previewRequestId === requestId) { resumingPreview.value = false; restoredOnce = true; }
   }
 }
 
 async function cancelPreviewJob() {
   try { await previewTracker.cancel(); }
-  catch (err) { error.value = err instanceof Error ? err.message : '取消预览失败'; }
+  catch (err) { showNotice({ tone: 'danger', title: '取消预览失败', message: err instanceof Error ? err.message : '请稍后重试。' }); }
+}
+
+function backToInput() {
+  // 仅解绑本地跟踪；按现有约定，只有显式取消才调用服务端取消接口。
+  previewTracker.detach(true);
+  preview.value = null;
+  draftPlan.value = undefined;
+  planDirty.value = false;
+  error.value = null;
+  createdTaskId.value = null;
 }
 
 async function retryUnit(unitId: string) {
@@ -240,6 +287,8 @@ async function openHistoricalReview(taskId: string) {
   opening.value = true;
   reviewSection.value = 'overview';
   clearAll(false);
+  preview.value = null;
+  createdTaskId.value = null;
   trackingTaskId = taskId;
   activePage.value = "dashboard";
   error.value = null;
@@ -342,6 +391,26 @@ async function performRefresh(taskId: string, notifyLifecycle: boolean): Promise
   }
 }
 
+const errorTitle = computed(() => {
+  if (task.value?.status === "failed") return "审查任务失败";
+  if (previewStage.value) return "预览未完成";
+  if (task.value) return "操作未完成";
+  return "请求未完成";
+});
+// 统一用模态展示页面级错误：写入 error 时打开原生 dialog，清空时关闭。
+watch(error, (value) => {
+  if (!value) {
+    if (errorDialog.value?.open) errorDialog.value.close();
+    return;
+  }
+  void nextTick(() => { if (!errorDialog.value?.open) errorDialog.value?.showModal(); });
+});
+
+function dismissError() {
+  errorDialog.value?.close();
+  error.value = null;
+}
+
 async function loadReportOnce(next: ReviewTask): Promise<void> {
   if (next.report_markdown) {
     report.value = next.report_markdown;
@@ -412,6 +481,7 @@ function startNewReview() {
   prUrl.value = "";
   draftPlan.value = undefined;
   planDirty.value = false;
+  createdTaskId.value = null;
   activePage.value = "dashboard";
   reviewSection.value = "overview";
   mobileOpen.value = false;
@@ -463,15 +533,21 @@ onBeforeUnmount(() => {
     <div class="main">
       <AppHeader :title="pageTitle" :status-text="statusText" :menu-open="mobileOpen" @menu="mobileOpen = !mobileOpen" />
       <main v-if="activePage === 'dashboard'" id="workspace-content" class="page">
-        <p v-if="error" class="notice danger" role="alert">{{ error }}</p>
-        <PreviewProgress v-if="!task && !submitting" :job="previewJob" :tracking="previewing" :connection-error="previewConnectionError" @resume="restorePreview" @cancel="cancelPreviewJob" />
-        <div v-if="opening || (submitting && !task)" class="card card-pad" role="status">{{ opening ? '正在打开审查记录…' : '正在校验 PR 快照并创建审查任务…' }}</div>
-        <ReviewWorkspace v-else-if="task" :key="task.id" :task="task" :report="report" :section="reviewSection" :status-text="statusText" :duration="taskDuration" :cancelling="cancelling" :retrying-unit-id="retryingUnitId" @navigate="navigateReview" @cancel="cancelCurrentReview" @create="startNewReview" @retry="retryUnit" />
-        <ReviewPlanPage v-else-if="preview" v-model:model="model" :preview="preview" :capabilities="capabilities" :dirty="planDirty" :previewing="previewing" @change="changePlan" @repreview="loadPreview" :pr-url="prUrl" :models="models" :default-model="defaultModel" :models-loading="modelsLoading" :models-error="modelsError" :submitting="submitting" @submit="submitReview" @back="preview = null" />
+        <ReviewWorkspace v-if="task" :key="task.id" :task="task" :report="report" :section="reviewSection" :status-text="statusText" :duration="taskDuration" :cancelling="cancelling" :retrying-unit-id="retryingUnitId" @navigate="navigateReview" @cancel="cancelCurrentReview" @create="startNewReview" @retry="retryUnit" />
+        <ReviewPlanPage v-else-if="preview" v-model:model="model" :preview="preview" :capabilities="capabilities" :dirty="planDirty" :previewing="previewing" @change="changePlan" @repreview="loadPreview" :pr-url="prUrl" :models="models" :default-model="defaultModel" :models-loading="modelsLoading" :models-error="modelsError" :submitting="submitting || Boolean(createdTaskId && !task)" :created="Boolean(createdTaskId && !task && !submitting)" @submit="submitReview" @back="backToInput" @open-created="createdTaskId && openHistoricalReview(createdTaskId)" />
+        <section v-else-if="opening" class="card card-pad workspace-loading" role="status" aria-live="polite">正在打开审查记录…</section>
+        <PreviewPage v-else-if="previewStage" :job="previewJob" :tracking="previewing" :connection-error="previewConnectionError" :pr-url="prUrl" :model="model" :default-model="defaultModel" @resume="restorePreview" @cancel="cancelPreviewJob" @retry="loadPreview" @back="backToInput" />
         <NewReviewPage v-else v-model:pr-url="prUrl" :loading="previewing" :busy="submitting || opening" @preview="loadPreview" @open="openHistoricalReview" @history="activePage = 'history'" />
       </main>
       <ReviewHistoryPage v-else-if="activePage === 'history'" :busy="submitting || opening || taskActive" @open="openHistoricalReview" @create="startNewReview" />
       <SettingsPage v-else :capabilities="capabilities" />
     </div>
+    <dialog ref="errorDialog" class="rg-dialog rg-error-dialog" role="alertdialog" aria-labelledby="rg-error-title" @close="error = null" @click.self="dismissError">
+      <div class="rg-error-dialog__head">
+        <span class="rg-error-dialog__icon"><AppIcon name="alert" :size="20" /></span>
+        <div><h2 id="rg-error-title">{{ errorTitle }}</h2><p>{{ error }}</p></div>
+      </div>
+      <div class="rg-error-dialog__actions"><button type="button" class="btn primary" @click="dismissError">知道了</button></div>
+    </dialog>
   </div>
 </template>

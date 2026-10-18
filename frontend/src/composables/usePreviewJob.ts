@@ -5,6 +5,11 @@ import type { PreviewJob, PreviewRequest } from '../types/previewJob';
 const STORAGE_KEY = 'rg-preview-job';
 const pending = (job: PreviewJob) => job.status === 'queued' || job.status === 'running';
 
+/** 首帧据此决定是否先显示恢复态，避免刷新时闪回新建页。 */
+export function hasSavedPreview(): boolean {
+  try { return Boolean(localStorage.getItem(STORAGE_KEY)); } catch { return false; }
+}
+
 export function usePreviewJob(api = { create: createPreviewJob, get: getPreviewJob, cancel: cancelPreviewJob }, interval = 1000) {
   const job = ref<PreviewJob | null>(null);
   const tracking = ref(false);

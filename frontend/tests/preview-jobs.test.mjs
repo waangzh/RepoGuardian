@@ -94,12 +94,53 @@ test('进度呈现真实阶段、百分比、耗时与缓存提示', async () =>
     const { default: Progress } = await server.ssrLoadModule('/src/components/review/PreviewProgress.vue');
     const job = { ...snapshot('running'), cache_hit: true, stages: [{ phase: 'clone', message: '正在克隆仓库',
       started_at: new Date(Date.now() - 12000).toISOString(), finished_at: null, percent: 23, operation: 'receiving_objects' }] };
-    const html = await renderToString(createSSRApp(Progress, { job, tracking: true, connectionError: '' }));
+    const html = await renderToString(createSSRApp(Progress, { job, tracking: true, connectionError: '', prUrl: request.pr_url }));
     assert.match(html, /正在克隆仓库/);
     assert.match(html, /23%/);
     assert.match(html, /总耗时/);
     assert.match(html, /刷新后会恢复/);
     assert.match(html, /已复用相同提交/);
+    assert.match(html, /role="progressbar"/);
+    assert.match(html, /aria-valuenow="23"/);
+    assert.match(html, /timeline-row/);
     assert.doesNotMatch(html, /undefined|NaN/);
   } finally { await server.close(); }
+});
+
+test('预览页把失败与连接中断留在步骤 1 并提供重试出口', async () => {
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: 'custom' });
+  try {
+    const { default: Page } = await server.ssrLoadModule('/src/components/pages/PreviewPage.vue');
+    const failed = { ...snapshot('failed'), error: '仓库准备失败，请检查网络连接。',
+      stages: [{ phase: 'clone', message: '正在克隆仓库', started_at: new Date(Date.now() - 9000).toISOString(), finished_at: null, percent: 40, operation: 'receiving_objects' }] };
+    const html = await renderToString(createSSRApp(Page, { job: failed, tracking: false, connectionError: '',
+      prUrl: request.pr_url, model: '', defaultModel: 'fixture' }));
+    assert.match(html, /STEP 01 \/ IMPORT PULL REQUEST/);
+    assert.match(html, /PR 分析未完成/);
+    assert.match(html, /仓库准备失败/);
+    assert.match(html, /重新分析 PR/);
+    assert.match(html, /返回修改 PR 链接/);
+    assert.match(html, /预览失败/);
+    assert.doesNotMatch(html, /undefined|NaN/);
+    const offline = await renderToString(createSSRApp(Page, { job: null, tracking: false, connectionError: 'offline',
+      prUrl: request.pr_url, model: '', defaultModel: 'fixture' }));
+    assert.match(offline, /无法读取预览状态/);
+    assert.match(offline, /继续查询预览/);
+    assert.match(offline, /连接中断/);
+  } finally { await server.close(); }
+});
+
+test('刷新恢复首帧使用本地预览标识，避免闪回新建页', async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: {
+    getItem: key => key === 'rg-preview-job' ? id : null, setItem() {}, removeItem() {},
+  } });
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: 'custom' });
+  try {
+    const { hasSavedPreview } = await server.ssrLoadModule('/src/composables/usePreviewJob.ts');
+    assert.equal(hasSavedPreview(), true);
+  } finally {
+    await server.close();
+    if (descriptor) Object.defineProperty(globalThis, 'localStorage', descriptor); else delete globalThis.localStorage;
+  }
 });
