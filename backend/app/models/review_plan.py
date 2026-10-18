@@ -78,9 +78,43 @@ class FindingDisposition(PlanModel):
         return value.strip()
 
 
+class FindingLocation(PlanModel):
+    path: str
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    side: Literal["left", "right"]
+
+    @field_validator("path")
+    @classmethod
+    def normalized_path(cls, value):
+        from app.models.review import _validate_repo_relative_path
+        return _validate_repo_relative_path(value)
+
+    @model_validator(mode="after")
+    def ordered_lines(self):
+        if self.end_line < self.start_line:
+            raise ValueError("end_line precedes start_line")
+        return self
+
+
+class FindingVerification(PlanModel):
+    method: Literal["static_model_review"] = "static_model_review"
+    evidence_status: Literal["verified", "insufficient", "unresolved", "unknown"] = "unknown"
+    dynamic_validation_status: Literal["not_executed", "passed", "failed", "unknown"] = "not_executed"
+
+
 class FindingView(PlanModel):
     id: str
+    # status 保留历史原值；消费者使用归一化 review_status 判断机器结论。
     status: str
+    review_status: Literal["candidate", "confirmed", "unresolved", "dismissed", "unknown"] = "unknown"
+    title: str | None = None
+    message: str | None = None
+    impact: str | None = None
+    recommendation: str | None = None
+    category: str | None = None
+    location: FindingLocation | None = None
+    verification: FindingVerification = Field(default_factory=FindingVerification)
     severity: str | None = None
     evidence_status: Literal["verified", "insufficient", "unresolved", "unknown"]
     human_confirmation_reason: str | None = None
