@@ -573,6 +573,9 @@ color:var(--primary)}
 cursor:pointer;
 width:15px;
 height:15px;
+min-height:0;
+margin:0;
+padding:0;
 flex:none}
 .check-chip input{pointer-events:none}
 .setting-section+.setting-section{border-top:1px solid var(--line);
