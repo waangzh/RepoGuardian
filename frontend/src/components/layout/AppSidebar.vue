@@ -2,6 +2,7 @@
 import type { AppPage } from "../../types/operations";
 import { reviewSections, type ReviewSection } from "../../types/workspace";
 import AppIcon from "../common/AppIcon.vue";
+import brandIcon from "../../assets/repoguardian-icon.png";
 
 defineProps<{
   modelValue: AppPage;
@@ -23,7 +24,7 @@ const emit = defineEmits<{
 
 <template>
   <aside id="workspace-sidebar" class="sidebar" :class="{ 'mobile-open': mobileOpen }" @keydown.esc="emit('close')">
-    <div class="brand"><div class="brand-icon"><AppIcon name="shield" :size="22" /></div><div class="brand-word"><strong>RepoGuardian</strong><small>Evidence-first review</small></div><button type="button" class="icon-btn mobile-close" aria-label="关闭导航" @click="emit('close')"><AppIcon name="x" /></button></div>
+    <div class="brand"><div class="brand-icon"><img :src="brandIcon" alt="" width="36" height="36" /></div><div class="brand-word"><strong>RepoGuardian</strong><small>Evidence-first review</small></div><button type="button" class="icon-btn mobile-close" aria-label="关闭导航" @click="emit('close')"><AppIcon name="x" /></button></div>
     <nav class="side-scroll" aria-label="主导航">
       <div class="nav-heading">工作区</div>
       <button type="button" class="side-link" :class="{ active: modelValue === 'dashboard' && !hasReview }" :disabled="taskActive || busy" @click="emit('create')"><AppIcon name="plus" /><span class="nav-text">新建审查</span></button>
