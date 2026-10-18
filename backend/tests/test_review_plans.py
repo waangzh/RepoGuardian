@@ -2,6 +2,7 @@ import copy
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+import httpx
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -111,6 +112,45 @@ async def test_preview_claim_rolls_back_when_enqueue_fails(plan_service, monkeyp
         await service.create_confirmed_task(confirmation(preview))
     assert service._repository.get_preview(preview.preview_id)["consumed_task_id"] is None
     assert service.list_tasks(status=None, page=1, page_size=20).total == 0
+
+
+async def test_confirmation_connection_failure_preserves_plan_and_retry_is_idempotent(plan_service, monkeypatch):
+    from sqlalchemy import func, select
+    from app.models.orm import WorkerJobOrm
+    from app.tools.github_tool import GitHubTool
+    service, _, _, model_calls, pr = plan_service
+    pr.body = None
+    preview = await service.preview(ReviewPreviewRequest(pr_url="https://github.com/o/r/pull/1"))
+    request = confirmation(preview)
+    failing = True
+    requests = []
+    def transport(value):
+        requests.append(value)
+        if failing:
+            raise httpx.ConnectError("proxy TLS failure; token=secret", request=value)
+        return httpx.Response(200, json={"title": pr.title, "body": pr.body, "html_url": pr.html_url,
+            "base": {"sha": pr.base.sha, "ref": pr.base.ref, "repo": {"clone_url": pr.clone_url}},
+            "head": {"sha": pr.head.sha, "ref": pr.head.ref, "repo": {"clone_url": pr.head.repo_clone_url}}})
+    original = AsyncClient
+    monkeypatch.setattr("app.tools.github_tool.httpx.AsyncClient", lambda **kwargs:
+        original(transport=httpx.MockTransport(transport), **kwargs))
+    service._github_tool = GitHubTool("secret")
+    monkeypatch.setattr(reviews, "get_review_service", lambda: service)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/reviews", json=request.model_dump(mode="json"))
+        assert response.status_code == 503 and response.json()["detail"]["code"] == "github_connection_failed"
+        assert "secret" not in response.text and len(requests) == 3
+        assert service._repository.get_preview(preview.preview_id)["consumed_task_id"] is None
+        assert service.list_tasks(status=None, page=1, page_size=20).total == 0
+        with service._repository._session_factory() as session:
+            assert session.scalar(select(func.count()).select_from(WorkerJobOrm)) == 0
+        failing = False
+        recovered = await client.post("/api/reviews", json=request.model_dump(mode="json"))
+        assert recovered.status_code == 202, recovered.text
+        replay = await client.post("/api/reviews", json=request.model_dump(mode="json"))
+        assert replay.status_code == 202 and replay.json()["task_id"] == recovered.json()["task_id"]
+        assert len(requests) == 4
+    assert service.list_tasks(status=None, page=1, page_size=20).total == 1 and model_calls == []
 
 
 def test_externalized_history_title_filter_precedes_pagination(plan_service, monkeypatch):

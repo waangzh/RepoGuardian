@@ -110,7 +110,8 @@ async function request<T>(path: string, init?: RequestInit, conflictMessage: str
     const payload = await response.json().catch(() => null);
     const detail = payload?.detail;
     const message = response.status === 409 && conflictMessage ? conflictMessage :
-      typeof detail === 'string' ? detail : Array.isArray(detail) ? detail.map(item => item.msg).join('；') : `请求失败：${response.status}`;
+      typeof detail === 'string' ? detail : typeof detail?.message === 'string' ? detail.message :
+      Array.isArray(detail) ? detail.map(item => item.msg).join('；') : `请求失败：${response.status}`;
     throw new Error(message);
   }
   return response.json() as Promise<T>;
