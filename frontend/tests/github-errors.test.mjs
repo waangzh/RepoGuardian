@@ -23,3 +23,18 @@ test('确认方案网络错误显示可理解的原因，并保持原方案供�
     assert.equal(calls[1].preview_id, 'same-plan');
   } finally { globalThis.fetch = original; await server.close(); }
 });
+
+test('方案输入或服务端配置变化时明确要求重新预览并保留失效标识', async () => {
+  const server = await createServer({ server: { middlewareMode: true, hmr: false },
+    optimizeDeps: { noDiscovery: true, entries: [], include: [] }, appType: 'custom' });
+  const original = globalThis.fetch;
+  try {
+    const { createReview } = await server.ssrLoadModule('/src/api/client.ts');
+    for (const [code, reason] of [['review_plan_repreview_required', '旧预览'],
+      ['review_plan_configuration_changed', '服务端配置'], ['review_plan_stale', '规划输入']]) {
+      globalThis.fetch = async () => new Response(JSON.stringify({detail:{code}}), {status:409});
+      await assert.rejects(createReview('https://github.com/o/r/pull/1'), error =>
+        error.message.includes('方案已失效') && error.message.includes(reason) && error.message.includes('重新预览'));
+    }
+  } finally { globalThis.fetch = original; await server.close(); }
+});

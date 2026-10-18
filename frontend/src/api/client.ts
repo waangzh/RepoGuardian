@@ -109,7 +109,14 @@ async function request<T>(path: string, init?: RequestInit, conflictMessage: str
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
     const detail = payload?.detail;
-    const message = response.status === 409 && conflictMessage ? conflictMessage :
+    const planConflicts: Record<string, string> = {
+      review_plan_repreview_required: '方案已失效：旧预览缺少完整确认信息，请重新预览后确认。',
+      review_plan_configuration_changed: '方案已失效：服务端配置或审查策略已变化，请重新预览后确认。',
+      review_plan_stale: '方案已失效：PR 或规划输入已变化，请重新预览后确认。',
+      review_plan_expired: '方案已失效：审查方案已过期，请重新预览后确认。',
+      review_plan_model_mismatch: '方案已失效：执行模型与预览不一致，请重新预览后确认。',
+    };
+    const message = response.status === 409 && conflictMessage ? planConflicts[detail?.code] || conflictMessage :
       typeof detail === 'string' ? detail : typeof detail?.message === 'string' ? detail.message :
       Array.isArray(detail) ? detail.map(item => item.msg).join('；') : `请求失败：${response.status}`;
     throw new Error(message);
