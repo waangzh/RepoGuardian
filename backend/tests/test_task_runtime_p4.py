@@ -192,7 +192,7 @@ async def test_production_spec_ignores_hot_default_changes(production_input, mon
     assert all("canonical_change" not in value for value in calls[0]["active_evidence"])
 
 
-@pytest.mark.parametrize("version", ["task-review-prompt-v2", "task-review-prompt-v3", "task-review-prompt-v4", "task-review-prompt-v5"])
+@pytest.mark.parametrize("version", ["task-review-prompt-v2", "task-review-prompt-v3", "task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6"])
 async def test_prompt_version_frozen_in_configuration_and_checkpoint(production_input, persistence, version):
     state, provider, calls = production_input
     state["task_runtime_configuration"]["prompt_version"] = version
@@ -210,7 +210,7 @@ async def test_prompt_version_frozen_in_configuration_and_checkpoint(production_
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("version", ["task-review-prompt-v4", "task-review-prompt-v5"])
+@pytest.mark.parametrize("version", ["task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6"])
 async def test_v4_large_goal_uses_small_anchors_for_independent_verification(production_input, version):
     from pathlib import Path
     state, provider, _ = production_input

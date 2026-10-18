@@ -93,3 +93,20 @@ def test_dimensions_do_not_conflate_scope_usage_and_dynamic_validation():
     outcome = derive_review_outcome(completed_task(scope_complete=False))
     assert outcome.review_completeness == "partial" and outcome.runtime_reliability == "reliable"
     assert "budget_exhausted" in derive_review_outcome(completed_task(termination_reason="budget_exhausted")).reason_codes
+
+
+def test_incomplete_investigation_does_not_invent_abnormal_termination():
+    task = completed_task(admitted_investigations=[
+        {"status": "insufficient_evidence", "answer": "insufficient_evidence"}])
+    task.status = TaskStatus.completed_with_warnings
+    outcome = derive_review_outcome(task)
+    assert outcome.kind == "inconclusive"
+    assert outcome.reason_codes == ["investigation_incomplete"]
+    assert outcome.review_completeness == "partial" and outcome.runtime_reliability == "reliable"
+
+
+@pytest.mark.parametrize("execution,termination", [("running", "running"), ("failed", "technical_failure"),
+    ("cancelled", "cancelled"), ("completed", "budget_exhausted"), ("completed", "deadline")])
+def test_abnormal_runtime_is_not_hidden_by_completed_task_label(execution, termination):
+    outcome = derive_review_outcome(completed_task(execution_status=execution, termination_reason=termination))
+    assert "termination_incomplete" in outcome.reason_codes and outcome.runtime_reliability == "unreliable"

@@ -51,7 +51,7 @@ def fit_context_pages(executor, step, configuration):
         catalog = deepcopy(original)
         try:
             pages = build_context_pages(executor.work_item, list(executor.goals.values()), catalog,
-                capacity_chars=capacity, chunk_evidence=executor.spec.prompt_version in {"task-review-prompt-v4", "task-review-prompt-v5"})
+                capacity_chars=capacity, chunk_evidence=executor.spec.prompt_version in {"task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6"})
             for page in pages:
                 goals = [executor.goals[value["goal_id"]].model_copy(update={
                     "start_line": value["start_line"], "end_line": value["end_line"]}) for value in page.ranges]
@@ -72,7 +72,7 @@ def task_runtime_configuration(model=None, *, provider=None):
     resolver = getattr(provider, "resolve_request_profile", None)
     profile = resolver(selected_model) if callable(resolver) else settings.resolve_model_profile(selected_model)
     return {"provider": provider_name, "model": selected_model,
-        "prompt_version": "task-review-prompt-v5",
+        "prompt_version": "task-review-prompt-v6",
         "publication_contract": "claim-publication-v1",
         # 新任务冻结具体关系规划；历史手工配置缺省为 legacy，恢复时不能静默换规划器。
         "risk_planner_version": "risk-planner-v6",
@@ -195,7 +195,7 @@ async def source_catalog(goals, spec, root, git, changed_files=None):
                     "new_start": hunk.new_start, "new_length": hunk.new_length,
                     "lines": [line.model_dump(mode="json") for line in hunk.lines]}
                 break
-        if spec.prompt_version in {"task-review-prompt-v4", "task-review-prompt-v5"}:
+        if spec.prompt_version in {"task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6"}:
             chunks, _ = build_context_evidence([{**value, "file": goal.target_ref}],
                                               spec.snapshot_head_sha, spec.snapshot_base_sha)
             for chunk in chunks:

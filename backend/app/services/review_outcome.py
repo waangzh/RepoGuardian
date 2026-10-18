@@ -65,8 +65,7 @@ def derive_review_outcome(task: ReviewTask, *, publishable_count: int | None = N
     manifest = task.run_manifest
     if report.usage_integrity != "complete" or report.unknown_attempts or (manifest and manifest.usage_integrity != "complete"):
         reasons.append(Reason.USAGE_INTEGRITY_UNKNOWN)
-    if (task.status != "completed" or report.execution_status != "completed"
-            or report.termination_reason != "plan_exhausted"):
+    if report.execution_status != "completed" or report.termination_reason != "plan_exhausted":
         reasons.append(Reason.TERMINATION_INCOMPLETE)
     if report.termination_reason == "budget_exhausted":
         reasons.append(Reason.BUDGET_EXHAUSTED)
