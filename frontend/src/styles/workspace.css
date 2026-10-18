@@ -119,6 +119,7 @@ button { color: inherit; }
 .rg-app .option-card:disabled:not(.selected) { color: var(--muted); background: var(--surface2); }
 .rg-app .plan-file { display: block; overflow-wrap: anywhere; }
 .rg-app .plan-file summary { cursor: pointer; font-weight: 650; }
+.rg-app .plan-file__symbol { display: block; margin-top: 3px; color: var(--text-muted); font-size: .8125rem; font-weight: 500; overflow-wrap: anywhere; }
 .rg-app .plan-aside .aside-stat { gap: 14px; align-items: start; }
 .rg-app .plan-aside .aside-stat strong { text-align: right; }
 .rg-app .kpi .number { font-size: 28px; line-height: 1.25; margin: 8px 0 4px; }

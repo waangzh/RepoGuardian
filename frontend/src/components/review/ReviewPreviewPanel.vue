@@ -1,18 +1,11 @@
 <script setup lang="ts">
-import type { ReviewPreviewResponse, ReviewUnit } from "../../types/review";
+import type { ReviewPreviewResponse } from "../../types/review";
 import AppIcon from "../common/AppIcon.vue";
 import EmptyState from "../common/EmptyState.vue";
 import StatusBadge from "../common/StatusBadge.vue";
+import { groupingReasonText, unitSymbolSummary, unitTitle } from "../../utils/unitPresentation";
 
 defineProps<{ preview: ReviewPreviewResponse | null; previewing: boolean }>();
-
-function basename(path: string): string {
-  return path.split(/[\\/]/).pop() || path;
-}
-
-function unitTitle(unit: ReviewUnit): string {
-  return unit.changed_symbols[0] || basename(unit.primary_files[0] || unit.id).replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ");
-}
 </script>
 
 <template>
@@ -33,9 +26,9 @@ function unitTitle(unit: ReviewUnit): string {
       <div v-if="preview.risk_tags.length" class="preview-risk-tags"><strong>风险标签</strong><span v-for="risk in preview.risk_tags" :key="risk">{{ risk }}</span></div>
       <section class="preview-groups">
         <header><h3>计划中的变更组</h3><span>主要文件</span><span>复杂度</span><span>Tokens</span><span>风险</span></header>
-        <article v-for="unit in preview.review_units" :key="unit.id">
-          <span><strong>{{ unitTitle(unit) }}</strong><small>{{ unit.grouping_reason }}</small></span>
-          <code>{{ unit.primary_files.length }} + {{ unit.related_files.length }} related</code>
+        <article v-for="(unit, index) in preview.review_units" :key="unit.id">
+          <span :title="unit.primary_files[0]"><strong>{{ unitTitle(unit, index, preview.review_units.length) }}</strong><small>{{ groupingReasonText(unit.grouping_reason) }}<template v-if="unitSymbolSummary(unit)"> · {{ unitSymbolSummary(unit) }}</template></small></span>
+          <code>{{ unit.primary_files.length }} 主审 + {{ unit.related_files.length }} 关联</code>
           <StatusBadge :status="unit.complexity" :label="unit.complexity" />
           <b>{{ unit.estimated_tokens.toLocaleString() }}</b>
           <StatusBadge :status="unit.risk_tags.includes('high') ? 'high' : unit.risk_tags.length ? 'medium' : 'low'" :label="unit.risk_tags[0] || 'low'" />
