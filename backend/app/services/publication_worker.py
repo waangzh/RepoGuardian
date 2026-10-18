@@ -31,11 +31,21 @@ def compose_summary(plan, selection, fallback, items, phase):
         else:
             inline.append(finding)
     preview = plan.model_copy(update={"inline_drafts": inline, "summary_findings": summary})
+    # 仅接入已经通过远端身份对账并落库的成功回执，不猜测 URL。
+    inline_keys = {finding.finding_key for finding in inline}
+    receipts = {}
+    for item in items:
+        key, url = getattr(item, "finding_key", None), getattr(item, "github_url", None)
+        if (item.kind == "inline" and item.state == "published" and key in inline_keys
+                and isinstance(url, str) and re.fullmatch(
+                    r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*#discussion(?:_r|-diff-)[0-9]+", url)):
+            receipts.setdefault(key, set()).add(url)
+    discussions = {key: next(iter(urls)) for key, urls in receipts.items() if len(urls) == 1}
     delivered = sum(item.kind == "inline" and item.state == "published" for item in items)
     failed = sum(item.kind == "inline" and item.state == "failed" for item in items)
     uncertain = sum(item.kind == "inline" and item.state == "uncertain" for item in items)
     count = len(plan.inline_drafts) + len(plan.summary_findings)
-    return (render_summary(preview) + f"\n\n### 投递状态：{phase}\n\n"
+    return (render_summary(preview, discussion_urls=discussions) + f"\n\n### 投递状态：{phase}\n\n"
             f"- 用户选择：{len(selected)} / {count} 项；未选择：{count - len(selected)} 项\n"
             f"- 已确认投递的 Inline：{delivered}\n- Summary-only：{len(summary)}\n"
             f"- Inline 失败：{failed}\n- Inline 结果未知：{uncertain}\n\n"
