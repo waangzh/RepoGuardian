@@ -48,7 +48,7 @@ def finding_body(text: dict, severity: str, head_sha: str, *, category: str | No
             f"审查 Commit：{markdown_text(head_sha, 64)}。")
 
 
-def render_summary(plan: PublicationPlan) -> str:
+def render_summary(plan: PublicationPlan, *, discussion_urls: dict[str, str] | None = None) -> str:
     outcome = plan.outcome
     digest = plan.digest
     descriptions = {
@@ -89,8 +89,10 @@ def render_summary(plan: PublicationPlan) -> str:
             location = markdown_text(anchor.file_path, 500)
             if anchor.start_line:
                 location += f":{anchor.start_line}（{anchor.side}）"
+            discussion = (discussion_urls or {}).get(finding.finding_key) if finding.placement == "inline" else None
             lines.append(f"{index}. [{finding.severity.title()}] {finding.title} — {location}"
-                         + ("（Summary）" if finding.placement == "summary" else ""))
+                         + ("（Summary）" if finding.placement == "summary" else "")
+                         + (f" · [查看 Inline 讨论]({discussion})" if discussion else ""))
         for finding in plan.summary_findings:
             lines += ["", render_finding(finding)]
     withheld_count = outcome.confirmed_count - outcome.publishable_count

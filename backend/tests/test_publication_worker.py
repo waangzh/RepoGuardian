@@ -28,6 +28,8 @@ async def test_summary_inline_final_status_and_repeat_do_not_duplicate(persisten
     assert all(item.state == "published" and item.github_url for item in result.items)
     assert len(fake.comments) == len(fake.reviews) == len(fake.inline) == 1
     assert "Inline：1" in next(iter(fake.comments.values()))["body"]
+    body = next(iter(fake.comments.values()))["body"]
+    assert f"[查看 Inline 讨论]({next(iter(fake.inline.values()))['html_url']})" in body
     assert not await worker.run_once()
     assert not any(value[0] == "APPROVE" for value in fake.writes)
 
@@ -47,6 +49,7 @@ async def test_timeout_after_inline_acceptance_recovers_batch_without_post_repla
     await worker.run_once()
     assert repo.get(attempt.id).state == "succeeded"
     assert len(fake.reviews) == len(fake.inline) == 1
+    assert "[查看 Inline 讨论](https://github.com/o/r/pull/1#discussion_r1000)" in next(iter(fake.comments.values()))["body"]
 
 
 async def test_absent_remote_after_unknown_send_requires_manual_handling(persistence):
@@ -165,3 +168,27 @@ async def test_lost_job_generation_blocks_writes(persistence):
     with pytest.raises(PublicationLeaseLost):
         await delivery.execute(job)
     assert not fake.writes
+
+
+@pytest.mark.parametrize("state,fallback,selected,url,linked", [
+    ("published", False, True, "https://github.com/o/r/pull/1#discussion_r1000", True),
+    ("uncertain", False, True, "https://github.com/o/r/pull/1#discussion_r1000", False),
+    ("failed", False, True, "https://github.com/o/r/pull/1#discussion_r1000", False),
+    ("published", True, True, "https://github.com/o/r/pull/1#discussion_r1000", False),
+    ("published", False, False, "https://github.com/o/r/pull/1#discussion_r1000", False),
+    ("published", False, True, "javascript:alert(1)", False),
+    ("published", False, True, "https://github.com/o/r/pull/1#discussion_r1000) @all", False),
+    ("published", False, True, None, False),
+])
+def test_summary_links_only_confirmed_selected_inline_receipts(state, fallback, selected, url, linked):
+    from types import SimpleNamespace
+    from app.services.publication_worker import compose_summary
+    from app.services.publication_planner import PublicationPlanner
+    from test_publication_planner import publishable_task
+    plan = PublicationPlanner().build(publishable_task())
+    saved = plan.model_dump(mode="json")
+    item = SimpleNamespace(kind="inline", state=state, finding_key="key-a", github_url=url)
+    result = compose_summary(plan, {"finding_keys": ["key-a"] if selected else []},
+        {"key-a": "outside_diff"} if fallback else {}, [item], "Published")
+    assert ("查看 Inline 讨论" in result) is linked
+    assert plan.model_dump(mode="json") == saved
