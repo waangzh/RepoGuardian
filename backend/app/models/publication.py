@@ -25,6 +25,8 @@ class OutcomeReason(StrEnum):
     TASK_FAILED = "task_failed"
     TASK_CANCELLED = "task_cancelled"
     TERMINATION_INCOMPLETE = "termination_incomplete"
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    DEADLINE_EXCEEDED = "deadline_exceeded"
     SCOPE_INCOMPLETE = "scope_incomplete"
     SCOPE_EMPTY = "scope_empty"
     VERIFICATION_UNRESOLVED = "verification_unresolved"
@@ -50,6 +52,35 @@ class ReviewOutcome(BaseModel):
     total_goals: int = Field(default=0, ge=0)
     incomplete_investigations: int = Field(default=0, ge=0)
     reason_codes: list[OutcomeReason] = Field(default_factory=list)
+    finding_conclusion: Literal["confirmed", "unresolved", "no_confirmed_findings", "unknown"] = "unknown"
+    review_completeness: CoverageKind = CoverageKind.UNKNOWN
+    runtime_reliability: Literal["reliable", "unreliable", "unknown"] = "unknown"
+    dynamic_validation: Literal["not_executed", "passed", "failed", "unknown"] = "not_executed"
+
+
+class DigestGoal(BaseModel):
+    goal_id: str | None = None
+    path: str | None = None
+    start_line: int | None = Field(default=None, ge=1)
+    end_line: int | None = Field(default=None, ge=1)
+    side: Literal["head", "base"] | None = None
+    status: str = "unknown"
+    reason: str | None = None
+
+
+class DigestExcludedFile(BaseModel):
+    path: str
+    reason: str
+
+
+class ReviewDigest(BaseModel):
+    examined_goals: list[DigestGoal] = Field(default_factory=list)
+    incomplete_goals: list[DigestGoal] = Field(default_factory=list)
+    reviewed_files: list[str] = Field(default_factory=list)
+    excluded_files: list[DigestExcludedFile] = Field(default_factory=list)
+    validation_state: Literal["not_executed", "unknown"] = "unknown"
+    checked_areas: list[Literal["head_source_ranges", "base_source_ranges", "file_changes"]] = Field(default_factory=list)
+    termination_reason: str | None = None
 
 
 class PublicationSnapshot(BaseModel):
@@ -87,6 +118,7 @@ class PublicationPlan(BaseModel):
     review_id: str
     snapshot: PublicationSnapshot
     outcome: ReviewOutcome
+    digest: ReviewDigest = Field(default_factory=ReviewDigest)
     summary_markdown: str = ""
     user_report_markdown: str = ""
     inline_drafts: list[PublicationFinding] = Field(default_factory=list)

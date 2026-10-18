@@ -2,7 +2,8 @@
 
 from pydantic import ValidationError
 
-from app.models.publication import PublicationAnchor, PublicationFinding, PublicationPlan, PublicationSnapshot, WithheldFinding
+from app.models.publication import (DigestExcludedFile, DigestGoal, ReviewDigest, PublicationAnchor,
+    PublicationFinding, PublicationPlan, PublicationSnapshot, WithheldFinding)
 from app.models.review import ReviewTask
 from app.models.review_runtime import TaskRuntimeReport
 from app.services.publication_renderer import finding_body, markdown_text, render_summary, render_user_report
@@ -10,12 +11,42 @@ from app.services.review_outcome import derive_review_outcome, snapshot_valid
 from app.services.review_publication import select_publication_findings
 
 
+def build_review_digest(task, report):
+    digest = ReviewDigest(excluded_files=[DigestExcludedFile(path=item.file_path, reason=item.reason)
+        for item in sorted(task.excluded_files, key=lambda item: (item.file_path, item.reason))])
+    if report is None:
+        return digest
+    digest.validation_state = "not_executed"
+    digest.termination_reason = report.termination_reason
+    areas = set()
+    file_goals = {}
+    for item in report.initial_scope_coverage:
+        kind = item.get("target_kind")
+        goal = DigestGoal(goal_id=item.get("goal_id"), path=item.get("target_ref"),
+            start_line=item.get("start_line"), end_line=item.get("end_line"),
+            side="base" if kind == "base_source_range" else "head" if kind == "source_range" else None,
+            status=item.get("status") or "unknown", reason=item.get("reason"))
+        (digest.examined_goals if goal.status == "examined" else digest.incomplete_goals).append(goal)
+        if goal.path:
+            file_goals.setdefault(goal.path, []).append(goal.status)
+        if goal.status == "examined" and kind in {"source_range", "base_source_range", "file_change"}:
+            areas.add({"source_range": "head_source_ranges", "base_source_range": "base_source_ranges",
+                       "file_change": "file_changes"}[kind])
+    for goals in (digest.examined_goals, digest.incomplete_goals):
+        goals.sort(key=lambda item: (item.path or "", item.side or "", item.start_line or 0, item.goal_id or ""))
+    digest.reviewed_files = sorted(path for path, statuses in file_goals.items() if all(s == "examined" for s in statuses))
+    digest.checked_areas = sorted(areas)
+    return digest
+
+
 class PublicationPlanner:
     def build(self, task: ReviewTask) -> PublicationPlan:
         records = []
+        report = None
         if task.engine == "task_review_v1" and task.task_runtime_report is not None:
             try:
-                records = TaskRuntimeReport.model_validate(task.task_runtime_report).findings
+                report = TaskRuntimeReport.model_validate(task.task_runtime_report)
+                records = report.findings
             except ValidationError:
                 pass  # Outcome 显式报告 runtime_report_invalid。
         selected, withheld = select_publication_findings(task, records)
@@ -28,7 +59,7 @@ class PublicationPlanner:
             selected = []
             outcome.publishable_count = 0
         manifest = task.run_manifest
-        plan = PublicationPlan(review_id=task.id, outcome=outcome,
+        plan = PublicationPlan(review_id=task.id, outcome=outcome, digest=build_review_digest(task, report),
             snapshot=PublicationSnapshot(head_sha=manifest.head_sha if manifest else None,
                 effective_base_sha=manifest.effective_base_sha if manifest else None),
             blocking_reasons=blockers, content_eligible=not blockers and snapshot_valid(task),

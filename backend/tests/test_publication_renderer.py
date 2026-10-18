@@ -7,7 +7,7 @@ from test_review_outcome import completed_task
 
 
 @pytest.mark.parametrize("task,label", [(completed_task(), "未发现可行动问题"),
-    (completed_task(scope_complete=False), "审查结论不确定"), (publishable_task(), "发现已确认问题")])
+    (completed_task(scope_complete=False), "本次审查未得出完整结论"), (publishable_task(), "发现已确认问题")])
 def test_rendered_counts_and_repeatability(task, label):
     plan = PublicationPlanner().build(task)
     assert label in plan.summary_markdown
@@ -26,3 +26,29 @@ def test_untrusted_markdown_and_html_are_escaped_and_bounded():
     assert "&lt;script&gt;" in text and "&#64;everyone" in text
     assert len(markdown_text("x" * 10000, 100)) == 101
     assert "\u202e" not in markdown_text("a\u202eb")
+
+
+def test_digest_is_based_on_goals_not_requested_focus_and_escapes_reasons():
+    task = completed_task(initial_scope_coverage=[
+        {"goal_id": "g1", "target_ref": "src/a.py", "target_kind": "base_source_range", "start_line": 2,
+         "end_line": 4, "status": "examined", "reason": "删除前契约核对"},
+        {"goal_id": "g2", "target_ref": "src/b.py", "status": "not_examined", "reason": "<script>@everyone"}],
+        scope_complete=False, termination_reason="budget_exhausted")
+    from app.models.review import ExcludedReviewFile
+    task.excluded_files = [ExcludedReviewFile(file_path="secret.env", reason="sensitive")]
+    plan = PublicationPlanner().build(task)
+    assert plan.digest.reviewed_files == ["src/a.py"]
+    assert plan.digest.checked_areas == ["base_source_ranges"]
+    assert len(plan.digest.incomplete_goals) == 1
+    text = plan.summary_markdown
+    assert "src/a" in text and "2–4（base）" in text and "budget_exhausted" in text
+    assert "secret" in text and "sensitive" in text and "可生成草稿" not in text
+    assert "<script>" not in text and "@everyone" not in text
+
+
+def test_complete_scope_with_unknown_usage_explains_reliability_separately():
+    plan = PublicationPlanner().build(completed_task(usage_integrity="unknown"))
+    assert plan.outcome.kind == "inconclusive"
+    assert plan.outcome.review_completeness == "complete"
+    assert plan.outcome.runtime_reliability == "unreliable"
+    assert "计量不完整" in plan.summary_markdown and "部分目标未完成检查" not in plan.summary_markdown

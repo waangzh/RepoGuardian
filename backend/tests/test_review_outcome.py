@@ -83,3 +83,13 @@ def test_dismissed_and_duplicate_do_not_block_clean_and_runtime_failure_wins():
         unscheduled_leads=[{"status": "duplicate"}])).kind == "clean"
     assert derive_review_outcome(completed_task(execution_status="failed")).kind == "failed"
     assert derive_review_outcome(completed_task(execution_status="cancelled")).kind == "cancelled"
+
+
+def test_dimensions_do_not_conflate_scope_usage_and_dynamic_validation():
+    outcome = derive_review_outcome(completed_task(usage_integrity="unknown"))
+    assert outcome.finding_conclusion == "no_confirmed_findings"
+    assert outcome.review_completeness == "complete" and outcome.runtime_reliability == "unreliable"
+    assert outcome.dynamic_validation == "not_executed"
+    outcome = derive_review_outcome(completed_task(scope_complete=False))
+    assert outcome.review_completeness == "partial" and outcome.runtime_reliability == "reliable"
+    assert "budget_exhausted" in derive_review_outcome(completed_task(termination_reason="budget_exhausted")).reason_codes

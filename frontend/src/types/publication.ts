@@ -11,6 +11,33 @@ export interface ReviewOutcome {
   total_goals: number;
   incomplete_investigations: number;
   reason_codes: string[];
+  finding_conclusion: "confirmed" | "unresolved" | "no_confirmed_findings" | "unknown";
+  review_completeness: CoverageKind;
+  runtime_reliability: "reliable" | "unreliable" | "unknown";
+  dynamic_validation: "not_executed" | "passed" | "failed" | "unknown";
+}
+
+export interface DigestGoal {
+  goal_id: string | null;
+  path: string | null;
+  start_line: number | null;
+  end_line: number | null;
+  side: "head" | "base" | null;
+  status: string;
+  reason: string | null;
+}
+export interface DigestExcludedFile {
+  path: string;
+  reason: string;
+}
+export interface ReviewDigest {
+  examined_goals: DigestGoal[];
+  incomplete_goals: DigestGoal[];
+  reviewed_files: string[];
+  excluded_files: DigestExcludedFile[];
+  validation_state: "not_executed" | "unknown";
+  checked_areas: ("head_source_ranges" | "base_source_ranges" | "file_changes")[];
+  termination_reason: string | null;
 }
 
 export interface PublicationSnapshot {
@@ -46,6 +73,7 @@ export interface PublicationPlan {
   review_id: string;
   snapshot: PublicationSnapshot;
   outcome: ReviewOutcome;
+  digest: ReviewDigest;
   summary_markdown: string;
   user_report_markdown: string;
   inline_drafts: PublicationFinding[];

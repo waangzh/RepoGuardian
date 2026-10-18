@@ -50,10 +50,11 @@ def test_review_mode_enum_is_kept_in_frontend_contract() -> None:
 def test_publication_interfaces_cover_backend_fields() -> None:
     from app.models.publication import (PublicationPlan, PublicationFinding, PublicationAnchor,
         PublicationSnapshot, ReviewOutcome, WithheldFinding, PublicationAttempt, PublicationItem,
-        PublicationSelection, PublicationPreflightResult, PublicationAccepted)
+        PublicationSelection, PublicationPreflightResult, PublicationAccepted, ReviewDigest, DigestGoal, DigestExcludedFile)
     source = FRONTEND_TYPES.with_name("publication.ts").read_text(encoding="utf-8")
     for model in (PublicationPlan, PublicationFinding, PublicationAnchor, PublicationSnapshot, ReviewOutcome, WithheldFinding,
-                  PublicationAttempt, PublicationItem, PublicationSelection, PublicationPreflightResult, PublicationAccepted):
+                  PublicationAttempt, PublicationItem, PublicationSelection, PublicationPreflightResult, PublicationAccepted,
+                  ReviewDigest, DigestGoal, DigestExcludedFile):
         body = _interface_body(source, model.__name__)
         assert all(re.search(rf"\b{name}\??\s*:", body) for name in model.model_fields)
 
