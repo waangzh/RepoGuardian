@@ -100,7 +100,7 @@ class TaskRuntimeCheckpoint:
             "verification": projection.verification.model_dump(mode="json") if projection.verification else None,
             "invalidated_results": projection.invalidated_results,
         }
-        if executor.spec.prompt_version == "task-review-prompt-v5":
+        if executor.spec.prompt_version in {"task-review-prompt-v5", "task-review-prompt-v6"}:
             session["rejected_items"] = step.rejected_items
         return session
 

@@ -40,7 +40,7 @@ def test_digest_is_based_on_goals_not_requested_focus_and_escapes_reasons():
     assert plan.digest.reviewed_files == ["src/a.py"]
     assert plan.digest.checked_areas == ["base_source_ranges"]
     assert len(plan.digest.incomplete_goals) == 1
-    text = plan.summary_markdown
+    text = plan.user_report_markdown
     assert "src/a" in text and "2–4（base）" in text and "budget_exhausted" in text
     assert "secret" in text and "sensitive" in text and "可生成草稿" not in text
     assert "<script>" not in text and "@everyone" not in text

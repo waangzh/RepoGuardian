@@ -119,7 +119,7 @@ class InspectTaskStep:
                     "correction": self.repair_errors,
                     "instruction": "Only resubmit rejected items; accepted results are stored by server.",
                 }
-                if executor.spec.prompt_version == "task-review-prompt-v5":
+                if executor.spec.prompt_version in {"task-review-prompt-v5", "task-review-prompt-v6"}:
                     feedback.update(rejected_items=self.rejected_items,
                         accepted_target_ids=sorted(executor.projection.accepted_target_ids))
                 request = replace(request, prompt=request.prompt + "\n" + json.dumps(feedback, ensure_ascii=False))

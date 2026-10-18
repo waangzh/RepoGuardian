@@ -39,7 +39,8 @@ async def test_endpoint_terminal_and_unfinished_statuses(monkeypatch, status):
     terminal = status in {TaskStatus.completed, TaskStatus.completed_with_warnings, TaskStatus.failed, TaskStatus.cancelled}
     assert response.status_code == (200 if terminal else 409)
     if terminal:
-        assert response.json()["outcome"]["kind"] == {"failed": "failed", "cancelled": "cancelled", "completed": "clean"}.get(status, "inconclusive")
+        # 任务标签不能覆盖本 fixture 已保存的完整、可靠 Runtime 结论。
+        assert response.json()["outcome"]["kind"] == {"failed": "failed", "cancelled": "cancelled"}.get(status, "clean")
     else:
         assert response.json()["detail"] == "Review is not finished"
 
