@@ -177,31 +177,43 @@ class ReviewService:
         return task
 
     async def create_confirmed_task(self, request: ReviewCreateRequest) -> ReviewTask:
+        from pydantic import ValidationError
+        from app.services.preview_confirmation import validate_confirmation, pr_fingerprint
         if not request.preview_id:
             return await self._create_and_dispatch(request)
         record = (await asyncio.to_thread(self._repository.get_preview, request.preview_id)
                   if self._repository else self._previews.get(request.preview_id))
-        if not record or record["pr_url"] != str(request.pr_url) or record["response"]["plan_hash"] != request.plan_hash:
+        if not record or record.get("pr_url") != str(request.pr_url):
             raise ValueError("review_plan_stale")
-        expected = record["response"]["snapshot"]
-        if (expected["head_sha"] != request.expected_head_sha
-                or expected["effective_base_sha"] != request.expected_effective_base_sha):
+        try:
+            response = ReviewPreviewResponse.model_validate(record["response"])
+        except (ValidationError, KeyError, TypeError):
+            raise ValueError("review_plan_stale") from None
+        expected = response.snapshot
+        if (response.plan_hash != request.plan_hash or expected is None
+                or expected.head_sha != request.expected_head_sha
+                or expected.effective_base_sha != request.expected_effective_base_sha):
             raise ValueError("review_plan_stale")
         if record.get("consumed_task_id"):
             task = await asyncio.to_thread(self.get_task, record["consumed_task_id"])
             if task is None:
                 raise ValueError("review_plan_stale")
             return task
-        if datetime.fromisoformat(record["response"]["expires_at"]) <= datetime.now(timezone.utc):
-            raise ValueError("review_plan_expired")
-        if request.model and request.model != record["configuration"]["model"]:
-            raise ValueError("review_plan_model_mismatch")
-        fresh = await self.preview(ReviewPreviewRequest(pr_url=request.pr_url,
-            model=record["configuration"]["model"], plan=record["response"]["effective_plan"]), persist=False)
-        if fresh.plan_hash != request.plan_hash:
+        expiry = response.expires_at
+        if expiry is None:
             raise ValueError("review_plan_stale")
-        return await self._create_and_dispatch(request.model_copy(update={"model": record["configuration"]["model"]}),
-                                configuration=record["configuration"], preview_id=request.preview_id)
+        if (expiry.replace(tzinfo=timezone.utc) if expiry.tzinfo is None else expiry) <= datetime.now(timezone.utc):
+            raise ValueError("review_plan_expired")
+        configuration, expected_pr = validate_confirmation(record, request)
+        if request.model and request.model != configuration["model"]:
+            raise ValueError("review_plan_model_mismatch")
+        pr = await self._github_tool.fetch_pr(str(request.pr_url))
+        if pr_fingerprint(pr) != expected_pr:
+            raise ValueError("review_plan_stale")
+        # 网络等待期间服务端配置也可能变化；只复核本地指纹，不重做准备。
+        configuration, _ = validate_confirmation(record, request)
+        return await self._create_and_dispatch(request.model_copy(update={"model": configuration["model"]}),
+                                configuration=configuration, preview_id=request.preview_id)
 
     def get_task(self, task_id: str) -> ReviewTask | None:
         if self._repository:
@@ -413,6 +425,8 @@ class ReviewService:
     async def _build_preview(self, request, pr_url, pr, configuration, options, prepared, persist):
         from app.services.review_plan import apply_scope, configure_runtime, preview_hash
         from app.services.review_input_context import build_pr_intent
+        from app.services.preview_confirmation import policy_fingerprint
+        planning_policy = policy_fingerprint()
         changed_files = self._diff_parser.parse(prepared["diff"])
         index = prepared["index"]
         planner = DeterministicReviewPlanner()
@@ -437,6 +451,7 @@ class ReviewService:
         frozen = configure_runtime(configuration, options, snapshot, plan_hash)
         from app.services.fingerprints import stable_hash
         frozen["initial_plan_hash"] = stable_hash(plan.model_dump(mode="json"))
+        frozen["initial_plan"] = plan.model_dump(mode="json")
         backend = self._validation_backend_selector.select(
             request.validation_backend.value,
             request.mode,
@@ -488,8 +503,10 @@ class ReviewService:
             warnings=plan.warnings,
         )
         if persist:
+            from app.services.preview_confirmation import freeze_confirmation
             record = {"pr_url": pr_url, "response": response.model_dump(mode="json"),
-                      "configuration": frozen}
+                      "configuration": frozen,
+                      "confirmation": freeze_confirmation(pr, configuration, request, response, planning_policy=planning_policy)}
             if self._repository:
                 await asyncio.to_thread(self._repository.save_preview, response.preview_id,
                                         record, response.expires_at)
