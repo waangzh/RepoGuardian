@@ -83,6 +83,7 @@ def derive_review_outcome(task: ReviewTask, *, publishable_count: int | None = N
                          confirmed_count=confirmed, publishable_count=publishable, unresolved_count=unresolved,
                          total_goals=total, examined_goals=examined, incomplete_investigations=investigations,
                          reason_codes=reasons,
+                         dynamic_validation="not_executed",
                          finding_conclusion="confirmed" if confirmed else "unresolved" if unresolved else
                              "unknown" if unknown else "no_confirmed_findings",
                          review_completeness=CoverageKind.UNKNOWN if not total else CoverageKind.PARTIAL if

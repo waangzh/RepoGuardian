@@ -66,3 +66,15 @@ def test_browser_publication_fixtures_reproduce_backend_plan() -> None:
     for fixture in json.loads(path.read_text(encoding="utf-8")).values():
         task = ReviewTask.model_validate(fixture["task"])
         assert PublicationPlanner().build(task).model_dump(mode="json") == fixture["plan"]
+
+
+def test_public_finding_schema_and_frontend_fields_are_explicit():
+    from app.models.review_plan import FindingLocation, FindingVerification, FindingView
+    source = FRONTEND_TYPES.with_name("reviewPlan.ts").read_text(encoding="utf-8")
+    for model in (FindingView, FindingLocation, FindingVerification):
+        body = _interface_body(source, model.__name__)
+        assert all(re.search(rf"\b{name}\??\s*:", body) for name in model.model_fields)
+    schema = app.openapi()["components"]["schemas"]
+    assert set(schema["FindingView"]["properties"]["review_status"]["enum"]) == {
+        "candidate", "confirmed", "unresolved", "dismissed", "unknown"}
+    assert schema["FindingLocation"]["properties"]["side"]["enum"] == ["left", "right"]

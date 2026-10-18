@@ -61,6 +61,9 @@ export interface PublicationFinding {
   anchor: PublicationAnchor;
   title: string;
   body_markdown: string;
+  category: string | null;
+  evidence_summary: string | null;
+  evidence_ids: string[];
 }
 
 export interface WithheldFinding {

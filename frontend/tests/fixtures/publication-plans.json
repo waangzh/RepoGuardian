@@ -374,7 +374,7 @@
         "termination_reason": "plan_exhausted"
       },
       "summary_markdown": "## RepoGuardian · PR Review\n\n**发现已确认问题**\n\n请逐项核对下列已确认问题及建议；仍需关注的限制见下方说明。\n\n- 已确认问题：1\n- 审查目标完成：1 / 1\n- 未决候选：0\n\n### 审查范围\n\n已检查：Head 变更源码区间。\n本次目标全部检查完成的文件：src/a\\.py。\n\n已检查目标：\n- src/a\\.py:7–7（head）：examined；固定源码检查\n\n### 问题索引\n\n1. [Medium] 空返回值破坏调用方契约 — src/a\\.py:7（head）\n\n### 验证边界\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n此结果不应视为 Approve 或质量检查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n审查记录：preview\\-findings。",
-      "user_report_markdown": "# RepoGuardian 用户审查报告\n\n## RepoGuardian · PR Review\n\n**发现已确认问题**\n\n请逐项核对下列已确认问题及建议；仍需关注的限制见下方说明。\n\n- 已确认问题：1\n- 审查目标完成：1 / 1\n- 未决候选：0\n\n### 审查范围\n\n已检查：Head 变更源码区间。\n本次目标全部检查完成的文件：src/a\\.py。\n\n已检查目标：\n- src/a\\.py:7–7（head）：examined；固定源码检查\n\n### 问题索引\n\n1. [Medium] 空返回值破坏调用方契约 — src/a\\.py:7（head）\n\n### 验证边界\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n此结果不应视为 Approve 或质量检查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n审查记录：preview\\-findings。\n\n### 空返回值破坏调用方契约\n\n**[Medium] 空返回值破坏调用方契约**\n\n**影响：** 调用方字段读取失败\n\n**触发场景：** 服务返回空值时直接读取字段\n\n**建议：** 先处理空值\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。静态审查结论。\n\n完整证据、被扣留记录与运行过程请查看原始审计报告。",
+      "user_report_markdown": "# RepoGuardian 用户审查报告\n\n## RepoGuardian · PR Review\n\n**发现已确认问题**\n\n请逐项核对下列已确认问题及建议；仍需关注的限制见下方说明。\n\n- 已确认问题：1\n- 审查目标完成：1 / 1\n- 未决候选：0\n\n### 审查范围\n\n已检查：Head 变更源码区间。\n本次目标全部检查完成的文件：src/a\\.py。\n\n已检查目标：\n- src/a\\.py:7–7（head）：examined；固定源码检查\n\n### 问题索引\n\n1. [Medium] 空返回值破坏调用方契约 — src/a\\.py:7（head）\n\n### 验证边界\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n此结果不应视为 Approve 或质量检查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n审查记录：preview\\-findings。\n\n### 空返回值破坏调用方契约\n\n**[Medium · Correctness] 空返回值破坏调用方契约**\n\n**问题与影响：** 调用方字段读取失败\n\n**代码证据（核验依据）：** 独立核对主张\n\n**触发场景：** 服务返回空值时直接读取字段\n\n**建议：** 先处理空值\n\n---\nRepoGuardian · 独立核验支持此结论\n\n静态审查 · 未执行目标代码、测试或构建\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n完整证据、被扣留记录与运行过程请查看原始审计报告。",
       "inline_drafts": [
         {
           "finding_key": "key-a",
@@ -389,7 +389,12 @@
             "hunk_id": null
           },
           "title": "空返回值破坏调用方契约",
-          "body_markdown": "**[Medium] 空返回值破坏调用方契约**\n\n**影响：** 调用方字段读取失败\n\n**触发场景：** 服务返回空值时直接读取字段\n\n**建议：** 先处理空值\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。静态审查结论。"
+          "body_markdown": "**[Medium · Correctness] 空返回值破坏调用方契约**\n\n**问题与影响：** 调用方字段读取失败\n\n**代码证据（核验依据）：** 独立核对主张\n\n**触发场景：** 服务返回空值时直接读取字段\n\n**建议：** 先处理空值\n\n---\nRepoGuardian · 独立核验支持此结论\n\n静态审查 · 未执行目标代码、测试或构建\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。",
+          "category": "correctness",
+          "evidence_summary": "独立核对主张",
+          "evidence_ids": [
+            "e1"
+          ]
         }
       ],
       "summary_findings": [],

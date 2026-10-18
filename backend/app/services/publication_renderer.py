@@ -33,12 +33,19 @@ def render_finding(finding: PublicationFinding) -> str:
     return finding.body_markdown
 
 
-def finding_body(text: dict, severity: str, head_sha: str) -> str:
-    return (f"**[{severity.title()}] {markdown_text(text['claim'], 200)}**\n\n"
-            f"**影响：** {markdown_text(text['affected_behavior'])}\n\n"
+def finding_body(text: dict, severity: str, head_sha: str, *, category: str | None = None,
+                 evidence_summary: str | None = None) -> str:
+    label = f"{severity.title()} · {markdown_text(category.title(), 100)}" if category else severity.title()
+    evidence = f"**代码证据（核验依据）：** {markdown_text(evidence_summary)}\n\n" if evidence_summary else ""
+    return (f"**[{label}] {markdown_text(text['claim'], 200)}**\n\n"
+            f"**问题与影响：** {markdown_text(text['affected_behavior'])}\n\n"
+            + evidence +
             f"**触发场景：** {markdown_text(text['failure_scenario'])}\n\n"
             f"**建议：** {markdown_text(text['recommendation'])}\n\n"
-            f"审查 Commit：{markdown_text(head_sha, 64)}。静态审查结论。")
+            "---\n"
+            + ("RepoGuardian · 独立核验支持此结论\n\n" if evidence_summary else "RepoGuardian\n\n")
+            + "静态审查 · 未执行目标代码、测试或构建\n\n"
+            f"审查 Commit：{markdown_text(head_sha, 64)}。")
 
 
 def render_summary(plan: PublicationPlan) -> str:

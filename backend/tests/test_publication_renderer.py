@@ -52,3 +52,12 @@ def test_complete_scope_with_unknown_usage_explains_reliability_separately():
     assert plan.outcome.review_completeness == "complete"
     assert plan.outcome.runtime_reliability == "unreliable"
     assert "计量不完整" in plan.summary_markdown and "部分目标未完成检查" not in plan.summary_markdown
+
+
+def test_bound_evidence_text_is_escaped_without_copying_raw_code():
+    task = publishable_task()
+    record = task.task_runtime_report["findings"][0]
+    record["verification"]["reason"] = record["publication"]["basis"] = "<script> ![x](https://evil) @everyone"
+    finding = PublicationPlanner().build(task).inline_drafts[0]
+    assert "<script>" not in finding.body_markdown and "![x]" not in finding.body_markdown
+    assert "@everyone" not in finding.body_markdown and "&#64;everyone" in finding.body_markdown

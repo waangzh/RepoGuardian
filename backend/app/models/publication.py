@@ -55,7 +55,7 @@ class ReviewOutcome(BaseModel):
     finding_conclusion: Literal["confirmed", "unresolved", "no_confirmed_findings", "unknown"] = "unknown"
     review_completeness: CoverageKind = CoverageKind.UNKNOWN
     runtime_reliability: Literal["reliable", "unreliable", "unknown"] = "unknown"
-    dynamic_validation: Literal["not_executed", "passed", "failed", "unknown"] = "not_executed"
+    dynamic_validation: Literal["not_executed", "passed", "failed", "unknown"] = "unknown"
 
 
 class DigestGoal(BaseModel):
@@ -104,6 +104,9 @@ class PublicationFinding(BaseModel):
     anchor: PublicationAnchor
     title: str
     body_markdown: str
+    category: str | None = None
+    evidence_summary: str | None = None
+    evidence_ids: list[str] = Field(default_factory=list)
 
 
 class WithheldFinding(BaseModel):

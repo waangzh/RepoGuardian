@@ -118,3 +118,56 @@ def test_failed_and_cancelled_have_no_finding_drafts(status):
     assert plan.outcome.kind == status and plan.outcome.confirmed_count == 1
     assert not plan.content_eligible and not plan.inline_drafts and not plan.summary_findings
     assert plan.outcome.publishable_count == 0
+
+
+def test_evidence_summary_uses_bound_verification_basis_and_ignores_unbound_code():
+    task = publishable_task()
+    record = task.task_runtime_report["findings"][0]
+    record["issue"]["primary_evidence"]["existing_code"] = "未被核验的新主张"
+    finding = PublicationPlanner().build(task).inline_drafts[0]
+    assert finding.evidence_summary == record["publication"]["basis"] == "独立核对主张"
+    assert finding.evidence_ids == ["e1"]
+    assert "代码证据" in finding.body_markdown and "独立核验支持此结论" in finding.body_markdown
+    assert "未被核验的新主张" not in finding.body_markdown
+    record["publication"]["basis"] = "未绑定的证据解释"
+    plan = PublicationPlanner().build(task)
+    assert not plan.inline_drafts and plan.withheld_findings[0].reason_code == "publication_subject_mismatch"
+
+
+def test_verification_without_evidence_is_withheld_even_if_machine_confirmed():
+    task = publishable_task()
+    record = task.task_runtime_report["findings"][0]
+    record["verification"]["evidence_ids"] = []
+    record["publication"]["evidence_ids"] = []
+    plan = PublicationPlanner().build(task)
+    assert plan.outcome.confirmed_count == 1 and not plan.inline_drafts
+    assert plan.withheld_findings[0].reason_code == "publication_evidence_missing"
+
+
+def test_narrowing_evidence_uses_the_verified_narrowing_basis():
+    from app.models.review_runtime import PublicationTextNarrowing
+    task = publishable_task()
+    record = task.task_runtime_report["findings"][0]
+    verification = VerificationResult.model_validate(record["verification"])
+    verification.publication_action = "narrow"
+    verification.narrowing = PublicationTextNarrowing(affected_behavior="仅空值路径读取失败", basis="仅该路径证据充分")
+    spec = SimpleNamespace(snapshot_head_sha=task.run_manifest.head_sha, snapshot_base_sha=task.run_manifest.effective_base_sha)
+    record["verification"] = verification.model_dump(mode="json")
+    record["publication"] = publication_view(Candidate.model_validate(record["candidate"]), verification, spec, usage_known=True)
+    record["issue"]["affected_behavior"] = verification.narrowing.affected_behavior
+    finding = PublicationPlanner().build(task).inline_drafts[0]
+    assert finding.evidence_summary == "仅该路径证据充分" and "仅空值路径读取失败" in finding.body_markdown
+
+
+def test_old_frozen_plan_keeps_saved_body_and_uses_unknown_defaults():
+    from app.models.publication import PublicationPlan
+    saved = PublicationPlanner().build(publishable_task()).model_dump(mode="json")
+    saved.pop("digest")
+    for field in ("finding_conclusion", "review_completeness", "runtime_reliability", "dynamic_validation"):
+        saved["outcome"].pop(field)
+    for field in ("category", "evidence_summary", "evidence_ids"):
+        saved["inline_drafts"][0].pop(field)
+    restored = PublicationPlan.model_validate(saved)
+    assert restored.summary_markdown == saved["summary_markdown"]
+    assert restored.inline_drafts[0].body_markdown == saved["inline_drafts"][0]["body_markdown"]
+    assert restored.digest.validation_state == "unknown" and restored.outcome.runtime_reliability == "unknown"
