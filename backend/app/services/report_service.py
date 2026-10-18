@@ -31,10 +31,11 @@ class ReportService:
             if not task.task_runtime_report:
                 return "\n".join(lines + ["任务级报告尚未生成，不能据此判断本轮检查完整性。"])
             report = task.task_runtime_report
-            _append_task_runtime_report(lines, report)
-            _append_pr_summary(lines, task)
-            _append_change_summary(lines, task)
-            _append_user_runtime_findings(lines, report)
+            from app.services.publication_planner import PublicationPlanner
+            plan = PublicationPlanner().build(task)
+            lines = ["# RepoGuardian 技术审计记录", "",
+                "本记录包含格式化审查事实与运行追踪，不代表全部原始事件。", "",
+                plan.user_report_markdown.split("\n", 1)[1]]
             lines.extend(["", "<details>", "<summary>技术审计附录（运行、调查与关联证据）</summary>", "",
                 "## 运行与计量", "", f"- 执行状态：{_report_text(report.get('execution_status', 'unknown'))}",
                 f"- 终止原因：{_report_text(report.get('termination_reason', 'unknown'))}",

@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.review_plan import FindingView
+
 
 class ReviewOutcomeKind(StrEnum):
     CLEAN = "clean"
@@ -74,6 +76,11 @@ class DigestExcludedFile(BaseModel):
 
 
 class ReviewDigest(BaseModel):
+    pr_url: str | None = None
+    author_goal: str | None = None
+    actual_changes: list[str] = Field(default_factory=list)
+    intent_alignment: str = "未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。"
+    findings: list[FindingView] = Field(default_factory=list)
     examined_goals: list[DigestGoal] = Field(default_factory=list)
     incomplete_goals: list[DigestGoal] = Field(default_factory=list)
     reviewed_files: list[str] = Field(default_factory=list)
@@ -124,11 +131,21 @@ class PublicationPlan(BaseModel):
     digest: ReviewDigest = Field(default_factory=ReviewDigest)
     summary_markdown: str = ""
     user_report_markdown: str = ""
+    review_comment_markdown: str = ""
     inline_drafts: list[PublicationFinding] = Field(default_factory=list)
     summary_findings: list[PublicationFinding] = Field(default_factory=list)
     withheld_findings: list[WithheldFinding] = Field(default_factory=list)
     content_eligible: bool = False
     blocking_reasons: list[str] = Field(default_factory=list)
+
+
+class ReviewCommentCheck(BaseModel):
+    review_id: str
+    status: Literal["current", "stale", "unknown"]
+    reviewed_head_sha: str | None
+    latest_head_sha: str | None = None
+    checked_at: datetime
+    review_comment_markdown: str
 
 
 class PublicationState(StrEnum):

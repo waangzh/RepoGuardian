@@ -1,4 +1,4 @@
-"""人工处理与机器证据分离；人工操作不更改 runtime、报告或发布资格。"""
+"""人工处理与机器证据分离；人工操作不更改 runtime 或发布资格。"""
 from pydantic import ValidationError
 
 from app.models.review_plan import FindingLocation, FindingVerification, FindingView
@@ -27,10 +27,12 @@ def finding_views(task, dispositions):
     records = (task.task_runtime_report or {}).get("findings", [])
     items = []
     for index, record in enumerate(records):
-        candidate = record.get("candidate") or {}
-        issue = record.get("issue") or {}
+        if not isinstance(record, dict):
+            continue
+        candidate = record.get("candidate") if isinstance(record.get("candidate"), dict) else {}
+        issue = record.get("issue") if isinstance(record.get("issue"), dict) else {}
         identity = record.get("key") or candidate.get("candidate_id") or f"finding-{index}"
-        state = record.get("status") or "unknown"
+        state = record.get("status") if isinstance(record.get("status"), str) else "unknown"
         verified_issue, _ = publication_issue(task, record) if state == "confirmed" else (None, None)
         evidence = ("verified" if verified_issue else
                     "insufficient" if "insufficient" in (record.get("reason") or "") else

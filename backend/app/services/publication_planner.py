@@ -6,7 +6,8 @@ from app.models.publication import (DigestExcludedFile, DigestGoal, ReviewDigest
     PublicationFinding, PublicationPlan, PublicationSnapshot, WithheldFinding)
 from app.models.review import ReviewTask
 from app.models.review_runtime import TaskRuntimeReport
-from app.services.publication_renderer import finding_body, markdown_text, render_summary, render_user_report
+from app.services.publication_renderer import finding_body, markdown_text, render_summary, render_user_report, render_review_comment
+from app.services.review_digest import enrich_review_digest
 from app.services.review_outcome import derive_review_outcome, snapshot_valid
 from app.services.review_publication import select_publication_findings
 
@@ -40,7 +41,7 @@ def build_review_digest(task, report):
 
 
 class PublicationPlanner:
-    def build(self, task: ReviewTask) -> PublicationPlan:
+    def build(self, task: ReviewTask, *, dispositions: dict | None = None) -> PublicationPlan:
         records = []
         report = None
         if task.engine == "task_review_v1" and task.task_runtime_report is not None:
@@ -59,7 +60,8 @@ class PublicationPlanner:
             selected = []
             outcome.publishable_count = 0
         manifest = task.run_manifest
-        plan = PublicationPlan(review_id=task.id, outcome=outcome, digest=build_review_digest(task, report),
+        plan = PublicationPlan(review_id=task.id, outcome=outcome,
+            digest=enrich_review_digest(build_review_digest(task, report), task, report, dispositions),
             snapshot=PublicationSnapshot(head_sha=manifest.head_sha if manifest else None,
                 effective_base_sha=manifest.effective_base_sha if manifest else None),
             blocking_reasons=blockers, content_eligible=not blockers and snapshot_valid(task),
@@ -89,4 +91,5 @@ class PublicationPlanner:
         plan.summary_findings.sort(key=sort_key)
         plan.summary_markdown = render_summary(plan)
         plan.user_report_markdown = render_user_report(task, plan)
+        plan.review_comment_markdown = render_review_comment(plan)
         return plan
