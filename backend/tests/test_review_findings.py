@@ -37,3 +37,10 @@ def test_unknown_location_is_not_invented(changes):
     issue["primary_evidence"].update(changes)
     issue["resolved_location"] = None
     assert finding_views(task, {})[0].location is None
+
+
+def test_conflicting_location_does_not_become_a_public_anchor():
+    task = publishable_task()
+    task.task_runtime_report["findings"][0]["issue"]["resolved_location"]["side"] = "base"
+    item = finding_views(task, {})[0]
+    assert item.location is None and item.verification.evidence_status == "unknown"

@@ -72,10 +72,15 @@ class PublicationPlanner:
                 file_path=evidence.file_path, start_line=evidence.resolved_start_line,
                 end_line=evidence.resolved_end_line, side=evidence.resolved_side)
             text = record["publication"]["published_text"]
+            evidence_summary = record["publication"]["basis"]
+            category = record["candidate"].get("category", "correctness")
             finding = PublicationFinding(finding_key=key, candidate_id=record["candidate"]["candidate_id"],
                 severity=issue.severity.value, placement=issue.placement.value, anchor=anchor,
                 title=markdown_text(text["claim"], 200),
-                body_markdown=finding_body(text, issue.severity.value, manifest.head_sha))
+                category=category, evidence_summary=evidence_summary,
+                evidence_ids=record["publication"]["evidence_ids"],
+                body_markdown=finding_body(text, issue.severity.value, manifest.head_sha,
+                    category=category, evidence_summary=evidence_summary))
             (plan.inline_drafts if finding.placement == "inline" else plan.summary_findings).append(finding)
         rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
         def sort_key(finding):

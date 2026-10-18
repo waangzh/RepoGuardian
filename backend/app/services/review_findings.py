@@ -10,6 +10,9 @@ def finding_location(issue):
     if anchor.get("resolution_status") != "exact":
         return None
     location = issue.get("resolved_location") or {}
+    if location and (location.get("file_path"), location.get("start_line"), location.get("end_line"), location.get("side")) != (
+            anchor.get("file_path"), anchor.get("resolved_start_line"), anchor.get("resolved_end_line"), anchor.get("resolved_side")):
+        return None
     if not location:
         location = {"file_path": anchor.get("file_path"), "start_line": anchor.get("resolved_start_line"),
                     "end_line": anchor.get("resolved_end_line"), "side": anchor.get("resolved_side")}

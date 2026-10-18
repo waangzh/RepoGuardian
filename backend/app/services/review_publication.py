@@ -72,6 +72,8 @@ def publication_issue(task, record):
             return None, "publication_subject_mismatch"
     except (ValidationError, ValueError):
         return None, "publication_subject_mismatch"
+    if not verification.evidence_ids or not str(view.get("basis") or "").strip():
+        return None, "publication_evidence_missing"
     try:
         issue = ReviewIssue.model_validate(record.get("issue"))
     except ValidationError:
