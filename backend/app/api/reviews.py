@@ -28,6 +28,7 @@ from app.models.review import (
 )
 from app.models.review_runtime import TaskRuntimeRetryResult
 from app.models.quick_preview import QuickPreviewRequest, QuickPreviewResponse
+from app.tools.github_tool import GitHubToolError
 from app.models.publication import PublicationPlan
 from app.models.persistence import (
     PatchDetail,
@@ -109,6 +110,8 @@ async def create_review(request: ReviewCreateRequest) -> ReviewCreateResponse:
     """创建审查任务，后台启动 LangGraph 执行，立即返回 202。"""
     try:
         task = await get_review_service().create_confirmed_task(request)
+    except GitHubToolError as exc:
+        raise HTTPException(status_code=exc.api_status, detail=exc.public_detail()) from None
     except ValueError as exc:
         raise HTTPException(status_code=409, detail={"code": str(exc)}) from exc
     return ReviewCreateResponse(task_id=task.id, status=task.status,
@@ -142,6 +145,8 @@ async def quick_preview_review(request: QuickPreviewRequest) -> QuickPreviewResp
         return await quick_preview(get_review_service()._github_tool, str(request.pr_url))
     except QuickPreviewStale:
         raise HTTPException(status_code=409, detail="PR快照已变化，请重新获取概览。") from None
+    except GitHubToolError as exc:
+        raise HTTPException(status_code=exc.api_status, detail=exc.public_detail()) from None
     except (TimeoutError, httpx.TimeoutException):
         raise HTTPException(status_code=504, detail="获取 PR 概览超时，请重试或准备完整方案。") from None
     except Exception:
@@ -154,6 +159,8 @@ async def preview_review(request: ReviewPreviewRequest) -> ReviewPreviewResponse
     """返回确定性 Review Unit 计划；不会调用 LLM、执行器或目标代码。"""
     try:
         return await get_review_service().preview(request)
+    except GitHubToolError as exc:
+        raise HTTPException(status_code=exc.api_status, detail=exc.public_detail()) from None
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

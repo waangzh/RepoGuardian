@@ -217,7 +217,10 @@ class PreviewJobs:
             logger.error("预览 %s 失败：%s", identity[:8], type(exc).__name__)
             # 不把可能含凭据、仓库内容或本地路径的第三方错误传给页面。
             label = "预览准备失败，请重试；如持续失败，请检查服务端日志。"
-            if isinstance(exc, (TimeoutError, httpx.TimeoutException, GitToolTimeout)):
+            from app.tools.github_tool import GitHubToolError
+            if isinstance(exc, GitHubToolError):
+                label = str(exc)
+            elif isinstance(exc, (TimeoutError, httpx.TimeoutException, GitToolTimeout)):
                 label = "预览准备超时，请检查网络连接后重试。"
             elif isinstance(exc, DiffPreparationError):
                 label = "PR 的 Base 和 Head 无法确定唯一比较基准，请检查 PR 快照。"
