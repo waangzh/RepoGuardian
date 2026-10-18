@@ -40,7 +40,7 @@ def derive_review_outcome(task: ReviewTask, *, publishable_count: int | None = N
     if not snapshot_valid(task):
         reasons.append(Reason.SNAPSHOT_MISSING)
     if report is None:
-        return ReviewOutcome(kind=kind, coverage=CoverageKind.UNKNOWN, reason_codes=reasons)
+        return ReviewOutcome(kind=kind, coverage=CoverageKind.UNKNOWN, reason_codes=reasons, dynamic_validation="unknown")
 
     confirmed = sum(str(item.get("status")) in {"confirmed", "published"} for item in report.findings)
     unresolved = sum(str(item.get("status")) in {"candidate", "unresolved", "needs_human"} for item in report.findings)
@@ -68,6 +68,10 @@ def derive_review_outcome(task: ReviewTask, *, publishable_count: int | None = N
     if (task.status != "completed" or report.execution_status != "completed"
             or report.termination_reason != "plan_exhausted"):
         reasons.append(Reason.TERMINATION_INCOMPLETE)
+    if report.termination_reason == "budget_exhausted":
+        reasons.append(Reason.BUDGET_EXHAUSTED)
+    elif report.termination_reason == "deadline":
+        reasons.append(Reason.DEADLINE_EXCEEDED)
     if not cancelled and not failed:
         kind = Kind.FINDINGS if confirmed else Kind.CLEAN if not reasons else Kind.INCONCLUSIVE
     publishable = 0
@@ -78,4 +82,13 @@ def derive_review_outcome(task: ReviewTask, *, publishable_count: int | None = N
     return ReviewOutcome(kind=kind, coverage=CoverageKind.PARTIAL if reasons else CoverageKind.COMPLETE,
                          confirmed_count=confirmed, publishable_count=publishable, unresolved_count=unresolved,
                          total_goals=total, examined_goals=examined, incomplete_investigations=investigations,
-                         reason_codes=reasons)
+                         reason_codes=reasons,
+                         finding_conclusion="confirmed" if confirmed else "unresolved" if unresolved else
+                             "unknown" if unknown else "no_confirmed_findings",
+                         review_completeness=CoverageKind.UNKNOWN if not total else CoverageKind.PARTIAL if
+                             any(reason in reasons for reason in (Reason.SCOPE_INCOMPLETE, Reason.VERIFICATION_UNRESOLVED,
+                                 Reason.FINDING_STATUS_UNKNOWN, Reason.INVESTIGATION_INCOMPLETE, Reason.UNSCHEDULED_INVESTIGATION))
+                             else CoverageKind.COMPLETE,
+                         runtime_reliability="unreliable" if any(reason in reasons for reason in (
+                             Reason.TASK_FAILED, Reason.TASK_CANCELLED, Reason.TERMINATION_INCOMPLETE,
+                             Reason.USAGE_INTEGRITY_UNKNOWN, Reason.SNAPSHOT_MISSING)) else "reliable")

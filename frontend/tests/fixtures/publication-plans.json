@@ -344,10 +344,37 @@
         "examined_goals": 1,
         "total_goals": 1,
         "incomplete_investigations": 0,
-        "reason_codes": []
+        "reason_codes": [],
+        "finding_conclusion": "confirmed",
+        "review_completeness": "complete",
+        "runtime_reliability": "reliable",
+        "dynamic_validation": "not_executed"
       },
-      "summary_markdown": "## RepoGuardian Review\n\n**发现已确认问题**\n\n- 目标检查：1 / 1\n- 已确认问题：1\n- 可生成草稿：1\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：complete\n\n### 问题索引\n\n1. [Medium] 空返回值破坏调用方契约 — src/a\\.py:7（head）\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。",
-      "user_report_markdown": "# RepoGuardian 用户审查报告\n\n## RepoGuardian Review\n\n**发现已确认问题**\n\n- 目标检查：1 / 1\n- 已确认问题：1\n- 可生成草稿：1\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：complete\n\n### 问题索引\n\n1. [Medium] 空返回值破坏调用方契约 — src/a\\.py:7（head）\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。\n\n### 空返回值破坏调用方契约\n\n**[Medium] 空返回值破坏调用方契约**\n\n**影响：** 调用方字段读取失败\n\n**触发场景：** 服务返回空值时直接读取字段\n\n**建议：** 先处理空值\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。静态审查结论。\n\n完整证据、被扣留记录与运行过程请查看原始审计报告。",
+      "digest": {
+        "examined_goals": [
+          {
+            "goal_id": "g1",
+            "path": "src/a.py",
+            "start_line": 7,
+            "end_line": 7,
+            "side": "head",
+            "status": "examined",
+            "reason": "固定源码检查"
+          }
+        ],
+        "incomplete_goals": [],
+        "reviewed_files": [
+          "src/a.py"
+        ],
+        "excluded_files": [],
+        "validation_state": "not_executed",
+        "checked_areas": [
+          "head_source_ranges"
+        ],
+        "termination_reason": "plan_exhausted"
+      },
+      "summary_markdown": "## RepoGuardian · PR Review\n\n**发现已确认问题**\n\n请逐项核对下列已确认问题及建议；仍需关注的限制见下方说明。\n\n- 已确认问题：1\n- 审查目标完成：1 / 1\n- 未决候选：0\n\n### 审查范围\n\n已检查：Head 变更源码区间。\n本次目标全部检查完成的文件：src/a\\.py。\n\n已检查目标：\n- src/a\\.py:7–7（head）：examined；固定源码检查\n\n### 问题索引\n\n1. [Medium] 空返回值破坏调用方契约 — src/a\\.py:7（head）\n\n### 验证边界\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n此结果不应视为 Approve 或质量检查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n审查记录：preview\\-findings。",
+      "user_report_markdown": "# RepoGuardian 用户审查报告\n\n## RepoGuardian · PR Review\n\n**发现已确认问题**\n\n请逐项核对下列已确认问题及建议；仍需关注的限制见下方说明。\n\n- 已确认问题：1\n- 审查目标完成：1 / 1\n- 未决候选：0\n\n### 审查范围\n\n已检查：Head 变更源码区间。\n本次目标全部检查完成的文件：src/a\\.py。\n\n已检查目标：\n- src/a\\.py:7–7（head）：examined；固定源码检查\n\n### 问题索引\n\n1. [Medium] 空返回值破坏调用方契约 — src/a\\.py:7（head）\n\n### 验证边界\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n此结果不应视为 Approve 或质量检查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n审查记录：preview\\-findings。\n\n### 空返回值破坏调用方契约\n\n**[Medium] 空返回值破坏调用方契约**\n\n**影响：** 调用方字段读取失败\n\n**触发场景：** 服务返回空值时直接读取字段\n\n**建议：** 先处理空值\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。静态审查结论。\n\n完整证据、被扣留记录与运行过程请查看原始审计报告。",
       "inline_drafts": [
         {
           "finding_key": "key-a",
@@ -569,10 +596,37 @@
         "examined_goals": 1,
         "total_goals": 1,
         "incomplete_investigations": 0,
-        "reason_codes": []
+        "reason_codes": [],
+        "finding_conclusion": "no_confirmed_findings",
+        "review_completeness": "complete",
+        "runtime_reliability": "reliable",
+        "dynamic_validation": "not_executed"
       },
-      "summary_markdown": "## RepoGuardian Review\n\n**未发现可行动问题**\n\n- 目标检查：1 / 1\n- 已确认问题：0\n- 可生成草稿：0\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：complete\n\n在已审查变更中未发现可行动问题。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。",
-      "user_report_markdown": "# RepoGuardian 用户审查报告\n\n## RepoGuardian Review\n\n**未发现可行动问题**\n\n- 目标检查：1 / 1\n- 已确认问题：0\n- 可生成草稿：0\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：complete\n\n在已审查变更中未发现可行动问题。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。\n\n完整证据、被扣留记录与运行过程请查看原始审计报告。",
+      "digest": {
+        "examined_goals": [
+          {
+            "goal_id": "g1",
+            "path": "src/a.py",
+            "start_line": 7,
+            "end_line": 7,
+            "side": "head",
+            "status": "examined",
+            "reason": "固定源码检查"
+          }
+        ],
+        "incomplete_goals": [],
+        "reviewed_files": [
+          "src/a.py"
+        ],
+        "excluded_files": [],
+        "validation_state": "not_executed",
+        "checked_areas": [
+          "head_source_ranges"
+        ],
+        "termination_reason": "plan_exhausted"
+      },
+      "summary_markdown": "## RepoGuardian · PR Review\n\n**未发现可行动问题**\n\n已完成本次约定范围的静态审查，未发现具有充分代码证据、需要 PR 作者处理的问题。\n\n- 已确认问题：0\n- 审查目标完成：1 / 1\n- 未决候选：0\n\n### 审查范围\n\n已检查：Head 变更源码区间。\n本次目标全部检查完成的文件：src/a\\.py。\n\n已检查目标：\n- src/a\\.py:7–7（head）：examined；固定源码检查\n\n### 验证边界\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n审查记录：preview\\-clean。",
+      "user_report_markdown": "# RepoGuardian 用户审查报告\n\n## RepoGuardian · PR Review\n\n**未发现可行动问题**\n\n已完成本次约定范围的静态审查，未发现具有充分代码证据、需要 PR 作者处理的问题。\n\n- 已确认问题：0\n- 审查目标完成：1 / 1\n- 未决候选：0\n\n### 审查范围\n\n已检查：Head 变更源码区间。\n本次目标全部检查完成的文件：src/a\\.py。\n\n已检查目标：\n- src/a\\.py:7–7（head）：examined；固定源码检查\n\n### 验证边界\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n审查记录：preview\\-clean。\n\n完整证据、被扣留记录与运行过程请查看原始审计报告。",
       "inline_drafts": [],
       "summary_findings": [],
       "withheld_findings": [],
@@ -780,10 +834,37 @@
         "incomplete_investigations": 0,
         "reason_codes": [
           "scope_incomplete"
-        ]
+        ],
+        "finding_conclusion": "no_confirmed_findings",
+        "review_completeness": "partial",
+        "runtime_reliability": "reliable",
+        "dynamic_validation": "not_executed"
       },
-      "summary_markdown": "## RepoGuardian Review\n\n**审查结论不确定**\n\n- 目标检查：1 / 1\n- 已确认问题：0\n- 可生成草稿：0\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：partial\n\n### 限制条件\n\n- 部分目标未完成检查\n\n未产生可发布问题不代表审查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。",
-      "user_report_markdown": "# RepoGuardian 用户审查报告\n\n## RepoGuardian Review\n\n**审查结论不确定**\n\n- 目标检查：1 / 1\n- 已确认问题：0\n- 可生成草稿：0\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：partial\n\n### 限制条件\n\n- 部分目标未完成检查\n\n未产生可发布问题不代表审查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。\n\n完整证据、被扣留记录与运行过程请查看原始审计报告。",
+      "digest": {
+        "examined_goals": [
+          {
+            "goal_id": "g1",
+            "path": "src/a.py",
+            "start_line": 7,
+            "end_line": 7,
+            "side": "head",
+            "status": "examined",
+            "reason": "固定源码检查"
+          }
+        ],
+        "incomplete_goals": [],
+        "reviewed_files": [
+          "src/a.py"
+        ],
+        "excluded_files": [],
+        "validation_state": "not_executed",
+        "checked_areas": [
+          "head_source_ranges"
+        ],
+        "termination_reason": "plan_exhausted"
+      },
+      "summary_markdown": "## RepoGuardian · PR Review\n\n**本次审查未得出完整结论**\n\n目前没有可确认的问题，但审查仍存在缺口或可靠性限制，不能据此认定本次变更没有问题。\n\n- 已确认问题：0\n- 审查目标完成：1 / 1\n- 未决候选：0\n\n### 审查范围\n\n已检查：Head 变更源码区间。\n本次目标全部检查完成的文件：src/a\\.py。\n\n已检查目标：\n- src/a\\.py:7–7（head）：examined；固定源码检查\n\n### 仍需关注\n\n- 部分目标未完成检查（scope_incomplete）\n\n### 验证边界\n\n审查完整性：不完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n此结果不应视为 Approve 或质量检查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n审查记录：preview\\-inconclusive。",
+      "user_report_markdown": "# RepoGuardian 用户审查报告\n\n## RepoGuardian · PR Review\n\n**本次审查未得出完整结论**\n\n目前没有可确认的问题，但审查仍存在缺口或可靠性限制，不能据此认定本次变更没有问题。\n\n- 已确认问题：0\n- 审查目标完成：1 / 1\n- 未决候选：0\n\n### 审查范围\n\n已检查：Head 变更源码区间。\n本次目标全部检查完成的文件：src/a\\.py。\n\n已检查目标：\n- src/a\\.py:7–7（head）：examined；固定源码检查\n\n### 仍需关注\n\n- 部分目标未完成检查（scope_incomplete）\n\n### 验证边界\n\n审查完整性：不完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n此结果不应视为 Approve 或质量检查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n审查记录：preview\\-inconclusive。\n\n完整证据、被扣留记录与运行过程请查看原始审计报告。",
       "inline_drafts": [],
       "summary_findings": [],
       "withheld_findings": [],
@@ -1139,10 +1220,37 @@
         "reason_codes": [
           "task_failed",
           "termination_incomplete"
-        ]
+        ],
+        "finding_conclusion": "confirmed",
+        "review_completeness": "complete",
+        "runtime_reliability": "unreliable",
+        "dynamic_validation": "not_executed"
       },
-      "summary_markdown": "## RepoGuardian Review\n\n**审查失败**\n\n- 目标检查：1 / 1\n- 已确认问题：1\n- 可生成草稿：0\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：partial\n\n1 项已确认记录未进入发布草稿；具体扣留原因保留在内部发布计划中。\n\n### 限制条件\n\n- 任务或运行时执行失败\n- 任务未可靠完成全部计划\n\n未产生可发布问题不代表审查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。",
-      "user_report_markdown": "# RepoGuardian 用户审查报告\n\n## RepoGuardian Review\n\n**审查失败**\n\n- 目标检查：1 / 1\n- 已确认问题：1\n- 可生成草稿：0\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：partial\n\n1 项已确认记录未进入发布草稿；具体扣留原因保留在内部发布计划中。\n\n### 限制条件\n\n- 任务或运行时执行失败\n- 任务未可靠完成全部计划\n\n未产生可发布问题不代表审查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。\n\n完整证据、被扣留记录与运行过程请查看原始审计报告。",
+      "digest": {
+        "examined_goals": [
+          {
+            "goal_id": "g1",
+            "path": "src/a.py",
+            "start_line": 7,
+            "end_line": 7,
+            "side": "head",
+            "status": "examined",
+            "reason": "固定源码检查"
+          }
+        ],
+        "incomplete_goals": [],
+        "reviewed_files": [
+          "src/a.py"
+        ],
+        "excluded_files": [],
+        "validation_state": "not_executed",
+        "checked_areas": [
+          "head_source_ranges"
+        ],
+        "termination_reason": "plan_exhausted"
+      },
+      "summary_markdown": "## RepoGuardian · PR Review\n\n**审查失败**\n\n审查执行失败，请处理运行故障并重新审查；已有记录不能视为完整结论。\n\n- 已确认问题：1\n- 审查目标完成：1 / 1\n- 未决候选：0\n\n### 审查范围\n\n已检查：Head 变更源码区间。\n本次目标全部检查完成的文件：src/a\\.py。\n\n已检查目标：\n- src/a\\.py:7–7（head）：examined；固定源码检查\n\n1 项已确认记录未进入发布草稿；具体扣留原因保留在内部发布计划中。\n\n### 仍需关注\n\n- 任务或运行时执行失败（task_failed）\n- 任务未可靠完成全部计划（termination_incomplete）\n\n### 验证边界\n\n审查完整性：完整；运行可靠性：存在限制。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n此结果不应视为 Approve 或质量检查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n审查记录：preview\\-failed。",
+      "user_report_markdown": "# RepoGuardian 用户审查报告\n\n## RepoGuardian · PR Review\n\n**审查失败**\n\n审查执行失败，请处理运行故障并重新审查；已有记录不能视为完整结论。\n\n- 已确认问题：1\n- 审查目标完成：1 / 1\n- 未决候选：0\n\n### 审查范围\n\n已检查：Head 变更源码区间。\n本次目标全部检查完成的文件：src/a\\.py。\n\n已检查目标：\n- src/a\\.py:7–7（head）：examined；固定源码检查\n\n1 项已确认记录未进入发布草稿；具体扣留原因保留在内部发布计划中。\n\n### 仍需关注\n\n- 任务或运行时执行失败（task_failed）\n- 任务未可靠完成全部计划（termination_incomplete）\n\n### 验证边界\n\n审查完整性：完整；运行可靠性：存在限制。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n此结果不应视为 Approve 或质量检查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n审查记录：preview\\-failed。\n\n完整证据、被扣留记录与运行过程请查看原始审计报告。",
       "inline_drafts": [],
       "summary_findings": [],
       "withheld_findings": [
@@ -1505,10 +1613,37 @@
         "reason_codes": [
           "task_cancelled",
           "termination_incomplete"
-        ]
+        ],
+        "finding_conclusion": "confirmed",
+        "review_completeness": "complete",
+        "runtime_reliability": "unreliable",
+        "dynamic_validation": "not_executed"
       },
-      "summary_markdown": "## RepoGuardian Review\n\n**审查已取消**\n\n- 目标检查：1 / 1\n- 已确认问题：1\n- 可生成草稿：0\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：partial\n\n1 项已确认记录未进入发布草稿；具体扣留原因保留在内部发布计划中。\n\n### 限制条件\n\n- 任务或运行时已取消\n- 任务未可靠完成全部计划\n\n未产生可发布问题不代表审查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。",
-      "user_report_markdown": "# RepoGuardian 用户审查报告\n\n## RepoGuardian Review\n\n**审查已取消**\n\n- 目标检查：1 / 1\n- 已确认问题：1\n- 可生成草稿：0\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：partial\n\n1 项已确认记录未进入发布草稿；具体扣留原因保留在内部发布计划中。\n\n### 限制条件\n\n- 任务或运行时已取消\n- 任务未可靠完成全部计划\n\n未产生可发布问题不代表审查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。\n\n完整证据、被扣留记录与运行过程请查看原始审计报告。",
+      "digest": {
+        "examined_goals": [
+          {
+            "goal_id": "g1",
+            "path": "src/a.py",
+            "start_line": 7,
+            "end_line": 7,
+            "side": "head",
+            "status": "examined",
+            "reason": "固定源码检查"
+          }
+        ],
+        "incomplete_goals": [],
+        "reviewed_files": [
+          "src/a.py"
+        ],
+        "excluded_files": [],
+        "validation_state": "not_executed",
+        "checked_areas": [
+          "head_source_ranges"
+        ],
+        "termination_reason": "plan_exhausted"
+      },
+      "summary_markdown": "## RepoGuardian · PR Review\n\n**审查已取消**\n\n审查已取消，请补查剩余范围后再判断本次变更。\n\n- 已确认问题：1\n- 审查目标完成：1 / 1\n- 未决候选：0\n\n### 审查范围\n\n已检查：Head 变更源码区间。\n本次目标全部检查完成的文件：src/a\\.py。\n\n已检查目标：\n- src/a\\.py:7–7（head）：examined；固定源码检查\n\n1 项已确认记录未进入发布草稿；具体扣留原因保留在内部发布计划中。\n\n### 仍需关注\n\n- 任务或运行时已取消（task_cancelled）\n- 任务未可靠完成全部计划（termination_incomplete）\n\n### 验证边界\n\n审查完整性：完整；运行可靠性：存在限制。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n此结果不应视为 Approve 或质量检查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n审查记录：preview\\-cancelled。",
+      "user_report_markdown": "# RepoGuardian 用户审查报告\n\n## RepoGuardian · PR Review\n\n**审查已取消**\n\n审查已取消，请补查剩余范围后再判断本次变更。\n\n- 已确认问题：1\n- 审查目标完成：1 / 1\n- 未决候选：0\n\n### 审查范围\n\n已检查：Head 变更源码区间。\n本次目标全部检查完成的文件：src/a\\.py。\n\n已检查目标：\n- src/a\\.py:7–7（head）：examined；固定源码检查\n\n1 项已确认记录未进入发布草稿；具体扣留原因保留在内部发布计划中。\n\n### 仍需关注\n\n- 任务或运行时已取消（task_cancelled）\n- 任务未可靠完成全部计划（termination_incomplete）\n\n### 验证边界\n\n审查完整性：完整；运行可靠性：存在限制。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n此结果不应视为 Approve 或质量检查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n审查记录：preview\\-cancelled。\n\n完整证据、被扣留记录与运行过程请查看原始审计报告。",
       "inline_drafts": [],
       "summary_findings": [],
       "withheld_findings": [
@@ -1868,10 +2003,37 @@
         "examined_goals": 1,
         "total_goals": 1,
         "incomplete_investigations": 0,
-        "reason_codes": []
+        "reason_codes": [],
+        "finding_conclusion": "confirmed",
+        "review_completeness": "complete",
+        "runtime_reliability": "reliable",
+        "dynamic_validation": "not_executed"
       },
-      "summary_markdown": "## RepoGuardian Review\n\n**发现已确认问题**\n\n- 目标检查：1 / 1\n- 已确认问题：1\n- 可生成草稿：0\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：complete\n\n1 项已确认记录未进入发布草稿；具体扣留原因保留在内部发布计划中。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。",
-      "user_report_markdown": "# RepoGuardian 用户审查报告\n\n## RepoGuardian Review\n\n**发现已确认问题**\n\n- 目标检查：1 / 1\n- 已确认问题：1\n- 可生成草稿：0\n- 未决候选：0\n- 未完成调查：0\n- 覆盖状态：complete\n\n1 项已确认记录未进入发布草稿；具体扣留原因保留在内部发布计划中。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n> 仅进行了静态审查，未执行目标仓库代码。此结果不保证不存在缺陷。\n\n完整证据、被扣留记录与运行过程请查看原始审计报告。",
+      "digest": {
+        "examined_goals": [
+          {
+            "goal_id": "g1",
+            "path": "src/a.py",
+            "start_line": 7,
+            "end_line": 7,
+            "side": "head",
+            "status": "examined",
+            "reason": "固定源码检查"
+          }
+        ],
+        "incomplete_goals": [],
+        "reviewed_files": [
+          "src/a.py"
+        ],
+        "excluded_files": [],
+        "validation_state": "not_executed",
+        "checked_areas": [
+          "head_source_ranges"
+        ],
+        "termination_reason": "plan_exhausted"
+      },
+      "summary_markdown": "## RepoGuardian · PR Review\n\n**发现已确认问题**\n\n请逐项核对下列已确认问题及建议；仍需关注的限制见下方说明。\n\n- 已确认问题：1\n- 审查目标完成：1 / 1\n- 未决候选：0\n\n### 审查范围\n\n已检查：Head 变更源码区间。\n本次目标全部检查完成的文件：src/a\\.py。\n\n已检查目标：\n- src/a\\.py:7–7（head）：examined；固定源码检查\n\n1 项已确认记录未进入发布草稿；具体扣留原因保留在内部发布计划中。\n\n### 验证边界\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n此结果不应视为 Approve 或质量检查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n审查记录：preview\\-withheld。",
+      "user_report_markdown": "# RepoGuardian 用户审查报告\n\n## RepoGuardian · PR Review\n\n**发现已确认问题**\n\n请逐项核对下列已确认问题及建议；仍需关注的限制见下方说明。\n\n- 已确认问题：1\n- 审查目标完成：1 / 1\n- 未决候选：0\n\n### 审查范围\n\n已检查：Head 变更源码区间。\n本次目标全部检查完成的文件：src/a\\.py。\n\n已检查目标：\n- src/a\\.py:7–7（head）：examined；固定源码检查\n\n1 项已确认记录未进入发布草稿；具体扣留原因保留在内部发布计划中。\n\n### 验证边界\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n此结果不应视为 Approve 或质量检查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n审查记录：preview\\-withheld。\n\n完整证据、被扣留记录与运行过程请查看原始审计报告。",
       "inline_drafts": [],
       "summary_findings": [],
       "withheld_findings": [
