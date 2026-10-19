@@ -17,11 +17,12 @@ test("Outcome 显示后端数量，不根据问题列表推断 Clean", async () 
         digest: { merge_decision: { status, label, advice: "先处理阻断问题" }, validations: [] },
         withheld_findings: [{ candidate_id: "c1", reason_code: "snapshot_mismatch" }] };
       const html = await renderToString(createSSRApp(component, { plan }));
-      for (const expected of [label, "3", "2", "1", "8 / 10", "scope_incomplete", "snapshot_mismatch"]) assert.ok(html.includes(expected));
-      assert.match(html, /逐条问题正文与发布状态/);
-      // 合并建议只展示当前结论，文案与服务端 label 一致，其他选项不出现。
-      assert.equal(html.match(/class="(?:success|danger|warning) merge-option active"/g)?.length, 1);
-      assert.equal(html.match(/class="[^"]*merge-option active/g)?.length, 1);
+      // 结论只出现一次；技术计数与限制收进折叠区，不再重复展示。
+      for (const expected of [label, "技术结论与限制", "scope_incomplete", "snapshot_mismatch"]) assert.ok(html.includes(expected));
+      assert.equal(html.match(new RegExp(label, "g"))?.length, 1);
+      assert.ok(!html.includes("3 项已确认问题") && !html.includes("8 / 10"));
+      // 合并建议只展示当前结论，其他选项不出现。
+      assert.equal(html.match(/class="(?:success|danger|warning) outcome-verdict"/g)?.length, 1);
       for (const other of ["未发现阻断性问题", "建议修改后再合并", "需要补充检查"].filter(value => value !== label)) {
         assert.ok(!html.includes(other));
       }
@@ -79,7 +80,7 @@ test("完整范围和计量限制分开展示；历史维度缺失保持未知",
       runtime_reliability: 'unreliable', dynamic_validation: 'not_executed', finding_conclusion: 'no_confirmed_findings', reason_codes: [] },
       digest: { merge_decision: { status: 'resolve_unknowns', label: '需要补充检查', advice: '先补齐限制' } }, withheld_findings: [] };
     const html = await renderToString(createSSRApp(component, { plan }));
-    for (const text of ['约定检查范围：完整', '存在计量或执行限制', '未发现已确认缺陷', '未执行']) assert.ok(html.includes(text));
+    for (const text of ['审查完整性：完整', '存在计量或执行限制', '未发现已确认缺陷', '未执行']) assert.ok(html.includes(text));
     assert.ok(!html.includes('覆盖部分完成'));
   } finally { await server.close(); }
 });

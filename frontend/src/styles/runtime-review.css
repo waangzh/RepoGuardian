@@ -141,15 +141,44 @@
   .runtime-findings-list code { grid-column: 2; }
 }
 
-/* 合并建议只展示当前结论；图标与左侧色条区分三态。 */
-.merge-options { margin: 18px 0 14px; padding: 0; list-style: none; }
-.merge-option { display: flex; align-items: flex-start; gap: 12px; padding: 16px 20px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); color: var(--text-secondary); }
-.merge-option strong { display: block; color: var(--text-primary); font-size: 1rem; }
-.merge-option p { margin: 5px 0 0; font-size: .875rem; line-height: 1.7; }
-.merge-option .app-icon { margin-top: 2px; }
-.merge-option.success { box-shadow: inset 3px 0 0 var(--success); }
-.merge-option.success .app-icon { color: var(--success); }
-.merge-option.danger { box-shadow: inset 3px 0 0 var(--danger); }
-.merge-option.danger .app-icon { color: var(--danger); }
-.merge-option.warning { box-shadow: inset 3px 0 0 var(--warning); }
-.merge-option.warning .app-icon { color: var(--warning); }
+/* 审查结论：只展示当前一条；图标与左侧色条区分三态。 */
+.outcome-verdict { display: flex; align-items: flex-start; gap: 12px; padding: 18px 20px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); }
+.outcome-verdict .app-icon { flex-shrink: 0; margin-top: 3px; }
+.outcome-verdict__text { min-width: 0; }
+.outcome-verdict__text .eyebrow { color: var(--text-muted); }
+.outcome-verdict__text h2 { margin: 6px 0 6px; font-size: 1.25rem; }
+.outcome-verdict__text p { margin: 0; color: var(--text-secondary); font-size: .9375rem; line-height: 1.75; }
+.outcome-verdict.success { box-shadow: inset 3px 0 0 var(--success); }
+.outcome-verdict.success .app-icon { color: var(--success); }
+.outcome-verdict.danger { box-shadow: inset 3px 0 0 var(--danger); }
+.outcome-verdict.danger .app-icon { color: var(--danger); }
+.outcome-verdict.warning { box-shadow: inset 3px 0 0 var(--warning); }
+.outcome-verdict.warning .app-icon { color: var(--warning); }
+.outcome-details { margin-top: 12px; }
+
+/* 结果概览四层：结论 → 核心发现 → 建议行动 → 更多信息。 */
+.overview-layers { display: grid; gap: 22px; }
+.overview-layer { display: grid; gap: 10px; }
+.layer-label { color: var(--text-muted); font-size: .8125rem; font-weight: 600; letter-spacing: .02em; }
+.core-findings { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); }
+.core-finding { display: grid; justify-items: center; gap: 4px; padding: 20px 16px; text-align: center; }
+.core-finding + .core-finding { border-left: 1px solid var(--border); }
+.core-finding strong { color: var(--text-primary); font-size: 1.75rem; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.core-finding strong small { color: var(--text-secondary); font-size: 1rem; font-weight: 500; }
+.core-finding span { color: var(--text-secondary); font-size: .875rem; }
+.overview-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.overview-action-cell, .overview-actions > .overview-action { display: flex; align-items: center; justify-content: flex-start; gap: 8px; min-height: 48px; padding: 0 18px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); }
+.overview-action-cell .button { margin: 0; }
+.overview-actions > .overview-action { color: var(--text-primary); font-weight: 600; cursor: pointer; }
+.overview-actions > .overview-action:hover { border-color: var(--border-strong); background: var(--surface-subtle); }
+.overview-more { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); overflow: hidden; }
+.overview-more__item + .overview-more__item { border-top: 1px solid var(--border); }
+.overview-more__item > summary { padding: 15px 20px; color: var(--text-primary); font-weight: 600; font-size: .9375rem; cursor: pointer; }
+.overview-more__item > summary:hover { background: var(--surface-subtle); }
+.overview-more__body { padding: 0 20px 18px; display: grid; gap: 10px; }
+.overview-more__body :is(.card, .summary-banner) { border: 0; padding: 0; background: transparent; box-shadow: none; }
+@media (max-width: 760px) {
+  .core-findings { grid-template-columns: 1fr; }
+  .core-finding + .core-finding { border-left: 0; border-top: 1px solid var(--border); }
+  .overview-actions { grid-template-columns: 1fr; }
+}
