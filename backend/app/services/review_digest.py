@@ -36,6 +36,15 @@ def enrich_review_digest(digest, task, report, dispositions):
             description += "；变更声明：" + "、".join(sorted(symbols)[:20])
         digest.actual_changes.append(description)
     if report is not None:
+        if report.pr_intent_context_truncated is True:
+            digest.author_context_status = "truncated"
+            digest.author_context_limitation = ("作者声明超过输入上限，送审内容已截断；未输入的部分尚未核验，"
+                "不能据此判断全部作者目标已实现。请补充目标并重新审查。")
+        elif report.pr_intent_context:
+            digest.author_context_status = "complete" if report.pr_intent_context_truncated is False else "unknown"
+            if digest.author_context_status == "unknown":
+                digest.author_context_limitation = ("历史审查未记录作者声明是否完整输入，无法确认是否遗漏作者目标；"
+                    "请重新审查以确认输入范围。")
         digest.validation_state, digest.validations = validation_digest(task)
         record = report.model_dump(mode="json")
         digest.execution_record = {key: record[key] for key in (

@@ -41,6 +41,8 @@ export interface DigestInvestigation {
 export interface ReviewDigest {
   pr_url?: string | null;
   author_goal?: string | null;
+  author_context_status?: "complete" | "truncated" | "unknown" | "not_recorded";
+  author_context_limitation?: string | null;
   actual_changes?: string[];
   intent_alignment?: string;
   intent_assessments?: DigestIntent[];

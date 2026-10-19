@@ -32,6 +32,20 @@ test("概览使用统一合并建议并区分补丁结果与 Head 验证", async
   } finally { await server.close(); }
 });
 
+test("作者声明截断或历史完整性未知时，概览保留服务端限制", async () => {
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  try {
+    const { default: component } = await server.ssrLoadModule("/src/components/review/PrChangeSummary.vue");
+    const fixtures = JSON.parse(await readFile(new URL("./fixtures/publication-plans.json", import.meta.url), "utf8"));
+    for (const [status, limitation] of [["truncated", "送审内容已截断；未输入的部分尚未核验"], ["unknown", "历史审查未记录作者声明是否完整输入"]]) {
+      const digest = { actual_changes: [], examined_goals: [], intent_assessments: [], author_context_status: status,
+        author_context_limitation: limitation };
+      const html = await renderToString(createSSRApp(component, { task: fixtures.clean.task, digest }));
+      assert.ok(html.includes(limitation)); assert.match(html, /role="status"/);
+    }
+  } finally { await server.close(); }
+});
+
 test("问题列表使用服务端有效等级，保留原始运行记录", async () => {
   const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   try {

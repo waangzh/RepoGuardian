@@ -37,9 +37,12 @@ def enable_intent(step):
     step.protocol = TaskReviewV1Protocol(step.executor.spec)
 
 
-async def test_structured_intent_survives_pages_and_checkpoint_with_same_budget(tmp_path, persistence):
+@pytest.mark.parametrize("truncated", [None, False, True])
+async def test_structured_intent_survives_pages_and_checkpoint_with_same_budget(tmp_path, persistence, truncated):
     step, messages = make_slice(tmp_path, [intent_submit, intent_submit])
     enable_intent(step)
+    step.executor.spec = step.executor.spec.model_copy(update={"pr_intent_context_truncated": truncated})
+    step.protocol = TaskReviewV1Protocol(step.executor.spec)
     executor = step.executor
     executor.goals["t1"] = executor.goals["t1"].model_copy(update={"end_line": 2})
     content = "first\nsecond"
@@ -58,11 +61,13 @@ async def test_structured_intent_survives_pages_and_checkpoint_with_same_budget(
     executor.page_examinations = {}
     await TaskRuntimeCheckpoint(runtime, {"w1": step}, repository).restore()
     assert executor.page_index == 1
+    assert checkpoint.spec.get("pr_intent_context_truncated") is truncated
     await runtime.advance_one({"w1": step})
     result = executor.projection.examinations["t1"]
     assert len(result.intent_assessments) == 2 and len(messages) == step.budget.calls_consumed == 2
     assert step.budget.settled_actual == 30
     report = project_task_runtime(runtime, {"w1": step}, list(executor.goals.values()), termination_reason="plan_exhausted")
+    assert report.pr_intent_context_truncated is truncated
     task = completed_task(**report.model_dump(mode="json"))
     task.run_manifest.effective_base_sha = executor.spec.snapshot_base_sha
     plan = PublicationPlanner().build(task)
@@ -70,6 +75,7 @@ async def test_structured_intent_survives_pages_and_checkpoint_with_same_budget(
     assert len(plan.digest.intent_assessments[0].observations) == 2
     assert "异常路径未核验" in plan.review_comment_markdown and "尚未核验" in plan.user_report_markdown
     assert plan.digest.merge_decision.status == "resolve_unknowns"
+    assert plan.digest.author_context_status == ("unknown" if truncated is None else "truncated" if truncated else "complete")
     task.task_runtime_report["initial_scope_coverage"][0]["snapshot_base_sha"] = "d" * 40
     assert PublicationPlanner().build(task).digest.intent_assessments[0].status == "insufficient"
 
