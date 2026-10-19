@@ -141,17 +141,18 @@
   .runtime-findings-list code { grid-column: 2; }
 }
 
-/* 合并建议三态：与后端 merge_decision 一致，当前结论高亮。 */
-.merge-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 18px 0 14px; padding: 0; list-style: none; }
-.merge-option { display: flex; align-items: flex-start; gap: 10px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-subtle); color: var(--text-secondary); }
-.merge-option strong { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--text-primary); font-size: .9375rem; }
-.merge-option p { margin: 4px 0 0; font-size: .8125rem; line-height: 1.7; }
+/* 合并建议三态：单卡片纵向列表，与对外示例一致；当前结论高亮。 */
+.merge-options { margin: 18px 0 14px; padding: 0; list-style: none; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); overflow: hidden; }
+.merge-option { display: flex; align-items: flex-start; gap: 12px; padding: 16px 20px; color: var(--text-secondary); }
+.merge-option + .merge-option { border-top: 1px solid var(--border); }
+.merge-option strong { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--text-primary); font-size: 1rem; }
+.merge-option p { margin: 5px 0 0; font-size: .875rem; line-height: 1.7; }
+.merge-option .app-icon { margin-top: 2px; }
 .merge-option.success .app-icon { color: var(--success); }
 .merge-option.danger .app-icon { color: var(--danger); }
 .merge-option.warning .app-icon { color: var(--warning); }
-.merge-option.active { border-color: var(--border-strong); background: var(--surface); box-shadow: var(--shadow-card); }
-.merge-option.success.active { border-left: 3px solid var(--success); }
-.merge-option.danger.active { border-left: 3px solid var(--danger); }
-.merge-option.warning.active { border-left: 3px solid var(--warning); }
+.merge-option.active { background: var(--surface-subtle); }
+.merge-option.success.active { box-shadow: inset 3px 0 0 var(--success); }
+.merge-option.danger.active { box-shadow: inset 3px 0 0 var(--danger); }
+.merge-option.warning.active { box-shadow: inset 3px 0 0 var(--warning); }
 .merge-current { padding: 1px 7px; border-radius: 999px; background: var(--surface-muted); color: var(--text-muted); font-size: .75rem; font-weight: 600; }
-@media (max-width: 760px) { .merge-options { grid-template-columns: 1fr; } }
