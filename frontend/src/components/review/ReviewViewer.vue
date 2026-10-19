@@ -646,7 +646,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
     </section>
 
     <section v-else-if="activeTab === 'report'" class="review-tab-panel report-view">
-      <ReportPanel :markdown="report || task.report_markdown" :user-markdown="publicationPlan?.user_report_markdown" :summary-markdown="publicationPlan?.summary_markdown" :comments-markdown="commentsMarkdown" :filename-prefix="`review-${task.id}`" />
+      <ReportPanel :key="task.id" :markdown="report || task.report_markdown" :user-markdown="publicationPlan?.user_report_markdown" :review-markdown="publicationPlan?.review_comment_markdown" :review-id="task.id" :reviewed-head-sha="publicationPlan?.snapshot.head_sha" :comments-markdown="commentsMarkdown" :filename-prefix="`review-${task.id}`" />
     </section>
     <section v-else class="review-tab-panel activity-view">
       <article class="run-manifest-card">

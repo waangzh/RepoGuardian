@@ -5,10 +5,7 @@ import re
 import unicodedata
 from urllib.parse import quote
 
-from pydantic import ValidationError
-
 from app.models.publication import PublicationFinding, PublicationPlan
-from app.models.review_runtime import TaskRuntimeReport
 
 
 OUTCOME_LABELS = {"clean": "未发现可行动问题", "findings": "发现已确认问题", "inconclusive": "本次审查未得出完整结论",
@@ -137,7 +134,8 @@ def _goal_lines(goals, title, *, limit=20, include_reason=True):
         if goal.side:
             location += f"（{goal.side}）"
         reason = f"；{markdown_text(goal.reason)}" if include_reason and goal.reason else ""
-        lines.append(f"- {location}：{markdown_text(goal.status, 100)}{reason}")
+        status = {"examined": "已检查", "not_examined": "未检查", "unsupported": "暂不支持", "unknown": "未知"}.get(goal.status, goal.status)
+        lines.append(f"- {location}：{markdown_text(status, 100)}{reason}")
     if limit is not None and len(goals) > limit:
         lines.append(f"另有 {len(goals) - limit} 项，完整目标见用户报告。")
     return lines
@@ -178,42 +176,30 @@ def render_user_report(task, plan: PublicationPlan) -> str:
     lines += ["", "## 尚未确认的风险", ""]
     if outcome.reason_codes:
         lines += [f"- {REASON_LABELS[reason]}" for reason in outcome.reason_codes]
-    report = None
-    if task.engine == "task_review_v1" and task.task_runtime_report is not None:
-        try:
-            report = TaskRuntimeReport.model_validate(task.task_runtime_report)
-        except ValidationError:
-            pass  # Outcome 已明确保留报告无效原因，不能从无效内容拼出完成结论。
     lines += ["", "### 哪些调查没有得到答案", ""]
-    if report is None:
+    if not plan.digest.investigations_known:
         lines.append("缺少有效任务运行报告，调查状态未知。")
     else:
-        pending = [item for item in report.admitted_investigations
-                   if item.get("status") != "answered" or str(item.get("answer")) not in {"supported", "refuted"}]
-        lines.append(f"已记录调查 {len(report.admitted_investigations)} 项；有明确答案 "
-                     f"{len(report.admitted_investigations) - len(pending)} 项；未得到充分答案 {len(pending)} 项。")
-        work_items = {item.get("work_item_id"): item for item in report.work_items}
+        pending = [item for item in plan.digest.investigations if item.answer == "unresolved"]
+        lines.append(f"已记录调查 {len(plan.digest.investigations)} 项；有明确答案 "
+                     f"{len(plan.digest.investigations) - len(pending)} 项；未得到充分答案 {len(pending)} 项。")
         for index, item in enumerate(pending, 1):
-            lines += ["", f"### {index}. {markdown_text(item.get('proposition') or '未记录调查命题')}", "",
+            lines += ["", f"### {index}. {markdown_text(item.proposition)}", "",
                 "- 调查结论：尚未取得足够证据回答此问题。",
-                f"- 未决原因：{markdown_text(item.get('reason') or '尚未记录明确原因，需查看原始审计记录。')}"]
-            limitations = item.get("limitations") or []
+                f"- 未决原因：{markdown_text(item.reason or '尚未记录明确原因，需查看技术审计记录。')}"]
+            limitations = item.limitations
             lines += [f"- 缺失证据或限制：{markdown_text(value)}" for value in limitations]
             if not limitations:
                 lines.append("- 缺失证据或限制：未记录具体缺口，不能推断调查已经完成。")
-            requests = work_items.get(item.get("work_item_id"), {}).get("evidence_requests") or []
-            for request in requests:
-                lines.append(f"- 原计划取证范围：{markdown_text(request.get('file_path') or '未知文件', 500)}:"
-                             f"{markdown_text(str(request.get('start_line')))}–{markdown_text(str(request.get('end_line')))}"
+            for request in item.requested_ranges:
+                lines.append(f"- 原计划取证范围：{markdown_text(request.path or '未知文件', 500)}:"
+                             f"{markdown_text(str(request.start_line))}–{markdown_text(str(request.end_line))}"
                              "（请求范围不代表已读取或已核验）")
             lines += ["- 下一步：补读上述缺失实现、调用方或返回值消费者，再重新核对原命题；证据仍不足时保留未决。",
                       ""]
-        if report.unscheduled_leads:
-            outstanding = [item for item in report.unscheduled_leads if item.get("status") != "duplicate"]
-            if outstanding:
-                lines += ["", "尚未完成调度的线索：", *[
-                    f"- {markdown_text(item.get('proposition') or item.get('lead_id') or '未命名线索')}："
-                    f"{markdown_text(item.get('reason') or '未记录原因')}" for item in outstanding]]
+        if plan.digest.unresolved_leads:
+            lines += ["", "尚未完成调度的线索：", *[
+                f"- {markdown_text(value)}" for value in plan.digest.unresolved_leads]]
     lines += ["", "## 审查范围与限制", "",
         f"- 审查目标完成：{outcome.examined_goals} / {outcome.total_goals}",
         f"- 已确认问题：{outcome.confirmed_count}；未决候选：{outcome.unresolved_count}"]
@@ -224,10 +210,6 @@ def render_user_report(task, plan: PublicationPlan) -> str:
     if plan.digest.excluded_files:
         lines += ["", "未纳入本轮审查的文件：", *[
             f"- {markdown_text(item.path, 500)}：{markdown_text(item.reason)}" for item in plan.digest.excluded_files]]
-    if plan.withheld_findings:
-        lines += ["", "未进入发布正文的记录：", *[
-            f"- {markdown_text(item.candidate_id, 160)}：{markdown_text(item.reason_code)}"
-            for item in plan.withheld_findings]]
     lines += ["", "## 下一步建议", "", merge_advice(plan)]
     if outcome.confirmed_count:
         lines.append("- 逐项核对已确认问题，结合触发场景和代码证据处理；被扣留的记录仍需单独核验。")
@@ -238,18 +220,24 @@ def render_user_report(task, plan: PublicationPlan) -> str:
     if outcome.unresolved_count:
         lines.append("- 在 Findings 或原始审计报告中核对未决候选，补齐证据后再决定是否作为缺陷处理。")
     if outcome.reason_codes:
-        lines += [f"- {REASON_LABELS[reason]}（{reason.value}）" for reason in outcome.reason_codes]
+        lines += [f"- {REASON_LABELS[reason]}" for reason in outcome.reason_codes]
     elif outcome.kind == "clean":
         lines.append("- 本轮没有发现需要处理的已确认问题；结合项目自身测试、CI 和人工判断决定是否合并。")
-    if report is not None:
-        lines += ["", f"实际运行记录：{markdown_text(report.execution_status, 100)} / "
-                  f"{markdown_text(report.termination_reason, 160)}。"]
     lines += ["", "## 验证边界", "", *_validation_lines(plan), "", "## 附录：技术信息", "",
         "", f"审查 Commit：{markdown_text(plan.snapshot.head_sha or '未记录', 64)}。",
         f"审查记录：{markdown_text(plan.review_id, 160)}。", "",
         "运行过程与证据追踪请查看技术审计记录；此 Markdown 不代表全部原始事件。"]
     if task.run_manifest:
         lines.append(f"模型：{markdown_text(task.run_manifest.provider)} / {markdown_text(task.run_manifest.model)}。")
+    if plan.digest.execution_status:
+        lines += ["", f"实际运行记录：{markdown_text(plan.digest.execution_status, 100)} / "
+                  f"{markdown_text(plan.digest.termination_reason or 'unknown', 160)}。"]
+    if plan.withheld_findings:
+        lines += ["", "未进入发布正文的记录：", *[
+            f"- {markdown_text(item.candidate_id, 160)}：{markdown_text(item.reason_code)}"
+            for item in plan.withheld_findings]]
+    if outcome.reason_codes:
+        lines += ["", "限制原因代码：" + "、".join(reason.value for reason in outcome.reason_codes)]
     return "\n".join(lines)
 
 
@@ -263,7 +251,7 @@ def merge_advice(plan):
     if plan.outcome.kind in {"failed", "cancelled"}:
         return "建议：本轮未完成有效审查，请解决运行限制并重新审查后再判断是否合并。"
     if any(item.severity in {"critical", "high"} for item in _ordered_findings(plan)):
-        return "建议：优先修复上述高风险问题并复核触发场景，再考虑合并。"
+        return "建议：优先修复本轮高风险问题并复核触发场景，再考虑合并。"
     if plan.outcome.confirmed_count:
         return "建议：逐项处理已确认问题；当前没有足够依据自动判断其合并阻断属性，需结合影响、CI 与必要审批决策。"
     if plan.outcome.kind != "clean":
@@ -271,12 +259,36 @@ def merge_advice(plan):
     return "建议：本轮静态审查未发现达到报告门槛的问题；确认相关测试、CI 与必要审批满足要求后，可以考虑进入合并流程。"
 
 
-def _change_understanding(plan):
-    return ["", "## PR 变更理解", "",
+def _change_understanding(plan, *, compact=False):
+    changes = plan.digest.actual_changes
+    lines = ["", "## PR 变更理解", "",
         "**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** " + markdown_text(plan.digest.author_goal or "未记录作者声明"),
         "", "**实际改动（固定 Diff 事实）：**", "",
-        *(["- " + markdown_text(item, 1000) for item in plan.digest.actual_changes] or ["未保存变更明细，无法归纳实际修改。"]),
-        "", "**目标符合性：** " + markdown_text(plan.digest.intent_alignment)]
+        *(["- " + markdown_text(item, 1000) for item in (changes[:5] if compact else changes)] or ["未保存变更明细，无法归纳实际修改。"])]
+    if compact and len(changes) > 5:
+        lines.append(f"另有 {len(changes) - 5} 个文件变更，完整清单见详细报告。")
+    checked = [goal for goal in plan.digest.examined_goals if goal.reason]
+    lines += ["", "**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**", ""]
+    if not checked:
+        lines.append("未保存具体行为检查理由，不能从目标数量推断已核对的行为。")
+    for goal in (checked[:3] if compact else checked):
+        location = markdown_text(goal.path or "文件未记录", 500)
+        if goal.start_line:
+            location += f":{goal.start_line}" + (f"–{goal.end_line}" if goal.end_line else "")
+        lines.append(f"- {location}（{goal.side or '代码侧未知'}）：{markdown_text(goal.reason)}")
+    if compact and len(checked) > 3:
+        lines.append(f"另有 {len(checked) - 3} 项行为检查记录，详见详细报告。")
+    answered = [item for item in plan.digest.investigations if item.answer != "unresolved"]
+    if answered:
+        lines += ["", "**已回答的关联调查（仅针对记录中的命题）：**", ""]
+    for item in (answered[:3] if compact else answered):
+        label = "静态证据支持此命题" if item.answer == "supported" else "静态证据反驳此命题"
+        lines.append(f"- {markdown_text(item.proposition)}：{label}。依据：{markdown_text(item.reason or '未记录具体理由')}。")
+        lines += [f"  - 限制：{markdown_text(value)}" for value in item.limitations]
+    if compact and len(answered) > 3:
+        lines.append(f"另有 {len(answered) - 3} 项已回答调查，详见详细报告。")
+    lines += ["", "**目标符合性：** " + markdown_text(plan.digest.intent_alignment)]
+    return lines
 
 
 def _human_lines(view):
@@ -308,7 +320,7 @@ def finding_location(plan, finding):
 
 def render_review_comment(plan):
     lines = ["## RepoGuardian · PR 审查评论", "", f"**审查结论：{OUTCOME_LABELS[plan.outcome.kind]}**", "", merge_advice(plan)]
-    lines += _change_understanding(plan)
+    lines += _change_understanding(plan, compact=True)
     lines += ["", "### 发现的问题", ""]
     for finding in _ordered_findings(plan):
         lines += [finding_location(plan, finding), "", finding.body_markdown, ""]

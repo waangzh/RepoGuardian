@@ -2,6 +2,9 @@
 
 import re
 
+from pydantic import ValidationError
+
+from app.models.publication import DigestGoal, DigestInvestigation
 from app.services.review_findings import finding_views
 from app.services.fingerprints import stable_hash
 
@@ -30,7 +33,33 @@ def enrich_review_digest(digest, task, report, dispositions):
             description += "；变更声明：" + "、".join(sorted(symbols)[:20])
         digest.actual_changes.append(description)
     if report is not None:
+        if report.pr_intent_context:
+            digest.author_goal = report.pr_intent_context
+            digest.intent_alignment = ("本轮静态检查已提供冻结的作者声明，具体目标对照及证据缺口见已检查行为的理由。"
+                "这些局部检查不构成作者全部目标已实现的独立验收结论。")
         # 与 Findings 页共用人工处理身份和机器状态；不回写原始运行数据。
         digest.findings = sorted(finding_views(task, dispositions or {}),
             key=lambda item: (item.id, stable_hash(item.model_dump(mode="json"))))
+        digest.investigations_known = True
+        digest.execution_status = report.execution_status
+        work_items = {item.get("work_item_id"): item for item in report.work_items
+                      if isinstance(item.get("work_item_id"), str)}
+        for item in report.admitted_investigations:
+            identity = item.get("work_item_id") if isinstance(item.get("work_item_id"), str) else None
+            answer = item.get("answer")
+            investigation = DigestInvestigation(work_item_id=identity,
+                proposition=str(item.get("proposition") or "未记录调查命题"),
+                answer=answer if item.get("status") == "answered" and isinstance(answer, str)
+                    and answer in {"supported", "refuted"} else "unresolved",
+                reason=str(item["reason"]) if item.get("reason") else None,
+                limitations=[str(value) for value in item.get("limitations") or []])
+            for request in work_items.get(identity, {}).get("evidence_requests") or []:
+                try:
+                    investigation.requested_ranges.append(DigestGoal(path=request.get("file_path"),
+                        start_line=request.get("start_line"), end_line=request.get("end_line")))
+                except (AttributeError, ValidationError):
+                    investigation.limitations.append("原计划取证范围格式无效，需核对技术记录。")
+            digest.investigations.append(investigation)
+        digest.unresolved_leads = [str(item.get("proposition") or item.get("lead_id") or "未命名线索") + "：" +
+            str(item.get("reason") or "未记录原因") for item in report.unscheduled_leads if item.get("status") != "duplicate"]
     return digest

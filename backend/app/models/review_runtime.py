@@ -100,12 +100,15 @@ class ReviewRunSpec(BaseModel):
     max_calls: int = Field(ge=0)
     readable_scope_files: tuple[RelativePath, ...] = ()
     review_strategy: dict = Field(default_factory=dict)
+    pr_intent_context: str | None = Field(default=None, min_length=1, max_length=4_000)
 
     @model_serializer(mode="wrap")
     def serialize_strategy(self, handler):
         value = handler(self)
         if not self.review_strategy:
             value.pop("review_strategy", None)
+        if self.pr_intent_context is None:
+            value.pop("pr_intent_context", None)
         return value
 
     @property
@@ -399,6 +402,14 @@ class TaskRuntimeReport(BaseModel):
     total_tokens: int | None = Field(default=None, ge=0)
     work_items: list[dict] = Field(default_factory=list)
     diagnostics: list[dict] = Field(default_factory=list)
+    pr_intent_context: str | None = Field(default=None, min_length=1, max_length=4_000)
+
+    @model_serializer(mode="wrap")
+    def serialize_intent_context(self, handler):
+        value = handler(self)
+        if self.pr_intent_context is None:
+            value.pop("pr_intent_context", None)
+        return value
 
 
 class TaskRuntimeRetryResult(BaseModel):

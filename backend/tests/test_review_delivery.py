@@ -6,6 +6,7 @@ import pytest
 from app.models.review import ChangedFile, DiffHunk, DiffLine
 from app.services.publication_planner import PublicationPlanner
 from app.services.report_service import ReportService
+from app.services.publication_renderer import render_user_report
 from test_publication_planner import publishable_task
 from test_report_service import _pr
 
@@ -63,3 +64,41 @@ def test_tampered_publication_text_is_never_copied():
     plan = PublicationPlanner().build(task)
     assert "篡改正文" not in plan.review_comment_markdown
     assert "未通过发布准入" in plan.review_comment_markdown
+
+
+def test_zero_finding_report_and_comment_explain_behavior_and_answered_investigation():
+    from test_review_outcome import completed_task
+    task = completed_task(initial_scope_coverage=[{"goal_id": "g", "target_ref": "src/a.py",
+        "target_kind": "source_range", "start_line": 3, "end_line": 8, "status": "examined",
+        "reason": "检查空值分支先返回，再读取非空对象的字段"}], admitted_investigations=[{
+        "proposition": "调用方是否继续消费已删除字段", "status": "answered", "answer": "refuted",
+        "reason": "调用方已切换到新的返回结构", "limitations": ["仅核对固定快照，未执行测试"]}])
+    plan = PublicationPlanner().build(task)
+    for markdown in (plan.review_comment_markdown, plan.user_report_markdown):
+        assert "检查空值分支先返回" in markdown and "src/a" in markdown
+        assert "静态证据反驳此命题" in markdown and "调用方已切换到新的返回结构" in markdown
+        assert "未执行测试" in markdown and "目标符合性" in markdown
+    # 渲染器消费同一已构建事实，不再从原始运行数据另行判定调查状态。
+    task.task_runtime_report["admitted_investigations"] = []
+    assert render_user_report(task, plan) == plan.user_report_markdown
+
+
+def test_compact_change_list_is_explicit_and_does_not_trim_defect_body():
+    task = publishable_task()
+    task.changed_files = [ChangedFile(file_path=f"src/file{i}.py", change_type="modified", additions=1, deletions=1)
+                          for i in range(8)]
+    plan = PublicationPlanner().build(task)
+    assert "另有 3 个文件变更" in plan.review_comment_markdown
+    assert "src/file7" not in plan.review_comment_markdown
+    assert "src/file7" in plan.user_report_markdown
+    assert plan.inline_drafts[0].body_markdown in plan.review_comment_markdown
+
+
+def test_unknown_investigation_answer_cannot_become_a_supported_change_claim():
+    from test_review_outcome import completed_task
+    task = completed_task(admitted_investigations=[{"proposition": "边界是否保持兼容", "status": "answered",
+        "answer": ["supported"], "reason": "无效答案", "limitations": []}])
+    plan = PublicationPlanner().build(task)
+    assert plan.digest.investigations[0].answer == "unresolved"
+    assert "静态证据支持此命题" not in plan.review_comment_markdown
+    assert "未得到充分答案 1 项" in plan.user_report_markdown
