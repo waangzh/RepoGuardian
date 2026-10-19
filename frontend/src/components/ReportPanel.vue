@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch, onBeforeUnmount } from "vue";
-import { checkReviewComment } from "../api/client";
+import { checkReviewComment, previewReviewComment } from "../api/client";
 import type { ReviewCommentCheck } from "../types/publication";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
@@ -22,7 +22,13 @@ const copied = ref(false);
 const feedback = ref("");
 const initialView = () => props.reviewMarkdown ? "comment" as const : props.userMarkdown ? "user" as const : "audit" as const;
 const reportView = ref<"user" | "comment" | "audit">(initialView());
-const currentMarkdown = computed(() => reportView.value === "comment" ? props.reviewMarkdown
+const detail = ref<"compact" | "full">("compact");
+const excludeResolved = ref(false);
+const selection = ref<ReviewCommentCheck | null>(null);
+const previewLoading = ref(false);
+let previewController: AbortController | null = null;
+const customSelection = computed(() => detail.value !== "compact" || excludeResolved.value);
+const currentMarkdown = computed(() => reportView.value === "comment" ? (customSelection.value ? selection.value?.review_comment_markdown : props.reviewMarkdown)
   : props.userMarkdown && reportView.value === "user" ? props.userMarkdown : props.markdown);
 const currentLabel = computed(() => reportView.value === "comment" ? "PR 评论"
   : props.userMarkdown && reportView.value === "user" ? "详细审查报告" : "技术审计记录");
@@ -32,7 +38,21 @@ let controller: AbortController | null = null;
 function resetCopy() { controller?.abort(); controller = null; checking.value = false; pendingCopy.value = null; copied.value = false; feedback.value = ""; }
 watch([currentMarkdown, () => props.reviewId, () => props.reviewedHeadSha], resetCopy);
 watch([() => props.reviewMarkdown, () => props.userMarkdown, () => props.reviewId], () => { reportView.value = initialView(); });
-onBeforeUnmount(resetCopy);
+watch([detail, excludeResolved, () => props.reviewId, () => props.reviewedHeadSha, () => props.reviewMarkdown], async () => {
+  resetCopy(); previewController?.abort(); selection.value = null; previewLoading.value = false;
+  if (!customSelection.value || !props.reviewId || !props.reviewMarkdown) return;
+  const request = new AbortController(); previewController = request; previewLoading.value = true;
+  const id = props.reviewId; const head = props.reviewedHeadSha;
+  try {
+    const result = await previewReviewComment(id, { detail: detail.value, exclude_resolved: excludeResolved.value }, request.signal);
+    if (request.signal.aborted || previewController !== request) return;
+    if (result.review_id !== id || result.reviewed_head_sha !== (head ?? null) || result.detail !== detail.value
+        || !result.review_comment_markdown || !Array.isArray(result.omitted_finding_keys)) throw new Error("选择预览身份不匹配");
+    selection.value = result;
+  } catch { if (!request.signal.aborted) feedback.value = "选择预览加载失败，请重新选择；尚未复制。"; }
+  finally { if (previewController === request) previewLoading.value = false; }
+}, { flush: "sync" });
+onBeforeUnmount(() => { resetCopy(); previewController?.abort(); });
 const reportDialog = ref<HTMLDialogElement | null>(null);
 
 const renderedMarkdown = computed(() => {
@@ -57,10 +77,11 @@ async function copyMarkdown() {
   controller?.abort(); controller = request;
   pendingCopy.value = null; checking.value = true; copied.value = false; feedback.value = "正在检查远端 Head…";
   try {
-    const result = await checkReviewComment(id, request.signal);
+    const result = await checkReviewComment(id, request.signal, { detail: detail.value, exclude_resolved: excludeResolved.value });
     if (request.signal.aborted || controller !== request || props.reviewId !== id || props.reviewedHeadSha !== head) return;
     if (result.review_id !== id || result.reviewed_head_sha !== (head ?? null)
         || !["current", "stale", "unknown"].includes(result.status) || !result.review_comment_markdown
+        || (customSelection.value && result.detail !== detail.value)
         || (result.status === "current" && (!head || result.latest_head_sha !== head))) throw new Error("快照不匹配");
     if (result.status === "current") await writeClipboard(result.review_comment_markdown);
     else { pendingCopy.value = result; feedback.value = result.status === "stale"
@@ -112,7 +133,13 @@ function exportMarkdown(comments = false) {
       <button v-if="userMarkdown" type="button" :aria-pressed="reportView === 'user'" @click="reportView = 'user'">详细报告</button>
       <details><summary>高级选项</summary><button type="button" :aria-pressed="reportView === 'audit'" @click="reportView = 'audit'">查看技术审计记录</button></details>
     </div>
-    <p class="runtime-caption">{{ reportView === 'comment' ? '完整问题正文，可单独复制到 GitHub；复制前检查远端 Head。人工处理以注记保留，不自动省略问题。' : reportView === 'user' ? '用于理解变更、核对问题和未决风险。' : '格式化执行与证据记录；不代表全部原始事件，历史正文保持原样。' }}</p>
+    <div v-if="reportView === 'comment' && reviewMarkdown" class="report-mode-switch" aria-label="PR 评论复制选项">
+      <label>内容密度 <select v-model="detail" aria-label="评论内容密度"><option value="compact">精简版 · 保留全部问题正文</option><option value="full">完整版 · 含全部范围记录</option></select></label>
+      <label><input v-model="excludeResolved" type="checkbox" />排除已处理的非阻断事项</label>
+      <span v-if="previewLoading" role="status">正在生成选择预览…</span>
+      <span v-else-if="selection">包含 {{ selection.included_finding_keys.length }} 项，明确省略 {{ selection.omitted_finding_keys.length }} 项；保留 {{ selection.retained_blocking_keys.length }} 项已处理阻断问题。</span>
+    </div>
+    <p class="runtime-caption">{{ reportView === 'comment' ? '精简版保留全部已选问题正文；省略事项逐项列明，阻断问题始终保留。复制前检查远端 Head。' : reportView === 'user' ? '用于理解变更、核对问题和未决风险。' : '格式化执行与证据记录；不代表全部原始事件，历史正文保持原样。' }}</p>
     <p v-if="feedback" class="report-feedback" role="status">{{ feedback }}</p>
     <button v-if="pendingCopy" type="button" class="button button--secondary button--compact" @click="copyAcknowledged">{{ pendingCopy.status === 'stale' ? '仍复制带旧快照说明的 PR 评论' : '仍复制带未知状态说明的 PR 评论' }}</button>
     <EmptyState v-if="!currentMarkdown" icon="report" title="报告尚未生成" description="当前没有可用的报告记录；请结合任务状态判断。" />

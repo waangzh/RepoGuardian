@@ -30,23 +30,11 @@ class ReportService:
         if task.engine == "task_review_v1":
             if not task.task_runtime_report:
                 return "\n".join(lines + ["任务级报告尚未生成，不能据此判断本轮检查完整性。"])
-            report = task.task_runtime_report
             from app.services.publication_planner import PublicationPlanner
+            from app.services.publication_renderer import render_technical_audit
             plan = PublicationPlanner().build(task)
-            lines = ["# RepoGuardian 技术审计记录", "",
-                "本记录包含格式化审查事实与运行追踪，不代表全部原始事件。", "",
-                plan.user_report_markdown.split("\n", 1)[1]]
-            lines.extend(["", "<details>", "<summary>技术审计附录（运行、调查与关联证据）</summary>", "",
-                "## 运行与计量", "", f"- 执行状态：{_report_text(report.get('execution_status', 'unknown'))}",
-                f"- 终止原因：{_report_text(report.get('termination_reason', 'unknown'))}",
-                f"- 计量状态：{_report_text(report.get('usage_integrity', 'unknown'))}",
-                f"- 已发送调用：{report.get('sent_calls', 0)}；已结算 Tokens：{report.get('settled_tokens', 0)}；未知用量：{report.get('unknown_attempts', 0)}", "",
-                "覆盖版本：task-goals-v1。初始范围、调查与缺陷结论分别记录。", ""])
-            if report.get("execution_status") == "failed":
-                lines.append("- 失败诊断：" + _inline_text(report.get("failure_summary") or runtime_failure_summary(report.get("diagnostics") or [])))
-            _append_task_runtime_findings(lines, report)
+            lines = [render_technical_audit(plan)]
             _append_execution_details(lines, task)
-            lines.extend(["", "</details>", ""])
         else:
             _append_pr_summary(lines, task)
             _append_pr_purpose(lines, task, purpose_summary=purpose_summary)

@@ -57,7 +57,7 @@ class ReviewOutcome(BaseModel):
     finding_conclusion: Literal["confirmed", "unresolved", "no_confirmed_findings", "unknown"] = "unknown"
     review_completeness: CoverageKind = CoverageKind.UNKNOWN
     runtime_reliability: Literal["reliable", "unreliable", "unknown"] = "unknown"
-    dynamic_validation: Literal["not_executed", "passed", "failed", "unknown"] = "unknown"
+    dynamic_validation: Literal["not_executed", "passed", "failed", "independent_results", "unknown"] = "unknown"
 
 
 class DigestGoal(BaseModel):
@@ -84,11 +84,40 @@ class DigestInvestigation(BaseModel):
     requested_ranges: list[DigestGoal] = Field(default_factory=list)
 
 
+class DigestIntent(BaseModel):
+    author_target: str
+    status: Literal["observed", "contradicted", "insufficient", "not_applicable", "not_checked"] = "not_checked"
+    observations: list[dict] = Field(default_factory=list)
+
+
+class DigestValidation(BaseModel):
+    id: str
+    source: str
+    stage: str
+    head_sha: str
+    patch_sha: str | None = None
+    status: str
+    trusted: bool = False
+    snapshot_matches: bool = False
+    reason: str
+    checks: list[str] = Field(default_factory=list)
+    completed_at: datetime | None = None
+
+
+class MergeDecision(BaseModel):
+    status: Literal["unavailable", "fix_blockers", "resolve_unknowns", "review_suggestions", "conditional_merge"] = "unavailable"
+    advice: str = "本轮缺少有效审查事实，请重新审查后再判断是否合并。"
+    blocking_finding_keys: list[str] = Field(default_factory=list)
+    nonblocking_finding_keys: list[str] = Field(default_factory=list)
+    unresolved_reasons: list[str] = Field(default_factory=list)
+
+
 class ReviewDigest(BaseModel):
     pr_url: str | None = None
     author_goal: str | None = None
     actual_changes: list[str] = Field(default_factory=list)
     intent_alignment: str = "未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。"
+    intent_assessments: list[DigestIntent] = Field(default_factory=list)
     findings: list[FindingView] = Field(default_factory=list)
     investigations_known: bool = False
     investigations: list[DigestInvestigation] = Field(default_factory=list)
@@ -98,7 +127,10 @@ class ReviewDigest(BaseModel):
     incomplete_goals: list[DigestGoal] = Field(default_factory=list)
     reviewed_files: list[str] = Field(default_factory=list)
     excluded_files: list[DigestExcludedFile] = Field(default_factory=list)
-    validation_state: Literal["not_executed", "unknown"] = "unknown"
+    validation_state: Literal["not_executed", "passed", "failed", "independent_results", "unknown"] = "unknown"
+    validations: list[DigestValidation] = Field(default_factory=list)
+    merge_decision: MergeDecision = Field(default_factory=MergeDecision)
+    execution_record: dict = Field(default_factory=dict)
     checked_areas: list[Literal["head_source_ranges", "base_source_ranges", "file_changes"]] = Field(default_factory=list)
     termination_reason: str | None = None
 
@@ -152,6 +184,12 @@ class PublicationPlan(BaseModel):
     blocking_reasons: list[str] = Field(default_factory=list)
 
 
+class ReviewCommentOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    detail: Literal["compact", "full"] = "compact"
+    exclude_resolved: bool = False
+
+
 class ReviewCommentCheck(BaseModel):
     review_id: str
     status: Literal["current", "stale", "unknown"]
@@ -159,6 +197,10 @@ class ReviewCommentCheck(BaseModel):
     latest_head_sha: str | None = None
     checked_at: datetime
     review_comment_markdown: str
+    included_finding_keys: list[str] = Field(default_factory=list)
+    omitted_finding_keys: list[str] = Field(default_factory=list)
+    retained_blocking_keys: list[str] = Field(default_factory=list)
+    detail: Literal["compact", "full"] = "compact"
 
 
 class PublicationState(StrEnum):

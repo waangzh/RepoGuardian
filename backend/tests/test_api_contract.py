@@ -52,11 +52,12 @@ def test_publication_interfaces_cover_backend_fields() -> None:
     from app.models.publication import (PublicationPlan, PublicationFinding, PublicationAnchor,
         PublicationSnapshot, ReviewOutcome, WithheldFinding, PublicationAttempt, PublicationItem,
         PublicationSelection, PublicationPreflightResult, PublicationAccepted, ReviewDigest, DigestGoal, DigestExcludedFile, ReviewCommentCheck,
-        DigestInvestigation)
+        DigestInvestigation, DigestIntent, DigestValidation, MergeDecision, ReviewCommentOptions)
     source = FRONTEND_TYPES.with_name("publication.ts").read_text(encoding="utf-8")
     for model in (PublicationPlan, PublicationFinding, PublicationAnchor, PublicationSnapshot, ReviewOutcome, WithheldFinding,
                   PublicationAttempt, PublicationItem, PublicationSelection, PublicationPreflightResult, PublicationAccepted,
-                  ReviewDigest, DigestGoal, DigestExcludedFile, ReviewCommentCheck, DigestInvestigation):
+                  ReviewDigest, DigestGoal, DigestExcludedFile, ReviewCommentCheck, DigestInvestigation,
+                  DigestIntent, DigestValidation, MergeDecision, ReviewCommentOptions):
         body = _interface_body(source, model.__name__)
         assert all(re.search(rf"\b{name}\??\s*:", body) for name in model.model_fields)
 
@@ -68,6 +69,29 @@ def test_browser_publication_fixtures_reproduce_backend_plan() -> None:
     for fixture in json.loads(path.read_text(encoding="utf-8")).values():
         task = ReviewTask.model_validate(fixture["task"])
         assert PublicationPlanner().build(task).model_dump(mode="json") == fixture["plan"]
+
+
+def test_browser_copy_variants_reproduce_backend_selection():
+    import json
+    from app.services.publication_planner import PublicationPlanner
+    from app.services.publication_renderer import comment_selection, render_review_comment
+
+    folder = FRONTEND_TYPES.parents[2] / "tests" / "fixtures"
+    fixtures = json.loads((folder / "publication-plans.json").read_text(encoding="utf-8"))
+    variants = json.loads((folder / "review-comment-options.json").read_text(encoding="utf-8"))
+    for name, fixture in fixtures.items():
+        task = ReviewTask.model_validate(fixture["task"])
+        base = PublicationPlanner().build(task)
+        saved = {item.id: {"current": {"status": "resolved", "reason": "合成验收：人工标记已处理"}}
+                 for item in base.digest.findings}
+        plan = PublicationPlanner().build(task, dispositions=saved)
+        for key, expected in variants[name].items():
+            detail, exclude = key.split(":")
+            included, omitted, retained = comment_selection(plan, exclude_resolved=exclude == "true")
+            assert expected == {"detail": detail,
+                "review_comment_markdown": render_review_comment(plan, detail=detail, exclude_resolved=exclude == "true"),
+                "included_finding_keys": [item.finding_key for item in included],
+                "omitted_finding_keys": [item.finding_key for item in omitted], "retained_blocking_keys": retained}
 
 
 def test_public_finding_schema_and_frontend_fields_are_explicit():

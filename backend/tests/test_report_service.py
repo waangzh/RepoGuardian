@@ -35,13 +35,11 @@ def test_runtime_user_report_contains_actionable_details_and_separate_audit() ->
             {"status": "dismissed", "candidate": {"claim": "已排除的误报"}}])
     task = ReviewTask(id="runtime", engine="task_review_v1", pr_url="https://github.com/o/r/pull/1", task_runtime_report=runtime.model_dump(mode="json"))
     markdown = ReportService().generate(task)
-    user, audit = markdown.split("<summary>技术审计附录（运行、调查与关联证据）</summary>", 1)
-    for value in ("核验后的标题", "受影响的行为", "可复现的失败场景", "核验后的修改建议", "尚无可靠代码定位", "尚未确认缺陷", "计量不完整"):
-        assert value in user
-    for value in ("原始主张", "candidate_derivation_incomplete"):
-        assert value not in user
-    assert "调查依据" in audit and "仅静态核对" in audit and "task-goals-v1" in audit
-    assert "已排除的误报" in user and "机器已确认但未生成发布评论" in user
+    assert "## 快照与结论身份" in markdown and "## 运行、计量与证据追踪" in markdown
+    for value in ("核验后的标题", "受影响的行为", "可复现的失败场景", "核验后的修改建议",
+                  "原始主张", "candidate_derivation_incomplete", "调查依据", "仅静态核对", "task-goals-v1", "已排除的误报"):
+        assert value in markdown
+    assert "## PR 变更理解" not in markdown and "## 发现的问题" not in markdown
 
 
 def test_runtime_report_escapes_model_html_and_keeps_missing_report_unknown() -> None:
@@ -50,7 +48,7 @@ def test_runtime_report_escapes_model_html_and_keeps_missing_report_unknown() ->
     task = ReviewTask(id="runtime", engine="task_review_v1", pr_url="https://github.com/o/r/pull/1", task_runtime_report=runtime.model_dump(mode="json"))
     markdown = ReportService().generate(task)
     assert "<script>" not in markdown and "&lt;script&gt;" in markdown
-    assert "失败原因" in markdown and "审查完整性：未知" in markdown
+    assert "failure_summary" in markdown and "审查完整性：未知" in markdown
     task.task_runtime_report = None
     assert "报告尚未生成" in ReportService().generate(task)
 

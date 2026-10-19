@@ -14,7 +14,7 @@ export interface ReviewOutcome {
   finding_conclusion: "confirmed" | "unresolved" | "no_confirmed_findings" | "unknown";
   review_completeness: CoverageKind;
   runtime_reliability: "reliable" | "unreliable" | "unknown";
-  dynamic_validation: "not_executed" | "passed" | "failed" | "unknown";
+  dynamic_validation: "not_executed" | "passed" | "failed" | "independent_results" | "unknown";
 }
 
 export interface DigestGoal {
@@ -43,6 +43,7 @@ export interface ReviewDigest {
   author_goal?: string | null;
   actual_changes?: string[];
   intent_alignment?: string;
+  intent_assessments?: DigestIntent[];
   findings?: import('./reviewPlan').FindingView[];
   investigations_known?: boolean;
   investigations?: DigestInvestigation[];
@@ -52,9 +53,44 @@ export interface ReviewDigest {
   incomplete_goals: DigestGoal[];
   reviewed_files: string[];
   excluded_files: DigestExcludedFile[];
-  validation_state: "not_executed" | "unknown";
+  validation_state: ReviewOutcome['dynamic_validation'];
+  validations?: DigestValidation[];
+  merge_decision?: MergeDecision;
+  execution_record?: Record<string, unknown>;
   checked_areas: ("head_source_ranges" | "base_source_ranges" | "file_changes")[];
   termination_reason: string | null;
+}
+
+export interface DigestIntent {
+  author_target: string;
+  status: "observed" | "contradicted" | "insufficient" | "not_applicable" | "not_checked";
+  observations: { goal_id: string; path: string; start_line: number | null; side: "head" | "base";
+    actual_behavior: string; alignment: "supported" | "contradicted" | "insufficient" | "not_applicable";
+    evidence_ids: string[]; limitations: string[] }[];
+}
+export interface DigestValidation {
+  id: string;
+  source: string;
+  stage: string;
+  head_sha: string;
+  patch_sha: string | null;
+  status: string;
+  trusted: boolean;
+  snapshot_matches: boolean;
+  reason: string;
+  checks: string[];
+  completed_at: string | null;
+}
+export interface MergeDecision {
+  status: "unavailable" | "fix_blockers" | "resolve_unknowns" | "review_suggestions" | "conditional_merge";
+  advice: string;
+  blocking_finding_keys: string[];
+  nonblocking_finding_keys: string[];
+  unresolved_reasons: string[];
+}
+export interface ReviewCommentOptions {
+  detail: "compact" | "full";
+  exclude_resolved: boolean;
 }
 
 export interface PublicationSnapshot {
@@ -111,6 +147,10 @@ export interface ReviewCommentCheck {
   latest_head_sha: string | null;
   checked_at: string;
   review_comment_markdown: string;
+  included_finding_keys: string[];
+  omitted_finding_keys: string[];
+  retained_blocking_keys: string[];
+  detail: "compact" | "full";
 }
 
 export type PublicationState = "queued" | "preparing" | "publishing" | "succeeded" | "partial" | "failed" | "uncertain" | "stale";

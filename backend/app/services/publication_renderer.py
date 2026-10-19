@@ -116,11 +116,18 @@ def render_summary(plan: PublicationPlan, *, discussion_urls: dict[str, str] | N
 def _validation_lines(plan):
     completeness = {"complete": "完整", "partial": "不完整", "unknown": "未知"}
     reliability = {"reliable": "可靠", "unreliable": "存在限制", "unknown": "未知"}
-    return [f"审查完整性：{completeness[plan.outcome.review_completeness]}；"
+    lines = [f"审查完整性：{completeness[plan.outcome.review_completeness]}；"
             f"运行可靠性：{reliability[plan.outcome.runtime_reliability]}。",
         "仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。"
         if plan.digest.validation_state == "not_executed" else
-        "动态验证状态未知；不能据此宣称目标仓库测试或构建已通过。"]
+        {"passed": "已有与当前 Head 绑定的受控验证通过记录；仅适用于记录的检查，不代替完整 CI 或审批。",
+         "failed": "已有与当前 Head 绑定的验证失败记录，需核对失败原因。",
+         "independent_results": "已有独立补丁验证结果；补丁通过不代表当前 PR Head 已通过测试。",
+         "unknown": "动态验证状态未知；不能据此宣称目标仓库测试或构建已通过。"}[plan.digest.validation_state]]
+    for result in plan.digest.validations:
+        lines.append(f"- {markdown_text(result.source)} / {markdown_text(result.stage)}：{markdown_text(result.status)}；"
+            f"可信绑定：{'是' if result.trusted and result.snapshot_matches else '否'}。{markdown_text(result.reason)}")
+    return lines
 
 
 def _goal_lines(goals, title, *, limit=20, include_reason=True):
@@ -248,15 +255,18 @@ def _ordered_findings(plan):
 
 
 def merge_advice(plan):
-    if plan.outcome.kind in {"failed", "cancelled"}:
-        return "建议：本轮未完成有效审查，请解决运行限制并重新审查后再判断是否合并。"
-    if any(item.severity in {"critical", "high"} for item in _ordered_findings(plan)):
-        return "建议：优先修复本轮高风险问题并复核触发场景，再考虑合并。"
-    if plan.outcome.confirmed_count:
-        return "建议：逐项处理已确认问题；当前没有足够依据自动判断其合并阻断属性，需结合影响、CI 与必要审批决策。"
-    if plan.outcome.kind != "clean":
-        return "建议：先补齐未决证据或运行限制，当前结果不足以支持合并判断。"
-    return "建议：本轮静态审查未发现达到报告门槛的问题；确认相关测试、CI 与必要审批满足要求后，可以考虑进入合并流程。"
+    decision = plan.digest.merge_decision
+    lines = ["建议：" + decision.advice,
+        f"阻断问题 {len(decision.blocking_finding_keys)} 项；非阻断建议 {len(decision.nonblocking_finding_keys)} 项。"
+        "策略：机器确认的 High/Critical 需先修复，Medium/Low 逐项评估；这不是自动 Approve。"]
+    lines.append("所有合并判断仍需满足项目要求的 CI 与必要审批；本建议不替代分支保护规则。")
+    if decision.unresolved_reasons:
+        labels = {"confirmed_findings_withheld": "仍有未通过发布准入的机器确认记录",
+            "finding_severity_unknown": "问题严重度未知", "author_intent_unresolved": "作者目标仍有未核验路径或矛盾",
+            "head_validation_failed": "当前 Head 验证失败", "head_validation_unknown": "已有验证记录无法确定当前 Head 结果"}
+        lines.append("仍需解决：" + "；".join(REASON_LABELS.get(reason, labels.get(reason, reason))
+            for reason in decision.unresolved_reasons) + "。")
+    return "\n\n".join(lines)
 
 
 def _change_understanding(plan, *, compact=False):
@@ -288,6 +298,15 @@ def _change_understanding(plan, *, compact=False):
     if compact and len(answered) > 3:
         lines.append(f"另有 {len(answered) - 3} 项已回答调查，详见详细报告。")
     lines += ["", "**目标符合性：** " + markdown_text(plan.digest.intent_alignment)]
+    labels = {"observed": "局部静态证据支持", "contradicted": "存在静态证据矛盾", "insufficient": "证据不足",
+              "not_applicable": "当前检查不适用", "not_checked": "尚未核验"}
+    for item in plan.digest.intent_assessments:
+        lines += ["", f"- 作者目标：{markdown_text(item.author_target, 4000)}；判断：{labels[item.status]}。"]
+        for observation in item.observations:
+            lines.append(f"  - 实际行为：{markdown_text(observation['actual_behavior'])}；"
+                f"位置：{markdown_text(str(observation.get('path') or '未知文件'))}:{observation.get('start_line') or '未知'}"
+                f"（{observation['side']}）；证据：{markdown_text('、'.join(observation['evidence_ids']) or '未获得有效证据')}。")
+            lines += ["  - 限制：" + markdown_text(value) for value in observation["limitations"]]
     return lines
 
 
@@ -318,17 +337,37 @@ def finding_location(plan, finding):
     return f"**代码位置：** {label}"
 
 
-def render_review_comment(plan):
+def comment_selection(plan, *, exclude_resolved=False):
+    findings = _ordered_findings(plan)
+    resolved = {item.id for item in plan.digest.findings if item.disposition and item.disposition.status == "resolved"}
+    blockers = set(plan.digest.merge_decision.blocking_finding_keys)
+    omitted = [item for item in findings if exclude_resolved and item.finding_key in resolved
+               and item.severity in {"medium", "low"} and item.finding_key not in blockers]
+    omitted_keys = {item.finding_key for item in omitted}
+    included = [item for item in findings if item.finding_key not in omitted_keys]
+    retained = [item.finding_key for item in included if exclude_resolved and item.finding_key in resolved
+                and (item.finding_key in blockers or item.severity in {"critical", "high"})]
+    return included, omitted, retained
+
+
+def render_review_comment(plan, *, detail="compact", exclude_resolved=False):
+    included, omitted, retained = comment_selection(plan, exclude_resolved=exclude_resolved)
     lines = ["## RepoGuardian · PR 审查评论", "", f"**审查结论：{OUTCOME_LABELS[plan.outcome.kind]}**", "", merge_advice(plan)]
-    lines += _change_understanding(plan, compact=True)
+    lines += _change_understanding(plan, compact=detail == "compact")
     lines += ["", "### 发现的问题", ""]
-    for finding in _ordered_findings(plan):
+    lines += [f"本次选择：包含 {len(included)} 项问题正文，省略 {len(omitted)} 项已处理的非阻断事项。机器结论与合并建议按全部审查事实保留。", ""]
+    for finding in included:
         lines += [finding_location(plan, finding), "", finding.body_markdown, ""]
         view = next((item for item in plan.digest.findings if item.id == finding.finding_key), None)
         if view and view.disposition:
             lines += _human_lines(view)
-    if not _ordered_findings(plan):
+    if not included:
         lines.append("当前没有通过发布准入的已核验问题正文。")
+    if omitted:
+        lines += ["", "明确省略的事项（人工标记已处理，不代表机器重新核验通过）：", *[
+            f"- [{item.severity}] {item.title}；{finding_location(plan, item)}；原因：本次选择排除已处理的非阻断事项。" for item in omitted]]
+    if retained:
+        lines.append(f"有 {len(retained)} 项已标记处理的阻断问题仍保留完整正文，需在新快照重新核验。")
     withheld = max(0, plan.outcome.confirmed_count - plan.outcome.publishable_count)
     if withheld:
         lines.append(f"另有 {withheld} 项机器确认记录未通过发布准入，请在详细报告中核对；当前评论未将其描述为已核验问题。")
@@ -337,4 +376,26 @@ def render_review_comment(plan):
         f"未决候选 {plan.outcome.unresolved_count} 项；未完成调查 {plan.outcome.incomplete_investigations} 项。",
         *[f"- {REASON_LABELS[reason]}" for reason in plan.outcome.reason_codes], "", *_validation_lines(plan), "",
         f"审查 Commit：{markdown_text(plan.snapshot.head_sha or '未记录', 64)}。"]
+    if detail == "full":
+        lines += _goal_lines(plan.digest.examined_goals, "已检查目标", limit=None)
+        lines += _goal_lines(plan.digest.incomplete_goals, "未完成目标", limit=None)
+        lines += [f"- 排除文件：{markdown_text(item.path)}；{markdown_text(item.reason)}" for item in plan.digest.excluded_files]
+    return "\n".join(lines)
+
+
+def render_technical_audit(plan):
+    import json
+
+    lines = ["# RepoGuardian 技术审计记录", "", "格式化的执行与证据索引，不代表全部原始事件或模型完整输入输出。", "",
+        "## 快照与结论身份", "", f"- 审查记录：{markdown_text(plan.review_id)}",
+        f"- Head：{markdown_text(plan.snapshot.head_sha or '未知')}",
+        f"- Effective Base：{markdown_text(plan.snapshot.effective_base_sha or '未知')}",
+        f"- 机器结论：{OUTCOME_LABELS[plan.outcome.kind]}", "", merge_advice(plan), "", "## 验证记录", "", *_validation_lines(plan)]
+    for title, data in (("目标符合性与证据引用", [item.model_dump(mode="json") for item in plan.digest.intent_assessments]),
+                        ("问题与人工处理身份", [item.model_dump(mode="json") for item in plan.digest.findings]),
+                        ("发布准入扣留记录", [item.model_dump(mode="json") for item in plan.withheld_findings]),
+                        ("运行、计量与证据追踪", plan.digest.execution_record)):
+        text = html.escape(json.dumps(data, ensure_ascii=False, indent=2), quote=False)
+        fence = "`" * max(3, max((len(value) + 1 for value in re.findall(r"`+", text)), default=3))
+        lines += ["", "## " + title, "", fence + "json", text, fence]
     return "\n".join(lines)

@@ -10,6 +10,7 @@ from app.services.publication_renderer import finding_body, markdown_text, rende
 from app.services.review_digest import enrich_review_digest
 from app.services.review_outcome import derive_review_outcome, snapshot_valid
 from app.services.review_publication import select_publication_findings
+from app.services.review_merge_decision import merge_decision
 
 
 def build_review_digest(task, report):
@@ -89,6 +90,7 @@ class PublicationPlanner:
             return (rank[finding.severity], finding.anchor.file_path, finding.anchor.start_line or 0, finding.finding_key)
         plan.inline_drafts.sort(key=sort_key)
         plan.summary_findings.sort(key=sort_key)
+        plan.digest.merge_decision = merge_decision(plan)
         plan.summary_markdown = render_summary(plan)
         plan.user_report_markdown = render_user_report(task, plan)
         plan.review_comment_markdown = render_review_comment(plan)

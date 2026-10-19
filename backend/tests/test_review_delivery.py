@@ -16,7 +16,7 @@ def test_comment_contains_full_inline_body_position_and_immutable_base_link():
     plan = PublicationPlanner().build(task)
     assert plan.inline_drafts[0].body_markdown in plan.review_comment_markdown
     assert f"/blob/{task.run_manifest.effective_base_sha}/src/a.py#L7" in plan.review_comment_markdown
-    assert "结合影响、CI" in plan.review_comment_markdown  # Issue 策略可降低原始严重度。
+    assert "阻断问题" in plan.review_comment_markdown and "CI" in plan.review_comment_markdown
     assert "审查 Commit" in plan.review_comment_markdown
     assert plan.user_report_markdown.index("## 发现的问题") < plan.user_report_markdown.index("## 审查范围与限制")
 
@@ -33,7 +33,9 @@ def test_detailed_and_audit_share_facts_and_human_state_does_not_change_admissio
     assert r"2026\-10\-19" in plan.review_comment_markdown
     assert plan.summary_markdown == base.summary_markdown
     assert task.task_runtime_report == original
-    assert base.user_report_markdown.split("\n", 1)[1] in ReportService().generate(task)
+    audit = ReportService().generate(task)
+    assert base.user_report_markdown.split("\n", 1)[1] not in audit
+    assert "运行、计量与证据追踪" in audit and "key-a" in audit
 
 
 def test_author_statement_and_actual_diff_are_kept_distinct_from_alignment():

@@ -355,6 +355,7 @@
         "author_goal": null,
         "actual_changes": [],
         "intent_alignment": "未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。",
+        "intent_assessments": [],
         "findings": [
           {
             "id": "key-a",
@@ -427,14 +428,183 @@
         ],
         "excluded_files": [],
         "validation_state": "not_executed",
+        "validations": [],
+        "merge_decision": {
+          "status": "review_suggestions",
+          "advice": "本轮已确认问题按当前严重度策略归为非阻断建议，需逐项评估影响与处理方式；确认相关测试、CI 和必要审批后再决定合并。",
+          "blocking_finding_keys": [],
+          "nonblocking_finding_keys": [
+            "key-a"
+          ],
+          "unresolved_reasons": []
+        },
+        "execution_record": {
+          "execution_status": "completed",
+          "termination_reason": "plan_exhausted",
+          "usage_integrity": "complete",
+          "sent_calls": 0,
+          "settled_tokens": 0,
+          "unknown_attempts": 0,
+          "total_tokens": null,
+          "work_items": [],
+          "diagnostics": [],
+          "relationship_hints": [],
+          "initial_scope_coverage": [
+            {
+              "goal_id": "g1",
+              "unit_id": "u1",
+              "target_kind": "source_range",
+              "target_ref": "src/a.py",
+              "start_line": 7,
+              "end_line": 7,
+              "status": "examined",
+              "reason": "固定源码检查"
+            }
+          ],
+          "admitted_investigations": [],
+          "unscheduled_leads": [],
+          "findings": [
+            {
+              "key": "key-a",
+              "candidate": {
+                "candidate_id": "candidate-a",
+                "claim": "空返回值破坏调用方契约",
+                "primary_anchor": "g1",
+                "supporting_evidence": [
+                  "e1"
+                ],
+                "source_result_ids": [
+                  "r1"
+                ],
+                "affected_behavior": "调用方字段读取失败",
+                "failure_scenario": "服务返回空值时直接读取字段",
+                "recommendation": "先处理空值",
+                "category": "correctness",
+                "severity": "medium",
+                "evidence_requests": []
+              },
+              "status": "confirmed",
+              "verification": {
+                "candidate_id": "candidate-a",
+                "decision": "supported",
+                "evidence_ids": [
+                  "e1"
+                ],
+                "reason": "独立核对主张",
+                "work_item_id": "verify1",
+                "request_id": "req1",
+                "attempt_id": "attempt1",
+                "snapshot_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "subject_hash": "9b32f70434b4124afe384c7e3014f488558a93cff7e288b7a26bd0a3dea9f4fb",
+                "publication_action": "retain",
+                "narrowing": null
+              },
+              "publication": {
+                "version": "claim-publication-v1",
+                "original_candidate_id": "candidate-a",
+                "subject_hash": "9b32f70434b4124afe384c7e3014f488558a93cff7e288b7a26bd0a3dea9f4fb",
+                "original_text": {
+                  "claim": "空返回值破坏调用方契约",
+                  "affected_behavior": "调用方字段读取失败",
+                  "failure_scenario": "服务返回空值时直接读取字段",
+                  "recommendation": "先处理空值"
+                },
+                "verified_core": {
+                  "claim": "空返回值破坏调用方契约",
+                  "failure_scenario": "服务返回空值时直接读取字段"
+                },
+                "verified_text": {
+                  "claim": "空返回值破坏调用方契约",
+                  "affected_behavior": "调用方字段读取失败",
+                  "failure_scenario": "服务返回空值时直接读取字段",
+                  "recommendation": "先处理空值"
+                },
+                "published_text": {
+                  "claim": "空返回值破坏调用方契约",
+                  "affected_behavior": "调用方字段读取失败",
+                  "failure_scenario": "服务返回空值时直接读取字段",
+                  "recommendation": "先处理空值"
+                },
+                "action": "retain",
+                "decision": "supported",
+                "basis": "独立核对主张",
+                "evidence_ids": [
+                  "e1"
+                ],
+                "request_id": "req1",
+                "attempt_id": "attempt1",
+                "work_item_id": "verify1",
+                "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "base_sha": "cccccccccccccccccccccccccccccccccccccccc",
+                "usage_known": true
+              },
+              "issue": {
+                "id": "candidate-a",
+                "review_unit_id": "u1",
+                "title": "空返回值破坏调用方契约",
+                "category": "correctness",
+                "severity": "medium",
+                "confidence": 0.5,
+                "affected_behavior": "调用方字段读取失败",
+                "failure_scenario": "服务返回空值时直接读取字段",
+                "reasoning_summary": null,
+                "recommendation": "先处理空值",
+                "primary_evidence": {
+                  "file_path": "src/a.py",
+                  "existing_code": "return None",
+                  "symbol": null,
+                  "expected_side": "head",
+                  "expected_hunk_id": null,
+                  "branch_claim": null,
+                  "context_before": [],
+                  "context_after": [],
+                  "resolved_start_line": 7,
+                  "resolved_end_line": 7,
+                  "resolution_method": "diff_exact",
+                  "resolution_status": "exact",
+                  "provenance": null,
+                  "match_count": 1,
+                  "anchor_hash": "hash",
+                  "resolved_side": "head",
+                  "candidate_locations": [],
+                  "unresolved_reason": null
+                },
+                "supporting_evidence": [],
+                "assumptions": [],
+                "related_tests": [],
+                "requires_human_confirmation": false,
+                "auto_fix_eligible": false,
+                "fix_risk": "low",
+                "status": "candidate",
+                "placement": "inline",
+                "unresolved_reason": null,
+                "resolved_location": {
+                  "file_path": "src/a.py",
+                  "start_line": 7,
+                  "end_line": 7,
+                  "side": "head",
+                  "hunk_id": null
+                },
+                "source_review_unit_ids": [
+                  "u1"
+                ],
+                "source_issue_ids": [
+                  "candidate-a"
+                ]
+              }
+            }
+          ],
+          "failure_summary": null,
+          "coverage_version": "task-goals-v1"
+        },
         "checked_areas": [
           "head_source_ranges"
         ],
         "termination_reason": "plan_exhausted"
       },
       "summary_markdown": "## RepoGuardian · PR Review\n\n**发现已确认问题**\n\n请逐项核对下列已确认问题及建议；仍需关注的限制见下方说明。\n\n- 已确认问题：1\n- 审查目标完成：1 / 1\n- 未决候选：0\n\n### 审查范围\n\n已检查：Head 变更源码区间。\n本次目标全部检查完成的文件：src/a\\.py。\n\n### 问题索引\n\n1. [Medium] 空返回值破坏调用方契约 — src/a\\.py:7（head）\n\n### 验证边界\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n此结果不应视为 Approve 或质量检查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n审查记录：preview\\-findings。",
-      "user_report_markdown": "# RepoGuardian 详细审查报告\n\n## 审查结论\n\n**发现已确认问题**\n\n请逐项核对下列已确认问题及建议；仍需关注的限制见下方说明。\n\n建议：逐项处理已确认问题；当前没有足够依据自动判断其合并阻断属性，需结合影响、CI 与必要审批决策。\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n## 发现的问题\n\n\n### 空返回值破坏调用方契约\n\n**代码位置：** [src/a\\.py:7（head）](https://github.com/o/r/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/src/a.py#L7)\n\n**[Medium · Correctness] 空返回值破坏调用方契约**\n\n**问题与影响：** 调用方字段读取失败\n\n**代码证据（核验依据）：** 独立核对主张\n\n**触发场景：** 服务返回空值时直接读取字段\n\n**建议：** 先处理空值\n\n---\nRepoGuardian · 独立核验支持此结论\n\n静态审查 · 未执行目标代码、测试或构建\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n- 人工处理：尚未记录。\n\n## 尚未确认的风险\n\n\n### 哪些调查没有得到答案\n\n已记录调查 0 项；有明确答案 0 项；未得到充分答案 0 项。\n\n## 审查范围与限制\n\n- 审查目标完成：1 / 1\n- 已确认问题：1；未决候选：0\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步建议\n\n建议：逐项处理已确认问题；当前没有足够依据自动判断其合并阻断属性，需结合影响、CI 与必要审批决策。\n- 逐项核对已确认问题，结合触发场景和代码证据处理；被扣留的记录仍需单独核验。\n\n## 验证边界\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## 附录：技术信息\n\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n审查记录：preview\\-findings。\n\n运行过程与证据追踪请查看技术审计记录；此 Markdown 不代表全部原始事件。\n模型：fixture / fixture。\n\n实际运行记录：completed / plan\\_exhausted。",
-      "review_comment_markdown": "## RepoGuardian · PR 审查评论\n\n**审查结论：发现已确认问题**\n\n建议：逐项处理已确认问题；当前没有足够依据自动判断其合并阻断属性，需结合影响、CI 与必要审批决策。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n### 发现的问题\n\n**代码位置：** [src/a\\.py:7（head）](https://github.com/o/r/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/src/a.py#L7)\n\n**[Medium · Correctness] 空返回值破坏调用方契约**\n\n**问题与影响：** 调用方字段读取失败\n\n**代码证据（核验依据）：** 独立核对主张\n\n**触发场景：** 服务返回空值时直接读取字段\n\n**建议：** 先处理空值\n\n---\nRepoGuardian · 独立核验支持此结论\n\n静态审查 · 未执行目标代码、测试或构建\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n\n### 其他审查结果与限制\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。",
+      "user_report_markdown": "# RepoGuardian 详细审查报告\n\n## 审查结论\n\n**发现已确认问题**\n\n请逐项核对下列已确认问题及建议；仍需关注的限制见下方说明。\n\n建议：本轮已确认问题按当前严重度策略归为非阻断建议，需逐项评估影响与处理方式；确认相关测试、CI 和必要审批后再决定合并。\n\n阻断问题 0 项；非阻断建议 1 项。策略：机器确认的 High/Critical 需先修复，Medium/Low 逐项评估；这不是自动 Approve。\n\n所有合并判断仍需满足项目要求的 CI 与必要审批；本建议不替代分支保护规则。\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n## 发现的问题\n\n\n### 空返回值破坏调用方契约\n\n**代码位置：** [src/a\\.py:7（head）](https://github.com/o/r/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/src/a.py#L7)\n\n**[Medium · Correctness] 空返回值破坏调用方契约**\n\n**问题与影响：** 调用方字段读取失败\n\n**代码证据（核验依据）：** 独立核对主张\n\n**触发场景：** 服务返回空值时直接读取字段\n\n**建议：** 先处理空值\n\n---\nRepoGuardian · 独立核验支持此结论\n\n静态审查 · 未执行目标代码、测试或构建\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n- 人工处理：尚未记录。\n\n## 尚未确认的风险\n\n\n### 哪些调查没有得到答案\n\n已记录调查 0 项；有明确答案 0 项；未得到充分答案 0 项。\n\n## 审查范围与限制\n\n- 审查目标完成：1 / 1\n- 已确认问题：1；未决候选：0\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步建议\n\n建议：本轮已确认问题按当前严重度策略归为非阻断建议，需逐项评估影响与处理方式；确认相关测试、CI 和必要审批后再决定合并。\n\n阻断问题 0 项；非阻断建议 1 项。策略：机器确认的 High/Critical 需先修复，Medium/Low 逐项评估；这不是自动 Approve。\n\n所有合并判断仍需满足项目要求的 CI 与必要审批；本建议不替代分支保护规则。\n- 逐项核对已确认问题，结合触发场景和代码证据处理；被扣留的记录仍需单独核验。\n\n## 验证边界\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## 附录：技术信息\n\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n审查记录：preview\\-findings。\n\n运行过程与证据追踪请查看技术审计记录；此 Markdown 不代表全部原始事件。\n模型：fixture / fixture。\n\n实际运行记录：completed / plan\\_exhausted。",
+      "review_comment_markdown": "## RepoGuardian · PR 审查评论\n\n**审查结论：发现已确认问题**\n\n建议：本轮已确认问题按当前严重度策略归为非阻断建议，需逐项评估影响与处理方式；确认相关测试、CI 和必要审批后再决定合并。\n\n阻断问题 0 项；非阻断建议 1 项。策略：机器确认的 High/Critical 需先修复，Medium/Low 逐项评估；这不是自动 Approve。\n\n所有合并判断仍需满足项目要求的 CI 与必要审批；本建议不替代分支保护规则。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n### 发现的问题\n\n本次选择：包含 1 项问题正文，省略 0 项已处理的非阻断事项。机器结论与合并建议按全部审查事实保留。\n\n**代码位置：** [src/a\\.py:7（head）](https://github.com/o/r/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/src/a.py#L7)\n\n**[Medium · Correctness] 空返回值破坏调用方契约**\n\n**问题与影响：** 调用方字段读取失败\n\n**代码证据（核验依据）：** 独立核对主张\n\n**触发场景：** 服务返回空值时直接读取字段\n\n**建议：** 先处理空值\n\n---\nRepoGuardian · 独立核验支持此结论\n\n静态审查 · 未执行目标代码、测试或构建\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n\n### 其他审查结果与限制\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。",
       "inline_drafts": [
         {
           "finding_key": "key-a",
@@ -672,6 +842,7 @@
         "author_goal": null,
         "actual_changes": [],
         "intent_alignment": "未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。",
+        "intent_assessments": [],
         "findings": [],
         "investigations_known": true,
         "investigations": [],
@@ -694,14 +865,51 @@
         ],
         "excluded_files": [],
         "validation_state": "not_executed",
+        "validations": [],
+        "merge_decision": {
+          "status": "conditional_merge",
+          "advice": "本轮静态审查未发现达到报告门槛的问题；确认相关测试、CI 与必要审批满足要求后，可以考虑进入合并流程。",
+          "blocking_finding_keys": [],
+          "nonblocking_finding_keys": [],
+          "unresolved_reasons": []
+        },
+        "execution_record": {
+          "execution_status": "completed",
+          "termination_reason": "plan_exhausted",
+          "usage_integrity": "complete",
+          "sent_calls": 0,
+          "settled_tokens": 0,
+          "unknown_attempts": 0,
+          "total_tokens": null,
+          "work_items": [],
+          "diagnostics": [],
+          "relationship_hints": [],
+          "initial_scope_coverage": [
+            {
+              "goal_id": "g1",
+              "unit_id": "u1",
+              "target_kind": "source_range",
+              "target_ref": "src/a.py",
+              "start_line": 7,
+              "end_line": 7,
+              "status": "examined",
+              "reason": "固定源码检查"
+            }
+          ],
+          "admitted_investigations": [],
+          "unscheduled_leads": [],
+          "findings": [],
+          "failure_summary": null,
+          "coverage_version": "task-goals-v1"
+        },
         "checked_areas": [
           "head_source_ranges"
         ],
         "termination_reason": "plan_exhausted"
       },
       "summary_markdown": "## RepoGuardian · PR Review\n\n**未发现可行动问题**\n\n已完成本次约定范围的静态审查，未发现具有充分代码证据、需要 PR 作者处理的问题。\n\n- 已确认问题：0\n- 审查目标完成：1 / 1\n- 未决候选：0\n\n### 审查范围\n\n已检查：Head 变更源码区间。\n本次目标全部检查完成的文件：src/a\\.py。\n\n### 验证边界\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n审查记录：preview\\-clean。",
-      "user_report_markdown": "# RepoGuardian 详细审查报告\n\n## 审查结论\n\n**未发现可行动问题**\n\n已完成本次约定范围的静态审查，未发现具有充分代码证据、需要 PR 作者处理的问题。\n\n建议：本轮静态审查未发现达到报告门槛的问题；确认相关测试、CI 与必要审批满足要求后，可以考虑进入合并流程。\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n## 发现的问题\n\n当前没有通过发布准入的已核验问题；以下机器记录与未决风险需分别核对。\n\n## 尚未确认的风险\n\n\n### 哪些调查没有得到答案\n\n已记录调查 0 项；有明确答案 0 项；未得到充分答案 0 项。\n\n## 审查范围与限制\n\n- 审查目标完成：1 / 1\n- 已确认问题：0；未决候选：0\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步建议\n\n建议：本轮静态审查未发现达到报告门槛的问题；确认相关测试、CI 与必要审批满足要求后，可以考虑进入合并流程。\n- 本轮没有发现需要处理的已确认问题；结合项目自身测试、CI 和人工判断决定是否合并。\n\n## 验证边界\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## 附录：技术信息\n\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n审查记录：preview\\-clean。\n\n运行过程与证据追踪请查看技术审计记录；此 Markdown 不代表全部原始事件。\n模型：fixture / fixture。\n\n实际运行记录：completed / plan\\_exhausted。",
-      "review_comment_markdown": "## RepoGuardian · PR 审查评论\n\n**审查结论：未发现可行动问题**\n\n建议：本轮静态审查未发现达到报告门槛的问题；确认相关测试、CI 与必要审批满足要求后，可以考虑进入合并流程。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n### 发现的问题\n\n当前没有通过发布准入的已核验问题正文。\n\n### 其他审查结果与限制\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。",
+      "user_report_markdown": "# RepoGuardian 详细审查报告\n\n## 审查结论\n\n**未发现可行动问题**\n\n已完成本次约定范围的静态审查，未发现具有充分代码证据、需要 PR 作者处理的问题。\n\n建议：本轮静态审查未发现达到报告门槛的问题；确认相关测试、CI 与必要审批满足要求后，可以考虑进入合并流程。\n\n阻断问题 0 项；非阻断建议 0 项。策略：机器确认的 High/Critical 需先修复，Medium/Low 逐项评估；这不是自动 Approve。\n\n所有合并判断仍需满足项目要求的 CI 与必要审批；本建议不替代分支保护规则。\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n## 发现的问题\n\n当前没有通过发布准入的已核验问题；以下机器记录与未决风险需分别核对。\n\n## 尚未确认的风险\n\n\n### 哪些调查没有得到答案\n\n已记录调查 0 项；有明确答案 0 项；未得到充分答案 0 项。\n\n## 审查范围与限制\n\n- 审查目标完成：1 / 1\n- 已确认问题：0；未决候选：0\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步建议\n\n建议：本轮静态审查未发现达到报告门槛的问题；确认相关测试、CI 与必要审批满足要求后，可以考虑进入合并流程。\n\n阻断问题 0 项；非阻断建议 0 项。策略：机器确认的 High/Critical 需先修复，Medium/Low 逐项评估；这不是自动 Approve。\n\n所有合并判断仍需满足项目要求的 CI 与必要审批；本建议不替代分支保护规则。\n- 本轮没有发现需要处理的已确认问题；结合项目自身测试、CI 和人工判断决定是否合并。\n\n## 验证边界\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## 附录：技术信息\n\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n审查记录：preview\\-clean。\n\n运行过程与证据追踪请查看技术审计记录；此 Markdown 不代表全部原始事件。\n模型：fixture / fixture。\n\n实际运行记录：completed / plan\\_exhausted。",
+      "review_comment_markdown": "## RepoGuardian · PR 审查评论\n\n**审查结论：未发现可行动问题**\n\n建议：本轮静态审查未发现达到报告门槛的问题；确认相关测试、CI 与必要审批满足要求后，可以考虑进入合并流程。\n\n阻断问题 0 项；非阻断建议 0 项。策略：机器确认的 High/Critical 需先修复，Medium/Low 逐项评估；这不是自动 Approve。\n\n所有合并判断仍需满足项目要求的 CI 与必要审批；本建议不替代分支保护规则。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n### 发现的问题\n\n本次选择：包含 0 项问题正文，省略 0 项已处理的非阻断事项。机器结论与合并建议按全部审查事实保留。\n\n当前没有通过发布准入的已核验问题正文。\n\n### 其他审查结果与限制\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。",
       "inline_drafts": [],
       "summary_findings": [],
       "withheld_findings": [],
@@ -920,6 +1128,7 @@
         "author_goal": null,
         "actual_changes": [],
         "intent_alignment": "未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。",
+        "intent_assessments": [],
         "findings": [],
         "investigations_known": true,
         "investigations": [],
@@ -942,14 +1151,53 @@
         ],
         "excluded_files": [],
         "validation_state": "not_executed",
+        "validations": [],
+        "merge_decision": {
+          "status": "resolve_unknowns",
+          "advice": "先补齐未决证据、被扣留的问题或验证限制，当前结果不足以支持合并判断。",
+          "blocking_finding_keys": [],
+          "nonblocking_finding_keys": [],
+          "unresolved_reasons": [
+            "scope_incomplete"
+          ]
+        },
+        "execution_record": {
+          "execution_status": "completed",
+          "termination_reason": "plan_exhausted",
+          "usage_integrity": "complete",
+          "sent_calls": 0,
+          "settled_tokens": 0,
+          "unknown_attempts": 0,
+          "total_tokens": null,
+          "work_items": [],
+          "diagnostics": [],
+          "relationship_hints": [],
+          "initial_scope_coverage": [
+            {
+              "goal_id": "g1",
+              "unit_id": "u1",
+              "target_kind": "source_range",
+              "target_ref": "src/a.py",
+              "start_line": 7,
+              "end_line": 7,
+              "status": "examined",
+              "reason": "固定源码检查"
+            }
+          ],
+          "admitted_investigations": [],
+          "unscheduled_leads": [],
+          "findings": [],
+          "failure_summary": null,
+          "coverage_version": "task-goals-v1"
+        },
         "checked_areas": [
           "head_source_ranges"
         ],
         "termination_reason": "plan_exhausted"
       },
       "summary_markdown": "## RepoGuardian · PR Review\n\n**本次审查未得出完整结论**\n\n目前没有可确认的问题，但审查仍存在缺口或可靠性限制，不能据此认定本次变更没有问题。\n\n- 已确认问题：0\n- 审查目标完成：1 / 1\n- 未决候选：0\n\n### 审查范围\n\n已检查：Head 变更源码区间。\n本次目标全部检查完成的文件：src/a\\.py。\n\n### 仍需关注\n\n- 部分目标未完成检查（scope_incomplete）\n\n### 验证边界\n\n审查完整性：不完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n此结果不应视为 Approve 或质量检查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n审查记录：preview\\-inconclusive。",
-      "user_report_markdown": "# RepoGuardian 详细审查报告\n\n## 审查结论\n\n**本次审查未得出完整结论**\n\n目前没有可确认的问题，但审查仍存在缺口或可靠性限制，不能据此认定本次变更没有问题。\n\n建议：先补齐未决证据或运行限制，当前结果不足以支持合并判断。\n\n审查完整性：不完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n## 发现的问题\n\n当前没有通过发布准入的已核验问题；以下机器记录与未决风险需分别核对。\n\n## 尚未确认的风险\n\n- 部分目标未完成检查\n\n### 哪些调查没有得到答案\n\n已记录调查 0 项；有明确答案 0 项；未得到充分答案 0 项。\n\n## 审查范围与限制\n\n- 审查目标完成：1 / 1\n- 已确认问题：0；未决候选：0\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步建议\n\n建议：先补齐未决证据或运行限制，当前结果不足以支持合并判断。\n- 部分目标未完成检查\n\n## 验证边界\n\n审查完整性：不完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## 附录：技术信息\n\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n审查记录：preview\\-inconclusive。\n\n运行过程与证据追踪请查看技术审计记录；此 Markdown 不代表全部原始事件。\n模型：fixture / fixture。\n\n实际运行记录：completed / plan\\_exhausted。\n\n限制原因代码：scope_incomplete",
-      "review_comment_markdown": "## RepoGuardian · PR 审查评论\n\n**审查结论：本次审查未得出完整结论**\n\n建议：先补齐未决证据或运行限制，当前结果不足以支持合并判断。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n### 发现的问题\n\n当前没有通过发布准入的已核验问题正文。\n\n### 其他审查结果与限制\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n- 部分目标未完成检查\n\n审查完整性：不完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。",
+      "user_report_markdown": "# RepoGuardian 详细审查报告\n\n## 审查结论\n\n**本次审查未得出完整结论**\n\n目前没有可确认的问题，但审查仍存在缺口或可靠性限制，不能据此认定本次变更没有问题。\n\n建议：先补齐未决证据、被扣留的问题或验证限制，当前结果不足以支持合并判断。\n\n阻断问题 0 项；非阻断建议 0 项。策略：机器确认的 High/Critical 需先修复，Medium/Low 逐项评估；这不是自动 Approve。\n\n所有合并判断仍需满足项目要求的 CI 与必要审批；本建议不替代分支保护规则。\n\n仍需解决：部分目标未完成检查。\n\n审查完整性：不完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n## 发现的问题\n\n当前没有通过发布准入的已核验问题；以下机器记录与未决风险需分别核对。\n\n## 尚未确认的风险\n\n- 部分目标未完成检查\n\n### 哪些调查没有得到答案\n\n已记录调查 0 项；有明确答案 0 项；未得到充分答案 0 项。\n\n## 审查范围与限制\n\n- 审查目标完成：1 / 1\n- 已确认问题：0；未决候选：0\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步建议\n\n建议：先补齐未决证据、被扣留的问题或验证限制，当前结果不足以支持合并判断。\n\n阻断问题 0 项；非阻断建议 0 项。策略：机器确认的 High/Critical 需先修复，Medium/Low 逐项评估；这不是自动 Approve。\n\n所有合并判断仍需满足项目要求的 CI 与必要审批；本建议不替代分支保护规则。\n\n仍需解决：部分目标未完成检查。\n- 部分目标未完成检查\n\n## 验证边界\n\n审查完整性：不完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## 附录：技术信息\n\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n审查记录：preview\\-inconclusive。\n\n运行过程与证据追踪请查看技术审计记录；此 Markdown 不代表全部原始事件。\n模型：fixture / fixture。\n\n实际运行记录：completed / plan\\_exhausted。\n\n限制原因代码：scope_incomplete",
+      "review_comment_markdown": "## RepoGuardian · PR 审查评论\n\n**审查结论：本次审查未得出完整结论**\n\n建议：先补齐未决证据、被扣留的问题或验证限制，当前结果不足以支持合并判断。\n\n阻断问题 0 项；非阻断建议 0 项。策略：机器确认的 High/Critical 需先修复，Medium/Low 逐项评估；这不是自动 Approve。\n\n所有合并判断仍需满足项目要求的 CI 与必要审批；本建议不替代分支保护规则。\n\n仍需解决：部分目标未完成检查。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n### 发现的问题\n\n本次选择：包含 0 项问题正文，省略 0 项已处理的非阻断事项。机器结论与合并建议按全部审查事实保留。\n\n当前没有通过发布准入的已核验问题正文。\n\n### 其他审查结果与限制\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n- 部分目标未完成检查\n\n审查完整性：不完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。",
       "inline_drafts": [],
       "summary_findings": [],
       "withheld_findings": [],
@@ -1315,6 +1563,7 @@
         "author_goal": null,
         "actual_changes": [],
         "intent_alignment": "未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。",
+        "intent_assessments": [],
         "findings": [
           {
             "id": "key-a",
@@ -1387,14 +1636,186 @@
         ],
         "excluded_files": [],
         "validation_state": "not_executed",
+        "validations": [],
+        "merge_decision": {
+          "status": "unavailable",
+          "advice": "本轮缺少有效审查事实，请重新审查后再判断是否合并。",
+          "blocking_finding_keys": [],
+          "nonblocking_finding_keys": [
+            "key-a"
+          ],
+          "unresolved_reasons": [
+            "confirmed_findings_withheld",
+            "task_failed"
+          ]
+        },
+        "execution_record": {
+          "execution_status": "completed",
+          "termination_reason": "plan_exhausted",
+          "usage_integrity": "complete",
+          "sent_calls": 0,
+          "settled_tokens": 0,
+          "unknown_attempts": 0,
+          "total_tokens": null,
+          "work_items": [],
+          "diagnostics": [],
+          "relationship_hints": [],
+          "initial_scope_coverage": [
+            {
+              "goal_id": "g1",
+              "unit_id": "u1",
+              "target_kind": "source_range",
+              "target_ref": "src/a.py",
+              "start_line": 7,
+              "end_line": 7,
+              "status": "examined",
+              "reason": "固定源码检查"
+            }
+          ],
+          "admitted_investigations": [],
+          "unscheduled_leads": [],
+          "findings": [
+            {
+              "key": "key-a",
+              "candidate": {
+                "candidate_id": "candidate-a",
+                "claim": "空返回值破坏调用方契约",
+                "primary_anchor": "g1",
+                "supporting_evidence": [
+                  "e1"
+                ],
+                "source_result_ids": [
+                  "r1"
+                ],
+                "affected_behavior": "调用方字段读取失败",
+                "failure_scenario": "服务返回空值时直接读取字段",
+                "recommendation": "先处理空值",
+                "category": "correctness",
+                "severity": "medium",
+                "evidence_requests": []
+              },
+              "status": "confirmed",
+              "verification": {
+                "candidate_id": "candidate-a",
+                "decision": "supported",
+                "evidence_ids": [
+                  "e1"
+                ],
+                "reason": "独立核对主张",
+                "work_item_id": "verify1",
+                "request_id": "req1",
+                "attempt_id": "attempt1",
+                "snapshot_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "subject_hash": "9b32f70434b4124afe384c7e3014f488558a93cff7e288b7a26bd0a3dea9f4fb",
+                "publication_action": "retain",
+                "narrowing": null
+              },
+              "publication": {
+                "version": "claim-publication-v1",
+                "original_candidate_id": "candidate-a",
+                "subject_hash": "9b32f70434b4124afe384c7e3014f488558a93cff7e288b7a26bd0a3dea9f4fb",
+                "original_text": {
+                  "claim": "空返回值破坏调用方契约",
+                  "affected_behavior": "调用方字段读取失败",
+                  "failure_scenario": "服务返回空值时直接读取字段",
+                  "recommendation": "先处理空值"
+                },
+                "verified_core": {
+                  "claim": "空返回值破坏调用方契约",
+                  "failure_scenario": "服务返回空值时直接读取字段"
+                },
+                "verified_text": {
+                  "claim": "空返回值破坏调用方契约",
+                  "affected_behavior": "调用方字段读取失败",
+                  "failure_scenario": "服务返回空值时直接读取字段",
+                  "recommendation": "先处理空值"
+                },
+                "published_text": {
+                  "claim": "空返回值破坏调用方契约",
+                  "affected_behavior": "调用方字段读取失败",
+                  "failure_scenario": "服务返回空值时直接读取字段",
+                  "recommendation": "先处理空值"
+                },
+                "action": "retain",
+                "decision": "supported",
+                "basis": "独立核对主张",
+                "evidence_ids": [
+                  "e1"
+                ],
+                "request_id": "req1",
+                "attempt_id": "attempt1",
+                "work_item_id": "verify1",
+                "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "base_sha": "cccccccccccccccccccccccccccccccccccccccc",
+                "usage_known": true
+              },
+              "issue": {
+                "id": "candidate-a",
+                "review_unit_id": "u1",
+                "title": "空返回值破坏调用方契约",
+                "category": "correctness",
+                "severity": "medium",
+                "confidence": 0.5,
+                "affected_behavior": "调用方字段读取失败",
+                "failure_scenario": "服务返回空值时直接读取字段",
+                "reasoning_summary": null,
+                "recommendation": "先处理空值",
+                "primary_evidence": {
+                  "file_path": "src/a.py",
+                  "existing_code": "return None",
+                  "symbol": null,
+                  "expected_side": "head",
+                  "expected_hunk_id": null,
+                  "branch_claim": null,
+                  "context_before": [],
+                  "context_after": [],
+                  "resolved_start_line": 7,
+                  "resolved_end_line": 7,
+                  "resolution_method": "diff_exact",
+                  "resolution_status": "exact",
+                  "provenance": null,
+                  "match_count": 1,
+                  "anchor_hash": "hash",
+                  "resolved_side": "head",
+                  "candidate_locations": [],
+                  "unresolved_reason": null
+                },
+                "supporting_evidence": [],
+                "assumptions": [],
+                "related_tests": [],
+                "requires_human_confirmation": false,
+                "auto_fix_eligible": false,
+                "fix_risk": "low",
+                "status": "candidate",
+                "placement": "inline",
+                "unresolved_reason": null,
+                "resolved_location": {
+                  "file_path": "src/a.py",
+                  "start_line": 7,
+                  "end_line": 7,
+                  "side": "head",
+                  "hunk_id": null
+                },
+                "source_review_unit_ids": [
+                  "u1"
+                ],
+                "source_issue_ids": [
+                  "candidate-a"
+                ]
+              }
+            }
+          ],
+          "failure_summary": null,
+          "coverage_version": "task-goals-v1"
+        },
         "checked_areas": [
           "head_source_ranges"
         ],
         "termination_reason": "plan_exhausted"
       },
       "summary_markdown": "## RepoGuardian · PR Review\n\n**审查失败**\n\n审查执行失败，请处理运行故障并重新审查；已有记录不能视为完整结论。\n\n- 已确认问题：1\n- 审查目标完成：1 / 1\n- 未决候选：0\n\n### 审查范围\n\n已检查：Head 变更源码区间。\n本次目标全部检查完成的文件：src/a\\.py。\n\n1 项已确认记录未进入发布草稿；具体扣留原因保留在内部发布计划中。\n\n### 仍需关注\n\n- 任务或运行时执行失败（task_failed）\n\n### 验证边界\n\n审查完整性：完整；运行可靠性：存在限制。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n此结果不应视为 Approve 或质量检查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n审查记录：preview\\-failed。",
-      "user_report_markdown": "# RepoGuardian 详细审查报告\n\n## 审查结论\n\n**审查失败**\n\n审查执行失败，请处理运行故障并重新审查；已有记录不能视为完整结论。\n\n建议：本轮未完成有效审查，请解决运行限制并重新审查后再判断是否合并。\n\n审查完整性：完整；运行可靠性：存在限制。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n## 发现的问题\n\n当前没有通过发布准入的已核验问题；以下机器记录与未决风险需分别核对。\n\n### 机器已确认但未生成发布评论\n\n#### 空返回值破坏调用方契约\n\n- AI 判定：机器已确认，发布准入未通过\n- 严重程度：medium\n- 位置：src/a\\.py:7（right）\n- 影响：调用方字段读取失败\n- 触发场景：服务返回空值时直接读取字段\n- 建议：先处理空值\n- 人工处理：尚未记录。\n\n## 尚未确认的风险\n\n- 任务或运行时执行失败\n\n### 哪些调查没有得到答案\n\n已记录调查 0 项；有明确答案 0 项；未得到充分答案 0 项。\n\n## 审查范围与限制\n\n- 审查目标完成：1 / 1\n- 已确认问题：1；未决候选：0\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步建议\n\n建议：本轮未完成有效审查，请解决运行限制并重新审查后再判断是否合并。\n- 逐项核对已确认问题，结合触发场景和代码证据处理；被扣留的记录仍需单独核验。\n- 任务或运行时执行失败\n\n## 验证边界\n\n审查完整性：完整；运行可靠性：存在限制。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## 附录：技术信息\n\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n审查记录：preview\\-failed。\n\n运行过程与证据追踪请查看技术审计记录；此 Markdown 不代表全部原始事件。\n模型：fixture / fixture。\n\n实际运行记录：completed / plan\\_exhausted。\n\n未进入发布正文的记录：\n- candidate\\-a：review\\_content\\_blocked\n\n限制原因代码：task_failed",
-      "review_comment_markdown": "## RepoGuardian · PR 审查评论\n\n**审查结论：审查失败**\n\n建议：本轮未完成有效审查，请解决运行限制并重新审查后再判断是否合并。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n### 发现的问题\n\n当前没有通过发布准入的已核验问题正文。\n另有 1 项机器确认记录未通过发布准入，请在详细报告中核对；当前评论未将其描述为已核验问题。\n\n### 其他审查结果与限制\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n- 任务或运行时执行失败\n\n审查完整性：完整；运行可靠性：存在限制。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。",
+      "user_report_markdown": "# RepoGuardian 详细审查报告\n\n## 审查结论\n\n**审查失败**\n\n审查执行失败，请处理运行故障并重新审查；已有记录不能视为完整结论。\n\n建议：本轮缺少有效审查事实，请重新审查后再判断是否合并。\n\n阻断问题 0 项；非阻断建议 1 项。策略：机器确认的 High/Critical 需先修复，Medium/Low 逐项评估；这不是自动 Approve。\n\n所有合并判断仍需满足项目要求的 CI 与必要审批；本建议不替代分支保护规则。\n\n仍需解决：仍有未通过发布准入的机器确认记录；任务或运行时执行失败。\n\n审查完整性：完整；运行可靠性：存在限制。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n## 发现的问题\n\n当前没有通过发布准入的已核验问题；以下机器记录与未决风险需分别核对。\n\n### 机器已确认但未生成发布评论\n\n#### 空返回值破坏调用方契约\n\n- AI 判定：机器已确认，发布准入未通过\n- 严重程度：medium\n- 位置：src/a\\.py:7（right）\n- 影响：调用方字段读取失败\n- 触发场景：服务返回空值时直接读取字段\n- 建议：先处理空值\n- 人工处理：尚未记录。\n\n## 尚未确认的风险\n\n- 任务或运行时执行失败\n\n### 哪些调查没有得到答案\n\n已记录调查 0 项；有明确答案 0 项；未得到充分答案 0 项。\n\n## 审查范围与限制\n\n- 审查目标完成：1 / 1\n- 已确认问题：1；未决候选：0\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步建议\n\n建议：本轮缺少有效审查事实，请重新审查后再判断是否合并。\n\n阻断问题 0 项；非阻断建议 1 项。策略：机器确认的 High/Critical 需先修复，Medium/Low 逐项评估；这不是自动 Approve。\n\n所有合并判断仍需满足项目要求的 CI 与必要审批；本建议不替代分支保护规则。\n\n仍需解决：仍有未通过发布准入的机器确认记录；任务或运行时执行失败。\n- 逐项核对已确认问题，结合触发场景和代码证据处理；被扣留的记录仍需单独核验。\n- 任务或运行时执行失败\n\n## 验证边界\n\n审查完整性：完整；运行可靠性：存在限制。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## 附录：技术信息\n\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n审查记录：preview\\-failed。\n\n运行过程与证据追踪请查看技术审计记录；此 Markdown 不代表全部原始事件。\n模型：fixture / fixture。\n\n实际运行记录：completed / plan\\_exhausted。\n\n未进入发布正文的记录：\n- candidate\\-a：review\\_content\\_blocked\n\n限制原因代码：task_failed",
+      "review_comment_markdown": "## RepoGuardian · PR 审查评论\n\n**审查结论：审查失败**\n\n建议：本轮缺少有效审查事实，请重新审查后再判断是否合并。\n\n阻断问题 0 项；非阻断建议 1 项。策略：机器确认的 High/Critical 需先修复，Medium/Low 逐项评估；这不是自动 Approve。\n\n所有合并判断仍需满足项目要求的 CI 与必要审批；本建议不替代分支保护规则。\n\n仍需解决：仍有未通过发布准入的机器确认记录；任务或运行时执行失败。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n### 发现的问题\n\n本次选择：包含 0 项问题正文，省略 0 项已处理的非阻断事项。机器结论与合并建议按全部审查事实保留。\n\n当前没有通过发布准入的已核验问题正文。\n另有 1 项机器确认记录未通过发布准入，请在详细报告中核对；当前评论未将其描述为已核验问题。\n\n### 其他审查结果与限制\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n- 任务或运行时执行失败\n\n审查完整性：完整；运行可靠性：存在限制。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。",
       "inline_drafts": [],
       "summary_findings": [],
       "withheld_findings": [
@@ -1767,6 +2188,7 @@
         "author_goal": null,
         "actual_changes": [],
         "intent_alignment": "未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。",
+        "intent_assessments": [],
         "findings": [
           {
             "id": "key-a",
@@ -1839,14 +2261,186 @@
         ],
         "excluded_files": [],
         "validation_state": "not_executed",
+        "validations": [],
+        "merge_decision": {
+          "status": "unavailable",
+          "advice": "本轮缺少有效审查事实，请重新审查后再判断是否合并。",
+          "blocking_finding_keys": [],
+          "nonblocking_finding_keys": [
+            "key-a"
+          ],
+          "unresolved_reasons": [
+            "confirmed_findings_withheld",
+            "task_cancelled"
+          ]
+        },
+        "execution_record": {
+          "execution_status": "completed",
+          "termination_reason": "plan_exhausted",
+          "usage_integrity": "complete",
+          "sent_calls": 0,
+          "settled_tokens": 0,
+          "unknown_attempts": 0,
+          "total_tokens": null,
+          "work_items": [],
+          "diagnostics": [],
+          "relationship_hints": [],
+          "initial_scope_coverage": [
+            {
+              "goal_id": "g1",
+              "unit_id": "u1",
+              "target_kind": "source_range",
+              "target_ref": "src/a.py",
+              "start_line": 7,
+              "end_line": 7,
+              "status": "examined",
+              "reason": "固定源码检查"
+            }
+          ],
+          "admitted_investigations": [],
+          "unscheduled_leads": [],
+          "findings": [
+            {
+              "key": "key-a",
+              "candidate": {
+                "candidate_id": "candidate-a",
+                "claim": "空返回值破坏调用方契约",
+                "primary_anchor": "g1",
+                "supporting_evidence": [
+                  "e1"
+                ],
+                "source_result_ids": [
+                  "r1"
+                ],
+                "affected_behavior": "调用方字段读取失败",
+                "failure_scenario": "服务返回空值时直接读取字段",
+                "recommendation": "先处理空值",
+                "category": "correctness",
+                "severity": "medium",
+                "evidence_requests": []
+              },
+              "status": "confirmed",
+              "verification": {
+                "candidate_id": "candidate-a",
+                "decision": "supported",
+                "evidence_ids": [
+                  "e1"
+                ],
+                "reason": "独立核对主张",
+                "work_item_id": "verify1",
+                "request_id": "req1",
+                "attempt_id": "attempt1",
+                "snapshot_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "subject_hash": "9b32f70434b4124afe384c7e3014f488558a93cff7e288b7a26bd0a3dea9f4fb",
+                "publication_action": "retain",
+                "narrowing": null
+              },
+              "publication": {
+                "version": "claim-publication-v1",
+                "original_candidate_id": "candidate-a",
+                "subject_hash": "9b32f70434b4124afe384c7e3014f488558a93cff7e288b7a26bd0a3dea9f4fb",
+                "original_text": {
+                  "claim": "空返回值破坏调用方契约",
+                  "affected_behavior": "调用方字段读取失败",
+                  "failure_scenario": "服务返回空值时直接读取字段",
+                  "recommendation": "先处理空值"
+                },
+                "verified_core": {
+                  "claim": "空返回值破坏调用方契约",
+                  "failure_scenario": "服务返回空值时直接读取字段"
+                },
+                "verified_text": {
+                  "claim": "空返回值破坏调用方契约",
+                  "affected_behavior": "调用方字段读取失败",
+                  "failure_scenario": "服务返回空值时直接读取字段",
+                  "recommendation": "先处理空值"
+                },
+                "published_text": {
+                  "claim": "空返回值破坏调用方契约",
+                  "affected_behavior": "调用方字段读取失败",
+                  "failure_scenario": "服务返回空值时直接读取字段",
+                  "recommendation": "先处理空值"
+                },
+                "action": "retain",
+                "decision": "supported",
+                "basis": "独立核对主张",
+                "evidence_ids": [
+                  "e1"
+                ],
+                "request_id": "req1",
+                "attempt_id": "attempt1",
+                "work_item_id": "verify1",
+                "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "base_sha": "cccccccccccccccccccccccccccccccccccccccc",
+                "usage_known": true
+              },
+              "issue": {
+                "id": "candidate-a",
+                "review_unit_id": "u1",
+                "title": "空返回值破坏调用方契约",
+                "category": "correctness",
+                "severity": "medium",
+                "confidence": 0.5,
+                "affected_behavior": "调用方字段读取失败",
+                "failure_scenario": "服务返回空值时直接读取字段",
+                "reasoning_summary": null,
+                "recommendation": "先处理空值",
+                "primary_evidence": {
+                  "file_path": "src/a.py",
+                  "existing_code": "return None",
+                  "symbol": null,
+                  "expected_side": "head",
+                  "expected_hunk_id": null,
+                  "branch_claim": null,
+                  "context_before": [],
+                  "context_after": [],
+                  "resolved_start_line": 7,
+                  "resolved_end_line": 7,
+                  "resolution_method": "diff_exact",
+                  "resolution_status": "exact",
+                  "provenance": null,
+                  "match_count": 1,
+                  "anchor_hash": "hash",
+                  "resolved_side": "head",
+                  "candidate_locations": [],
+                  "unresolved_reason": null
+                },
+                "supporting_evidence": [],
+                "assumptions": [],
+                "related_tests": [],
+                "requires_human_confirmation": false,
+                "auto_fix_eligible": false,
+                "fix_risk": "low",
+                "status": "candidate",
+                "placement": "inline",
+                "unresolved_reason": null,
+                "resolved_location": {
+                  "file_path": "src/a.py",
+                  "start_line": 7,
+                  "end_line": 7,
+                  "side": "head",
+                  "hunk_id": null
+                },
+                "source_review_unit_ids": [
+                  "u1"
+                ],
+                "source_issue_ids": [
+                  "candidate-a"
+                ]
+              }
+            }
+          ],
+          "failure_summary": null,
+          "coverage_version": "task-goals-v1"
+        },
         "checked_areas": [
           "head_source_ranges"
         ],
         "termination_reason": "plan_exhausted"
       },
       "summary_markdown": "## RepoGuardian · PR Review\n\n**审查已取消**\n\n审查已取消，请补查剩余范围后再判断本次变更。\n\n- 已确认问题：1\n- 审查目标完成：1 / 1\n- 未决候选：0\n\n### 审查范围\n\n已检查：Head 变更源码区间。\n本次目标全部检查完成的文件：src/a\\.py。\n\n1 项已确认记录未进入发布草稿；具体扣留原因保留在内部发布计划中。\n\n### 仍需关注\n\n- 任务或运行时已取消（task_cancelled）\n\n### 验证边界\n\n审查完整性：完整；运行可靠性：存在限制。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n此结果不应视为 Approve 或质量检查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n审查记录：preview\\-cancelled。",
-      "user_report_markdown": "# RepoGuardian 详细审查报告\n\n## 审查结论\n\n**审查已取消**\n\n审查已取消，请补查剩余范围后再判断本次变更。\n\n建议：本轮未完成有效审查，请解决运行限制并重新审查后再判断是否合并。\n\n审查完整性：完整；运行可靠性：存在限制。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n## 发现的问题\n\n当前没有通过发布准入的已核验问题；以下机器记录与未决风险需分别核对。\n\n### 机器已确认但未生成发布评论\n\n#### 空返回值破坏调用方契约\n\n- AI 判定：机器已确认，发布准入未通过\n- 严重程度：medium\n- 位置：src/a\\.py:7（right）\n- 影响：调用方字段读取失败\n- 触发场景：服务返回空值时直接读取字段\n- 建议：先处理空值\n- 人工处理：尚未记录。\n\n## 尚未确认的风险\n\n- 任务或运行时已取消\n\n### 哪些调查没有得到答案\n\n已记录调查 0 项；有明确答案 0 项；未得到充分答案 0 项。\n\n## 审查范围与限制\n\n- 审查目标完成：1 / 1\n- 已确认问题：1；未决候选：0\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步建议\n\n建议：本轮未完成有效审查，请解决运行限制并重新审查后再判断是否合并。\n- 逐项核对已确认问题，结合触发场景和代码证据处理；被扣留的记录仍需单独核验。\n- 任务或运行时已取消\n\n## 验证边界\n\n审查完整性：完整；运行可靠性：存在限制。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## 附录：技术信息\n\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n审查记录：preview\\-cancelled。\n\n运行过程与证据追踪请查看技术审计记录；此 Markdown 不代表全部原始事件。\n模型：fixture / fixture。\n\n实际运行记录：completed / plan\\_exhausted。\n\n未进入发布正文的记录：\n- candidate\\-a：review\\_content\\_blocked\n\n限制原因代码：task_cancelled",
-      "review_comment_markdown": "## RepoGuardian · PR 审查评论\n\n**审查结论：审查已取消**\n\n建议：本轮未完成有效审查，请解决运行限制并重新审查后再判断是否合并。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n### 发现的问题\n\n当前没有通过发布准入的已核验问题正文。\n另有 1 项机器确认记录未通过发布准入，请在详细报告中核对；当前评论未将其描述为已核验问题。\n\n### 其他审查结果与限制\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n- 任务或运行时已取消\n\n审查完整性：完整；运行可靠性：存在限制。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。",
+      "user_report_markdown": "# RepoGuardian 详细审查报告\n\n## 审查结论\n\n**审查已取消**\n\n审查已取消，请补查剩余范围后再判断本次变更。\n\n建议：本轮缺少有效审查事实，请重新审查后再判断是否合并。\n\n阻断问题 0 项；非阻断建议 1 项。策略：机器确认的 High/Critical 需先修复，Medium/Low 逐项评估；这不是自动 Approve。\n\n所有合并判断仍需满足项目要求的 CI 与必要审批；本建议不替代分支保护规则。\n\n仍需解决：仍有未通过发布准入的机器确认记录；任务或运行时已取消。\n\n审查完整性：完整；运行可靠性：存在限制。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n## 发现的问题\n\n当前没有通过发布准入的已核验问题；以下机器记录与未决风险需分别核对。\n\n### 机器已确认但未生成发布评论\n\n#### 空返回值破坏调用方契约\n\n- AI 判定：机器已确认，发布准入未通过\n- 严重程度：medium\n- 位置：src/a\\.py:7（right）\n- 影响：调用方字段读取失败\n- 触发场景：服务返回空值时直接读取字段\n- 建议：先处理空值\n- 人工处理：尚未记录。\n\n## 尚未确认的风险\n\n- 任务或运行时已取消\n\n### 哪些调查没有得到答案\n\n已记录调查 0 项；有明确答案 0 项；未得到充分答案 0 项。\n\n## 审查范围与限制\n\n- 审查目标完成：1 / 1\n- 已确认问题：1；未决候选：0\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步建议\n\n建议：本轮缺少有效审查事实，请重新审查后再判断是否合并。\n\n阻断问题 0 项；非阻断建议 1 项。策略：机器确认的 High/Critical 需先修复，Medium/Low 逐项评估；这不是自动 Approve。\n\n所有合并判断仍需满足项目要求的 CI 与必要审批；本建议不替代分支保护规则。\n\n仍需解决：仍有未通过发布准入的机器确认记录；任务或运行时已取消。\n- 逐项核对已确认问题，结合触发场景和代码证据处理；被扣留的记录仍需单独核验。\n- 任务或运行时已取消\n\n## 验证边界\n\n审查完整性：完整；运行可靠性：存在限制。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## 附录：技术信息\n\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n审查记录：preview\\-cancelled。\n\n运行过程与证据追踪请查看技术审计记录；此 Markdown 不代表全部原始事件。\n模型：fixture / fixture。\n\n实际运行记录：completed / plan\\_exhausted。\n\n未进入发布正文的记录：\n- candidate\\-a：review\\_content\\_blocked\n\n限制原因代码：task_cancelled",
+      "review_comment_markdown": "## RepoGuardian · PR 审查评论\n\n**审查结论：审查已取消**\n\n建议：本轮缺少有效审查事实，请重新审查后再判断是否合并。\n\n阻断问题 0 项；非阻断建议 1 项。策略：机器确认的 High/Critical 需先修复，Medium/Low 逐项评估；这不是自动 Approve。\n\n所有合并判断仍需满足项目要求的 CI 与必要审批；本建议不替代分支保护规则。\n\n仍需解决：仍有未通过发布准入的机器确认记录；任务或运行时已取消。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n### 发现的问题\n\n本次选择：包含 0 项问题正文，省略 0 项已处理的非阻断事项。机器结论与合并建议按全部审查事实保留。\n\n当前没有通过发布准入的已核验问题正文。\n另有 1 项机器确认记录未通过发布准入，请在详细报告中核对；当前评论未将其描述为已核验问题。\n\n### 其他审查结果与限制\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n- 任务或运行时已取消\n\n审查完整性：完整；运行可靠性：存在限制。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。",
       "inline_drafts": [],
       "summary_findings": [],
       "withheld_findings": [
@@ -2217,6 +2811,7 @@
         "author_goal": null,
         "actual_changes": [],
         "intent_alignment": "未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。",
+        "intent_assessments": [],
         "findings": [
           {
             "id": "key-a",
@@ -2289,14 +2884,185 @@
         ],
         "excluded_files": [],
         "validation_state": "not_executed",
+        "validations": [],
+        "merge_decision": {
+          "status": "resolve_unknowns",
+          "advice": "先补齐未决证据、被扣留的问题或验证限制，当前结果不足以支持合并判断。",
+          "blocking_finding_keys": [],
+          "nonblocking_finding_keys": [
+            "key-a"
+          ],
+          "unresolved_reasons": [
+            "confirmed_findings_withheld"
+          ]
+        },
+        "execution_record": {
+          "execution_status": "completed",
+          "termination_reason": "plan_exhausted",
+          "usage_integrity": "complete",
+          "sent_calls": 0,
+          "settled_tokens": 0,
+          "unknown_attempts": 0,
+          "total_tokens": null,
+          "work_items": [],
+          "diagnostics": [],
+          "relationship_hints": [],
+          "initial_scope_coverage": [
+            {
+              "goal_id": "g1",
+              "unit_id": "u1",
+              "target_kind": "source_range",
+              "target_ref": "src/a.py",
+              "start_line": 7,
+              "end_line": 7,
+              "status": "examined",
+              "reason": "固定源码检查"
+            }
+          ],
+          "admitted_investigations": [],
+          "unscheduled_leads": [],
+          "findings": [
+            {
+              "key": "key-a",
+              "candidate": {
+                "candidate_id": "candidate-a",
+                "claim": "空返回值破坏调用方契约",
+                "primary_anchor": "g1",
+                "supporting_evidence": [
+                  "e1"
+                ],
+                "source_result_ids": [
+                  "r1"
+                ],
+                "affected_behavior": "调用方字段读取失败",
+                "failure_scenario": "服务返回空值时直接读取字段",
+                "recommendation": "先处理空值",
+                "category": "correctness",
+                "severity": "medium",
+                "evidence_requests": []
+              },
+              "status": "confirmed",
+              "verification": {
+                "candidate_id": "candidate-a",
+                "decision": "supported",
+                "evidence_ids": [
+                  "e1"
+                ],
+                "reason": "独立核对主张",
+                "work_item_id": "verify1",
+                "request_id": "req1",
+                "attempt_id": "attempt1",
+                "snapshot_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "subject_hash": "9b32f70434b4124afe384c7e3014f488558a93cff7e288b7a26bd0a3dea9f4fb",
+                "publication_action": "retain",
+                "narrowing": null
+              },
+              "publication": {
+                "version": "claim-publication-v1",
+                "original_candidate_id": "candidate-a",
+                "subject_hash": "9b32f70434b4124afe384c7e3014f488558a93cff7e288b7a26bd0a3dea9f4fb",
+                "original_text": {
+                  "claim": "空返回值破坏调用方契约",
+                  "affected_behavior": "调用方字段读取失败",
+                  "failure_scenario": "服务返回空值时直接读取字段",
+                  "recommendation": "先处理空值"
+                },
+                "verified_core": {
+                  "claim": "空返回值破坏调用方契约",
+                  "failure_scenario": "服务返回空值时直接读取字段"
+                },
+                "verified_text": {
+                  "claim": "空返回值破坏调用方契约",
+                  "affected_behavior": "调用方字段读取失败",
+                  "failure_scenario": "服务返回空值时直接读取字段",
+                  "recommendation": "先处理空值"
+                },
+                "published_text": {
+                  "claim": "空返回值破坏调用方契约",
+                  "affected_behavior": "调用方字段读取失败",
+                  "failure_scenario": "服务返回空值时直接读取字段",
+                  "recommendation": "先处理空值"
+                },
+                "action": "retain",
+                "decision": "supported",
+                "basis": "独立核对主张",
+                "evidence_ids": [
+                  "e1"
+                ],
+                "request_id": "req1",
+                "attempt_id": "attempt1",
+                "work_item_id": "verify1",
+                "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "base_sha": "cccccccccccccccccccccccccccccccccccccccc",
+                "usage_known": false
+              },
+              "issue": {
+                "id": "candidate-a",
+                "review_unit_id": "u1",
+                "title": "空返回值破坏调用方契约",
+                "category": "correctness",
+                "severity": "medium",
+                "confidence": 0.5,
+                "affected_behavior": "调用方字段读取失败",
+                "failure_scenario": "服务返回空值时直接读取字段",
+                "reasoning_summary": null,
+                "recommendation": "先处理空值",
+                "primary_evidence": {
+                  "file_path": "src/a.py",
+                  "existing_code": "return None",
+                  "symbol": null,
+                  "expected_side": "head",
+                  "expected_hunk_id": null,
+                  "branch_claim": null,
+                  "context_before": [],
+                  "context_after": [],
+                  "resolved_start_line": 7,
+                  "resolved_end_line": 7,
+                  "resolution_method": "diff_exact",
+                  "resolution_status": "exact",
+                  "provenance": null,
+                  "match_count": 1,
+                  "anchor_hash": "hash",
+                  "resolved_side": "head",
+                  "candidate_locations": [],
+                  "unresolved_reason": null
+                },
+                "supporting_evidence": [],
+                "assumptions": [],
+                "related_tests": [],
+                "requires_human_confirmation": false,
+                "auto_fix_eligible": false,
+                "fix_risk": "low",
+                "status": "candidate",
+                "placement": "inline",
+                "unresolved_reason": null,
+                "resolved_location": {
+                  "file_path": "src/a.py",
+                  "start_line": 7,
+                  "end_line": 7,
+                  "side": "head",
+                  "hunk_id": null
+                },
+                "source_review_unit_ids": [
+                  "u1"
+                ],
+                "source_issue_ids": [
+                  "candidate-a"
+                ]
+              }
+            }
+          ],
+          "failure_summary": null,
+          "coverage_version": "task-goals-v1"
+        },
         "checked_areas": [
           "head_source_ranges"
         ],
         "termination_reason": "plan_exhausted"
       },
       "summary_markdown": "## RepoGuardian · PR Review\n\n**发现已确认问题**\n\n请逐项核对下列已确认问题及建议；仍需关注的限制见下方说明。\n\n- 已确认问题：1\n- 审查目标完成：1 / 1\n- 未决候选：0\n\n### 审查范围\n\n已检查：Head 变更源码区间。\n本次目标全部检查完成的文件：src/a\\.py。\n\n1 项已确认记录未进入发布草稿；具体扣留原因保留在内部发布计划中。\n\n### 验证边界\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n此结果不应视为 Approve 或质量检查通过。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n审查记录：preview\\-withheld。",
-      "user_report_markdown": "# RepoGuardian 详细审查报告\n\n## 审查结论\n\n**发现已确认问题**\n\n请逐项核对下列已确认问题及建议；仍需关注的限制见下方说明。\n\n建议：逐项处理已确认问题；当前没有足够依据自动判断其合并阻断属性，需结合影响、CI 与必要审批决策。\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n## 发现的问题\n\n当前没有通过发布准入的已核验问题；以下机器记录与未决风险需分别核对。\n\n### 机器已确认但未生成发布评论\n\n#### 空返回值破坏调用方契约\n\n- AI 判定：机器已确认，发布准入未通过\n- 严重程度：medium\n- 位置：src/a\\.py:7（right）\n- 影响：调用方字段读取失败\n- 触发场景：服务返回空值时直接读取字段\n- 建议：先处理空值\n- 人工处理：尚未记录。\n\n## 尚未确认的风险\n\n\n### 哪些调查没有得到答案\n\n已记录调查 0 项；有明确答案 0 项；未得到充分答案 0 项。\n\n## 审查范围与限制\n\n- 审查目标完成：1 / 1\n- 已确认问题：1；未决候选：0\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步建议\n\n建议：逐项处理已确认问题；当前没有足够依据自动判断其合并阻断属性，需结合影响、CI 与必要审批决策。\n- 逐项核对已确认问题，结合触发场景和代码证据处理；被扣留的记录仍需单独核验。\n\n## 验证边界\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## 附录：技术信息\n\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n审查记录：preview\\-withheld。\n\n运行过程与证据追踪请查看技术审计记录；此 Markdown 不代表全部原始事件。\n模型：fixture / fixture。\n\n实际运行记录：completed / plan\\_exhausted。\n\n未进入发布正文的记录：\n- candidate\\-a：publication\\_usage\\_unknown",
-      "review_comment_markdown": "## RepoGuardian · PR 审查评论\n\n**审查结论：发现已确认问题**\n\n建议：逐项处理已确认问题；当前没有足够依据自动判断其合并阻断属性，需结合影响、CI 与必要审批决策。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n### 发现的问题\n\n当前没有通过发布准入的已核验问题正文。\n另有 1 项机器确认记录未通过发布准入，请在详细报告中核对；当前评论未将其描述为已核验问题。\n\n### 其他审查结果与限制\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。",
+      "user_report_markdown": "# RepoGuardian 详细审查报告\n\n## 审查结论\n\n**发现已确认问题**\n\n请逐项核对下列已确认问题及建议；仍需关注的限制见下方说明。\n\n建议：先补齐未决证据、被扣留的问题或验证限制，当前结果不足以支持合并判断。\n\n阻断问题 0 项；非阻断建议 1 项。策略：机器确认的 High/Critical 需先修复，Medium/Low 逐项评估；这不是自动 Approve。\n\n所有合并判断仍需满足项目要求的 CI 与必要审批；本建议不替代分支保护规则。\n\n仍需解决：仍有未通过发布准入的机器确认记录。\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n## 发现的问题\n\n当前没有通过发布准入的已核验问题；以下机器记录与未决风险需分别核对。\n\n### 机器已确认但未生成发布评论\n\n#### 空返回值破坏调用方契约\n\n- AI 判定：机器已确认，发布准入未通过\n- 严重程度：medium\n- 位置：src/a\\.py:7（right）\n- 影响：调用方字段读取失败\n- 触发场景：服务返回空值时直接读取字段\n- 建议：先处理空值\n- 人工处理：尚未记录。\n\n## 尚未确认的风险\n\n\n### 哪些调查没有得到答案\n\n已记录调查 0 项；有明确答案 0 项；未得到充分答案 0 项。\n\n## 审查范围与限制\n\n- 审查目标完成：1 / 1\n- 已确认问题：1；未决候选：0\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步建议\n\n建议：先补齐未决证据、被扣留的问题或验证限制，当前结果不足以支持合并判断。\n\n阻断问题 0 项；非阻断建议 1 项。策略：机器确认的 High/Critical 需先修复，Medium/Low 逐项评估；这不是自动 Approve。\n\n所有合并判断仍需满足项目要求的 CI 与必要审批；本建议不替代分支保护规则。\n\n仍需解决：仍有未通过发布准入的机器确认记录。\n- 逐项核对已确认问题，结合触发场景和代码证据处理；被扣留的记录仍需单独核验。\n\n## 验证边界\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n## 附录：技术信息\n\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n审查记录：preview\\-withheld。\n\n运行过程与证据追踪请查看技术审计记录；此 Markdown 不代表全部原始事件。\n模型：fixture / fixture。\n\n实际运行记录：completed / plan\\_exhausted。\n\n未进入发布正文的记录：\n- candidate\\-a：publication\\_usage\\_unknown",
+      "review_comment_markdown": "## RepoGuardian · PR 审查评论\n\n**审查结论：发现已确认问题**\n\n建议：先补齐未决证据、被扣留的问题或验证限制，当前结果不足以支持合并判断。\n\n阻断问题 0 项；非阻断建议 1 项。策略：机器确认的 High/Critical 需先修复，Medium/Low 逐项评估；这不是自动 Approve。\n\n所有合并判断仍需满足项目要求的 CI 与必要审批；本建议不替代分支保护规则。\n\n仍需解决：仍有未通过发布准入的机器确认记录。\n\n## PR 变更理解\n\n**作者声明的目标（来自 PR 描述或标题，未经独立验证）：** 未记录作者声明\n\n**实际改动（固定 Diff 事实）：**\n\n未保存变更明细，无法归纳实际修改。\n\n**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**\n\n- src/a\\.py:7–7（head）：固定源码检查\n\n**目标符合性：** 未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。\n\n### 发现的问题\n\n本次选择：包含 0 项问题正文，省略 0 项已处理的非阻断事项。机器结论与合并建议按全部审查事实保留。\n\n当前没有通过发布准入的已核验问题正文。\n另有 1 项机器确认记录未通过发布准入，请在详细报告中核对；当前评论未将其描述为已核验问题。\n\n### 其他审查结果与限制\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n\n审查完整性：完整；运行可靠性：可靠。\n仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。",
       "inline_drafts": [],
       "summary_findings": [],
       "withheld_findings": [

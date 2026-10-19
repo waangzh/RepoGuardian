@@ -101,6 +101,7 @@ class ReviewRunSpec(BaseModel):
     readable_scope_files: tuple[RelativePath, ...] = ()
     review_strategy: dict = Field(default_factory=dict)
     pr_intent_context: str | None = Field(default=None, min_length=1, max_length=4_000)
+    intent_assessment_contract: Literal["structured-intent-v1"] | None = None
 
     @model_serializer(mode="wrap")
     def serialize_strategy(self, handler):
@@ -109,6 +110,8 @@ class ReviewRunSpec(BaseModel):
             value.pop("review_strategy", None)
         if self.pr_intent_context is None:
             value.pop("pr_intent_context", None)
+        if self.intent_assessment_contract is None:
+            value.pop("intent_assessment_contract", None)
         return value
 
     @property
@@ -216,12 +219,29 @@ class RuntimeReadResponse(BaseModel):
         return self
 
 
+class IntentAssessment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    author_quote: str = Field(min_length=1, max_length=4_000)
+    actual_behavior: str = Field(min_length=1, max_length=2_000)
+    alignment: Literal["supported", "contradicted", "insufficient", "not_applicable"]
+    evidence_ids: list[str] = Field(default_factory=list, max_length=20)
+    limitations: list[str] = Field(default_factory=list, max_length=20)
+
+
 class ExaminationSubmission(BaseModel):
     model_config = ConfigDict(extra="forbid")
     target_id: str = Field(min_length=1, max_length=160)
     disposition: ExaminationDisposition
     evidence_ids: list[str] = Field(default_factory=list, max_length=20)
     reason: str = Field(min_length=1, max_length=2_000)
+    intent_assessments: list[IntentAssessment] = Field(default_factory=list, max_length=24)
+
+    @model_serializer(mode="wrap")
+    def serialize_assessments(self, handler):
+        value = handler(self)
+        if not self.intent_assessments:
+            value.pop("intent_assessments", None)
+        return value
 
 
 class CandidateSubmission(BaseModel):
@@ -332,6 +352,14 @@ class ExaminationResult(BaseModel):
     disposition: ExaminationDisposition
     evidence_ids: list[str] = Field(default_factory=list)
     reason: str
+    intent_assessments: list[IntentAssessment] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def serialize_assessments(self, handler):
+        value = handler(self)
+        if not self.intent_assessments:
+            value.pop("intent_assessments", None)
+        return value
 
 
 class Candidate(BaseModel):

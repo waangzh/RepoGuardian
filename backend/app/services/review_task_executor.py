@@ -375,6 +375,21 @@ class ReviewTaskExecutor:
             if item.disposition.value == "examined" and not self._covers(goal, item.evidence_ids):
                 errors.append(RuntimeParseError("examinations", index, "incomplete_goal_evidence"))
                 continue
+            from app.services.review_intent import author_targets
+            targets = author_targets(self.spec.pr_intent_context)
+            if self.spec.intent_assessment_contract and targets and not item.intent_assessments:
+                errors.append(RuntimeParseError("examinations", index, "missing_intent_assessment"))
+                continue
+            invalid_intent = any(
+                not self.spec.intent_assessment_contract or assessment.author_quote not in targets
+                or not set(assessment.evidence_ids).issubset(item.evidence_ids)
+                or (assessment.alignment in {"supported", "contradicted"} and
+                    (item.disposition.value != "examined" or not assessment.evidence_ids
+                     or not self._covers(goal, assessment.evidence_ids)))
+                for assessment in item.intent_assessments)
+            if invalid_intent:
+                errors.append(RuntimeParseError("examinations", index, "invalid_intent_assessment_binding"))
+                continue
             valid_examinations.append(item)
         grouped = {}
         for item in valid_examinations:
@@ -388,6 +403,7 @@ class ReviewTaskExecutor:
                 goal_id=target_id, request_id=self.request_id,
                 snapshot_head_sha=self.spec.snapshot_head_sha,
                 disposition=item.disposition, evidence_ids=item.evidence_ids, reason=item.reason,
+                intent_assessments=item.intent_assessments,
             )
             if self.pages and item.disposition.value == "examined":
                 page = self.pages[self.page_index]
@@ -400,6 +416,8 @@ class ReviewTaskExecutor:
                 result = result.model_copy(update={
                     "evidence_ids": list(dict.fromkeys(e for fragment in fragments.values() for e in fragment.evidence_ids)),
                     "reason": "\n".join(fragment.reason for fragment in fragments.values()),
+                    "intent_assessments": [assessment for fragment in fragments.values()
+                                           for assessment in fragment.intent_assessments],
                 })
             self.projection.examinations[target_id] = result
             self.projection.pending_target_ids.discard(target_id)
