@@ -6,6 +6,8 @@ import StatusBadge from "../common/StatusBadge.vue";
 import { groupingReasonText, unitSymbolSummary, unitTitle } from "../../utils/unitPresentation";
 
 defineProps<{ preview: ReviewPreviewResponse | null; previewing: boolean }>();
+// 复杂度是规划规模，不是风险等级：只做中性标签，避免借用严重度颜色。
+const complexityLabels: Record<string, string> = { small: "小", medium: "中", large: "大" };
 </script>
 
 <template>
@@ -29,9 +31,9 @@ defineProps<{ preview: ReviewPreviewResponse | null; previewing: boolean }>();
         <article v-for="(unit, index) in preview.review_units" :key="unit.id">
           <span :title="unit.primary_files[0]"><strong>{{ unitTitle(unit, index, preview.review_units.length) }}</strong><small>{{ groupingReasonText(unit.grouping_reason) }}<template v-if="unitSymbolSummary(unit)"> · {{ unitSymbolSummary(unit) }}</template></small></span>
           <code>{{ unit.primary_files.length }} 主审 + {{ unit.related_files.length }} 关联</code>
-          <StatusBadge :status="unit.complexity" :label="unit.complexity" />
+          <span class="badge neutral">{{ complexityLabels[unit.complexity] }}</span>
           <b>{{ unit.estimated_tokens.toLocaleString() }}</b>
-          <StatusBadge :status="unit.risk_tags.includes('high') ? 'high' : unit.risk_tags.length ? 'medium' : 'low'" :label="unit.risk_tags[0] || 'low'" />
+          <StatusBadge v-if="unit.risk_tags.length" :status="unit.risk_tags.includes('high') ? 'high' : 'medium'" :label="unit.risk_tags[0]" /><span v-else class="badge neutral">未标记风险</span>
         </article>
       </section>
       <section v-if="preview.excluded_files.length" class="preview-excluded"><h3>已排除</h3><p v-for="file in preview.excluded_files" :key="file.file_path"><code>{{ file.file_path }}</code><span>{{ file.reason }}</span></p></section>
