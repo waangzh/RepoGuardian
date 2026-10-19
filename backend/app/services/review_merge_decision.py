@@ -15,7 +15,6 @@ _LIMITS = {
     "author_context_truncated": "作者声明输入已截断，未输入部分的目标尚未核验",
     "author_context_unknown": "作者声明输入是否完整未知，目标范围仍需确认",
     "finding_severity_unknown": "存在严重度未知的问题记录",
-    "author_intent_unresolved": "作者目标仍有未核验路径或矛盾",
     "head_validation_failed": "当前 Head 的已有验证记录为失败",
     "head_validation_unknown": "已有验证记录无法确定当前 Head 结果",
 }
@@ -35,8 +34,7 @@ def merge_decision(plan):
         unresolved.append("confirmed_findings_withheld")
     if any(item.severity not in {"critical", "high", "medium", "low"} for item in views):
         unresolved.append("finding_severity_unknown")
-    if any(item.status in {"contradicted", "insufficient", "not_checked"} for item in plan.digest.intent_assessments):
-        unresolved.append("author_intent_unresolved")
+    # 作者声明对照是辅助分析：未逐项核验不构成合并阻断，明确矛盾只在评论风险中展示。
     if plan.digest.validation_state in {"failed", "unknown"}:
         unresolved.append("head_validation_" + plan.digest.validation_state)
     reasons = sorted(set(unresolved))

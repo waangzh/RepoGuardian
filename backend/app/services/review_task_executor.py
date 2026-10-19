@@ -377,7 +377,9 @@ class ReviewTaskExecutor:
                 continue
             from app.services.review_intent import author_targets
             targets = author_targets(self.spec.pr_intent_context)
-            if self.spec.intent_assessment_contract and targets and not item.intent_assessments:
+            # v3 起作者声明对照是辅助信息：未提供不拒绝检查；一旦提供仍严格绑定。
+            if (self.spec.intent_assessment_contract in {"structured-intent-v1", "structured-intent-v2"}
+                    and targets and not item.intent_assessments):
                 errors.append(RuntimeParseError("examinations", index, "missing_intent_assessment"))
                 continue
             intent_error = next((reason for reason in (
@@ -517,7 +519,7 @@ class ReviewTaskExecutor:
         误判为非法；v2 只要求 supported/contradicted 引用的证据位于本目标范围内、
         同文件同侧，不要求覆盖整段。未知路径仍应为 insufficient。
         """
-        if self.spec.intent_assessment_contract != "structured-intent-v2":
+        if self.spec.intent_assessment_contract not in {"structured-intent-v2", "structured-intent-v3"}:
             return self._covers(goal, assessment.evidence_ids)
         side = self.goal_side(goal)
         for identity in assessment.evidence_ids:

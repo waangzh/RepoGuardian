@@ -14,11 +14,21 @@ _EN_SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9`*_(\[])")
 _WHITESPACE = re.compile(r"\s+")
 # 这些标题通常描述测试、备注或参考信息，不是作者要求实现的目标。
 _NON_GOAL_HEADING = re.compile(
-    r"^(?:背景|动机|上下文|测试|测试计划|测试说明|验证|验证方式|如何验证|备注|注意|注意事项|"
-    r"参考|参考资料|链接|相关链接|截图|图片|附录|checklist|notes?|testing|tests?|screenshots?|"
-    r"references?|related|context|motivation)\b",
+    r"^(?:背景(?:信息|说明|与动机)?|动机|上下文|现状(?:与问题)?|问题(?:描述|背景|与现状)?|"
+    r"原因(?:分析)?|测试(?:计划|说明|方式|用例)?|验证(?:方式|说明|步骤)?|如何验证|"
+    r"备注|注意(?:事项)?|参考(?:资料)?|相关链接|链接|截图|图片|附录|"
+    r"其他(?:说明|信息)?|补充(?:说明|信息)?|额外说明|变更背景)"
+    r"(?:$|[\s:：\-—（(])",
     re.IGNORECASE,
 )
+_EN_NON_GOAL_HEADING = re.compile(
+    r"^(?:checklist|notes?|testing|tests?|test plan|screenshots?|references?|related|context|motivation)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_non_goal_heading(title: str) -> bool:
+    return bool(_NON_GOAL_HEADING.match(title) or _EN_NON_GOAL_HEADING.match(title))
 _IMAGE_ONLY = re.compile(r"^\s*(?:!\[[^\]]*\]\([^)]*\)|\[!\[[^\]]*\]\([^)]*\)\]\([^)]*\))\s*$")
 
 
@@ -43,7 +53,7 @@ def _blocks(context: str):
                 yield block
                 block = []
             title = heading.group(2).strip().strip("*_ ")
-            skip_section = bool(_NON_GOAL_HEADING.match(title))
+            skip_section = _is_non_goal_heading(title)
             continue
         if skip_section or _TABLE.match(line) or _RULE.match(line) or _IMAGE_ONLY.match(line):
             continue

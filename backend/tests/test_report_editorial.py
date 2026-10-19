@@ -10,8 +10,9 @@ from test_review_outcome import completed_task
 
 def test_author_targets_skip_markdown_scaffolding_and_non_goal_sections():
     context = ("## 背景\n这是无关背景。\n\n## 修改内容\n- 拒绝过期令牌。\n- 补充刷新路径。\n\n"
-               "## 测试\n运行 pytest。\n\n## 注意事项\n- 不要修改数据库。\n\n```python\nprint('x')\n```\n"
-               "| 字段 | 说明 |\n| --- | --- |")
+               "## 测试\n运行 pytest。\n\n## 注意事项\n- 不要修改数据库。\n\n"
+               "## 现状与问题\n旧实现会重复查询。\n\n## 其他说明\n后续再补文档。\n\n"
+               "```python\nprint('x')\n```\n| 字段 | 说明 |\n| --- | --- |")
     assert author_targets(context) == ["拒绝过期令牌。", "补充刷新路径。"]
     # 普通段落仍按句末标点切分，保留原文。
     assert author_targets("保留返回值。拒绝空值。") == ["保留返回值。", "拒绝空值。"]
@@ -94,6 +95,29 @@ def test_summary_projection_excludes_audit_and_per_finding_payload():
     for key in ("execution_record", "findings", "examined_goals", "incomplete_goals", "investigations"):
         assert key not in digest
     assert "摘要" not in dumped and len(dumped["digest"]) < len(plan.digest.model_dump(mode="json"))
+
+
+def test_unchecked_author_claims_do_not_block_merge_but_contradictions_are_shown():
+    task = publishable_task()
+    report = task.task_runtime_report
+    report["pr_intent_context"] = "拒绝空值。补充测试。"
+    report["pr_intent_context_truncated"] = False
+    plan = PublicationPlanner().build(task)
+    unchecked = next(item for item in plan.digest.intent_assessments if item.author_target == "补充测试。")
+    assert unchecked.status == "not_checked"
+    assert "author_intent_unresolved" not in plan.digest.merge_decision.unresolved_reasons
+    assert plan.digest.merge_decision.status == "review_suggestions"
+    # 未核验不进入评论风险；明确矛盾才展示位置。
+    assert "”尚未核验。" not in plan.review_comment_markdown
+    goal = report["initial_scope_coverage"][0]
+    goal.update(target_ref="src/a.py", status="examined", result_id="result-1", evidence_ids=["e1"],
+        snapshot_head_sha=task.run_manifest.head_sha, snapshot_base_sha=task.run_manifest.effective_base_sha,
+        intent_assessments=[IntentAssessment(author_quote="拒绝空值。", actual_behavior="空值被直接放行",
+            alignment="contradicted", evidence_ids=["e1"]).model_dump(mode="json")])
+    contradicted = PublicationPlanner().build(task)
+    assert "静态证据矛盾" in contradicted.review_comment_markdown
+    assert "src/a.py" in contradicted.review_comment_markdown
+    assert "author_intent_unresolved" not in contradicted.digest.merge_decision.unresolved_reasons
 
 
 def test_merge_decision_separates_code_blockers_from_runtime_limits():
