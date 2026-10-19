@@ -29,7 +29,7 @@ from app.models.review import (
 from app.models.review_runtime import TaskRuntimeRetryResult
 from app.models.quick_preview import QuickPreviewRequest, QuickPreviewResponse
 from app.tools.github_tool import GitHubToolError
-from app.models.publication import PublicationPlan, ReviewCommentCheck, ReviewCommentOptions
+from app.models.publication import PublicationPlan, ReviewCommentCheck, ReviewCommentOptions, ReviewSummary
 from app.models.persistence import (
     PatchDetail,
     ReviewIssueDetail,
@@ -38,7 +38,7 @@ from app.models.persistence import (
     ValidationDetail,
 )
 from app.services.report_service import ReportService
-from app.services.publication_planner import PublicationPlanner
+from app.services.publication_planner import PublicationPlanner, summary_projection
 from app.services.review_service import ReviewService
 from app.services.review_repository import ReviewRepository
 from app.models.preview_job import PreviewJobCreate, PreviewJobResponse
@@ -309,11 +309,7 @@ async def get_file_context(task_id: str, file_id: int) -> FileContextResponse:
         raise HTTPException(status_code=502, detail="读取固定快照上下文失败，请稍后重试") from exc
 
 
-@router.get("/{task_id}/publication-plan", response_model=PublicationPlan, responses={
-    404: {"description": "Task not found"}, 409: {"description": "Review is not finished"},
-})
-async def get_publication_plan(task_id: str) -> PublicationPlan:
-    """从保存的终态快照生成草稿，不调用模型或 GitHub，不持久化发布状态。"""
+async def _build_plan(task_id: str) -> PublicationPlan:
     service = get_review_service()
     task = await asyncio.to_thread(service.get_task, task_id)
     if task is None:
@@ -322,6 +318,23 @@ async def get_publication_plan(task_id: str) -> PublicationPlan:
         raise HTTPException(status_code=409, detail="Review is not finished")
     dispositions = await _report_dispositions(service, task_id)
     return await asyncio.to_thread(PublicationPlanner().build, task.model_copy(deep=True), dispositions=dispositions)
+
+
+@router.get("/{task_id}/publication-summary", response_model=ReviewSummary, responses={
+    404: {"description": "Task not found"}, 409: {"description": "Review is not finished"},
+})
+async def get_publication_summary(task_id: str) -> ReviewSummary:
+    """结果概览的轻量投影；逐条正文、目标明细与执行追踪仍由完整计划按需读取。"""
+    plan = await _build_plan(task_id)
+    return summary_projection(plan)
+
+
+@router.get("/{task_id}/publication-plan", response_model=PublicationPlan, responses={
+    404: {"description": "Task not found"}, 409: {"description": "Review is not finished"},
+})
+async def get_publication_plan(task_id: str) -> PublicationPlan:
+    """从保存的终态快照生成草稿，不调用模型或 GitHub，不持久化发布状态。"""
+    return await _build_plan(task_id)
 
 
 async def _report_dispositions(service, task_id):
@@ -350,7 +363,7 @@ async def check_review_comment(task_id: str, options: ReviewCommentOptions | Non
     from datetime import datetime, timezone
     from app.services.publication_renderer import markdown_text
 
-    plan = await get_publication_plan(task_id)
+    plan = await _build_plan(task_id)
     options = options or ReviewCommentOptions()
     included, omitted, retained, comment = _comment_content(plan, options)
     latest = None
@@ -364,11 +377,15 @@ async def check_review_comment(task_id: str, options: ReviewCommentOptions | Non
         except (GitHubToolError, ValueError, httpx.HTTPError, TimeoutError):
             pass  # 未能确认保持 unknown；不导出凭据、响应正文或异常文本。
     checked_at = datetime.now(timezone.utc)
-    label = {"current": "检查时远端 Head 与审查快照一致", "stale": "PR 已有新提交，当前评论基于旧 Head，建议重新审查",
-             "unknown": "未能确认远端 Head，无法判断当前评论是否已经过期"}[state]
-    note = (f"\n\n> 快照检查：{label}。\n> 检查时间：{checked_at.isoformat()}；"
-            f"审查 Head：{markdown_text(plan.snapshot.head_sha or '未记录', 64)}；"
-            f"远端 Head：{markdown_text(latest or '未知', 64)}。此状态仅代表检查时点。")
+    # 正常情况下正文已含简短的 Commit 声明；只有版本过期或无法确认时才追加提示，
+    # 避免把检查时间与远端 Head 写进每一次复制的评论。
+    note = ""
+    if state != "current":
+        label = {"stale": "PR 已有新提交，当前评论基于旧 Head，建议重新审查后再发布",
+                 "unknown": "未能确认远端 Head，无法判断当前评论是否已经过期"}[state]
+        note = (f"\n\n> 快照检查：{label}。\n> 检查时间：{checked_at.isoformat()}；"
+                f"审查 Head：{markdown_text(plan.snapshot.head_sha or '未记录', 64)}；"
+                f"远端 Head：{markdown_text(latest or '未知', 64)}。此状态仅代表检查时点。")
     return ReviewCommentCheck(review_id=task_id, status=state, reviewed_head_sha=plan.snapshot.head_sha,
         latest_head_sha=latest, checked_at=checked_at, review_comment_markdown=comment + note,
         included_finding_keys=[item.finding_key for item in included], omitted_finding_keys=[item.finding_key for item in omitted],
@@ -380,7 +397,7 @@ async def preview_review_comment(task_id: str, options: ReviewCommentOptions):
     """选择预览只读取本地事实；复制时仍必须重新检查远端 Head。"""
     from datetime import datetime, timezone
 
-    plan = await get_publication_plan(task_id)
+    plan = await _build_plan(task_id)
     included, omitted, retained, comment = _comment_content(plan, options)
     return ReviewCommentCheck(review_id=task_id, status="unknown", reviewed_head_sha=plan.snapshot.head_sha,
         checked_at=datetime.now(timezone.utc), detail=options.detail,

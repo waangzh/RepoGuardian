@@ -9,17 +9,19 @@ test("Outcome 显示后端数量，不根据问题列表推断 Clean", async () 
   try {
     const { default: component } = await server.ssrLoadModule("/src/components/review/ReviewOutcomePanel.vue");
     for (const [kind, label] of [["clean", "未发现可行动问题"], ["findings", "发现已确认问题"], ["inconclusive", "审查结论不确定"], ["failed", "审查失败"], ["cancelled", "审查已取消"]]) {
-      const plan = { outcome: { kind, coverage: "partial", confirmed_count: 3, publishable_count: 2, unresolved_count: 1,
+      const plan = { schema_version: "review-summary-v1",
+        outcome: { kind, coverage: "partial", confirmed_count: 3, publishable_count: 2, unresolved_count: 1,
         examined_goals: 8, total_goals: 10, incomplete_investigations: 1, reason_codes: ["scope_incomplete"] },
+        digest: { merge_decision: { status: "fix_blockers", label, advice: "先处理阻断问题" }, validations: [] },
         withheld_findings: [{ candidate_id: "c1", reason_code: "snapshot_mismatch" }] };
       const html = await renderToString(createSSRApp(component, { plan }));
       for (const expected of [label, "3", "2", "1", "8 / 10", "scope_incomplete", "snapshot_mismatch"]) assert.ok(html.includes(expected));
-      assert.match(html, /尚未发布到 GitHub/);
+      assert.match(html, /逐条问题正文与发布状态/);
     }
   } finally { await server.close(); }
 });
 
-test("切换任务、重试与卸载丢弃旧请求；失败不产生本地草稿", async () => {
+test("概览摘要与完整计划分离；切换任务、失败与卸载丢弃旧请求", async () => {
   const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   const scope = effectScope();
   try {
@@ -27,27 +29,37 @@ test("切换任务、重试与卸载丢弃旧请求；失败不产生本地草�
     const task = ref({ id: "one", status: "completed" });
     const pending = [];
     const load = (id, signal) => new Promise((resolve, reject) => pending.push({ id, signal, resolve, reject }));
-    const state = scope.run(() => usePublicationPlan(() => task.value, load));
+    const state = scope.run(() => usePublicationPlan(() => task.value, load, load));
+    // 概览只读取轻量摘要；完整计划在没有页面请求前不会加载。
+    assert.equal(pending.length, 1);
+    state.ensurePlan(); await nextTick();
+    assert.equal(pending.length, 2);
     task.value = { id: "two", status: "completed" };
     await nextTick();
     assert.equal(pending[0].signal.aborted, true);
-    pending[0].resolve({ review_id: "one", schema_version: "review-publication-v1" });
-    pending[1].reject(new Error("offline"));
+    assert.equal(pending[1].signal.aborted, true);
+    pending[0].resolve({ review_id: "one", schema_version: "review-summary-v1" });
+    pending[1].resolve({ review_id: "one", schema_version: "review-publication-v1" });
+    pending[2].reject(new Error("offline"));
+    pending[3].reject(new Error("offline"));
     await nextTick(); await nextTick();
-    assert.equal(state.plan.value, null);
+    assert.equal(state.summary.value, null);
     assert.match(state.error.value, /加载失败/);
     state.reload(); await nextTick();
-    pending[2].resolve({ review_id: "two", schema_version: "review-publication-v1", outcome: { kind: "inconclusive" } });
+    pending[4].resolve({ review_id: "two", schema_version: "review-summary-v1", outcome: { kind: "inconclusive" } });
+    pending[5].resolve({ review_id: "two", schema_version: "review-publication-v1", outcome: { kind: "inconclusive" } });
     await nextTick(); await nextTick();
+    assert.equal(state.summary.value.outcome.kind, "inconclusive");
     assert.equal(state.plan.value.outcome.kind, "inconclusive");
     task.value = { id: "two", status: "reviewing" }; await nextTick();
+    assert.equal(state.summary.value, null);
     assert.equal(state.plan.value, null);
     task.value = { id: "three", status: "cancelled" }; await nextTick();
     scope.stop();
-    assert.equal(pending[3].signal.aborted, true);
-    pending[3].resolve({ review_id: "three", schema_version: "review-publication-v1" });
+    assert.equal(pending[6].signal.aborted, true);
+    pending[6].resolve({ review_id: "three", schema_version: "review-summary-v1" });
     await nextTick(); await nextTick();
-    assert.equal(state.plan.value, null);
+    assert.equal(state.summary.value, null);
   } finally { scope.stop(); await server.close(); }
 });
 
@@ -56,7 +68,8 @@ test("完整范围和计量限制分开展示；历史维度缺失保持未知",
   try {
     const { default: component } = await server.ssrLoadModule("/src/components/review/ReviewOutcomePanel.vue");
     const plan = { outcome: { kind: 'inconclusive', coverage: 'partial', review_completeness: 'complete',
-      runtime_reliability: 'unreliable', dynamic_validation: 'not_executed', finding_conclusion: 'no_confirmed_findings', reason_codes: [] }, withheld_findings: [] };
+      runtime_reliability: 'unreliable', dynamic_validation: 'not_executed', finding_conclusion: 'no_confirmed_findings', reason_codes: [] },
+      digest: { merge_decision: { status: 'resolve_unknowns', label: '需要补充检查', advice: '先补齐限制' } }, withheld_findings: [] };
     const html = await renderToString(createSSRApp(component, { plan }));
     for (const text of ['约定检查范围：完整', '存在计量或执行限制', '未发现已确认缺陷', '未执行']) assert.ok(html.includes(text));
     assert.ok(!html.includes('覆盖部分完成'));

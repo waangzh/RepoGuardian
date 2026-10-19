@@ -2,8 +2,8 @@
 
 from pydantic import ValidationError
 
-from app.models.publication import (DigestExcludedFile, DigestGoal, ReviewDigest, PublicationAnchor,
-    PublicationFinding, PublicationPlan, PublicationSnapshot, WithheldFinding)
+from app.models.publication import (DigestExcludedFile, DigestGoal, ReviewDigest, ReviewSummary, ReviewSummaryDigest,
+    PublicationAnchor, PublicationFinding, PublicationPlan, PublicationSnapshot, WithheldFinding)
 from app.models.review import ReviewTask
 from app.models.review_runtime import TaskRuntimeReport
 from app.services.publication_renderer import finding_body, markdown_text, render_summary, render_user_report, render_review_comment
@@ -39,6 +39,22 @@ def build_review_digest(task, report):
     digest.reviewed_files = sorted(path for path, statuses in file_goals.items() if all(s == "examined" for s in statuses))
     digest.checked_areas = sorted(areas)
     return digest
+
+
+def summary_projection(plan: PublicationPlan) -> ReviewSummary:
+    """结果概览的轻量投影；技术审计与逐条正文仍只存在于完整计划。"""
+    digest = plan.digest
+    return ReviewSummary(review_id=plan.review_id, snapshot=plan.snapshot, outcome=plan.outcome,
+        digest=ReviewSummaryDigest(author_goal=digest.author_goal,
+            author_context_status=digest.author_context_status,
+            author_context_limitation=digest.author_context_limitation,
+            change_understanding=digest.change_understanding, actual_changes=digest.actual_changes,
+            intent_alignment=digest.intent_alignment, merge_decision=digest.merge_decision,
+            excluded_files=digest.excluded_files, validation_state=digest.validation_state,
+            validations=digest.validations, checked_areas=digest.checked_areas,
+            termination_reason=digest.termination_reason),
+        review_comment_markdown=plan.review_comment_markdown, withheld_findings=plan.withheld_findings,
+        content_eligible=plan.content_eligible, blocking_reasons=plan.blocking_reasons)
 
 
 class PublicationPlanner:
@@ -82,7 +98,9 @@ class PublicationPlanner:
                 title=markdown_text(text["claim"], 200),
                 category=category, evidence_summary=evidence_summary,
                 evidence_ids=record["publication"]["evidence_ids"],
-                body_markdown=finding_body(text, issue.severity.value, manifest.head_sha,
+                affected_behavior=text["affected_behavior"], failure_scenario=text["failure_scenario"],
+                recommendation=text["recommendation"],
+                body_markdown=finding_body(text, issue.severity.value,
                     category=category, evidence_summary=evidence_summary))
             (plan.inline_drafts if finding.placement == "inline" else plan.summary_findings).append(finding)
         rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}

@@ -106,10 +106,20 @@ class DigestValidation(BaseModel):
 
 class MergeDecision(BaseModel):
     status: Literal["unavailable", "fix_blockers", "resolve_unknowns", "review_suggestions", "conditional_merge"] = "unavailable"
+    label: str = "需要补充检查"
     advice: str = "本轮缺少有效审查事实，请重新审查后再判断是否合并。"
     blocking_finding_keys: list[str] = Field(default_factory=list)
     nonblocking_finding_keys: list[str] = Field(default_factory=list)
     unresolved_reasons: list[str] = Field(default_factory=list)
+    limits: list[str] = Field(default_factory=list)
+
+
+class ChangeUnderstanding(BaseModel):
+    """由已绑定证据的检查记录归纳；不新增模型调用，也不宣称未核验行为。"""
+
+    author_goal: str = "未记录明确的作者目标。"
+    actual_changes: str = "未保存可归纳的实际变更。"
+    alignment: str = "未保存逐目标的符合性核验记录，不能由覆盖率推断作者目标已经实现。"
 
 
 class ReviewDigest(BaseModel):
@@ -118,6 +128,7 @@ class ReviewDigest(BaseModel):
     author_context_status: Literal["complete", "truncated", "unknown", "not_recorded"] = "not_recorded"
     author_context_limitation: str | None = None
     actual_changes: list[str] = Field(default_factory=list)
+    change_understanding: ChangeUnderstanding | None = None
     intent_alignment: str = "未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。"
     intent_assessments: list[DigestIntent] = Field(default_factory=list)
     findings: list[FindingView] = Field(default_factory=list)
@@ -132,7 +143,6 @@ class ReviewDigest(BaseModel):
     validation_state: Literal["not_executed", "passed", "failed", "independent_results", "unknown"] = "unknown"
     validations: list[DigestValidation] = Field(default_factory=list)
     merge_decision: MergeDecision = Field(default_factory=MergeDecision)
-    execution_record: dict = Field(default_factory=dict)
     checked_areas: list[Literal["head_source_ranges", "base_source_ranges", "file_changes"]] = Field(default_factory=list)
     termination_reason: str | None = None
 
@@ -158,6 +168,9 @@ class PublicationFinding(BaseModel):
     anchor: PublicationAnchor
     title: str
     body_markdown: str
+    affected_behavior: str = ""
+    failure_scenario: str = ""
+    recommendation: str = ""
     category: str | None = None
     evidence_summary: str | None = None
     evidence_ids: list[str] = Field(default_factory=list)
@@ -166,6 +179,35 @@ class PublicationFinding(BaseModel):
 class WithheldFinding(BaseModel):
     candidate_id: str
     reason_code: str
+
+
+class ReviewSummaryDigest(BaseModel):
+    """结果概览所需的轻量投影；不含逐条问题正文、目标明细或执行追踪。"""
+
+    author_goal: str | None = None
+    author_context_status: Literal["complete", "truncated", "unknown", "not_recorded"] = "not_recorded"
+    author_context_limitation: str | None = None
+    change_understanding: ChangeUnderstanding | None = None
+    actual_changes: list[str] = Field(default_factory=list)
+    intent_alignment: str = ""
+    merge_decision: MergeDecision = Field(default_factory=MergeDecision)
+    excluded_files: list[DigestExcludedFile] = Field(default_factory=list)
+    validation_state: Literal["not_executed", "passed", "failed", "independent_results", "unknown"] = "unknown"
+    validations: list[DigestValidation] = Field(default_factory=list)
+    checked_areas: list[Literal["head_source_ranges", "base_source_ranges", "file_changes"]] = Field(default_factory=list)
+    termination_reason: str | None = None
+
+
+class ReviewSummary(BaseModel):
+    schema_version: Literal["review-summary-v1"] = "review-summary-v1"
+    review_id: str
+    snapshot: PublicationSnapshot
+    outcome: ReviewOutcome
+    digest: ReviewSummaryDigest = Field(default_factory=ReviewSummaryDigest)
+    review_comment_markdown: str = ""
+    withheld_findings: list[WithheldFinding] = Field(default_factory=list)
+    content_eligible: bool = False
+    blocking_reasons: list[str] = Field(default_factory=list)
 
 
 class PublicationPlan(BaseModel):

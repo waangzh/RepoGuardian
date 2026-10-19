@@ -126,8 +126,12 @@ async def test_single_finding_copy_uses_latest_server_body_and_head_check(monkey
     assert body["status"] == state and calls == [task.pr_url]
     assert body["included_finding_keys"] == ["key-a"] and body["omitted_finding_keys"] == ["key-b"]
     text = body["review_comment_markdown"]
-    assert "**问题与影响：**" in text and "最新人工处理说明" in text and "快照检查" in text
-    assert "另一个问题" not in text and "另有 1 项" in text and "src/a.py" in text
+    assert "空返回值破坏调用方契约" in text and "最新人工处理说明" in text
+    if state == "current":
+        assert "快照检查" not in text
+    else:
+        assert "快照检查" in text
+    assert "另一个问题" not in text and "另有 1 项" in text and "src/a\\.py" in text
     assert task.task_runtime_report == before
 
 

@@ -158,7 +158,8 @@ async def test_copy_selection_is_explicit_keeps_blockers_and_rechecks_head(monke
         options = {"detail": "full", "exclude_resolved": True}
         preview = (await client.post(f"/api/reviews/{task.id}/review-comment-preview", json=options)).json()
         assert not calls and preview["omitted_finding_keys"] == ["key-a"]
-        assert "明确省略" in preview["review_comment_markdown"] and "**问题与影响：**" not in preview["review_comment_markdown"]
+        assert "本次未包含的事项" in preview["review_comment_markdown"]
+        assert "**问题与影响：**" not in preview["review_comment_markdown"]
         copied = (await client.post(f"/api/reviews/{task.id}/review-comment-check", json=options)).json()
         assert calls == [task.pr_url] and copied["status"] == "current"
         assert copied["detail"] == "full" and copied["omitted_finding_keys"] == ["key-a"]
@@ -167,15 +168,22 @@ async def test_copy_selection_is_explicit_keeps_blockers_and_rechecks_head(monke
         task.task_runtime_report = blocking.task_runtime_report
         retained = (await client.post(f"/api/reviews/{task.id}/review-comment-preview", json=options)).json()
         assert retained["retained_blocking_keys"] == ["key-a"] and not retained["omitted_finding_keys"]
-        assert "**问题与影响：**" in retained["review_comment_markdown"]
+        assert "核心功能鉴权失败" in retained["review_comment_markdown"]
         assert (await client.post(f"/api/reviews/{task.id}/review-comment-check", json={"finding_keys": []})).status_code == 422
 
 
-def test_compact_and_full_keep_all_problem_bodies_and_machine_facts():
+def test_compact_is_publishable_and_full_adds_evidence_without_duplicates():
     task = publishable_task()
     plan = PublicationPlanner().build(task)
     original = deepcopy(plan)
-    for detail in ("compact", "full"):
-        assert plan.inline_drafts[0].body_markdown in render_review_comment(plan, detail=detail)
+    finding = plan.inline_drafts[0]
+    compact = render_review_comment(plan, detail="compact")
+    full = render_review_comment(plan, detail="full")
+    for markdown in (compact, full):
+        assert finding.title in markdown and finding.recommendation in markdown
+        assert markdown.count("Commit") == 1
+        assert "独立核验支持此结论" not in markdown
+    assert "代码证据" not in compact and "代码证据" in full
+    assert len(full) > len(compact)
     assert plan == original
     assert json.loads(plan.model_dump_json())["digest"]["merge_decision"]["status"] == "review_suggestions"

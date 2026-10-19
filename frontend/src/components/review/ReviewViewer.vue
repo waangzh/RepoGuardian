@@ -55,7 +55,7 @@ const emit = defineEmits<{
 }>();
 
 const snapshotBase = computed(() => evidenceSnapshotBase(props.task));
-const { plan: publicationPlan, error: publicationError, loading: publicationLoading, reload: reloadPublication } = usePublicationPlan(() => props.task);
+const { plan: publicationPlan, error: publicationError, loading: publicationLoading, reload: reloadPublication } = usePublicationPlan(() => props.task, undefined, undefined, { autoPlan: true });
 const publicationFindings = computed(() => [...(publicationPlan.value?.inline_drafts || []), ...(publicationPlan.value?.summary_findings || [])]);
 const commentsMarkdown = computed(() => publicationFindings.value.map(item => item.body_markdown).join("\n\n---\n\n"));
 

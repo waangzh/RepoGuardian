@@ -11,14 +11,18 @@ from test_publication_planner import publishable_task
 from test_report_service import _pr
 
 
-def test_comment_contains_full_inline_body_position_and_immutable_base_link():
+def test_comment_contains_inline_finding_position_and_immutable_base_link():
     task = publishable_task(side="base", severity="high")
     plan = PublicationPlanner().build(task)
-    assert plan.inline_drafts[0].body_markdown in plan.review_comment_markdown
+    finding = plan.inline_drafts[0]
+    # 评论是发给作者的审查意见：标题、位置与建议必须保留，但不复制完整审计正文。
+    assert finding.title in plan.review_comment_markdown
+    assert finding.recommendation in plan.review_comment_markdown
+    # 评论中的行内定位仍链接到不可变的 Effective Base 快照（URL 路径不做 Markdown 转义）。
     assert f"/blob/{task.run_manifest.effective_base_sha}/src/a.py#L7" in plan.review_comment_markdown
     assert "阻断问题" in plan.review_comment_markdown and "CI" in plan.review_comment_markdown
-    assert "审查 Commit" in plan.review_comment_markdown
-    assert plan.user_report_markdown.index("## 发现的问题") < plan.user_report_markdown.index("## 审查范围与限制")
+    assert plan.review_comment_markdown.count("Commit") == 1
+    assert plan.user_report_markdown.index("## 已确认问题") < plan.user_report_markdown.index("## 附录：审查范围与限制")
 
 
 def test_detailed_and_audit_share_facts_and_human_state_does_not_change_admission():
@@ -45,7 +49,9 @@ def test_author_statement_and_actual_diff_are_kept_distinct_from_alignment():
         hunks=[DiffHunk(old_start=1, old_length=1, new_start=1, new_length=2,
             lines=[DiffLine(kind="added", content="def handle(value):", new_line_no=1)])])]
     plan = PublicationPlanner().build(task)
-    assert "handle" in plan.user_report_markdown and "固定 Diff 事实" in plan.review_comment_markdown
+    assert "handle" in plan.user_report_markdown
+    assert "代码实际改变了什么" in plan.review_comment_markdown
+    assert "修复空值异常" in plan.review_comment_markdown
     assert "未保存独立的目标符合性核验记录" in plan.review_comment_markdown
     assert "隐藏" not in plan.user_report_markdown and "<script>" not in plan.user_report_markdown
 
@@ -77,23 +83,26 @@ def test_zero_finding_report_and_comment_explain_behavior_and_answered_investiga
         "reason": "调用方已切换到新的返回结构", "limitations": ["仅核对固定快照，未执行测试"]}])
     plan = PublicationPlanner().build(task)
     for markdown in (plan.review_comment_markdown, plan.user_report_markdown):
-        assert "检查空值分支先返回" in markdown and "src/a" in markdown
-        assert "静态证据反驳此命题" in markdown and "调用方已切换到新的返回结构" in markdown
-        assert "未执行测试" in markdown and "目标符合性" in markdown
+        assert "检查空值分支先返回" in markdown
+    # 详细报告保留已回答调查与限制；评论只列影响决策的未决事项。
+    assert "调用方已切换到新的返回结构" in plan.user_report_markdown
+    assert "未执行测试" in plan.user_report_markdown and "吻合与未确认" in plan.user_report_markdown
     # 渲染器消费同一已构建事实，不再从原始运行数据另行判定调查状态。
     task.task_runtime_report["admitted_investigations"] = []
     assert render_user_report(task, plan) == plan.user_report_markdown
 
 
-def test_compact_change_list_is_explicit_and_does_not_trim_defect_body():
+def test_compact_change_understanding_summarizes_and_does_not_trim_defect():
     task = publishable_task()
     task.changed_files = [ChangedFile(file_path=f"src/file{i}.py", change_type="modified", additions=1, deletions=1)
                           for i in range(8)]
     plan = PublicationPlanner().build(task)
-    assert "另有 3 个文件变更" in plan.review_comment_markdown
+    assert "共 8 个文件" in plan.review_comment_markdown
     assert "src/file7" not in plan.review_comment_markdown
     assert "src/file7" in plan.user_report_markdown
-    assert plan.inline_drafts[0].body_markdown in plan.review_comment_markdown
+    finding = plan.inline_drafts[0]
+    assert finding.title in plan.review_comment_markdown
+    assert finding.recommendation in plan.review_comment_markdown
 
 
 def test_unknown_investigation_answer_cannot_become_a_supported_change_claim():
@@ -103,4 +112,4 @@ def test_unknown_investigation_answer_cannot_become_a_supported_change_claim():
     plan = PublicationPlanner().build(task)
     assert plan.digest.investigations[0].answer == "unresolved"
     assert "静态证据支持此命题" not in plan.review_comment_markdown
-    assert "未得到充分答案 1 项" in plan.user_report_markdown
+    assert "未决调查：边界是否保持兼容" in plan.user_report_markdown

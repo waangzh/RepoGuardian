@@ -31,7 +31,7 @@ const currentMarkdown = computed(() => reportView.value === "comment" ? (customS
   : props.userMarkdown && reportView.value === "user" ? props.userMarkdown : props.markdown);
 const currentLabel = computed(() => reportView.value === "comment" ? "PR 评论"
   : props.userMarkdown && reportView.value === "user" ? "详细审查报告" : "技术审计记录");
-const { copied, feedback, checking, pendingCopy, resetCopy, writeClipboard, copyCheckedComment, copyAcknowledged } = useReviewCommentCopy({
+const { copied, feedback, checking, pendingCopy, resetCopy, writeClipboard, copyCheckedComment, copyAcknowledged, checkedComment } = useReviewCommentCopy({
   reviewId: () => props.reviewId, reviewedHeadSha: () => props.reviewedHeadSha, markdown: () => currentMarkdown.value,
   options: () => ({ detail: detail.value, exclude_resolved: excludeResolved.value }),
 });
@@ -71,17 +71,28 @@ async function copyMarkdown() {
   await copyCheckedComment();
 }
 
-function exportMarkdown(comments = false) {
-  const content = comments ? props.commentsMarkdown : currentMarkdown.value;
-  if (!content) return;
+function downloadMarkdown(content: string, kind: string) {
   const prefix = (props.filenamePrefix || "repoguardian").replace(/[^a-z0-9_-]/gi, "-").slice(0, 80);
-  const kind = comments ? "comments" : reportView.value === "comment" ? "pr-comment" : props.userMarkdown && reportView.value === "user" ? "report" : "audit";
   const url = URL.createObjectURL(new Blob([content], { type: "text/markdown;charset=utf-8" }));
   const link = document.createElement("a");
   link.href = url;
   link.download = `${prefix}-${kind}.md`;
   link.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function exportMarkdown() {
+  if (!currentMarkdown.value || checking.value) return;
+  // 外部分享类交付与复制共用快照检查；详细报告的历史导出不要求 Head 一致。
+  if (reportView.value === "comment") {
+    await checkedComment(content => downloadMarkdown(content, "pr-comment"));
+    return;
+  }
+  downloadMarkdown(currentMarkdown.value, props.userMarkdown && reportView.value === "user" ? "report" : "audit");
+}
+
+function exportComments() {
+  if (props.commentsMarkdown) downloadMarkdown(props.commentsMarkdown, "comments");
 }
 </script>
 
@@ -90,8 +101,8 @@ function exportMarkdown(comments = false) {
     <PanelHeader icon="report" :title="currentLabel" subtitle="预览、复制与本地导出">
       <div class="report-actions">
         <button type="button" class="button button--ghost button--compact" :disabled="!currentMarkdown" @click="reportDialog?.showModal()">查看完整报告</button>
-        <button type="button" class="button button--secondary button--compact" :disabled="!currentMarkdown || checking" @click="copyMarkdown">{{ checking ? "检查快照中…" : copied ? "已复制" : reportView === 'comment' ? "复制 PR 评论" : "复制当前报告" }}</button>
-        <button type="button" class="button button--primary button--compact" :disabled="!currentMarkdown" @click="exportMarkdown()">导出当前报告</button>
+        <button type="button" class="button button--secondary button--compact" :disabled="!currentMarkdown || checking" @click="exportMarkdown">{{ checking ? "检查 PR 版本中…" : reportView === 'comment' ? "导出 PR 评论" : "导出当前报告" }}</button>
+        <button type="button" class="button button--primary button--compact" :disabled="!currentMarkdown || checking" @click="copyMarkdown">{{ checking ? "检查 PR 版本中…" : copied ? "已复制" : reportView === 'comment' ? "复制 PR 评论" : "复制当前报告" }}</button>
       </div>
     </PanelHeader>
     <div v-if="userMarkdown || reviewMarkdown" class="report-mode-switch" aria-label="报告内容选择">
@@ -105,7 +116,8 @@ function exportMarkdown(comments = false) {
       <span v-if="previewLoading" role="status">正在生成选择预览…</span>
       <span v-else-if="selection">包含 {{ selection.included_finding_keys.length }} 项，明确省略 {{ selection.omitted_finding_keys.length }} 项；保留 {{ selection.retained_blocking_keys.length }} 项已处理阻断问题。</span>
     </div>
-    <p class="runtime-caption">{{ reportView === 'comment' ? '精简版保留全部已选问题正文；省略事项逐项列明，阻断问题始终保留。复制前检查远端 Head。' : reportView === 'user' ? '用于理解变更、核对问题和未决风险。' : '格式化执行与证据记录；不代表全部原始事件，历史正文保持原样。' }}</p>
+    <p class="runtime-caption">{{ reportView === 'comment' ? '默认评论可直接发布；复制或导出前检查 PR 当前 Head，过期时在正文强调限制。' : reportView === 'user' ? '用于理解变更、核对问题和未决风险；历史版本可直接导出。' : '格式化执行与证据记录；不代表全部原始事件，历史正文保持原样。' }}</p>
+    <p v-if="commentsMarkdown" class="runtime-caption"><button type="button" class="text-button" @click="exportComments">导出逐条评论草稿（技术用途，不检查 Head）</button></p>
     <p v-if="feedback" class="report-feedback" role="status">{{ feedback }}</p>
     <button v-if="pendingCopy" type="button" class="button button--secondary button--compact" @click="copyAcknowledged">{{ pendingCopy.status === 'stale' ? '仍复制带旧快照说明的 PR 评论' : '仍复制带未知状态说明的 PR 评论' }}</button>
     <EmptyState v-if="!currentMarkdown" icon="report" title="报告尚未生成" description="当前没有可用的报告记录；请结合任务状态判断。" />

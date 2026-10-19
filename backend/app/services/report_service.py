@@ -32,8 +32,9 @@ class ReportService:
                 return "\n".join(lines + ["任务级报告尚未生成，不能据此判断本轮检查完整性。"])
             from app.services.publication_planner import PublicationPlanner
             from app.services.publication_renderer import render_technical_audit
+            from app.services.review_digest import execution_record
             plan = PublicationPlanner().build(task)
-            lines = [render_technical_audit(plan)]
+            lines = [render_technical_audit(plan, execution_record(task.task_runtime_report))]
             _append_execution_details(lines, task)
         else:
             _append_pr_summary(lines, task)

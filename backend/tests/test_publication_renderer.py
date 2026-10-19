@@ -6,8 +6,8 @@ from test_publication_planner import publishable_task
 from test_review_outcome import completed_task
 
 
-@pytest.mark.parametrize("task,label", [(completed_task(), "未发现可行动问题"),
-    (completed_task(scope_complete=False), "本次审查未得出完整结论"), (publishable_task(), "发现已确认问题")])
+@pytest.mark.parametrize("task,label", [(completed_task(), "未发现阻断性问题"),
+    (completed_task(scope_complete=False), "需要补充检查"), (publishable_task(), "建议评估后合并")])
 def test_rendered_counts_and_repeatability(task, label):
     plan = PublicationPlanner().build(task)
     assert label in plan.summary_markdown

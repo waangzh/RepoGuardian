@@ -37,7 +37,7 @@ export function useReviewCommentCopy(source: CommentSource, load = checkReviewCo
     }
   }
 
-  async function copyCheckedComment() {
+  async function checkedComment(onReady: (content: string) => Promise<void> | void) {
     if (!source.markdown() || checking.value) return;
     const id = source.reviewId();
     const head = source.reviewedHeadSha() ?? null;
@@ -55,7 +55,7 @@ export function useReviewCommentCopy(source: CommentSource, load = checkReviewCo
           || result.detail !== options.detail
           || (options.finding_key && (result.included_finding_keys?.length !== 1 || result.included_finding_keys[0] !== options.finding_key))
           || (result.status === "current" && (!head || result.latest_head_sha !== head))) throw new Error("快照或所选问题不匹配");
-      if (result.status === "current") await writeClipboard(result.review_comment_markdown);
+      if (result.status === "current") await onReady(result.review_comment_markdown);
       else {
         pendingCopy.value = result;
         feedback.value = result.status === "stale"
@@ -66,10 +66,15 @@ export function useReviewCommentCopy(source: CommentSource, load = checkReviewCo
     finally { if (controller === request) { checking.value = false; controller = null; } }
   }
 
+  async function copyCheckedComment() {
+    await checkedComment(writeClipboard);
+  }
+
   async function copyAcknowledged() {
     const result = pendingCopy.value;
     pendingCopy.value = null;
     if (result) await writeClipboard(result.review_comment_markdown);
   }
-  return { copied, feedback, checking, pendingCopy, resetCopy, writeClipboard, copyCheckedComment, copyAcknowledged };
+  return { copied, feedback, checking, pendingCopy, resetCopy, writeClipboard, checkedComment,
+    copyCheckedComment, copyAcknowledged };
 }

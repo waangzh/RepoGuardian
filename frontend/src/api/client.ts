@@ -98,6 +98,10 @@ export function getPublicationPlan(taskId: string, signal?: AbortSignal): Promis
   return request<PublicationPlan>(`/api/reviews/${encodeURIComponent(taskId)}/publication-plan`, { signal });
 }
 
+export function getPublicationSummary(taskId: string, signal?: AbortSignal): Promise<import('../types/publication').ReviewSummary> {
+  return request<import('../types/publication').ReviewSummary>(`/api/reviews/${encodeURIComponent(taskId)}/publication-summary`, { signal });
+}
+
 export function checkReviewComment(taskId: string, signal?: AbortSignal, options?: import('../types/publication').ReviewCommentOptions) {
   return request<import('../types/publication').ReviewCommentCheck>(`/api/reviews/${encodeURIComponent(taskId)}/review-comment-check`, { method: 'POST', signal, body: JSON.stringify(options) });
 }
