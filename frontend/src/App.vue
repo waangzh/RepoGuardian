@@ -34,7 +34,7 @@ const activePage = ref<AppPage>("dashboard");
 const reviewSection = ref<ReviewSection>("overview");
 const mobileOpen = ref(false);
 const opening = ref(false);
-const pageTitle = computed(() => activePage.value === 'history' ? '审查历史' : activePage.value === 'settings' ? '系统设置' : task.value ? reviewSections.find(item => item.id === reviewSection.value)?.label || '当前审查' : preview.value ? '审查方案' : previewStage.value ? '分析 PR' : quickOverview.value || quickLoading.value || quickError.value ? 'PR 概览' : '新建审查');
+const pageTitle = computed(() => activePage.value === 'history' ? '审查历史' : activePage.value === 'settings' ? '系统设置' : task.value ? reviewSections.find(item => item.id === reviewSection.value)?.label || '当前审查' : preview.value ? '审查方案' : previewStage.value ? '准备审查方案' : quickOverview.value || quickLoading.value || quickError.value ? 'PR 概览' : '新建审查');
 watch([activePage, reviewSection], () => { mobileOpen.value = false; });
 function navigateReview(section: ReviewSection) { activePage.value = 'dashboard'; reviewSection.value = section; mobileOpen.value = false; }
 const prUrl = ref("");
@@ -231,7 +231,7 @@ function applyPreviewJob(value: PreviewJob) {
     previewTracker.detach(true);
     void openHistoricalReview(value.consumed_task_id);
   } else if (value.status === 'completed') {
-    error.value = '预览已完成但未返回方案，请重新分析 PR。';
+    error.value = '预览已完成但未返回方案，请重新准备审查方案。';
   }
   // failed/cancelled/expired 由预览页展示 job.error，避免顶部重复报错；
   // 方案页重新校验失败时 preview 仍存在，才把错误交给页面顶部。

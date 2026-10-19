@@ -28,8 +28,8 @@ const statusLabel = computed(() => {
 });
 const title = computed(() => {
   if (!props.job) return props.connectionError ? '无法读取预览状态' : '正在连接预览服务';
-  if (active.value) return '正在分析 PR';
-  return 'PR 分析未完成';
+  if (active.value) return '正在准备审查方案';
+  return '审查方案未准备完成';
 });
 const now = ref(Date.now());
 let timer: ReturnType<typeof setInterval> | undefined;
@@ -72,12 +72,12 @@ const elapsed = computed(() => {
           <button v-if="connectionError && !tracking" type="button" class="btn secondary" @click="emit('resume')">继续查询预览</button>
           <button v-if="active" type="button" class="btn secondary" @click="emit('cancel')">取消预览</button>
           <template v-if="retryable">
-            <button type="button" class="btn primary" @click="emit('retry')"><AppIcon name="play" :size="16" />重新分析 PR</button>
+            <button type="button" class="btn primary" @click="emit('retry')"><AppIcon name="play" :size="16" />重新准备审查方案</button>
             <button type="button" class="btn secondary" @click="emit('back')">返回修改 PR 链接</button>
           </template>
           <button v-else-if="!active && !connectionError" type="button" class="btn secondary" @click="emit('back')">返回修改 PR 链接</button>
         </div>
-        <p v-if="incomplete" class="field-hint">重新分析会创建新的预览；已产生的尝试不会计入正式审查。</p>
+        <p v-if="incomplete" class="field-hint">重新准备会创建新的方案预览；此阶段不会启动 AI 审查。</p>
       </section>
     </aside>
   </div>

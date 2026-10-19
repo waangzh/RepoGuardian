@@ -72,9 +72,8 @@ def _module_summary(paths: list[str]) -> str:
 
 def _change_understanding(digest, task, report) -> ChangeUnderstanding:
     goal = _first_paragraph(digest.author_goal)
-    author_goal = (f"作者声明（未经独立验证）：{goal}" if goal else "未记录明确的作者目标。")
-    if digest.author_context_limitation:
-        author_goal += "（作者声明的输入范围有限制，见下方说明。）"
+    # 正文只保存目标内容；输入完整性与符合性仍由 Digest 的独立字段表达。
+    author_goal = goal or "未记录明确的作者目标。"
     observed_goals = [goal for goal in digest.examined_goals if goal.reason and goal.reason.strip()]
     paths = [file.file_path for file in task.changed_files]
     additions = sum(file.additions for file in task.changed_files)

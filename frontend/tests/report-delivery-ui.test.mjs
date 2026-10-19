@@ -12,6 +12,7 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
     const { default: Readable } = await server.ssrLoadModule('/src/components/report/ReportReadableView.vue');
     const { default: Audit } = await server.ssrLoadModule('/src/components/report/AuditSummaryView.vue');
     const { default: Context } = await server.ssrLoadModule('/src/components/report/ReportContext.vue');
+    const { default: Workspace } = await server.ssrLoadModule('/src/components/review/ReviewWorkspace.vue');
     const { reportSourceLink, reportValidationLabel, coverageLabel, reportLimitations } = await server.ssrLoadModule('/src/utils/reportPresentation.ts');
     for (const name of ['clean', 'findings', 'inconclusive', 'failed', 'cancelled', 'withheld']) {
       await t.test(name, async () => {
@@ -19,7 +20,8 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
         const before = JSON.stringify(plan);
         const html = await renderToString(createSSRApp(Readable, { plan }));
         for (const id of ['conclusion', 'changes', 'evidence', 'gaps', 'actions']) assert.ok(html.includes(`id="rd-detail-${id}"`));
-        assert.ok(html.includes('作者声明 · 尚需独立核验'));
+        assert.ok(html.includes('<h4>PR 目标</h4>'));
+        assert.ok(html.includes('来源与验证边界'));
         assert.ok(html.includes(reportValidationLabel(plan.outcome.dynamic_validation)));
         const audit = await renderToString(createSSRApp(Audit, { task, plan }));
         assert.ok(audit.includes('查看原始结构化记录'));
@@ -44,6 +46,21 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
       const context = await renderToString(createSSRApp(Context, { task: fixtures.clean.task, plan, stale: true }));
       assert.ok(context.includes('审查结果基于旧代码版本'));
     });
+    await t.test('旧目标包装只影响展示，来源、输入缺口与代码观察仍保留', async () => {
+      const plan = structuredClone(fixtures.findings.plan);
+      plan.digest.change_understanding.author_goal = '作者声明（未经独立验证）：修复缓存读取。';
+      plan.digest.author_context_status = 'truncated';
+      plan.digest.author_context_limitation = '作者输入已截断，尾部尚未核验。';
+      const before = JSON.stringify(plan);
+      const html = await renderToString(createSSRApp(Readable, { plan }));
+      assert.ok(html.includes('<h4>PR 目标</h4><p>修复缓存读取。</p>'));
+      assert.ok(!html.includes('作者声明（未经独立验证）：'));
+      assert.equal(html.split('作者输入已截断，尾部尚未核验。').length - 1, 1);
+      assert.ok(html.indexOf('来源与验证边界') < html.indexOf('作者输入已截断'));
+      assert.equal(html.split('未执行目标仓库代码、测试或构建。').length - 1, 1);
+      assert.ok(html.includes('不代表目标已实现'));
+      assert.equal(JSON.stringify(plan), before);
+    });
     await t.test('快照链接拒绝外域、凭据、遍历和未知 SHA，保留 Base 行号', () => {
       const sha = 'a'.repeat(40), pr = 'https://github.com/owner/repo/pull/95';
       assert.equal(reportSourceLink(pr, 'src/a b.ts', sha, 12), `https://github.com/owner/repo/blob/${sha}/src/a%20b.ts#L12`);
@@ -52,6 +69,31 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
       assert.equal(reportSourceLink(pr, 'a.ts', null), null);
       assert.equal(reportSourceLink(pr, 'a.ts', 'short'), null);
       assert.equal(reportSourceLink(pr, 'a.ts', sha, -1), `https://github.com/owner/repo/blob/${sha}/a.ts`);
+    });
+    await t.test('报告加载期间仍保留通用 PR 头部和结果导航', async () => {
+      const task = structuredClone(fixtures.clean.task);
+      task.pr = { owner: 'fixture', repo: 'review-ui', number: 95, title: '统一审查页面标题', html_url: 'https://github.com/fixture/review-ui/pull/95',
+        base: { ref: 'main' }, head: { ref: 'feature/report' } };
+      for (const section of ['report', 'files', 'publish']) {
+        const html = await renderToString(createSSRApp(Workspace, { task, report: null, section, statusText: '审查已完成', duration: '13 秒', cancelling: false, retryingUnitId: null }));
+        assert.equal(html.match(/class="pr-title"/g)?.length, 1);
+        assert.equal(html.match(/统一审查页面标题/g)?.length, 1);
+        assert.ok(html.includes('aria-label="审查结果导航"'));
+        assert.ok(html.includes('>新建审查</button>'));
+        assert.match(html, new RegExp(`aria-current="page"[^>]*>${({ report: '审查报告', files: '变更文件', publish: '发布到 GitHub' })[section]}`));
+      }
+    });
+    await t.test('嵌入式快照卡片保留结论与 Head，不重复 PR 标题和任务状态', async () => {
+      const task = { ...fixtures.clean.task, pr: { title: '避免重复的PR标题', owner: 'fixture', repo: 'review-ui', number: 95, base: { ref: 'main' }, head: { ref: 'feature/report' } } };
+      const plan = fixtures.clean.plan;
+      const embedded = await renderToString(createSSRApp(Context, { task, plan, embedded: true }));
+      assert.ok(!embedded.includes('避免重复的PR标题'));
+      assert.ok(!embedded.includes('rd-context-top'));
+      assert.ok(embedded.includes(plan.snapshot.head_sha.slice(0, 12)));
+      assert.ok(embedded.includes('检查覆盖：完整'));
+      const standalone = await renderToString(createSSRApp(Context, { task, plan }));
+      assert.ok(standalone.includes('避免重复的PR标题'));
+      assert.ok(standalone.includes('rd-context-top'));
     });
   } finally { await server.close(); }
 });

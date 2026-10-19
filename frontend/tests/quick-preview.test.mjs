@@ -45,7 +45,7 @@ test('概览明确截断与非审查边界，正文转义且只能继续准备�
     assert.match(html, /尚未进行审查/);
     assert.match(html, /准备完整审查方案/);
     assert.match(html, /原路径/);
-    assert.doesNotMatch(html, /<script>|<img>|确认方案并开始审查/);
+    assert.doesNotMatch(html, /<script>|<img>|开始 AI 审查/);
     const waiting = await renderToString(createSSRApp(Page, { overview: null, loading: true, error: '', prUrl: 'url' }));
     assert.match(waiting, /取消并返回/);
     assert.match(waiting, /disabled[^>]*>准备完整审查方案/);

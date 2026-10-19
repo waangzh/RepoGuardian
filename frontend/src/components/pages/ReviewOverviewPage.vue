@@ -28,16 +28,14 @@ const validationLabel = computed(() => ({ not_executed: "未执行目标仓库�
   independent_results: "已有独立补丁结果，当前 Head 未知", unknown: "动态验证状态未知" })[dynamicValidation.value] || "动态验证状态未知");
 const validations = computed(() => props.summaryPlan?.digest.validations || []);
 
-// 建议行动：严格按情景矩阵给出主要操作；无风险时不出现“查看待确认风险”。
-const primaryActions = computed(() => {
-  const keys = situation.value?.actions.map(item => item.key) ?? [];
-  const includeCopy = situation.value?.key === "clean" || situation.value?.key === "nonblocking";
-  return { keys, includeCopy };
-});
+// 建议行动：严格按情景矩阵给出主要操作；复制是交付动作，按情景决定标签与主次。
+const primaryActions = computed(() => situation.value?.actions ?? []);
+const copy = computed(() => situation.value?.copy ?? null);
 function runAction(key: SituationActionKey) {
-  if (key === "view_blockers" || key === "view_unresolved" || key === "view_findings") emit("navigate", "findings");
+  if (key === "view_blockers" || key === "view_unresolved" || key === "view_findings" || key === "view_retained") emit("navigate", "findings");
   else if (key === "view_gaps") emit("navigate", "scope");
-  else if (key === "view_validation" || key === "view_activity") emit("navigate", "activity");
+  else if (key === "view_validation" || key === "view_activity" || key === "view_error") emit("navigate", "activity");
+  else if (key === "view_report") emit("navigate", "report");
   else if (key === "rereview") emit("create");
 }
 </script>
@@ -58,14 +56,15 @@ function runAction(key: SituationActionKey) {
     </section>
     <section class="overview-layer">
       <div class="layer-label">建议行动</div>
-      <div class="overview-actions" :class="{ single: !primaryActions.includeCopy && primaryActions.keys.length <= 1 }">
-        <div v-if="primaryActions.includeCopy" class="overview-action-cell">
-          <CopyCommentButton v-if="summaryPlan" :review-id="task.id" :reviewed-head-sha="summaryPlan.snapshot.head_sha" :markdown="summaryPlan.review_comment_markdown || ''" @snapshot="stale = $event === 'stale'" />
+      <p class="overview-action-note">{{ !terminal ? "审查尚未结束，可先查看当前进度。" : situation ? copy?.partial ? "结论不完整或未形成可信判断时，复制内容会明确标注为部分审查记录。" : copy ? "复制前会核对 PR 当前 Head；复制内容只适用于本次快照。" : "当前结果基于旧代码版本，请先重新审查。" : "后端尚未提供审查摘要，可先查看报告或技术记录。" }}</p>
+      <div class="overview-actions" :class="{ single: !copy && primaryActions.length <= 1 }">
+        <button v-for="action in primaryActions" :key="action.key" type="button" class="btn secondary overview-action" @click="runAction(action.key)">
+          <AppIcon :name="action.icon || 'arrow-right'" :size="16" />{{ action.label }}
+        </button>
+        <div v-if="copy" class="overview-action-cell">
+          <CopyCommentButton v-if="summaryPlan" :review-id="task.id" :reviewed-head-sha="summaryPlan.snapshot.head_sha" :markdown="summaryPlan.review_comment_markdown || ''" :label="copy.label" :primary="copy.prominence === 'primary'" :partial="copy.partial" @snapshot="stale = $event === 'stale'" />
           <button v-else type="button" class="btn secondary" @click="emit('navigate', 'report')">查看报告</button>
         </div>
-        <button v-for="key in primaryActions.keys" :key="key" type="button" class="btn secondary overview-action" @click="runAction(key)">
-          <AppIcon :name="(situation?.actions.find(item => item.key === key)?.icon) || 'arrow-right'" :size="16" />{{ situation?.actions.find(item => item.key === key)?.label }}
-        </button>
       </div>
     </section>
     <section class="overview-layer">

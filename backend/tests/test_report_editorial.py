@@ -1,5 +1,7 @@
 """报告编辑性契约：评论面向作者、详细报告不重复、概览不携带审计数据。"""
 
+from copy import deepcopy
+
 from app.models.review_runtime import IntentAssessment
 from app.services.publication_planner import PublicationPlanner, summary_projection
 from app.services.publication_renderer import render_review_comment, render_user_report
@@ -30,7 +32,8 @@ def test_change_understanding_uses_bound_observations_and_does_not_claim_fulfill
     plan = PublicationPlanner().build(task)
     understanding = plan.digest.change_understanding
     assert understanding is not None
-    assert "拒绝空值" in understanding.author_goal
+    assert understanding.author_goal == "拒绝空值。"
+    assert plan.digest.author_context_status == "complete"
     assert "空值分支在读取字段前返回" in understanding.actual_changes
     assert "1 项获得局部静态证据支持" in understanding.alignment
     assert "不构成作者全部目标已实现的验收结论" in understanding.alignment
@@ -81,8 +84,8 @@ def test_detailed_report_states_conclusion_limits_and_steps_once():
     # 结论、建议、验证边界各出现一次；范围目标只出现在附录。
     assert report.count("## 审查结论") == 1
     assert report.count("## 下一步建议") == 1
-    assert report.count("### 验证边界") == 1
-    assert report.index("## 附录：审查范围与限制") < report.index("### 验证边界")
+    assert report.count("### 来源与验证边界") == 1
+    assert report.index("## 附录：审查范围与限制") < report.index("### 来源与验证边界")
     assert "src/b.py" not in report.split("## 附录")[0]
     assert report.count("仍以审查范围与验证边界为准") <= 1
 
@@ -93,12 +96,14 @@ def test_delivery_comment_matches_prototype_and_keeps_validation_limits_truthful
     task.task_runtime_report["pr_intent_context_truncated"] = False
     plan = PublicationPlanner().build(task)
     markdown = plan.review_comment_markdown
-    for phrase in ("**作者目标：**", "作者声明，尚非独立验证结论", "**代码观察：**", "## 已确认问题",
+    for phrase in ("**PR 目标：** 修复空值异常。", "来源与验证边界", "不代表目标已实现", "**代码观察：**", "## 已确认问题",
                    "本轮没有达到发布证据门槛的已确认缺陷。", "## 审查局限", "不能将静态检查视作 CI 通过",
                    "存在尚未验证的业务预期", "未发现已确认问题不等于代码无缺陷", "本结论基于提交"):
         assert phrase in markdown
     assert plan.outcome.confirmed_count == 0
     assert markdown.index("## 变更概述") < markdown.index("## 已确认问题") < markdown.index("## 审查局限")
+    assert "作者声明（未经独立验证）：" not in markdown
+    assert markdown.index("来源与验证边界") < markdown.index("PR 目标来自作者提供的 PR 描述或标题")
     for state in ("passed", "failed", "independent_results", "unknown"):
         changed = plan.model_copy(deep=True)
         changed.digest.validation_state = state
@@ -112,6 +117,40 @@ def test_delivery_comment_matches_prototype_and_keeps_validation_limits_truthful
             assert "动态验证状态未知" in result
         elif state == "failed":
             assert result.count("已有与当前 Head 绑定的验证失败记录，需核对失败原因。") == 1
+
+
+def test_author_goal_is_plain_text_and_legacy_wrapping_is_display_only():
+    task = publishable_task()
+    task.task_runtime_report["pr_intent_context"] = "修复缓存失效时的读取问题。"
+    task.task_runtime_report["pr_intent_context_truncated"] = True
+    plan = PublicationPlanner().build(task)
+    understanding = plan.digest.change_understanding
+    assert understanding.author_goal == "修复缓存失效时的读取问题。"
+    assert plan.digest.author_context_status == "truncated"
+    assert plan.digest.intent_assessments[0].status == "not_checked"
+    understanding.author_goal = "作者声明（未经独立验证）：修复缓存失效时的读取问题。（作者声明的输入范围有限制，见下方说明。）"
+    before = plan.model_dump(mode="json")
+    for markdown in (render_review_comment(plan), render_review_comment(plan, detail="full"), render_user_report(task, plan)):
+        assert "**PR 目标：** 修复缓存失效时的读取问题。" in markdown
+        assert "作者声明（未经独立验证）：" not in markdown
+        assert "输入范围有限制，见下方说明" not in markdown
+        assert markdown.count("PR 目标来自作者提供的 PR 描述或标题") == 1
+        assert "送审内容已截断" in markdown
+        assert markdown.index("来源与验证边界") < markdown.index("作者目标输入限制：")
+    assert plan.model_dump(mode="json") == before
+
+
+def test_multiple_findings_share_one_document_validation_boundary():
+    task = publishable_task(claim="缓存读取失败")
+    second = deepcopy(publishable_task(claim="刷新路径失败", candidate_id="candidate-b").task_runtime_report["findings"][0])
+    second["key"] = "key-b"
+    task.task_runtime_report["findings"].append(second)
+    plan = PublicationPlanner().build(task)
+    assert plan.outcome.publishable_count == 2
+    for markdown in (plan.user_report_markdown, render_review_comment(plan, detail="full")):
+        assert "缓存读取失败" in markdown and "刷新路径失败" in markdown
+        assert markdown.count("未执行目标仓库代码") == 1
+        assert markdown.count("来源与验证边界") == 1
 
 
 def test_summary_projection_excludes_audit_and_per_finding_payload():
@@ -163,3 +202,30 @@ def test_merge_decision_separates_code_blockers_from_runtime_limits():
     assert clean.digest.merge_decision.status == "conditional_merge"
     assert clean.digest.merge_decision.label == "未发现阻断性问题"
     assert clean.digest.merge_decision.limits == []
+
+
+def test_failed_or_cancelled_copy_is_explicitly_a_partial_record():
+    """失败/取消后允许复制，但正文必须自述为部分记录，不能呈现为完成的 PR Review。"""
+    failed = publishable_task()
+    failed.status = "failed"
+    failed.task_runtime_report["execution_status"] = "failed"
+    plan = PublicationPlanner().build(failed)
+    assert plan.outcome.kind == "failed"
+    for markdown in (plan.review_comment_markdown, render_review_comment(plan, detail="full")):
+        assert "审查未完成（部分审查记录）" in markdown
+        assert "以下为执行失败前已保留的部分审查记录" in markdown
+        # 不再复用正常审查的合并建议措辞。
+        assert "需要补充检查" not in markdown.split("## 建议")[0]
+        assert "审查执行失败，以下建议不构成完整审查结论" in markdown
+    assert "部分审查记录" in plan.summary_markdown
+    assert "部分审查记录" not in PublicationPlanner().build(completed_task()).review_comment_markdown
+
+    cancelled = publishable_task()
+    cancelled.status = "cancelled"
+    cancelled.task_runtime_report["execution_status"] = "cancelled"
+    plan = PublicationPlanner().build(cancelled)
+    assert plan.outcome.kind == "cancelled"
+    for markdown in (plan.review_comment_markdown, render_review_comment(plan, detail="full")):
+        assert "审查已取消（部分审查记录）" in markdown
+        assert "以下为取消前已保留的部分审查记录" in markdown
+        assert "审查已取消，以下建议仅基于停止前保留的记录" in markdown

@@ -25,6 +25,7 @@ const props = defineProps<{
   filenamePrefix?: string;
   task?: ReviewTask;
   plan?: PublicationPlan | null;
+  embedded?: boolean;
 }>();
 const emit = defineEmits<{ publish: []; file: [path: string]; finding: [key: string] }>();
 const panelId = useId();
@@ -112,9 +113,12 @@ function exportComments() {
 </script>
 
 <template>
-  <section id="review-report" class="rd-workspace">
-    <header class="rd-heading"><div><div class="rd-eyebrow">Review delivery workspace</div><h1>审查报告与交付</h1><p>先确认结论与局限，再生成适合不同读者的交付内容。</p></div><div class="rd-top-actions"><a v-if="githubLink" class="btn secondary" :href="githubLink" target="_blank" rel="noreferrer"><AppIcon name="external" :size="15" />在 GitHub 查看 PR</a><button type="button" class="btn secondary" :disabled="!currentMarkdown || busy" @click="exportMarkdown"><AppIcon name="download" :size="15" />导出报告</button></div></header>
-    <ReportContext v-if="task" :task="task" :plan="plan" :stale="headCheck?.status === 'stale'" />
+  <section id="review-report" class="rd-workspace" :class="{ 'rd-workspace--embedded': embedded }">
+    <header v-if="!embedded" class="rd-heading">
+      <div><div class="rd-eyebrow">Review delivery workspace</div><h1>审查报告与交付</h1><p>先确认结论与局限，再生成适合不同读者的交付内容。</p></div>
+      <div class="rd-top-actions"><a v-if="githubLink && !embedded" class="btn secondary" :href="githubLink" target="_blank" rel="noreferrer"><AppIcon name="external" :size="15" />在 GitHub 查看 PR</a><button type="button" class="btn secondary" :disabled="!currentMarkdown || busy" @click="exportMarkdown"><AppIcon name="download" :size="15" />导出报告</button></div>
+    </header>
+    <ReportContext v-if="task" :task="task" :plan="plan" :embedded="embedded" :stale="headCheck?.status === 'stale'" />
     <section class="rd-shell" aria-label="审查报告工作台">
       <ReportModeTabs v-model="reportView" :panel-id="panelId" />
       <div class="rd-layout"><section :id="panelId" class="rd-main" role="tabpanel" :aria-label="currentLabel" tabindex="0">

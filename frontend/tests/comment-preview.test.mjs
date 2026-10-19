@@ -24,6 +24,39 @@ test('评论分节保留真实问题、选择说明、快照限制和历史正�
         }
       });
     }
+    await t.test('失败与取消的部分审查记录保留提示且不冒充正常章节', () => {
+      for (const [verdict, note] of [
+        ['❌ 结论：审查未完成（部分审查记录）', '以下为执行失败前已保留的部分审查记录'],
+        ['⏹ 结论：审查已取消（部分审查记录）', '以下为取消前已保留的部分审查记录'],
+      ]) {
+        const markdown = `RepoGuardian · PR Code Review
+
+${verdict}
+
+> ${note}，不是完整审查结论。
+
+## 变更概述
+
+**代码观察：** 局部观察。
+
+## 已确认问题
+
+本轮没有达到发布证据门槛的已确认缺陷。
+
+## 审查局限
+
+- 未完成范围未知。
+
+## 建议
+
+请重新审查。`;
+        const document = parseCommentPreview(markdown);
+        assert.ok(document, verdict);
+        assert.equal(document.positive, false);
+        assert.deepEqual(document.sections.slice(0, 4).map(item => item.title), ['变更概述', '已确认问题', '审查局限', '建议']);
+        assert.ok(document.sections[0].markdown.includes('部分审查记录'));
+      }
+    });
     await t.test('旧版标题兼容，代码块与额外章节不丢失', () => {
       const markdown = 'RepoGuardian · PR Code Review\n\n❓ 结论：需要补充检查\n\n## 变更概述\n\n**实际变更：** 真实观察。\n\n## 发现的问题\n\n```md\n## 不能当成章节\n---\n```\n\n## 其他审查结果\n\n证据不足。\n\n## 额外说明\n\n保留额外段落。\n\n---\n\n本结论基于 Commit `head` 的只读静态审查。\n\nPR 已有新提交，仅适用于旧 Head。';
       const document = parseCommentPreview(markdown);

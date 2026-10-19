@@ -14,16 +14,23 @@ export function parseCommentPreview(markdown: string) {
   const title = first?.type === 'paragraph' || first?.type === 'heading' ? first.text : '';
   const verdict = meaningful[1];
   const match = verdict?.type === 'paragraph'
-    ? /^(✅|⚠️?|❓)\s*(结论[：:].+)$/u.exec(verdict.text.trim()) : null;
+    ? /^(✅|⚠️?|❓|❌|⏹)\s*(结论[：:].+)$/u.exec(verdict.text.trim()) : null;
   if (title !== 'RepoGuardian · PR Code Review' || !match) return null;
 
   const sections: CommentPreviewSection[] = [];
   let section: CommentPreviewSection | null = null;
   let snapshot = '';
   let inSnapshot = false;
+  // 失败/取消的复制内容在结论后自带“部分审查记录”说明；它不是章节，
+  // 但必须保留，因此并入紧随其后的首个章节正文。
+  let pendingNote = '';
   const start = tokens.indexOf(verdict!) + 1;
   for (let index = start; index < tokens.length; index += 1) {
     const token = tokens[index]!;
+    if (!section && token.type === 'blockquote' && /部分审查记录/.test(token.text)) {
+      pendingNote += token.raw;
+      continue;
+    }
     if (token.type === 'hr' && /^\s*本结论基于/.test(tokens.slice(index + 1).map(item => item.raw).join(''))) {
       inSnapshot = true;
       continue;
@@ -31,7 +38,8 @@ export function parseCommentPreview(markdown: string) {
     if (inSnapshot) { snapshot += token.raw; continue; }
     if (token.type === 'heading' && token.depth === 2) {
       const label = ({ '发现的问题': '已确认问题', '其他审查结果': '审查局限' } as Record<string, string>)[token.text] || token.text;
-      section = { title: label, markdown: '', findings: label === '已确认问题' };
+      section = { title: label, markdown: pendingNote, findings: label === '已确认问题' };
+      pendingNote = '';
       sections.push(section);
     } else if (section) {
       // Older comments used this label for the same source-bound observation.
