@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { useReviewCommentCopy } from "../../composables/useReviewCommentCopy";
@@ -11,10 +11,17 @@ const props = defineProps<{
   markdown: string;
   detail?: "compact" | "full";
 }>();
+// 复制前的快照检查结果回传给页面，供概览切换到“旧代码版本”情景；不改变复制行为。
+const emit = defineEmits<{ snapshot: [status: "current" | "stale" | "unknown"] }>();
 const dialog = ref<HTMLDialogElement | null>(null);
 const { copied, feedback, checking, pendingCopy, copyCheckedComment, copyAcknowledged } = useReviewCommentCopy({
   reviewId: () => props.reviewId, reviewedHeadSha: () => props.reviewedHeadSha, markdown: () => props.markdown,
   options: () => ({ detail: props.detail || "compact", exclude_resolved: false }),
+});
+// 快照检查是只读请求；把结论回传给页面，仅在明确 stale 时切换情景。
+watch(() => [pendingCopy.value?.status, copied.value] as const, () => {
+  if (pendingCopy.value?.status === "stale") emit("snapshot", "stale");
+  else if (copied.value) emit("snapshot", "current");
 });
 const rendered = computed(() => DOMPurify.sanitize(marked.parse(props.markdown || "", { async: false }) as string,
   { USE_PROFILES: { html: true }, FORBID_TAGS: ["style"] }));
