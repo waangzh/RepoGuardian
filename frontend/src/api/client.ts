@@ -98,8 +98,11 @@ export function getPublicationPlan(taskId: string, signal?: AbortSignal): Promis
   return request<PublicationPlan>(`/api/reviews/${encodeURIComponent(taskId)}/publication-plan`, { signal });
 }
 
-export function checkReviewComment(taskId: string, signal?: AbortSignal) {
-  return request<import('../types/publication').ReviewCommentCheck>(`/api/reviews/${encodeURIComponent(taskId)}/review-comment-check`, { method: 'POST', signal });
+export function checkReviewComment(taskId: string, signal?: AbortSignal, options?: import('../types/publication').ReviewCommentOptions) {
+  return request<import('../types/publication').ReviewCommentCheck>(`/api/reviews/${encodeURIComponent(taskId)}/review-comment-check`, { method: 'POST', signal, body: JSON.stringify(options) });
+}
+export function previewReviewComment(taskId: string, options: import('../types/publication').ReviewCommentOptions, signal?: AbortSignal) {
+  return request<import('../types/publication').ReviewCommentCheck>(`/api/reviews/${encodeURIComponent(taskId)}/review-comment-preview`, { method: 'POST', signal, body: JSON.stringify(options) });
 }
 
 async function request<T>(path: string, init?: RequestInit, conflictMessage: string | null = '方案已失效或任务状态冲突，请重新预览后确认。'): Promise<T> {

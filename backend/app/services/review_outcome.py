@@ -8,6 +8,7 @@ from app.models.publication import CoverageKind, OutcomeReason as Reason, Review
 from app.models.review import ReviewTask
 from app.models.review_runtime import TaskRuntimeReport
 from app.services.review_publication import select_publication_findings
+from app.services.review_validation_digest import validation_digest
 
 
 def snapshot_valid(task: ReviewTask) -> bool:
@@ -82,7 +83,7 @@ def derive_review_outcome(task: ReviewTask, *, publishable_count: int | None = N
                          confirmed_count=confirmed, publishable_count=publishable, unresolved_count=unresolved,
                          total_goals=total, examined_goals=examined, incomplete_investigations=investigations,
                          reason_codes=reasons,
-                         dynamic_validation="not_executed",
+                         dynamic_validation=validation_digest(task)[0],
                          finding_conclusion="confirmed" if confirmed else "unresolved" if unresolved else
                              "unknown" if unknown else "no_confirmed_findings",
                          review_completeness=CoverageKind.UNKNOWN if not total else CoverageKind.PARTIAL if

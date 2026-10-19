@@ -34,7 +34,13 @@ def project_task_runtime(runtime, steps, goals, *, termination_reason, budget=No
         status = "unsupported" if goal.unsupported_reason else result.disposition.value if result else "not_examined"
         outcomes.append({**goal.model_dump(mode="json"), "status": status,
                          "reason": goal.unsupported_reason or (result.reason if result else "no_accepted_examination"),
-                         "result_id": result.result_id if result else None})
+                         "result_id": result.result_id if result else None,
+                         **({"evidence_ids": result.evidence_ids,
+                             "snapshot_head_sha": result.snapshot_head_sha,
+                             "snapshot_base_sha": next(step.executor.spec.snapshot_base_sha for step in steps.values()
+                                 if goal.goal_id in step.executor.projection.examinations),
+                             "intent_assessments": [value.model_dump(mode="json") for value in result.intent_assessments]}
+                            if result and result.intent_assessments else {})})
     derivation = runtime.derivation
     investigations = []
     for step in steps.values():

@@ -29,7 +29,7 @@ from app.models.review import (
 from app.models.review_runtime import TaskRuntimeRetryResult
 from app.models.quick_preview import QuickPreviewRequest, QuickPreviewResponse
 from app.tools.github_tool import GitHubToolError
-from app.models.publication import PublicationPlan, ReviewCommentCheck
+from app.models.publication import PublicationPlan, ReviewCommentCheck, ReviewCommentOptions
 from app.models.persistence import (
     PatchDetail,
     ReviewIssueDetail,
@@ -331,13 +331,16 @@ async def _report_dispositions(service, task_id):
 
 
 @router.post("/{task_id}/review-comment-check", response_model=ReviewCommentCheck)
-async def check_review_comment(task_id: str):
+async def check_review_comment(task_id: str, options: ReviewCommentOptions | None = None):
     """只读检查复制时的 Head；不使用发布权限、不保存发布状态。"""
     import re
     from datetime import datetime, timezone
-    from app.services.publication_renderer import markdown_text
+    from app.services.publication_renderer import markdown_text, render_review_comment, comment_selection
 
     plan = await get_publication_plan(task_id)
+    options = options or ReviewCommentOptions()
+    included, omitted, retained = comment_selection(plan, exclude_resolved=options.exclude_resolved)
+    comment = render_review_comment(plan, detail=options.detail, exclude_resolved=options.exclude_resolved)
     latest = None
     state = "unknown"
     if plan.snapshot.head_sha and re.fullmatch(r"[a-f0-9]{40,64}", plan.snapshot.head_sha):
@@ -355,7 +358,24 @@ async def check_review_comment(task_id: str):
             f"审查 Head：{markdown_text(plan.snapshot.head_sha or '未记录', 64)}；"
             f"远端 Head：{markdown_text(latest or '未知', 64)}。此状态仅代表检查时点。")
     return ReviewCommentCheck(review_id=task_id, status=state, reviewed_head_sha=plan.snapshot.head_sha,
-        latest_head_sha=latest, checked_at=checked_at, review_comment_markdown=plan.review_comment_markdown + note)
+        latest_head_sha=latest, checked_at=checked_at, review_comment_markdown=comment + note,
+        included_finding_keys=[item.finding_key for item in included], omitted_finding_keys=[item.finding_key for item in omitted],
+        retained_blocking_keys=retained, detail=options.detail)
+
+
+@router.post("/{task_id}/review-comment-preview", response_model=ReviewCommentCheck)
+async def preview_review_comment(task_id: str, options: ReviewCommentOptions):
+    """选择预览只读取本地事实；复制时仍必须重新检查远端 Head。"""
+    from datetime import datetime, timezone
+    from app.services.publication_renderer import render_review_comment, comment_selection
+
+    plan = await get_publication_plan(task_id)
+    included, omitted, retained = comment_selection(plan, exclude_resolved=options.exclude_resolved)
+    return ReviewCommentCheck(review_id=task_id, status="unknown", reviewed_head_sha=plan.snapshot.head_sha,
+        checked_at=datetime.now(timezone.utc), detail=options.detail,
+        review_comment_markdown=render_review_comment(plan, detail=options.detail, exclude_resolved=options.exclude_resolved),
+        included_finding_keys=[item.finding_key for item in included], omitted_finding_keys=[item.finding_key for item in omitted],
+        retained_blocking_keys=retained)
 
 
 @router.get("/{task_id}/report")

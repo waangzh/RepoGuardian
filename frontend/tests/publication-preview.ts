@@ -9,6 +9,7 @@ import "../src/styles/prototype.css";
 import "../src/styles/workspace.css";
 
 const fixtures = await (await fetch("/tests/fixtures/publication-plans.json")).json() as Record<string, { task: ReviewTask; plan: PublicationPlan }>;
+const variants = await (await fetch("/tests/fixtures/review-comment-options.json")).json();
 const choice = ref("findings");
 const task = ref(fixtures.findings!.task);
 const section = ref<ReviewSection>('report');
@@ -17,11 +18,14 @@ const copiedText = ref('');
 Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { copiedText.value = text; } } });
 const originalFetch = window.fetch.bind(window);
 window.fetch = async (input, init) => {
-  if (typeof input === 'string' && input.endsWith('/review-comment-check')) {
+  if (typeof input === 'string' && (input.endsWith('/review-comment-check') || input.endsWith('/review-comment-preview'))) {
     const plan = fixtures[choice.value]!.plan;
-    return new Response(JSON.stringify({ review_id: task.value.id, status: snapshotState.value,
+    const options = JSON.parse(typeof init?.body === 'string' ? init.body : '{}');
+    const variant = variants[choice.value][`${options.detail || 'compact'}:${!!options.exclude_resolved}`];
+    const preview = input.endsWith('/review-comment-preview');
+    return new Response(JSON.stringify({ ...variant, review_id: task.value.id, status: preview ? 'unknown' : snapshotState.value,
       reviewed_head_sha: plan.snapshot.head_sha, latest_head_sha: snapshotState.value === 'current' ? plan.snapshot.head_sha : 'd'.repeat(40),
-      checked_at: new Date().toISOString(), review_comment_markdown: plan.review_comment_markdown + `\n\n快照检查：${snapshotState.value}` }),
+      checked_at: new Date().toISOString(), review_comment_markdown: variant.review_comment_markdown + (preview ? '' : `\n\n快照检查：${snapshotState.value}`) }),
       { headers: { 'Content-Type': 'application/json' } });
   }
   if (typeof input === "string" && input.endsWith("/publication-plan")) {

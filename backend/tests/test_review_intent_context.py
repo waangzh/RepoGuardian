@@ -28,6 +28,10 @@ def test_intent_is_opt_in_bounded_and_part_of_frozen_spec_identity():
     assert len(active.pr_intent_context) == 4_000 and active.pr_intent_context.endswith("…")
     assert stable_hash(active.model_dump(mode="json")) != stable_hash(historical.model_dump(mode="json"))
     assert ReviewRunSpec.model_validate(active.model_dump(mode="json")) == active
+    structured = frozen_runtime_spec(state, {**config, "pr_intent_contract": "pr-intent-assessment-v1"}, budget)
+    assert structured.intent_assessment_contract == "structured-intent-v1"
+    assert structured.pr_intent_context == active.pr_intent_context
+    assert "intent_assessment_contract" not in historical.model_dump(mode="json")
 
 
 async def test_existing_budgeted_inspection_compares_author_intent_and_preserves_actual_input(tmp_path):
