@@ -67,7 +67,7 @@ test("结果概览按情景渲染主操作与复制语义", async () => {
     const expectations = [
       ["clean", "查看完整报告", "复制 PR 评论", false],
       ["findings", "查看问题", "复制 PR 评论", false],
-      ["inconclusive", "查看缺口", "复制审查记录", false],
+      ["inconclusive", "查看证据缺口", "复制审查记录", false],
       ["failed", "查看错误", "复制部分审查记录", true],
       ["cancelled", "查看已保留结果", "复制部分审查记录", true],
     ];

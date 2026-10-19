@@ -26,11 +26,15 @@ for (const { task } of Object.values(fixtures)) {
       { kind: 'added', content: '    return None', old_line_no: null, new_line_no: 7 },
     ] }] }];
 }
-const choice = ref("findings");
-const task = ref(fixtures.findings!.task);
-const section = ref<ReviewSection>('report');
+const params = new URLSearchParams(location.search);
+const initialScene = params.get("scene") || "findings";
+const choice = ref(fixtures[initialScene] ? initialScene : "findings");
+const task = ref(fixtures[choice.value]!.task);
+const section = ref<ReviewSection>(params.get("section") === "overview" ? "overview" : "report");
 const snapshotState = ref('current');
 const copiedText = ref('');
+const createRequested = ref(false);
+let summaryFailures = 0;
 const shell = new URLSearchParams(location.search).has('shell');
 const mobileOpen = ref(false);
 Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { copiedText.value = text; } } });
@@ -54,9 +58,12 @@ window.fetch = async (input, init) => {
     return new Response(JSON.stringify({ items: fixtures[choice.value]!.plan.digest.findings || [] }), { headers: { 'Content-Type': 'application/json' } });
   }
   if (typeof input === "string" && input.endsWith("/publication-summary")) {
-    if (choice.value === "error") return new Response("加载失败", { status: 503 });
-    const fixture = fixtures[choice.value];
-    return new Response(JSON.stringify(fixture!.summary), { headers: { "Content-Type": "application/json" } });
+    if (choice.value === "error" && summaryFailures > 0) {
+      summaryFailures -= 1;
+      return new Response("加载失败", { status: 503 });
+    }
+    const fixture = fixtures[choice.value === "error" ? "inconclusive" : choice.value];
+    return new Response(JSON.stringify({ ...fixture!.summary, review_id: task.value.id }), { headers: { "Content-Type": "application/json" } });
   }
   if (typeof input === "string" && input.endsWith("/publication-plan")) {
     if (choice.value === "error") return new Response("加载失败", { status: 503 });
@@ -67,19 +74,23 @@ window.fetch = async (input, init) => {
 };
 function workspace() {
   return h(ReviewWorkspace, { task: task.value, report: task.value.report_markdown, statusText: task.value.status,
-    section: section.value, 'onNavigate': (value: ReviewSection) => { section.value = value; }, duration: "1 秒", cancelling: false, retryingUnitId: null });
+    section: section.value, 'onNavigate': (value: ReviewSection) => { section.value = value; },
+    onCreate: () => { createRequested.value = true; }, duration: "1 秒", cancelling: false, retryingUnitId: null });
 }
 createApp({ setup: () => () => h("div", [
   h("div", { style: "padding:16px;background:#fff3dd;display:flex;gap:16px" }, [
     h("strong", "合成快照 · 后端发布计划验收"),
     h("select", { "aria-label": "验收场景", value: choice.value, onChange: (event: Event) => {
       choice.value = (event.target as HTMLSelectElement).value;
+      createRequested.value = false;
+      summaryFailures = choice.value === "error" ? 1 : 0;
       task.value = structuredClone(fixtures[choice.value === "error" ? "inconclusive" : choice.value]!.task);
       if (choice.value === "error") task.value.id = "preview-error";
     } }, ["findings", "clean", "inconclusive", "failed", "cancelled", "withheld", "error"].map(value => h("option", { value }, value))),
   ]),
   h('select', { 'aria-label': '快照场景', value: snapshotState.value, onChange: (event: Event) => { snapshotState.value = (event.target as HTMLSelectElement).value; copiedText.value = ''; } }, ['current', 'stale', 'unknown'].map(value => h('option', {value}, value))),
   h('output', { 'aria-label': '已复制内容', style: 'display:block;max-height:120px;overflow:auto' }, copiedText.value),
+  createRequested.value ? h('output', { 'aria-label': '重新审查入口' }, '已请求重新分析 PR（合成验收，不创建真实任务）') : null,
   shell ? h('div', { class: 'rg-app app' }, [
     h(AppSidebar, { modelValue: 'dashboard', section: section.value, hasReview: true, taskActive: false, mobileOpen: mobileOpen.value, busy: false,
       onSection: (value: ReviewSection) => { section.value = value; mobileOpen.value = false; }, onClose: () => { mobileOpen.value = false; } }),
