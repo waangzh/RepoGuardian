@@ -19,9 +19,12 @@ test("Outcome 显示后端数量，不根据问题列表推断 Clean", async () 
       const html = await renderToString(createSSRApp(component, { plan }));
       for (const expected of [label, "3", "2", "1", "8 / 10", "scope_incomplete", "snapshot_mismatch"]) assert.ok(html.includes(expected));
       assert.match(html, /逐条问题正文与发布状态/);
-      // 三态合并建议始终展示，当前结论与服务端 label 一致。
-      for (const option of ["未发现阻断性问题", "建议修改后再合并", "需要补充检查"]) assert.ok(html.includes(option));
-      assert.match(html, /class="(?:danger|warning|success) active merge-option"/);
+      // 合并建议只展示当前结论，文案与服务端 label 一致，其他选项不出现。
+      assert.equal(html.match(/class="(?:success|danger|warning) merge-option active"/g)?.length, 1);
+      assert.equal(html.match(/class="[^"]*merge-option active/g)?.length, 1);
+      for (const other of ["未发现阻断性问题", "建议修改后再合并", "需要补充检查"].filter(value => value !== label)) {
+        assert.ok(!html.includes(other));
+      }
     }
   } finally { await server.close(); }
 });

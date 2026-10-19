@@ -141,18 +141,15 @@
   .runtime-findings-list code { grid-column: 2; }
 }
 
-/* 合并建议三态：单卡片纵向列表，与对外示例一致；当前结论高亮。 */
-.merge-options { margin: 18px 0 14px; padding: 0; list-style: none; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); overflow: hidden; }
-.merge-option { display: flex; align-items: flex-start; gap: 12px; padding: 16px 20px; color: var(--text-secondary); }
-.merge-option + .merge-option { border-top: 1px solid var(--border); }
-.merge-option strong { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--text-primary); font-size: 1rem; }
+/* 合并建议只展示当前结论；图标与左侧色条区分三态。 */
+.merge-options { margin: 18px 0 14px; padding: 0; list-style: none; }
+.merge-option { display: flex; align-items: flex-start; gap: 12px; padding: 16px 20px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); color: var(--text-secondary); }
+.merge-option strong { display: block; color: var(--text-primary); font-size: 1rem; }
 .merge-option p { margin: 5px 0 0; font-size: .875rem; line-height: 1.7; }
 .merge-option .app-icon { margin-top: 2px; }
+.merge-option.success { box-shadow: inset 3px 0 0 var(--success); }
 .merge-option.success .app-icon { color: var(--success); }
+.merge-option.danger { box-shadow: inset 3px 0 0 var(--danger); }
 .merge-option.danger .app-icon { color: var(--danger); }
+.merge-option.warning { box-shadow: inset 3px 0 0 var(--warning); }
 .merge-option.warning .app-icon { color: var(--warning); }
-.merge-option.active { background: var(--surface-subtle); }
-.merge-option.success.active { box-shadow: inset 3px 0 0 var(--success); }
-.merge-option.danger.active { box-shadow: inset 3px 0 0 var(--danger); }
-.merge-option.warning.active { box-shadow: inset 3px 0 0 var(--warning); }
-.merge-current { padding: 1px 7px; border-radius: 999px; background: var(--surface-muted); color: var(--text-muted); font-size: .75rem; font-weight: 600; }
