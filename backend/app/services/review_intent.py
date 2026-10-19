@@ -9,6 +9,9 @@ _BULLET = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*)$")
 _RULE = re.compile(r"^\s*(?:[-*_]\s*){3,}$")
 _BOLD_LABEL = re.compile(r"^\s*\*\*[^*]+\*\*\s*[：:]?\s*$")
 _SENTENCE = re.compile(r"[^。！？!?]+[。！？!?]?")
+# 英文句号不参与中英文通用切分（避免小数、缩写）；仅在句号后接空白与大写/代码时切分。
+_EN_SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9`*_(\[])")
+_WHITESPACE = re.compile(r"\s+")
 # 这些标题通常描述测试、备注或参考信息，不是作者要求实现的目标。
 _NON_GOAL_HEADING = re.compile(
     r"^(?:背景|动机|上下文|测试|测试计划|测试说明|验证|验证方式|如何验证|备注|注意|注意事项|"
@@ -73,8 +76,41 @@ def _split_block(block: list[str]) -> list[str]:
         items.append(" ".join(current).strip())
     targets: list[str] = []
     for item in items:
-        targets.extend(part.strip() for part in _SENTENCE.findall(item) if part.strip())
+        for chunk in _SENTENCE.findall(item):
+            targets.extend(part.strip() for part in _EN_SENTENCE.split(chunk) if part.strip())
     return targets
+
+
+def normalized_target(value: str) -> str:
+    """Markdown 换行与空白不影响目标引用；其他字符保持原样。"""
+    return _WHITESPACE.sub(" ", value).strip()
+
+
+def matches_author_target(quote: str | None, targets: list[str]) -> bool:
+    """模型可引用完整目标或其中的完整句子。
+
+    英文 PR 描述按段落切分时，模型常引用段落内的一个完整句子；空白归一后
+    允许引用是目标的子串，但不接受目标之外的改写或拼接。
+    """
+    candidate = normalized_target(quote or "")
+    if not candidate:
+        return False
+    normalized = [normalized_target(target) for target in targets]
+    for target in normalized:
+        if candidate == target:
+            return True
+        if len(candidate) >= 24 and candidate in target:
+            return True
+    # 模型也可能原样引用相邻的完整句子（例如连续两句）；只接受连续拼接。
+    for start in range(len(normalized)):
+        joined = normalized[start]
+        for end in range(start + 1, len(normalized)):
+            joined = normalized_target(joined + " " + normalized[end])
+            if len(joined) > len(candidate):
+                break
+            if joined == candidate:
+                return True
+    return False
 
 
 def author_targets(context: str | None) -> list[str]:

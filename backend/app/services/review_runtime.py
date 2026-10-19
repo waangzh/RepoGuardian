@@ -174,6 +174,8 @@ class TaskReviewRuntime:
             item.reason = "repeated_read_no_progress"
         elif observation.get("errors") or pending:
             state = "failed"
+            # 纠错机会已用尽仍被拒绝：区分“模型输出未通过验收”和执行故障。
+            item.reason = "model_response_rejected"
         else:
             state = "completed"
         if state == "ready":
@@ -273,7 +275,15 @@ class TaskReviewRuntime:
                         return "experiment_unit_deadline"
                     if states <= {"completed"}:
                         return "plan_exhausted"
-                    if states & {"unknown", "result_missing", "failed"}:
+                    if states & {"unknown", "result_missing"}:
+                        return "technical_failure"
+                    if "failed" in states:
+                        rejected = [item for item in self._items.values()
+                                    if item.state.value == "failed" and item.reason == "model_response_rejected"]
+                        failed = [item for item in self._items.values() if item.state.value == "failed"]
+                        # 全部失败项都只是模型输出未通过验收时，保留可诊断的终止原因。
+                        if failed and len(rejected) == len(failed):
+                            return "model_response_rejected"
                         return "technical_failure"
                     return "no_progress"
                 return "cancelled"

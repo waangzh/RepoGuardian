@@ -998,7 +998,8 @@ class ReviewService:
         task.task_runtime_report = rebuilt.task_runtime_report
         if task.status == TaskStatus.failed and task.task_runtime_report:
             from app.services.task_review_projection import runtime_failure_summary
-            task.error = runtime_failure_summary(task.task_runtime_report.get("diagnostics") or [])
+            task.error = runtime_failure_summary(task.task_runtime_report.get("diagnostics") or [],
+                termination_reason=task.task_runtime_report.get("termination_reason"))
         else:
             task.error = rebuilt.error
         task.task_runtime_retry_unit_id = rebuilt.task_runtime_retry_unit_id

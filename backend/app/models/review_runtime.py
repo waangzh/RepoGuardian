@@ -102,7 +102,7 @@ class ReviewRunSpec(BaseModel):
     review_strategy: dict = Field(default_factory=dict)
     pr_intent_context: str | None = Field(default=None, min_length=1, max_length=4_000)
     pr_intent_context_truncated: bool | None = Field(default=None, strict=True)
-    intent_assessment_contract: Literal["structured-intent-v1"] | None = None
+    intent_assessment_contract: Literal["structured-intent-v1", "structured-intent-v2"] | None = None
 
     @model_serializer(mode="wrap")
     def serialize_strategy(self, handler):

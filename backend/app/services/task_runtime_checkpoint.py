@@ -389,4 +389,6 @@ class TaskRuntimeCheckpoint:
                 state = "ready"
             else:
                 state = "failed"
+                # 与在线推进保持同一诊断口径：模型输出未被接受而非执行故障。
+                item.reason = "model_response_rejected"
             item.state = type(item.state)("cancelled" if self.runtime.cancelled and state == "ready" else state)

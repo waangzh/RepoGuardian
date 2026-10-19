@@ -3,7 +3,35 @@
 from app.models.review_runtime import TaskRuntimeReport
 
 
-def runtime_failure_summary(diagnostics):
+REASON_HINTS = {
+    "unknown_author_target": "作者目标引用不在冻结声明中",
+    "intent_evidence_scope_mismatch": "目标对照引用超出本次检查范围",
+    "intent_evidence_outside_examination": "目标对照引用了本次检查之外的证据",
+    "intent_evidence_missing": "支持或反驳目标缺少证据",
+    "intent_examination_not_examined": "目标对照绑定到未完成的检查",
+    "missing_intent_assessment": "检查未提供作者目标对照",
+    "invalid_intent_assessment_binding": "作者目标对照未通过验收",
+    "invalid_json": "模型返回的 JSON 无法解析",
+    "invalid_response_kind": "模型返回了不支持的响应类型",
+}
+
+
+def runtime_failure_summary(diagnostics, *, termination_reason=None):
+    codes = []
+    for diagnostic in diagnostics or []:
+        if not isinstance(diagnostic, dict):
+            continue
+        for value in diagnostic.get("reason_codes") or []:
+            if isinstance(value, str) and value in REASON_HINTS and value not in codes:
+                codes.append(value)
+    if codes:
+        return "模型多次提交仍未通过服务端验收（" + "；".join(
+            f"{REASON_HINTS[code]}（{code}）" for code in codes[:3]) + "）。请重试或检查模型输出。"
+    if any(isinstance(diagnostic, dict) and diagnostic.get("category") == "model_response_rejected"
+           for diagnostic in diagnostics or []):
+        return "模型多次提交仍未通过服务端验收（model_response_rejected）；请重试或检查模型输出协议。"
+    if termination_reason == "model_response_rejected":
+        return "模型多次提交仍未通过服务端验收（model_response_rejected）；请重试或检查模型输出协议。"
     messages = {
         "model_connection_error": "模型服务连接失败（model_connection_error）",
         "model_timeout": "模型请求超时（model_timeout）",
@@ -15,6 +43,8 @@ def runtime_failure_summary(diagnostics):
         "model_request_failed": "模型请求失败（model_request_failed）",
     }
     for diagnostic in reversed(diagnostics):
+        if not isinstance(diagnostic, dict):
+            continue
         failure = diagnostic.get("provider_failure")
         if not isinstance(failure, dict) or failure.get("category") not in messages:
             continue
@@ -73,13 +103,16 @@ def project_task_runtime(runtime, steps, goals, *, termination_reason, budget=No
     if any(item.state.value == "unknown" and item.reason == "attempt_ledger_inconsistent"
            for item in runtime._items.values()):
         integrity = "inconsistent"
-    execution = ("cancelled" if runtime.cancelled else "failed" if termination_reason == "technical_failure"
+    execution = ("cancelled" if runtime.cancelled else "failed" if termination_reason in {
+                     "technical_failure", "model_response_rejected"}
                  else "running" if termination_reason == "running" else "completed")
     spec = next(iter(steps.values())).executor.spec if steps else None
+    diagnostics = _rejection_diagnostics(runtime, steps, termination_reason)
     return TaskRuntimeReport(execution_status=execution, termination_reason=termination_reason,
         pr_intent_context=spec.pr_intent_context if spec else None,
         pr_intent_context_truncated=spec.pr_intent_context_truncated if spec else None,
-        failure_summary=runtime_failure_summary(runtime.failures) if execution == "failed" else None,
+        failure_summary=(runtime_failure_summary(diagnostics, termination_reason=termination_reason)
+                         if execution == "failed" else None),
         readable_scope_hash=spec.readable_scope_hash if spec and spec.readable_scope_files else None,
         readable_file_count=len(spec.readable_scope_files) if spec else None,
         scope_complete=all(value["status"] == "examined" for value in outcomes),
@@ -89,10 +122,68 @@ def project_task_runtime(runtime, steps, goals, *, termination_reason, budget=No
                             if value["status"] == "hint"] if derivation else [],
         sent_calls=sum(attempt.sent for attempt in attempts), settled_tokens=budget.settled_actual if budget else 0,
         unknown_attempts=len(unknown), total_tokens=budget.settled_actual if budget and integrity == "complete" else None,
-        diagnostics=runtime.failures,
+        diagnostics=diagnostics,
         work_items=[{**item, "last_observation": steps[item["work_item_id"]].last_observation,
                      "tool_observations": steps[item["work_item_id"]].tool_observations}
                     for item in runtime.snapshot()])
+
+
+_PROVIDER_FIELDS = {"category", "error_type", "attempts", "status_code", "cause_types"}
+_DIAGNOSTIC_FIELDS = {"stage", "error_type", "provider_failure", "work_item_id", "category",
+                      "reason_codes", "format_corrections"}
+_ALLOWED_ERROR_TYPES = {
+    "APIConnectionError", "APITimeoutError", "AuthenticationError", "PermissionDeniedError",
+    "RateLimitError", "BadRequestError", "NotFoundError", "UnprocessableEntityError",
+    "InternalServerError", "LLMProviderError",
+}
+
+
+def _safe_diagnostic(failure: dict) -> dict:
+    """审计导出只保留固定分类、计数与受控原因代码，不携带异常文本。"""
+    value = {key: failure[key] for key in _DIAGNOSTIC_FIELDS if key in failure}
+    if value.get("error_type") not in _ALLOWED_ERROR_TYPES:
+        value.pop("error_type", None)
+    if not isinstance(value.get("reason_codes"), list):
+        value.pop("reason_codes", None)
+    provider = failure.get("provider_failure")
+    if isinstance(provider, dict):
+        safe = {key: provider[key] for key in _PROVIDER_FIELDS if key in provider}
+        # error_type 与 cause_types 只接受固定枚举，旧记录中的自由文本一律丢弃。
+        if safe.get("error_type") not in _ALLOWED_ERROR_TYPES:
+            safe.pop("error_type", None)
+        if isinstance(safe.get("cause_types"), list):
+            safe["cause_types"] = [value for value in safe["cause_types"]
+                                   if value in _ALLOWED_ERROR_TYPES or value in {
+                                       "ConnectError", "ProxyError", "ConnectTimeout", "ReadTimeout",
+                                       "WriteTimeout", "PoolTimeout", "ReadError", "WriteError",
+                                       "RemoteProtocolError", "LocalProtocolError", "ConnectionRefusedError",
+                                       "ConnectionResetError", "SSLCertVerificationError", "SSLError", "gaierror"}]
+        value["provider_failure"] = safe
+    return value
+
+
+def _rejection_diagnostics(runtime, steps, termination_reason):
+    """模型输出被拒时补充可诊断类别；不导出模型原文或自由文本。"""
+    diagnostics = [_safe_diagnostic(failure) for failure in runtime.failures if isinstance(failure, dict)]
+    rejected = [item for item in runtime._items.values()
+                if item.state.value == "failed" and item.reason == "model_response_rejected"]
+    if termination_reason != "model_response_rejected" or not rejected:
+        return diagnostics
+    codes: list[str] = []
+    corrections = 0
+    for item in rejected:
+        step = steps.get(item.work_item_id)
+        observation = getattr(step, "last_observation", {}) or {}
+        for error in observation.get("errors") or []:
+            reason = error.get("reason") if isinstance(error, dict) else None
+            if isinstance(reason, str) and reason not in codes:
+                codes.append(reason)
+        if step is not None:
+            corrections = max(corrections, step.executor.work_item.format_corrections)
+    diagnostics.append({"category": "model_response_rejected", "stage": "task_advance",
+                        "reason_codes": codes, "format_corrections": corrections,
+                        "detail": "exception_text_omitted_for_safety"})
+    return diagnostics
 
 
 def relationship_leads_for_item(leads, identity):
