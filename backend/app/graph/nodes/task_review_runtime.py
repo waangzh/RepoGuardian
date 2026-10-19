@@ -74,7 +74,7 @@ def task_runtime_configuration(model=None, *, provider=None):
     return {"provider": provider_name, "model": selected_model,
         "prompt_version": "task-review-prompt-v6",
         "publication_contract": "claim-publication-v1",
-        "pr_intent_contract": "pr-intent-assessment-v3",
+        "pr_intent_contract": "pr-intent-assessment-v4",
         # 新任务冻结具体关系规划；历史手工配置缺省为 legacy，恢复时不能静默换规划器。
         "risk_planner_version": "risk-planner-v6",
         "call_resolution_version": "import-evidence-v5",
@@ -144,12 +144,12 @@ def frozen_runtime_spec(state, configuration, budget, *, readable_files=()):
     intent_truncated = None
     contract = configuration.get("pr_intent_contract")
     if contract in {"pr-intent-context-v1", "pr-intent-assessment-v1", "pr-intent-assessment-v2",
-                    "pr-intent-assessment-v3"}:
+                    "pr-intent-assessment-v3", "pr-intent-assessment-v4"}:
         pr = state.get("pr_info") or {}
         statement = "\n\n".join(value.strip() for value in (pr.get("title"), pr.get("body"))
                                  if isinstance(value, str) and value.strip())
         if statement:
-            if contract in {"pr-intent-assessment-v2", "pr-intent-assessment-v3"}:
+            if contract in {"pr-intent-assessment-v2", "pr-intent-assessment-v3", "pr-intent-assessment-v4"}:
                 intent_truncated = len(statement) > 4_000
             intent_context = statement[:3_999] + "…" if len(statement) > 4_000 else statement
     return ReviewRunSpec(run_id=state["task_id"], snapshot_head_sha=state["head_sha"],
@@ -162,10 +162,12 @@ def frozen_runtime_spec(state, configuration, budget, *, readable_files=()):
         readable_scope_files=tuple(sorted(readable_files)),
         pr_intent_context=intent_context,
         pr_intent_context_truncated=intent_truncated,
-        # v3 允许“局部观察证据”只覆盖目标内的一段；v1/v2 保持冻结行为。
-        intent_assessment_contract=(("structured-intent-v2" if contract == "pr-intent-assessment-v3"
+        # v3 允许“局部观察证据”只覆盖目标内的一段；v4 进一步把对照改为可选辅助分析。
+        intent_assessment_contract=(("structured-intent-v3" if contract == "pr-intent-assessment-v4"
+            else "structured-intent-v2" if contract == "pr-intent-assessment-v3"
             else "structured-intent-v1") if intent_context and contract in {
-                "pr-intent-assessment-v1", "pr-intent-assessment-v2", "pr-intent-assessment-v3"} else None),
+                "pr-intent-assessment-v1", "pr-intent-assessment-v2", "pr-intent-assessment-v3",
+                "pr-intent-assessment-v4"} else None),
         review_strategy={key: value for key, value in (configuration.get("effective_plan") or {}).items()
                          if key in {"depth", "focus"}})
 

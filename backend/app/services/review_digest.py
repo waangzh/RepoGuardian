@@ -122,13 +122,13 @@ def _change_understanding(digest, task, report) -> ChangeUnderstanding:
         contradicted = sum(item.status == "contradicted" for item in digest.intent_assessments)
         not_applicable = sum(item.status == "not_applicable" for item in digest.intent_assessments)
         unresolved = total - supported - contradicted - not_applicable
-        parts = [f"作者目标共 {total} 项"]
+        parts = [f"作者声明片段共 {total} 项"]
         if supported:
             parts.append(f"{supported} 项获得局部静态证据支持")
         if contradicted:
-            parts.append(f"{contradicted} 项存在静态证据矛盾")
+            parts.append(f"{contradicted} 项与代码存在静态证据矛盾")
         if unresolved:
-            parts.append(f"{unresolved} 项证据不足或尚未核验")
+            parts.append(f"{unresolved} 项未逐项核验（辅助信息，不作为合并阻断）")
         if not_applicable:
             parts.append(f"{not_applicable} 项当前检查不适用")
         alignment = "，".join(parts) + "。局部观察不构成作者全部目标已实现的验收结论。"

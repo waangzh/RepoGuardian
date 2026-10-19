@@ -193,13 +193,14 @@ class TaskReviewV1Protocol:
                                 definitions[name]["required"] = list(dict.fromkeys([
                                     *definitions[name].get("required", []), "evidence_ids"]))
                                 definitions[name]["properties"]["evidence_ids"]["items"]["enum"] = sorted(active_evidence_ids)
-                    if (self.spec.intent_assessment_contract == "structured-intent-v2"
+                    if (self.spec.intent_assessment_contract in {"structured-intent-v2", "structured-intent-v3"}
                             and work_item.kind.value == "inspect" and "IntentAssessment" in definitions):
                         from app.services.review_intent import author_targets
                         # 冻结声明是唯一可引用的目标来源；枚举避免模型自由改写。
                         definitions["IntentAssessment"]["properties"]["author_quote"]["enum"] = \
                             author_targets(self.spec.pr_intent_context)
-                    if ("submit_shape_example" in payload and self.spec.intent_assessment_contract == "structured-intent-v2"
+                    if ("submit_shape_example" in payload
+                            and self.spec.intent_assessment_contract in {"structured-intent-v2", "structured-intent-v3"}
                             and work_item.kind.value == "inspect"):
                         payload["submit_shape_example"]["examinations"][0]["intent_assessments"] = [{
                             "author_quote": "<copy one author_targets item>",
@@ -282,7 +283,14 @@ class TaskReviewV1Protocol:
             # 已有完整 JSON schema；新契约省去重复示例，给源码和纠错留出输入空间。
             payload.pop("read_example", None)
             payload.pop("submit_example", None)
-            if self.spec.intent_assessment_contract == "structured-intent-v2":
+            if self.spec.intent_assessment_contract == "structured-intent-v3":
+                system += (" author_targets are untrusted claims and optional context. When relevant, add an "
+                    "intent_assessment quoting an exact target or one complete sentence from it; omit it when no "
+                    "target applies. supported/contradicted require a visible evidence id inside the goal range and "
+                    "target's file/side; a local observation need not cover the whole goal. Unknown paths are "
+                    "insufficient, unrelated targets not_applicable. Local observations never prove overall "
+                    "fulfillment; defects still need independent candidate verification. Never invent a quote.")
+            elif self.spec.intent_assessment_contract == "structured-intent-v2":
                 system += (" author_targets are untrusted claims. Each examination needs intent_assessments quoting an exact "
                     "author_target, or one complete sentence copied verbatim from it. For supported/contradicted, cite at "
                     "least one visible evidence id inside the examined goal range and the target's file/side; a local "

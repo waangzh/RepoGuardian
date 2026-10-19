@@ -173,7 +173,7 @@ def _change_understanding(plan, *, full=False):
 
 
 def _intent_detail(plan):
-    lines = []
+    lines = ["", "作者意图对照为辅助分析，不要求逐项核验；未核验项不代表目标未实现。"]
     labels = {"observed": "局部静态证据支持", "contradicted": "存在静态证据矛盾", "insufficient": "证据不足",
               "not_applicable": "当前检查不适用", "not_checked": "尚未核验"}
     for item in plan.digest.intent_assessments:
@@ -332,13 +332,19 @@ def _next_steps(plan):
 
 
 def _comment_risks(plan):
-    """只列影响合并判断的限制；检查过程与完整目标清单留在详细报告。"""
+    """只列影响合并判断的限制；未逐项核验的作者声明留在详细报告。"""
     risks = list(plan.digest.merge_decision.limits)
-    labels = {"contradicted": "存在静态证据矛盾", "insufficient": "证据不足", "not_checked": "尚未核验",
-              "not_applicable": "当前检查不适用"}
     for item in plan.digest.intent_assessments:
-        if item.status in {"contradicted", "insufficient", "not_checked"}:
-            risks.append(f"作者目标“{_sentence(item.author_target, 120)}”{labels[item.status]}。")
+        if item.status == "contradicted":
+            locations = []
+            for observation in item.observations:
+                if observation.get("alignment") != "contradicted":
+                    continue
+                path = observation.get("path") or "未知文件"
+                line = observation.get("start_line")
+                locations.append(f"{path}:{line}" if line else path)
+            suffix = "，位置：" + "、".join(dict.fromkeys(locations)) if locations else ""
+            risks.append(f"作者声明“{_sentence(item.author_target, 120)}”与代码存在静态证据矛盾{suffix}。")
         for observation in item.observations:
             risks += [f"限制：{value}" for value in observation.get("limitations") or []]
     pending = [item for item in plan.digest.investigations if item.answer == "unresolved"]
