@@ -91,6 +91,7 @@ export interface MergeDecision {
 export interface ReviewCommentOptions {
   detail: "compact" | "full";
   exclude_resolved: boolean;
+  finding_key?: string | null;
 }
 
 export interface PublicationSnapshot {

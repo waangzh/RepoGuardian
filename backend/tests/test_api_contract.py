@@ -74,7 +74,7 @@ def test_browser_publication_fixtures_reproduce_backend_plan() -> None:
 def test_browser_copy_variants_reproduce_backend_selection():
     import json
     from app.services.publication_planner import PublicationPlanner
-    from app.services.publication_renderer import comment_selection, render_review_comment
+    from app.services.publication_renderer import comment_selection, render_review_comment, render_finding_comment
 
     folder = FRONTEND_TYPES.parents[2] / "tests" / "fixtures"
     fixtures = json.loads((folder / "publication-plans.json").read_text(encoding="utf-8"))
@@ -86,10 +86,17 @@ def test_browser_copy_variants_reproduce_backend_selection():
                  for item in base.digest.findings}
         plan = PublicationPlanner().build(task, dispositions=saved)
         for key, expected in variants[name].items():
-            detail, exclude = key.split(":")
-            included, omitted, retained = comment_selection(plan, exclude_resolved=exclude == "true")
+            detail, exclude, *identity = key.split(":", 2)
+            if identity:
+                findings = [*plan.inline_drafts, *plan.summary_findings]
+                selected = next(item for item in findings if item.finding_key == identity[0])
+                included, omitted, retained = [selected], [item for item in findings if item != selected], []
+                markdown = render_finding_comment(plan, selected)
+            else:
+                included, omitted, retained = comment_selection(plan, exclude_resolved=exclude == "true")
+                markdown = render_review_comment(plan, detail=detail, exclude_resolved=exclude == "true")
             assert expected == {"detail": detail,
-                "review_comment_markdown": render_review_comment(plan, detail=detail, exclude_resolved=exclude == "true"),
+                "review_comment_markdown": markdown,
                 "included_finding_keys": [item.finding_key for item in included],
                 "omitted_finding_keys": [item.finding_key for item in omitted], "retained_blocking_keys": retained}
 

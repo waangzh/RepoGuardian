@@ -575,7 +575,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
               <div><dt>建议</dt><dd>{{ selectedIssue.recommendation }}</dd></div>
             </dl>
             <details class="runtime-technical finding-technical"><summary>证据定位与模型详情</summary><p>{{ selectedIssue.primary_evidence.resolution_status }} · {{ selectedIssue.primary_evidence.resolution_method }} · {{ selectedIssue.primary_evidence.provenance || '未知来源' }}</p><p>模型置信度 {{ Math.round(selectedIssue.confidence * 100) }}% · 未经校准</p></details>
-            <CommentDraftPanel v-if="selectedPublicationFinding" :finding="selectedPublicationFinding" />
+            <CommentDraftPanel v-if="selectedPublicationFinding" :finding="selectedPublicationFinding" :review-id="task.id" :reviewed-head-sha="task.run_manifest?.head_sha || null" />
             <section v-if="selectedIssue.supporting_evidence.length" class="supporting-evidence">
               <h4>辅助证据</h4>
               <article v-for="evidence in selectedIssue.supporting_evidence" :key="`${evidence.file_path}:${evidence.resolved_start_line}`"><code>{{ evidence.file_path }}<template v-if="evidence.resolved_start_line">:{{ evidence.resolved_start_line }}</template></code><pre>{{ evidence.existing_code }}</pre></article>
@@ -596,7 +596,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
               <div v-if="selectedRuntimeFinding.failureScenario"><dt>触发场景</dt><dd>{{ selectedRuntimeFinding.failureScenario }}</dd></div>
               <div v-if="selectedRuntimeFinding.recommendation"><dt>建议</dt><dd>{{ selectedRuntimeFinding.recommendation }}</dd></div>
             </dl>
-            <CommentDraftPanel v-if="selectedPublicationFinding" :finding="selectedPublicationFinding" />
+            <CommentDraftPanel v-if="selectedPublicationFinding" :finding="selectedPublicationFinding" :review-id="task.id" :reviewed-head-sha="task.run_manifest?.head_sha || null" />
             <details v-if="selectedRuntimeFinding.rawReason"><summary>技术详情</summary><code>{{ selectedRuntimeFinding.rawReason }}</code></details>
           </template>
           <EmptyState v-else icon="context" title="没有选中的发现" description="请选择包含发现的变更组。" />

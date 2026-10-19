@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, onBeforeUnmount } from "vue";
-import { checkReviewComment, previewReviewComment } from "../api/client";
+import { previewReviewComment } from "../api/client";
+import { useReviewCommentCopy } from "../composables/useReviewCommentCopy";
 import type { ReviewCommentCheck } from "../types/publication";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
@@ -18,8 +19,6 @@ const props = defineProps<{
   filenamePrefix?: string;
 }>();
 
-const copied = ref(false);
-const feedback = ref("");
 const initialView = () => props.reviewMarkdown ? "comment" as const : props.userMarkdown ? "user" as const : "audit" as const;
 const reportView = ref<"user" | "comment" | "audit">(initialView());
 const detail = ref<"compact" | "full">("compact");
@@ -32,11 +31,10 @@ const currentMarkdown = computed(() => reportView.value === "comment" ? (customS
   : props.userMarkdown && reportView.value === "user" ? props.userMarkdown : props.markdown);
 const currentLabel = computed(() => reportView.value === "comment" ? "PR 评论"
   : props.userMarkdown && reportView.value === "user" ? "详细审查报告" : "技术审计记录");
-const checking = ref(false);
-const pendingCopy = ref<ReviewCommentCheck | null>(null);
-let controller: AbortController | null = null;
-function resetCopy() { controller?.abort(); controller = null; checking.value = false; pendingCopy.value = null; copied.value = false; feedback.value = ""; }
-watch([currentMarkdown, () => props.reviewId, () => props.reviewedHeadSha], resetCopy);
+const { copied, feedback, checking, pendingCopy, resetCopy, writeClipboard, copyCheckedComment, copyAcknowledged } = useReviewCommentCopy({
+  reviewId: () => props.reviewId, reviewedHeadSha: () => props.reviewedHeadSha, markdown: () => currentMarkdown.value,
+  options: () => ({ detail: detail.value, exclude_resolved: excludeResolved.value }),
+});
 watch([() => props.reviewMarkdown, () => props.userMarkdown, () => props.reviewId], () => { reportView.value = initialView(); });
 watch([detail, excludeResolved, () => props.reviewId, () => props.reviewedHeadSha, () => props.reviewMarkdown], async () => {
   resetCopy(); previewController?.abort(); selection.value = null; previewLoading.value = false;
@@ -52,7 +50,7 @@ watch([detail, excludeResolved, () => props.reviewId, () => props.reviewedHeadSh
   } catch { if (!request.signal.aborted) feedback.value = "选择预览加载失败，请重新选择；尚未复制。"; }
   finally { if (previewController === request) previewLoading.value = false; }
 }, { flush: "sync" });
-onBeforeUnmount(() => { resetCopy(); previewController?.abort(); });
+onBeforeUnmount(() => previewController?.abort());
 const reportDialog = ref<HTMLDialogElement | null>(null);
 
 const renderedMarkdown = computed(() => {
@@ -70,39 +68,7 @@ const renderedMarkdown = computed(() => {
 async function copyMarkdown() {
   if (!currentMarkdown.value || checking.value) return;
   if (reportView.value !== "comment") { await writeClipboard(currentMarkdown.value); return; }
-  if (!props.reviewId) { feedback.value = "缺少审查身份，无法检查复制快照。"; return; }
-  const id = props.reviewId;
-  const head = props.reviewedHeadSha;
-  const request = new AbortController();
-  controller?.abort(); controller = request;
-  pendingCopy.value = null; checking.value = true; copied.value = false; feedback.value = "正在检查远端 Head…";
-  try {
-    const result = await checkReviewComment(id, request.signal, { detail: detail.value, exclude_resolved: excludeResolved.value });
-    if (request.signal.aborted || controller !== request || props.reviewId !== id || props.reviewedHeadSha !== head) return;
-    if (result.review_id !== id || result.reviewed_head_sha !== (head ?? null)
-        || !["current", "stale", "unknown"].includes(result.status) || !result.review_comment_markdown
-        || (customSelection.value && result.detail !== detail.value)
-        || (result.status === "current" && (!head || result.latest_head_sha !== head))) throw new Error("快照不匹配");
-    if (result.status === "current") await writeClipboard(result.review_comment_markdown);
-    else { pendingCopy.value = result; feedback.value = result.status === "stale"
-      ? "PR 已有新提交：当前评论基于旧 Head。建议重新审查，或明确复制带旧快照说明的评论。"
-      : "未能确认远端 Head：无法判断评论是否过期。可重试，或明确复制带状态说明的评论。"; }
-  } catch { if (!request.signal.aborted) feedback.value = "快照检查失败，请重试；尚未复制。"; }
-  finally { if (controller === request) { checking.value = false; controller = null; } }
-}
-
-async function writeClipboard(content: string) {
-  try {
-    await navigator.clipboard.writeText(content);
-    copied.value = true;
-    feedback.value = "当前报告已复制。";
-  } catch { copied.value = false; feedback.value = "复制失败，请查看完整报告或导出 Markdown 文件。"; }
-}
-
-async function copyAcknowledged() {
-  const result = pendingCopy.value;
-  pendingCopy.value = null;
-  if (result) await writeClipboard(result.review_comment_markdown);
+  await copyCheckedComment();
 }
 
 function exportMarkdown(comments = false) {

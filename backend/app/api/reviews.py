@@ -330,17 +330,29 @@ async def _report_dispositions(service, task_id):
             else getattr(service, "_dispositions", {}).get(task_id, {}))
 
 
+def _comment_content(plan, options):
+    from app.services.publication_renderer import render_review_comment, render_finding_comment, comment_selection
+
+    if options.finding_key is not None:
+        findings = [*plan.inline_drafts, *plan.summary_findings]
+        selected = next((item for item in findings if item.finding_key == options.finding_key), None)
+        if selected is None:
+            raise HTTPException(status_code=409, detail="Selected finding is no longer eligible for a comment")
+        return [selected], [item for item in findings if item.finding_key != selected.finding_key], [], render_finding_comment(plan, selected)
+    included, omitted, retained = comment_selection(plan, exclude_resolved=options.exclude_resolved)
+    return included, omitted, retained, render_review_comment(plan, detail=options.detail, exclude_resolved=options.exclude_resolved)
+
+
 @router.post("/{task_id}/review-comment-check", response_model=ReviewCommentCheck)
 async def check_review_comment(task_id: str, options: ReviewCommentOptions | None = None):
     """只读检查复制时的 Head；不使用发布权限、不保存发布状态。"""
     import re
     from datetime import datetime, timezone
-    from app.services.publication_renderer import markdown_text, render_review_comment, comment_selection
+    from app.services.publication_renderer import markdown_text
 
     plan = await get_publication_plan(task_id)
     options = options or ReviewCommentOptions()
-    included, omitted, retained = comment_selection(plan, exclude_resolved=options.exclude_resolved)
-    comment = render_review_comment(plan, detail=options.detail, exclude_resolved=options.exclude_resolved)
+    included, omitted, retained, comment = _comment_content(plan, options)
     latest = None
     state = "unknown"
     if plan.snapshot.head_sha and re.fullmatch(r"[a-f0-9]{40,64}", plan.snapshot.head_sha):
@@ -367,13 +379,12 @@ async def check_review_comment(task_id: str, options: ReviewCommentOptions | Non
 async def preview_review_comment(task_id: str, options: ReviewCommentOptions):
     """选择预览只读取本地事实；复制时仍必须重新检查远端 Head。"""
     from datetime import datetime, timezone
-    from app.services.publication_renderer import render_review_comment, comment_selection
 
     plan = await get_publication_plan(task_id)
-    included, omitted, retained = comment_selection(plan, exclude_resolved=options.exclude_resolved)
+    included, omitted, retained, comment = _comment_content(plan, options)
     return ReviewCommentCheck(review_id=task_id, status="unknown", reviewed_head_sha=plan.snapshot.head_sha,
         checked_at=datetime.now(timezone.utc), detail=options.detail,
-        review_comment_markdown=render_review_comment(plan, detail=options.detail, exclude_resolved=options.exclude_resolved),
+        review_comment_markdown=comment,
         included_finding_keys=[item.finding_key for item in included], omitted_finding_keys=[item.finding_key for item in omitted],
         retained_blocking_keys=retained)
 

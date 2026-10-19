@@ -58,10 +58,12 @@ def enrich_review_digest(digest, task, report, dispositions):
                             continue
                         if assessment.author_quote != target:
                             continue
+                        needs_source = assessment.alignment in {"supported", "contradicted"}
                         bound = bool(task.run_manifest and goal.get("snapshot_head_sha") == task.run_manifest.head_sha
                             and goal.get("snapshot_base_sha") == task.run_manifest.effective_base_sha
-                            and goal.get("status") == "examined" and goal.get("result_id")
-                            and assessment.evidence_ids and set(assessment.evidence_ids).issubset(goal.get("evidence_ids") or []))
+                            and goal.get("result_id")
+                            and (not needs_source or (goal.get("status") == "examined" and assessment.evidence_ids))
+                            and set(assessment.evidence_ids).issubset(goal.get("evidence_ids") or []))
                         entry.observations.append({"goal_id": goal.get("goal_id"), "path": goal.get("target_ref"),
                             "start_line": goal.get("start_line"), "side": "base" if goal.get("target_kind") == "base_source_range" else "head",
                             "actual_behavior": assessment.actual_behavior,

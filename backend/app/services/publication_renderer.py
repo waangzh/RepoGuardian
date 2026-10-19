@@ -383,6 +383,17 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False):
     return "\n".join(lines)
 
 
+def render_finding_comment(plan, finding):
+    lines = [finding_location(plan, finding), "", finding.body_markdown]
+    view = next((item for item in plan.digest.findings if item.id == finding.finding_key), None)
+    if view:
+        lines += ["", *_human_lines(view)]
+    other_count = len(_ordered_findings(plan)) - 1
+    lines += ["", f"本评论仅针对当前选中的一个问题；另有 {other_count} 项已准入问题未包含在本条评论中。"
+        "完整审查结论、被扣留记录与未决风险请查看完整 PR 评论和详细报告。"]
+    return "\n".join(lines)
+
+
 def render_technical_audit(plan):
     import json
 

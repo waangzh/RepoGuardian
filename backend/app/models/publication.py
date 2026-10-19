@@ -4,7 +4,7 @@ from enum import StrEnum
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.review_plan import FindingView
 
@@ -188,6 +188,13 @@ class ReviewCommentOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
     detail: Literal["compact", "full"] = "compact"
     exclude_resolved: bool = False
+    finding_key: str | None = Field(default=None, min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def single_finding_scope(self):
+        if self.finding_key is not None and self.exclude_resolved:
+            raise ValueError("single finding selection cannot exclude resolved findings")
+        return self
 
 
 class ReviewCommentCheck(BaseModel):
