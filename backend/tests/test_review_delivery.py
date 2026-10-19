@@ -12,7 +12,8 @@ from test_report_service import _pr
 
 
 def test_comment_contains_inline_finding_position_and_immutable_base_link():
-    task = publishable_task(side="base", severity="high")
+    task = publishable_task(side="base", severity="high", claim="核心功能鉴权失败")
+    task.task_runtime_report["findings"][0]["issue"]["confidence"] = 0.9
     plan = PublicationPlanner().build(task)
     finding = plan.inline_drafts[0]
     # 评论是发给作者的审查意见：标题、位置与建议必须保留，但不复制完整审计正文。
@@ -20,7 +21,7 @@ def test_comment_contains_inline_finding_position_and_immutable_base_link():
     assert finding.recommendation in plan.review_comment_markdown
     # 评论中的行内定位仍链接到不可变的 Effective Base 快照（URL 路径不做 Markdown 转义）。
     assert f"/blob/{task.run_manifest.effective_base_sha}/src/a.py#L7" in plan.review_comment_markdown
-    assert "阻断问题" in plan.review_comment_markdown and "CI" in plan.review_comment_markdown
+    assert "建议修改后再合并" in plan.review_comment_markdown and "CI" in plan.review_comment_markdown
     assert plan.review_comment_markdown.count("Commit") == 1
     assert plan.user_report_markdown.index("## 已确认问题") < plan.user_report_markdown.index("## 附录：审查范围与限制")
 
@@ -50,9 +51,9 @@ def test_author_statement_and_actual_diff_are_kept_distinct_from_alignment():
             lines=[DiffLine(kind="added", content="def handle(value):", new_line_no=1)])])]
     plan = PublicationPlanner().build(task)
     assert "handle" in plan.user_report_markdown
-    assert "代码实际改变了什么" in plan.review_comment_markdown
+    assert "**实际变更：**" in plan.review_comment_markdown
     assert "修复空值异常" in plan.review_comment_markdown
-    assert "未保存独立的目标符合性核验记录" in plan.review_comment_markdown
+    assert "未保存独立的目标符合性核验记录" in plan.user_report_markdown
     assert "隐藏" not in plan.user_report_markdown and "<script>" not in plan.user_report_markdown
 
 
@@ -87,6 +88,8 @@ def test_zero_finding_report_and_comment_explain_behavior_and_answered_investiga
     # 详细报告保留已回答调查与限制；评论只列影响决策的未决事项。
     assert "调用方已切换到新的返回结构" in plan.user_report_markdown
     assert "未执行测试" in plan.user_report_markdown and "吻合与未确认" in plan.user_report_markdown
+    # 评论只保留可读的变更概述，不再展开三问式作者意图对照。
+    assert "作者想解决什么" not in plan.review_comment_markdown
     # 渲染器消费同一已构建事实，不再从原始运行数据另行判定调查状态。
     task.task_runtime_report["admitted_investigations"] = []
     assert render_user_report(task, plan) == plan.user_report_markdown

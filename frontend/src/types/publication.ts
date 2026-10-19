@@ -89,6 +89,7 @@ export interface DigestValidation {
   completed_at: string | null;
 }
 export interface MergeDecision {
+  /** review_suggestions 仅用于兼容旧冻结计划；当前后端只生成三态。 */
   status: "unavailable" | "fix_blockers" | "resolve_unknowns" | "review_suggestions" | "conditional_merge";
   label: string;
   advice: string;

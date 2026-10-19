@@ -31,6 +31,9 @@ test("概览使用统一合并建议并区分补丁结果与 Head 验证", async
     const html = await renderToString(createSSRApp(component, { plan }));
     for (const value of ["已有独立补丁结果，Head 未知", "未发现阻断性问题", "统一事实要求补查缓存路径",
       "不代表当前 Head 已通过", "调用方尚未核验"]) assert.ok(html.includes(value));
+    // 三态选项固定顺序，当前项高亮。
+    const positions = ["未发现阻断性问题", "建议修改后再合并", "需要补充检查"].map(value => html.indexOf(value));
+    assert.ok(positions.every((value, index) => value >= 0 && (index === 0 || value > positions[index - 1])));
   } finally { await server.close(); }
 });
 
