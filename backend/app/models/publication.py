@@ -105,6 +105,7 @@ class DigestValidation(BaseModel):
 
 
 class MergeDecision(BaseModel):
+    # 对外只生成三态；review_suggestions 仅为旧冻结计划的反序列化兼容。
     status: Literal["unavailable", "fix_blockers", "resolve_unknowns", "review_suggestions", "conditional_merge"] = "unavailable"
     label: str = "需要补充检查"
     advice: str = "本轮缺少有效审查事实，请重新审查后再判断是否合并。"

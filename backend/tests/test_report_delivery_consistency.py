@@ -29,9 +29,9 @@ async def test_effective_severity_agrees_across_api_digest_comment_and_merge(mon
         views = (await client.get(f"/api/reviews/{task.id}/findings")).json()["items"]
         plan = (await client.get(f"/api/reviews/{task.id}/publication-plan")).json()
     assert views[0]["severity"] == plan["digest"]["findings"][0]["severity"] == plan["inline_drafts"][0]["severity"] == expected
-    assert f"[{expected.title()}" in plan["review_comment_markdown"]
+    assert f"**[{expected.title()}" in plan["review_comment_markdown"]
     decision = plan["digest"]["merge_decision"]
-    assert decision["status"] == ("fix_blockers" if strong else "review_suggestions")
+    assert decision["status"] == ("fix_blockers" if strong else "conditional_merge")
     assert decision["blocking_finding_keys"] == (["key-a"] if strong else [])
     assert task.task_runtime_report == original
     assert finding_views(task, {"key-a": {"current": {"status": "resolved", "reason": "人工标记"}}})[0].severity == expected
@@ -89,7 +89,8 @@ async def test_accepted_not_applicable_without_evidence_is_preserved(tmp_path, d
     task.run_manifest.effective_base_sha = step.executor.spec.snapshot_base_sha
     plan = PublicationPlanner().build(task)
     assert plan.digest.intent_assessments[0].status == "not_applicable"
-    assert "当前检查不适用" in plan.review_comment_markdown
+    # 逐目标对照属于详细报告；评论只保留变更概述与其他审查结果。
+    assert "当前检查不适用" in plan.user_report_markdown
     assert "author_intent_unresolved" not in plan.digest.merge_decision.unresolved_reasons
     goal = task.task_runtime_report["initial_scope_coverage"][0]
     original = deepcopy(goal)

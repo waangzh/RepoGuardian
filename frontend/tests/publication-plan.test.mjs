@@ -8,15 +8,20 @@ test("Outcome 显示后端数量，不根据问题列表推断 Clean", async () 
   const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   try {
     const { default: component } = await server.ssrLoadModule("/src/components/review/ReviewOutcomePanel.vue");
-    for (const [kind, label] of [["clean", "未发现可行动问题"], ["findings", "发现已确认问题"], ["inconclusive", "审查结论不确定"], ["failed", "审查失败"], ["cancelled", "审查已取消"]]) {
+    for (const [kind, status, label] of [["clean", "conditional_merge", "未发现阻断性问题"],
+      ["findings", "fix_blockers", "建议修改后再合并"], ["inconclusive", "resolve_unknowns", "需要补充检查"],
+      ["failed", "unavailable", "需要补充检查"], ["cancelled", "unavailable", "需要补充检查"]]) {
       const plan = { schema_version: "review-summary-v1",
         outcome: { kind, coverage: "partial", confirmed_count: 3, publishable_count: 2, unresolved_count: 1,
         examined_goals: 8, total_goals: 10, incomplete_investigations: 1, reason_codes: ["scope_incomplete"] },
-        digest: { merge_decision: { status: "fix_blockers", label, advice: "先处理阻断问题" }, validations: [] },
+        digest: { merge_decision: { status, label, advice: "先处理阻断问题" }, validations: [] },
         withheld_findings: [{ candidate_id: "c1", reason_code: "snapshot_mismatch" }] };
       const html = await renderToString(createSSRApp(component, { plan }));
       for (const expected of [label, "3", "2", "1", "8 / 10", "scope_incomplete", "snapshot_mismatch"]) assert.ok(html.includes(expected));
       assert.match(html, /逐条问题正文与发布状态/);
+      // 三态合并建议始终展示，当前结论与服务端 label 一致。
+      for (const option of ["未发现阻断性问题", "建议修改后再合并", "需要补充检查"]) assert.ok(html.includes(option));
+      assert.match(html, /class="(?:danger|warning|success) active merge-option"/);
     }
   } finally { await server.close(); }
 });

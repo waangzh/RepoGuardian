@@ -28,12 +28,18 @@ REASON_LABELS = {
     "snapshot_missing": "审查快照缺失或身份无效", "runtime_report_missing": "缺少任务运行报告",
     "runtime_report_invalid": "任务运行报告格式无效", "unsupported_legacy_projection": "历史引擎不支持此发布协议，请查看原始审计报告",
 }
+# 对外只保留三种合并建议；review_suggestions 仅为旧冻结计划兼容。
 MERGE_LABELS = {
     "fix_blockers": "建议修改后再合并",
     "resolve_unknowns": "需要补充检查",
-    "review_suggestions": "建议评估后合并",
     "conditional_merge": "未发现阻断性问题",
     "unavailable": "需要补充检查",
+}
+MERGE_SYMBOLS = {
+    "fix_blockers": "⚠️",
+    "resolve_unknowns": "❓",
+    "conditional_merge": "✅",
+    "unavailable": "❓",
 }
 def markdown_text(value: str, limit: int = 2000) -> str:
     text = " ".join("".join(char for char in value if not unicodedata.category(char).startswith("C") or char in "\n\t").split())
@@ -119,25 +125,36 @@ def _finding_location_text(finding) -> str:
     return location
 
 
-def finding_location(plan, finding):
+def _location_href(plan, finding) -> str | None:
     anchor = finding.anchor
-    label = _finding_location_text(finding)
     # 仅从严格解析的 GitHub PR 身份生成链接，不接受仓库提供的 URL。
     from app.tools.github_tool import parse_pr_url
     try:
         owner, repo, _ = parse_pr_url(plan.digest.pr_url or "")
     except ValueError:
-        owner = repo = None
+        return None
     sha = plan.snapshot.effective_base_sha if anchor.side == "base" else plan.snapshot.head_sha
     if owner and repo and sha and re.fullmatch(r"[a-f0-9]{40,64}", sha) and anchor.start_line and anchor.side:
-        url = f"https://github.com/{quote(owner, safe='')}/{quote(repo, safe='')}/blob/{sha}/{quote(anchor.file_path, safe='/')}#L{anchor.start_line}"
-        return f"**代码位置：** [{label}]({url})"
-    return f"**代码位置：** {label}"
+        return f"https://github.com/{quote(owner, safe='')}/{quote(repo, safe='')}/blob/{sha}/{quote(anchor.file_path, safe='/')}#L{anchor.start_line}"
+    return None
+
+
+def finding_location(plan, finding):
+    label = _finding_location_text(finding)
+    href = _location_href(plan, finding)
+    return f"**代码位置：** [{label}]({href})" if href else f"**代码位置：** {label}"
 
 
 def merge_heading(plan):
     decision = plan.digest.merge_decision
     return MERGE_LABELS.get(decision.status, decision.label), decision.advice
+
+
+def merge_verdict_line(plan) -> str:
+    """评论与概览共用的单行结论：符号 + 结论 + 合并建议。"""
+    label, _ = merge_heading(plan)
+    symbol = MERGE_SYMBOLS.get(plan.digest.merge_decision.status, "❓")
+    return f"{symbol} 结论：{label}"
 
 
 def merge_advice(plan):
@@ -358,10 +375,12 @@ def _comment_risks(plan):
 
 
 def _comment_finding_lines(plan, finding, index, view, *, full):
+    """按对外评论结构渲染单条问题：等级、标题、位置、影响、建议。"""
     severity = finding.severity.title()
     category = f" · {markdown_text(finding.category.title(), 100)}" if finding.category else ""
-    lines = [f"**{index}. [{severity}{category}] {markdown_text(finding.title, 200)}**", "",
-             finding_location(plan, finding), ""]
+    # 等级与标题同一行，与对外评论示例一致；位置紧随其后。
+    lines = [f"**[{severity}{category}] {markdown_text(finding.title, 200)}**", "",
+             _comment_location(plan, finding), ""]
     impact = _sentence(finding.affected_behavior)
     if impact:
         lines += [markdown_text(impact), ""]
@@ -377,6 +396,63 @@ def _comment_finding_lines(plan, finding, index, view, *, full):
     return lines
 
 
+def _comment_location(plan, finding) -> str:
+    """评论正文中的位置行；有严格解析的 PR 身份时使用不可变快照链接。"""
+    label = _finding_location_text(finding)
+    href = _location_href(plan, finding)
+    return f"[{label}]({href})" if href else label
+
+
+def _comment_change_overview(plan):
+    """一段可读的变更概述；未核验与限制留给“其他审查结果”。"""
+    understanding = plan.digest.change_understanding
+    author = (understanding.author_goal if understanding else plan.digest.author_goal) or ""
+    actual = understanding.actual_changes if understanding else ""
+    lines = ["## 变更概述", ""]
+    if author and author != "未记录明确的作者目标。":
+        lines += [f"**作者目标：** {markdown_text(author, 400)}", ""]
+    lines += [f"**实际变更：** {markdown_text(actual or '未保存可归纳的实际变更。', 800)}"]
+    if plan.digest.author_context_limitation:
+        lines += ["", "**作者目标输入限制：** " + markdown_text(plan.digest.author_context_limitation)]
+    return lines
+
+
+def _comment_other_results(plan, *, omitted, retained, withheld):
+    """其他审查结果：未决风险、验证边界与未纳入正文的记录。"""
+    lines = ["", "## 其他审查结果", ""]
+    entries = list(_comment_risks(plan))
+    if plan.digest.incomplete_goals:
+        entries.append(f"- 约定目标仍有 {len(plan.digest.incomplete_goals)} 项未完成检查。")
+    if plan.outcome.unresolved_count:
+        entries.append(f"- 另有 {plan.outcome.unresolved_count} 项候选问题尚未确认，不作为已核验缺陷。")
+    if omitted:
+        entries.append("**本次未包含的事项（人工标记已处理，不代表机器重新核验通过）：**")
+        entries += [f"- [{item.severity}] {markdown_text(item.title)}；{_finding_location_text(item)}"
+                    for item in omitted]
+    if retained:
+        entries.append(f"- {len(retained)} 项已标记处理的阻断问题仍保留正文，需在新快照重新核验。")
+    if withheld:
+        entries.append(f"- 另有 {withheld} 项机器确认记录未通过发布准入，详见完整报告；"
+                       "当前评论未将其描述为已核验问题。")
+    if entries:
+        lines += entries
+    else:
+        lines.append("本轮其余约定目标未发现达到报告门槛的问题。")
+    lines += ["", _validation_sentence(plan)]
+    return lines
+
+
+def _validation_sentence(plan) -> str:
+    state = plan.digest.validation_state
+    return {
+        "not_executed": "未执行目标仓库代码、测试或构建。",
+        "passed": "已有与当前 Head 绑定的受控验证通过记录；不代替完整 CI 或审批。",
+        "failed": "已有与当前 Head 绑定的验证失败记录，需核对失败原因。",
+        "independent_results": "已有独立补丁验证结果；补丁通过不代表当前 PR Head 已通过测试。",
+        "unknown": "动态验证状态未知；不能据此宣称目标仓库测试或构建已通过。",
+    }[state]
+
+
 def comment_selection(plan, *, exclude_resolved=False):
     findings = _ordered_findings(plan)
     resolved = {item.id for item in plan.digest.findings if item.disposition and item.disposition.status == "resolved"}
@@ -390,18 +466,32 @@ def comment_selection(plan, *, exclude_resolved=False):
     return included, omitted, retained
 
 
+def _comment_next_steps(plan, *, has_findings: bool):
+    """面向作者的单段行动建议，避免把报告中的多条清单原样搬进评论。"""
+    decision = plan.digest.merge_decision
+    steps = []
+    if decision.status == "fix_blockers":
+        steps.append("先修复上述阻断问题，并在新快照重新核验后再考虑合并。")
+    elif decision.status == "resolve_unknowns":
+        steps.append("先补齐“其他审查结果”中的证据缺口，再判断是否可以合并。")
+    elif has_findings:
+        steps.append("请评估上述非阻断问题的业务影响，结合 CI 与必要审批后再决定合并。")
+    else:
+        steps.append("请结合项目自身的测试、CI 和人工判断决定是否合并；本轮结论不替代审批。")
+    if plan.digest.merge_decision.nonblocking_finding_keys and decision.status == "fix_blockers":
+        steps.append("非阻断建议可在同一轮修改中一并评估。")
+    if plan.digest.incomplete_goals:
+        steps.append("未完成的约定目标需要补查后才能判断整轮审查是否完整。")
+    return [" ".join(steps)]
+
+
 def render_review_comment(plan, *, detail="compact", exclude_resolved=False):
     """默认评论是可直接发布的审查意见；full 只增加证据与范围明细。"""
     included, omitted, retained = comment_selection(plan, exclude_resolved=exclude_resolved)
     full = detail == "full"
-    label, advice = merge_heading(plan)
-    decision = plan.digest.merge_decision
-    lines = ["## RepoGuardian · PR 审查评论", "", f"**审查结论：{label}**", "", advice, ""]
-    if decision.blocking_finding_keys or decision.nonblocking_finding_keys:
-        lines += [f"阻断问题 {len(decision.blocking_finding_keys)} 项；"
-                  f"非阻断建议 {len(decision.nonblocking_finding_keys)} 项。"
-                  "严重度映射不替代对部署条件和业务影响的判断，仍需满足 CI 与必要审批。"]
-    lines += _change_understanding(plan)
+    withheld = max(0, plan.outcome.confirmed_count - plan.outcome.publishable_count)
+    lines = ["RepoGuardian · PR Code Review", "", merge_verdict_line(plan), ""]
+    lines += _comment_change_overview(plan)
     lines += ["", "## 发现的问题", ""]
     if included:
         views = {item.id: item for item in plan.digest.findings}
@@ -409,19 +499,8 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False):
             lines += _comment_finding_lines(plan, finding, index, views.get(finding.finding_key), full=full)
     else:
         lines += ["本次没有通过发布准入的已核验问题。", ""]
-    if omitted:
-        lines += ["**本次未包含的事项（人工标记已处理，不代表机器重新核验通过）：**", *[
-            f"- [{item.severity}] {markdown_text(item.title)}；{_finding_location_text(item)}" for item in omitted], ""]
-    if retained:
-        lines += [f"{len(retained)} 项已标记处理的阻断问题仍保留正文，需在新快照重新核验。", ""]
-    withheld = max(0, plan.outcome.confirmed_count - plan.outcome.publishable_count)
-    if withheld:
-        lines += [f"另有 {withheld} 项机器确认记录未通过发布准入，详见完整报告；当前评论未将其描述为已核验问题。", ""]
-    risks = _comment_risks(plan)
-    if risks:
-        lines += ["## 未决风险", ""] + risks + [""]
-    steps = [line[2:] if line.startswith("- ") else line for line in _next_steps(plan)[3:] if line.strip()]
-    lines += ["## 建议", ""] + steps
+    lines += _comment_other_results(plan, omitted=omitted, retained=retained, withheld=withheld)
+    lines += ["", "## 建议", ""] + _comment_next_steps(plan, has_findings=bool(included))
     if full:
         lines += ["", "## 审查范围", "",
             f"约定目标已检查 {plan.outcome.examined_goals} / {plan.outcome.total_goals}；"
@@ -431,7 +510,8 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False):
         lines += [f"- 排除文件：{markdown_text(item.path)}；{markdown_text(item.reason)}" for item in plan.digest.excluded_files]
     lines += ["", "---", "",
         f"本结论基于 Commit `{markdown_text(plan.snapshot.head_sha or '未记录', 64)}` 的只读静态审查；"
-        "未执行目标代码、测试或构建，不替代 CI 与人工审批。"]
+        "未执行目标代码、测试或构建，不替代 CI 与人工审批。"
+        "未发现的问题不代表其他路径已经安全。"]
     return "\n".join(lines)
 
 

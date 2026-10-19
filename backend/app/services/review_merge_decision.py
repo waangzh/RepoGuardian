@@ -1,15 +1,8 @@
 """显式的报告建议策略；不授予 Approve 或合并权限。"""
 
 from app.models.publication import MergeDecision
-from app.services.publication_renderer import REASON_LABELS
+from app.services.publication_renderer import MERGE_LABELS, REASON_LABELS
 
-_LABELS = {
-    "fix_blockers": "建议修改后再合并",
-    "resolve_unknowns": "需要补充检查",
-    "review_suggestions": "建议评估后合并",
-    "conditional_merge": "未发现阻断性问题",
-    "unavailable": "需要补充检查",
-}
 _LIMITS = {
     "confirmed_findings_withheld": "仍有未通过发布准入的机器确认记录",
     "author_context_truncated": "作者声明输入已截断，未输入部分的目标尚未核验",
@@ -42,23 +35,28 @@ def merge_decision(plan):
                              unresolved_reasons=reasons,
                              limits=[_LIMITS.get(reason) or REASON_LABELS.get(reason, reason) for reason in reasons])
     if plan.outcome.kind in {"failed", "cancelled"} or not plan.content_eligible:
-        decision.label = _LABELS["unavailable"]
+        decision.status = "unavailable"
+        decision.label = MERGE_LABELS["unavailable"]
         return decision
     if blocking:
         decision.status = "fix_blockers"
-        decision.advice = "优先修复下列机器确认的 High/Critical 问题并重新核验，再考虑合并；人工标记已处理不能代替新快照核验。"
+        decision.advice = ("存在已核验且影响关键行为的问题，需要先处理。"
+                           "请优先修复下列机器确认的 High/Critical 问题并在新快照重新核验；"
+                           "人工标记已处理不能代替新快照核验。")
     elif reasons:
         decision.status = "resolve_unknowns"
         code_gaps = [reason for reason in reasons if reason not in _BOUNDARY_REASONS
                      and not reason.startswith(("head_validation_", "author_context_"))]
-        decision.advice = ("当前审查存在足以影响合并判断的证据缺口；请先补齐下列事项。"
+        decision.advice = ("当前审查存在足以影响决策的证据缺口；请先补齐下列事项。"
                            if code_gaps else
                            "当前审查的代码结论没有新增阻断项，但执行范围或验证记录仍有限制；补齐后再决定是否合并。")
-    elif suggestions or plan.outcome.confirmed_count:
-        decision.status = "review_suggestions"
-        decision.advice = "本轮已确认问题按当前严重度策略归为非阻断建议，需逐项评估影响与处理方式；确认相关测试、CI 和必要审批后再决定合并。"
+    elif suggestions:
+        # 图片与业内常用做法只保留三态；已确认的 Medium/Low 属于非阻断建议，并入“未发现阻断性问题”。
+        decision.status = "conditional_merge"
+        decision.advice = ("本次静态审查没有发现需要阻止合并的问题；请结合 CI、审批和人工判断决定是否合并。"
+                           f"另有 {len(suggestions)} 项已确认的非阻断问题，建议评估影响后处理。")
     elif plan.outcome.kind == "clean":
         decision.status = "conditional_merge"
         decision.advice = "本次静态审查没有发现需要阻止合并的问题；请结合 CI、审批和人工判断决定是否合并。"
-    decision.label = _LABELS[decision.status]
+    decision.label = MERGE_LABELS[decision.status]
     return decision

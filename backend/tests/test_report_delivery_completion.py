@@ -188,4 +188,4 @@ def test_compact_is_publishable_and_full_adds_evidence_without_duplicates():
     assert "代码证据" not in compact and "代码证据" in full
     assert len(full) > len(compact)
     assert plan == original
-    assert json.loads(plan.model_dump_json())["digest"]["merge_decision"]["status"] == "review_suggestions"
+    assert json.loads(plan.model_dump_json())["digest"]["merge_decision"]["status"] == "conditional_merge"

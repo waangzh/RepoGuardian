@@ -62,8 +62,11 @@ def test_compact_comment_is_publishable_and_does_not_repeat_boilerplate():
     assert "独立核验支持此结论" not in compact
     assert "静态审查 · 未执行目标代码" not in compact
     assert compact.index("回归令牌校验缺失") < compact.index("Commit")
-    assert "严重度映射" in compact
-    assert "非阻断建议 1 项" in compact
+    # 评论采用图片结构：标题、单行结论、变更概述、问题、其他审查结果、建议。
+    assert compact.startswith("RepoGuardian · PR Code Review\n\n✅ 结论：未发现阻断性问题")
+    for heading in ("## 变更概述", "## 发现的问题", "## 其他审查结果", "## 建议"):
+        assert heading in compact
+    assert "非阻断问题" in compact
     # 非阻断问题也必须保留标题、位置和建议，只是省略证据展开。
     assert "**建议：**" in compact and "src/a" in compact
 
@@ -106,7 +109,9 @@ def test_unchecked_author_claims_do_not_block_merge_but_contradictions_are_shown
     unchecked = next(item for item in plan.digest.intent_assessments if item.author_target == "补充测试。")
     assert unchecked.status == "not_checked"
     assert "author_intent_unresolved" not in plan.digest.merge_decision.unresolved_reasons
-    assert plan.digest.merge_decision.status == "review_suggestions"
+    # 对外只有三种合并建议；已确认的 Medium/Low 归入非阻断建议。
+    assert plan.digest.merge_decision.status == "conditional_merge"
+    assert plan.digest.merge_decision.nonblocking_finding_keys == ["key-a"]
     # 未核验不进入评论风险；明确矛盾才展示位置。
     assert "”尚未核验。" not in plan.review_comment_markdown
     goal = report["initial_scope_coverage"][0]
