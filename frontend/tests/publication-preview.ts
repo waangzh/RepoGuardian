@@ -1,6 +1,7 @@
 // 合成数据验收，计划由后端 Planner 生成，不读取真实任务或远端 PR。
 import { createApp, h, ref } from "vue";
 import ReviewWorkspace from "../src/components/review/ReviewWorkspace.vue";
+import AppSidebar from '../src/components/layout/AppSidebar.vue';
 import type { ReviewSection } from "../src/types/workspace";
 import type { ReviewTask } from "../src/types/review";
 import type { PublicationPlan } from "../src/types/publication";
@@ -30,6 +31,8 @@ const task = ref(fixtures.findings!.task);
 const section = ref<ReviewSection>('report');
 const snapshotState = ref('current');
 const copiedText = ref('');
+const shell = new URLSearchParams(location.search).has('shell');
+const mobileOpen = ref(false);
 Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { copiedText.value = text; } } });
 const originalFetch = window.fetch.bind(window);
 window.fetch = async (input, init) => {
@@ -62,6 +65,10 @@ window.fetch = async (input, init) => {
   }
   return originalFetch(input, init);
 };
+function workspace() {
+  return h(ReviewWorkspace, { task: task.value, report: task.value.report_markdown, statusText: task.value.status,
+    section: section.value, 'onNavigate': (value: ReviewSection) => { section.value = value; }, duration: "1 秒", cancelling: false, retryingUnitId: null });
+}
 createApp({ setup: () => () => h("div", [
   h("div", { style: "padding:16px;background:#fff3dd;display:flex;gap:16px" }, [
     h("strong", "合成快照 · 后端发布计划验收"),
@@ -73,6 +80,9 @@ createApp({ setup: () => () => h("div", [
   ]),
   h('select', { 'aria-label': '快照场景', value: snapshotState.value, onChange: (event: Event) => { snapshotState.value = (event.target as HTMLSelectElement).value; copiedText.value = ''; } }, ['current', 'stale', 'unknown'].map(value => h('option', {value}, value))),
   h('output', { 'aria-label': '已复制内容', style: 'display:block;max-height:120px;overflow:auto' }, copiedText.value),
-  h(ReviewWorkspace, { task: task.value, report: task.value.report_markdown, statusText: task.value.status,
-    section: section.value, 'onNavigate': (value: ReviewSection) => { section.value = value; }, duration: "1 秒", cancelling: false, retryingUnitId: null }),
+  shell ? h('div', { class: 'rg-app app' }, [
+    h(AppSidebar, { modelValue: 'dashboard', section: section.value, hasReview: true, taskActive: false, mobileOpen: mobileOpen.value, busy: false,
+      onSection: (value: ReviewSection) => { section.value = value; mobileOpen.value = false; }, onClose: () => { mobileOpen.value = false; } }),
+    h('main', { class: 'main' }, [h('button', { class: 'btn secondary', type: 'button', 'aria-label': '打开导航', onClick: () => { mobileOpen.value = true; } }, '导航'), h('div', { class: 'workspace-main' }, [workspace()])]),
+  ]) : workspace(),
 ]) }).mount("#preview");

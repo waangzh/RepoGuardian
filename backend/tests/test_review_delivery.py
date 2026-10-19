@@ -22,7 +22,7 @@ def test_comment_contains_inline_finding_position_and_immutable_base_link():
     # 评论中的行内定位仍链接到不可变的 Effective Base 快照（URL 路径不做 Markdown 转义）。
     assert f"/blob/{task.run_manifest.effective_base_sha}/src/a.py#L7" in plan.review_comment_markdown
     assert "建议修改后再合并" in plan.review_comment_markdown and "CI" in plan.review_comment_markdown
-    assert plan.review_comment_markdown.count("Commit") == 1
+    assert plan.review_comment_markdown.count("本结论基于提交") == 1
     assert plan.user_report_markdown.index("## 已确认问题") < plan.user_report_markdown.index("## 附录：审查范围与限制")
 
 
@@ -51,7 +51,7 @@ def test_author_statement_and_actual_diff_are_kept_distinct_from_alignment():
             lines=[DiffLine(kind="added", content="def handle(value):", new_line_no=1)])])]
     plan = PublicationPlanner().build(task)
     assert "handle" in plan.user_report_markdown
-    assert "**实际变更：**" in plan.review_comment_markdown
+    assert "**代码观察：**" in plan.review_comment_markdown
     assert "修复空值异常" in plan.review_comment_markdown
     assert "未保存独立的目标符合性核验记录" in plan.user_report_markdown
     assert "隐藏" not in plan.user_report_markdown and "<script>" not in plan.user_report_markdown

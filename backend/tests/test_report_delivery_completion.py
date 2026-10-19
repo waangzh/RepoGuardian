@@ -183,7 +183,7 @@ def test_compact_is_publishable_and_full_adds_evidence_without_duplicates():
     full = render_review_comment(plan, detail="full")
     for markdown in (compact, full):
         assert finding.title in markdown and finding.recommendation in markdown
-        assert markdown.count("Commit") == 1
+        assert markdown.count("本结论基于提交") == 1
         assert "独立核验支持此结论" not in markdown
     assert "代码证据" not in compact and "代码证据" in full
     assert len(full) > len(compact)
