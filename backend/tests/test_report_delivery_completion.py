@@ -156,7 +156,9 @@ async def test_copy_selection_is_explicit_keeps_blockers_and_rechecks_head(monke
         copied = (await client.post(f"/api/reviews/{task.id}/review-comment-check", json=options)).json()
         assert calls == [task.pr_url] and copied["status"] == "current"
         assert copied["detail"] == "full" and copied["omitted_finding_keys"] == ["key-a"]
-        task.task_runtime_report["findings"][0]["issue"]["severity"] = "high"
+        blocking = publishable_task(claim="核心功能鉴权失败", severity="high")
+        blocking.task_runtime_report["findings"][0]["issue"]["confidence"] = 0.9
+        task.task_runtime_report = blocking.task_runtime_report
         retained = (await client.post(f"/api/reviews/{task.id}/review-comment-preview", json=options)).json()
         assert retained["retained_blocking_keys"] == ["key-a"] and not retained["omitted_finding_keys"]
         assert "**问题与影响：**" in retained["review_comment_markdown"]

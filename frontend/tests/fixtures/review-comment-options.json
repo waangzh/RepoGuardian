@@ -35,6 +35,15 @@
         "key-a"
       ],
       "retained_blocking_keys": []
+    },
+    "compact:false:key-a": {
+      "detail": "compact",
+      "review_comment_markdown": "**代码位置：** [src/a\\.py:7（head）](https://github.com/o/r/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/src/a.py#L7)\n\n**[Medium · Correctness] 空返回值破坏调用方契约**\n\n**问题与影响：** 调用方字段读取失败\n\n**代码证据（核验依据）：** 独立核对主张\n\n**触发场景：** 服务返回空值时直接读取字段\n\n**建议：** 先处理空值\n\n---\nRepoGuardian · 独立核验支持此结论\n\n静态审查 · 未执行目标代码、测试或构建\n\n审查 Commit：aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。\n\n- 人工处理：已处理；原因：合成验收：人工标记已处理；时间：未记录。机器结论与发布资格保持独立。\n\n本评论仅针对当前选中的一个问题；另有 0 项已准入问题未包含在本条评论中。完整审查结论、被扣留记录与未决风险请查看完整 PR 评论和详细报告。",
+      "included_finding_keys": [
+        "key-a"
+      ],
+      "omitted_finding_keys": [],
+      "retained_blocking_keys": []
     }
   },
   "clean": {

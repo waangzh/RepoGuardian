@@ -21,12 +21,15 @@ window.fetch = async (input, init) => {
   if (typeof input === 'string' && (input.endsWith('/review-comment-check') || input.endsWith('/review-comment-preview'))) {
     const plan = fixtures[choice.value]!.plan;
     const options = JSON.parse(typeof init?.body === 'string' ? init.body : '{}');
-    const variant = variants[choice.value][`${options.detail || 'compact'}:${!!options.exclude_resolved}`];
+    const variant = variants[choice.value][`${options.detail || 'compact'}:${!!options.exclude_resolved}${options.finding_key ? ':' + options.finding_key : ''}`];
     const preview = input.endsWith('/review-comment-preview');
     return new Response(JSON.stringify({ ...variant, review_id: task.value.id, status: preview ? 'unknown' : snapshotState.value,
       reviewed_head_sha: plan.snapshot.head_sha, latest_head_sha: snapshotState.value === 'current' ? plan.snapshot.head_sha : 'd'.repeat(40),
       checked_at: new Date().toISOString(), review_comment_markdown: variant.review_comment_markdown + (preview ? '' : `\n\n快照检查：${snapshotState.value}`) }),
       { headers: { 'Content-Type': 'application/json' } });
+  }
+  if (typeof input === 'string' && input.endsWith('/findings')) {
+    return new Response(JSON.stringify({ items: fixtures[choice.value]!.plan.digest.findings || [] }), { headers: { 'Content-Type': 'application/json' } });
   }
   if (typeof input === "string" && input.endsWith("/publication-plan")) {
     if (choice.value === "error") return new Response("加载失败", { status: 503 });

@@ -31,3 +31,19 @@ test("概览使用统一合并建议并区分补丁结果与 Head 验证", async
     for (const value of ["已有独立补丁结果，Head 未知", "统一事实要求补查缓存路径", "不代表当前 Head 已通过", "阻断问题 1 项"]) assert.ok(html.includes(value));
   } finally { await server.close(); }
 });
+
+test("问题列表使用服务端有效等级，保留原始运行记录", async () => {
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  try {
+    const fixtures = JSON.parse(await readFile(new URL("./fixtures/publication-plans.json", import.meta.url), "utf8"));
+    const task = structuredClone(fixtures.findings.task);
+    task.task_runtime_report.findings[0].issue.severity = "high";
+    const { runtimeFindingRows } = await server.ssrLoadModule("/src/utils/taskRuntimePresentation.ts");
+    const { default: component } = await server.ssrLoadModule("/src/components/pages/ReviewFindingsPage.vue");
+    const findings = runtimeFindingRows(task.task_runtime_report, task.issues);
+    const publicationFindings = fixtures.findings.plan.inline_drafts.map(item => ({ ...item, severity: "medium", body_markdown: "" }));
+    const html = await renderToString(createSSRApp(component, { task, findings, publicationFindings, focusKey: "" }));
+    assert.match(html, /class="(?:badge neutral|neutral badge)">中<\/span>/);
+    assert.equal(task.task_runtime_report.findings[0].issue.severity, "high");
+  } finally { await server.close(); }
+});

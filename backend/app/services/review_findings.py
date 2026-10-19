@@ -38,7 +38,8 @@ def finding_views(task, dispositions):
                     "insufficient" if "insufficient" in (record.get("reason") or "") else
                     "unresolved" if state in {"unresolved", "candidate"} else "unknown")
         saved = dispositions.get(identity) or {}
-        items.append(FindingView(id=identity, status=state, severity=issue.get("severity") or candidate.get("severity"),
+        items.append(FindingView(id=identity, status=state,
+            severity=verified_issue.severity.value if verified_issue else issue.get("severity") or candidate.get("severity"),
             review_status={"published": "confirmed", "needs_human": "unresolved"}.get(state,
                 state if state in {"confirmed", "candidate", "unresolved", "dismissed"} else "unknown"),
             title=issue.get("title") or candidate.get("claim"),
