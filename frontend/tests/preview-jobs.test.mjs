@@ -116,9 +116,9 @@ test('预览页把失败与连接中断留在步骤 1 并提供重试出口', as
     const html = await renderToString(createSSRApp(Page, { job: failed, tracking: false, connectionError: '',
       prUrl: request.pr_url, model: '', defaultModel: 'fixture' }));
     assert.match(html, /STEP 01 \/ IMPORT PULL REQUEST/);
-    assert.match(html, /PR 分析未完成/);
+    assert.match(html, /审查方案未准备完成/);
     assert.match(html, /仓库准备失败/);
-    assert.match(html, /重新分析 PR/);
+    assert.match(html, /重新准备审查方案/);
     assert.match(html, /返回修改 PR 链接/);
     assert.match(html, /预览失败/);
     assert.doesNotMatch(html, /undefined|NaN/);

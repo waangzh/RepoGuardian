@@ -168,6 +168,7 @@
 .core-finding strong { color: var(--text-primary); font-size: 2rem; line-height: 1.2; font-weight: 650; font-variant-numeric: tabular-nums; }
 .core-finding strong small { color: var(--text-secondary); font-size: 1rem; font-weight: 500; }
 .core-finding span { color: var(--text-secondary); font-size: .875rem; line-height: 1.5; }
+.overview-action-note { margin: 0; color: var(--text-secondary); font-size: .8125rem; line-height: 1.6; overflow-wrap: anywhere; }
 .overview-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--panel-gap); }
 .overview-actions.single { grid-template-columns: minmax(0, 1fr); }
 .overview-action-cell, .overview-actions > .overview-action { display: flex; align-items: center; justify-content: flex-start; gap: 8px; min-height: 56px; padding: 8px 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); }

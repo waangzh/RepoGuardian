@@ -27,7 +27,7 @@ onMounted(async () => {
     <p>从代码变更出发，先了解审查范围，再获取带证据的审查结论。结论、覆盖与尚未解决的事项，清楚呈现。</p>
     <form @submit.prevent="valid && !loading && !busy && emit('preview')">
       <label class="field-label" for="pr-url">GitHub Pull Request 链接</label>
-      <div class="hero-input"><input id="pr-url" class="input" type="url" :value="prUrl" placeholder="https://github.com/owner/repo/pull/123" autocomplete="url" :disabled="busy" aria-describedby="pr-hint" @input="emit('update:prUrl', ($event.target as HTMLInputElement).value)" /><button type="submit" class="btn primary" :disabled="!valid || loading || busy"><AppIcon :name="loading ? 'clock' : 'arrow-right'" />{{ loading ? '正在分析 PR…' : '分析 PR' }}</button></div>
+      <div class="hero-input"><input id="pr-url" class="input" type="url" :value="prUrl" placeholder="https://github.com/owner/repo/pull/123" autocomplete="url" :disabled="busy" aria-describedby="pr-hint" @input="emit('update:prUrl', ($event.target as HTMLInputElement).value)" /><button type="submit" class="btn primary" :disabled="!valid || loading || busy"><AppIcon :name="loading ? 'clock' : 'arrow-right'" />{{ loading ? '正在预览 PR 变更…' : '预览 PR 变更' }}</button></div>
       <p v-if="prUrl && !valid" id="pr-hint" class="input-error">请输入 https://github.com/仓库所有者/仓库/pull/编号 格式的 PR 链接。</p>
     </form>
     <div class="hero-meta"><span><AppIcon name="check-circle" />确认前不调用模型</span><span><AppIcon name="shield" />严格只读代码审查</span><span><AppIcon name="context" />证据与检查限制可追溯</span></div>

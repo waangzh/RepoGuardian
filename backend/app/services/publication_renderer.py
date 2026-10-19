@@ -151,10 +151,28 @@ def merge_heading(plan):
 
 
 def merge_verdict_line(plan) -> str:
-    """评论与概览共用的单行结论：符号 + 结论 + 合并建议。"""
+    """评论与概览共用的单行结论：符号 + 结论 + 合并建议。
+
+    失败/取消时不能再输出通用的“需要补充检查”，否则复制内容会被误读为
+    一次完成的 PR Review；这里显式标注为部分审查记录。
+    """
+    kind = plan.outcome.kind
+    if kind == "failed":
+        return "❌ 结论：审查未完成（部分审查记录）"
+    if kind == "cancelled":
+        return "⏹ 结论：审查已取消（部分审查记录）"
     label, _ = merge_heading(plan)
     symbol = MERGE_SYMBOLS.get(plan.digest.merge_decision.status, "❓")
     return f"{symbol} 结论：{label}"
+
+
+def partial_review_note(plan) -> str:
+    """失败/取消后复制的内容必须自述为部分记录，而不是正常完成的审查结论。"""
+    if plan.outcome.kind == "failed":
+        return "> 以下为执行失败前已保留的部分审查记录，不是完整审查结论；未完成范围不代表代码安全。"
+    if plan.outcome.kind == "cancelled":
+        return "> 以下为取消前已保留的部分审查记录，不是完整审查结论；未完成范围不代表代码安全。"
+    return ""
 
 
 def merge_advice(plan):
@@ -170,17 +188,34 @@ def merge_advice(plan):
     return "\n\n".join(lines)
 
 
+def _author_goal(plan):
+    understanding = plan.digest.change_understanding
+    text = (understanding.author_goal if understanding else plan.digest.author_goal) or ""
+    # 兼容旧计划生成的包装，不修改冻结数据，也不删改作者正文中的验证描述。
+    prefix = "作者声明（未经独立验证）："
+    if text.startswith(prefix):
+        text = text.removeprefix(prefix).removesuffix("（作者声明的输入范围有限制，见下方说明。）")
+    return text.strip()
+
+
+def _author_source_lines(plan):
+    lines = []
+    if _author_goal(plan) not in {"", "未记录明确的作者目标。"}:
+        lines.append("PR 目标来自作者提供的 PR 描述或标题，以本轮保存的内容为准；仅作审查背景，不代表目标已实现。")
+    if plan.digest.author_context_limitation:
+        lines.append("作者目标输入限制：" + markdown_text(plan.digest.author_context_limitation))
+    return lines
+
+
 def _change_understanding(plan, *, full=False):
     understanding = plan.digest.change_understanding
-    author_goal = understanding.author_goal if understanding else (plan.digest.author_goal or "未记录作者声明")
+    author_goal = _author_goal(plan) or "未记录明确的作者目标。"
     actual = understanding.actual_changes if understanding else "未保存可归纳的实际变更。"
     alignment = understanding.alignment if understanding else plan.digest.intent_alignment
     lines = ["", "## PR 变更理解", "",
-        "**作者想解决什么：** " + markdown_text(author_goal, 1200 if full else 400), "",
+        "**PR 目标：** " + markdown_text(author_goal, 1200 if full else 400), "",
         "**代码实际改变了什么：** " + markdown_text(actual, 2000 if full else 600), "",
         "**吻合与未确认：** " + markdown_text(alignment, 1600 if full else 500)]
-    if plan.digest.author_context_limitation:
-        lines += ["", "**作者目标输入限制：** " + markdown_text(plan.digest.author_context_limitation)]
     if full and plan.digest.actual_changes:
         lines += ["", "**变更文件（固定 Diff 事实）：**", "",
                   *[f"- {markdown_text(item, 1000)}" for item in plan.digest.actual_changes]]
@@ -240,7 +275,7 @@ def _appendix_lines(plan, task):
     if plan.digest.excluded_files:
         lines += ["", "未纳入本轮审查的文件：", *[
             f"- {markdown_text(item.path, 500)}：{markdown_text(item.reason)}" for item in plan.digest.excluded_files]]
-    lines += ["", "### 验证边界", "", *_validation_lines(plan)]
+    lines += ["", "### 来源与验证边界", "", *_author_source_lines(plan), *_validation_lines(plan)]
     if outcome.reason_codes:
         lines += ["", "### 原因代码", "", *[f"- {REASON_LABELS[reason]}（{reason.value}）" for reason in outcome.reason_codes]]
     if plan.withheld_findings:
@@ -406,14 +441,12 @@ def _comment_location(plan, finding) -> str:
 def _comment_change_overview(plan):
     """分别展示作者声明和绑定证据的代码观察。"""
     understanding = plan.digest.change_understanding
-    author = (understanding.author_goal if understanding else plan.digest.author_goal) or ""
+    author = _author_goal(plan)
     actual = understanding.actual_changes if understanding else ""
     lines = ["## 变更概述", ""]
     if author and author != "未记录明确的作者目标。":
-        lines += [f"**作者目标：** {markdown_text(author, 400)}（作者声明，尚非独立验证结论）。", ""]
+        lines += [f"**PR 目标：** {markdown_text(author, 400)}", ""]
     lines += [f"**代码观察：** {markdown_text(actual or '未保存可归纳的实际变更。', 800)}"]
-    if plan.digest.author_context_limitation:
-        lines += ["", "**作者目标输入限制：** " + markdown_text(plan.digest.author_context_limitation)]
     return lines
 
 
@@ -434,6 +467,7 @@ def _comment_other_results(plan, *, omitted, retained, withheld):
     if withheld:
         entries.append(f"- 另有 {withheld} 项机器确认记录未通过发布准入，详见完整报告；"
                        "当前评论未将其描述为已核验问题。")
+    entries += ["", "### 来源与验证边界", "", *_author_source_lines(plan)]
     if plan.digest.validation_state == "not_executed":
         entries += ["- 本轮主要为只读静态检查，未执行目标仓库代码。",
                     "- 没有本轮独立运行的测试或构建结果，不能将静态检查视作 CI 通过。"]
@@ -477,6 +511,10 @@ def _comment_next_steps(plan, *, has_findings: bool):
     """面向作者的单段行动建议，避免把报告中的多条清单原样搬进评论。"""
     decision = plan.digest.merge_decision
     steps = []
+    if plan.outcome.kind == "failed":
+        return ["审查执行失败，以下建议不构成完整审查结论；请处理运行故障后重新审查。"]
+    if plan.outcome.kind == "cancelled":
+        return ["审查已取消，以下建议仅基于停止前保留的记录；请补查剩余范围后重新审查。"]
     if decision.status == "fix_blockers":
         steps.append("先修复上述阻断问题，并在新快照重新核验后再考虑合并。")
     elif decision.status == "resolve_unknowns":
@@ -498,6 +536,9 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False):
     full = detail == "full"
     withheld = max(0, plan.outcome.confirmed_count - plan.outcome.publishable_count)
     lines = ["RepoGuardian · PR Code Review", "", merge_verdict_line(plan), ""]
+    note = partial_review_note(plan)
+    if note:
+        lines += [note, ""]
     lines += _comment_change_overview(plan)
     lines += ["", "## 已确认问题", ""]
     if included:
@@ -566,7 +607,11 @@ def render_summary(plan, *, discussion_urls: dict[str, str] | None = None) -> st
     outcome = plan.outcome
     digest = plan.digest
     label, advice = merge_heading(plan)
-    lines = ["## RepoGuardian · PR Review", "", merge_verdict_line(plan), "", advice, "",
+    lines = ["## RepoGuardian · PR Review", "", merge_verdict_line(plan), ""]
+    note = partial_review_note(plan)
+    if note:
+        lines += [note, ""]
+    lines += [advice, "",
              f"- 已确认问题：{outcome.confirmed_count}",
              f"- 审查目标完成：{outcome.examined_goals} / {outcome.total_goals}",
              f"- 未决候选：{outcome.unresolved_count}", "", "### 审查范围", ""]

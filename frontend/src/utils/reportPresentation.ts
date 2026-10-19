@@ -8,6 +8,14 @@ export function reportValidationLabel(value?: ReviewOutcome['dynamic_validation'
     independent_results: '独立结果 · Head 未知', unknown: '未知' })[value || 'unknown'];
 }
 
+/** 旧计划的系统前缀只在展示时去除；输入完整性与核验状态仍保留在 Digest。 */
+export function reportAuthorGoal(plan: PublicationPlan): string {
+  const text = plan.digest.change_understanding?.author_goal || plan.digest.author_goal || '';
+  const prefix = '作者声明（未经独立验证）：';
+  return (text.startsWith(prefix) ? text.slice(prefix.length).replace(/（作者声明的输入范围有限制，见下方说明。）$/, '') : text).trim()
+    || '未记录明确的作者目标。';
+}
+
 export function reportLimitations(plan: PublicationPlan): string[] {
   const digest = plan.digest;
   return [...new Set([

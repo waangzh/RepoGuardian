@@ -31,7 +31,7 @@ export function getQuickPreview(prUrl: string, signal?: AbortSignal) {
 export function createPreviewJob(id: string, input: PreviewRequest, signal?: AbortSignal) {
   return request<PreviewJob>('/api/reviews/preview-jobs', {
     method: 'POST', body: JSON.stringify({ id, request: input }), signal,
-  }, '预览标识对应不同请求，请重新分析 PR。');
+  }, '预览标识对应不同请求，请重新准备审查方案。');
 }
 export function getPreviewJob(id: string, signal?: AbortSignal) {
   return request<PreviewJob>(`/api/reviews/preview-jobs/${encodeURIComponent(id)}`, { signal });
