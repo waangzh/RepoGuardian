@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import type { ReportMode } from './ReportModeTabs.vue';
+import type { ReviewTask } from '../../types/review';
+import type { PublicationPlan } from '../../types/publication';
 import AppIcon from '../common/AppIcon.vue';
 defineProps<{ mode: ReportMode; detail: 'compact' | 'full'; excludeResolved: boolean; available: boolean;
-  busy: boolean; copied: boolean; headLabel: string; headTone: string; headNote: string; canCheck: boolean; canPublish: boolean }>();
+  busy: boolean; copied: boolean; headLabel: string; headTone: string; headNote: string; canCheck: boolean; canPublish: boolean;
+  task?: ReviewTask; plan?: PublicationPlan | null }>();
 const emit = defineEmits<{ 'update:detail': [value: 'compact' | 'full']; 'update:excludeResolved': [value: boolean];
   copy: []; download: []; check: []; publish: []; full: [] }>();
 const chapters = [{ id: 'conclusion', label: '审查结论' }, { id: 'changes', label: '01 · 变更理解' },
@@ -10,6 +13,7 @@ const chapters = [{ id: 'conclusion', label: '审查结论' }, { id: 'changes', 
 </script>
 <template>
   <aside class="rd-aside" aria-label="报告工具区">
+    <section v-if="mode === 'audit'" class="rd-aside-card"><h3>审计元数据<AppIcon name="code" :size="16" /></h3><dl class="rd-aside-metadata"><dt>PR</dt><dd>{{ task?.pr ? `#${task.pr.number}` : '未记录' }}</dd><dt>Head</dt><dd><code>{{ plan?.snapshot.head_sha?.slice(0, 12) || '未记录' }}</code></dd><dt>运行模式</dt><dd>{{ task?.mode === 'review' ? '只读静态' : task?.mode || '未知' }}</dd><dt>原始事件</dt><dd>{{ task?.agent_events ? `当前返回 ${task.agent_events.length} 条` : '未提供' }}</dd></dl></section>
     <section v-if="mode === 'comment'" class="rd-aside-card">
       <h3>交付设置<AppIcon name="settings" :size="16" /></h3><p>控制复制到 PR 的信息密度，而不是改变机器审查结论。</p>
       <label class="rd-field">评论内容密度<select :value="detail" :disabled="!canCheck" aria-label="评论内容密度" @change="emit('update:detail', ($event.target as HTMLSelectElement).value as 'compact' | 'full')"><option value="compact">精简版 · 保留全部问题正文</option><option value="full">完整版 · 附加完整范围信息</option></select></label>

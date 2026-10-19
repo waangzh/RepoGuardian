@@ -6,8 +6,8 @@ import { reviewSituation } from '../../utils/reviewSituation';
 import { coverageLabel, reportValidationLabel } from '../../utils/reportPresentation';
 import AppIcon from '../common/AppIcon.vue';
 import StatusBadge from '../common/StatusBadge.vue';
-const props = defineProps<{ task: ReviewTask; plan?: PublicationPlan | null }>();
-const situation = computed(() => reviewSituation(props.plan));
+const props = defineProps<{ task: ReviewTask; plan?: PublicationPlan | null; stale?: boolean }>();
+const situation = computed(() => reviewSituation(props.plan, { stale: props.stale }));
 const head = computed(() => props.plan?.snapshot.head_sha || props.task.snapshot?.head_sha);
 </script>
 <template>

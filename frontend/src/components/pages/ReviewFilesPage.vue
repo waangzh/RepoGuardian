@@ -8,9 +8,9 @@ import EmptyState from "../common/EmptyState.vue";
 import AppIcon from "../common/AppIcon.vue";
 import ReviewFileTree from "../review/ReviewFileTree.vue";
 import { buildFileTree } from "../../utils/fileTree";
-const props = defineProps<{ task: ReviewTask; findings: RuntimeFindingRow[] }>();
+const props = defineProps<{ task: ReviewTask; findings: RuntimeFindingRow[]; initialPath?: string }>();
 const emit = defineEmits<{ finding: [key: string] }>();
-const path = ref("");
+const path = ref(props.initialPath || '');
 const search = ref("");
 const visible = computed(() => props.task.changed_files.filter(file => `${file.file_path} ${file.old_file_path || ''}`.toLowerCase().includes(search.value.toLowerCase())));
 const selected = computed(() => visible.value.find(file => file.file_path === path.value) || visible.value[0] || null);
@@ -20,6 +20,7 @@ const fileTree = computed(() => buildFileTree(visible.value.map(file => file.fil
 </script>
 <template>
   <div class="page-head"><div><h1>变更文件</h1><p class="title-sub">按文件查看真实代码差异与关联发现。文件列表不推断代码正确性。</p></div><span class="badge blue">{{ task.changed_files.length }} 个变更文件</span></div>
+  <p v-if="initialPath && !task.changed_files.some(file => file.file_path === initialPath)" class="notice warn" role="status">{{ initialPath }} 不在本轮变更文件列表中；请通过报告中的快照源码链接核对关联文件。</p>
   <div class="rg-files-layout">
     <aside class="card card-pad rg-file-nav">
       <h2>文件列表</h2>

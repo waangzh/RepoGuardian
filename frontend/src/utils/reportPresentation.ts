@@ -19,3 +19,15 @@ export function reportLimitations(plan: PublicationPlan): string[] {
     ...(digest.investigations || []).filter(item => item.answer === 'unresolved').map(item => `${item.proposition}：${item.reason || '尚未核验'}`),
   ])];
 }
+
+/** Only link to a frozen GitHub source location, never to a model-provided URL. */
+export function reportSourceLink(prUrl: string | null | undefined, path: string, sha: string | null, line?: number | null): string | null {
+  if (!sha || !/^[a-f0-9]{40}$/i.test(sha) || !path || path.includes('\\') || path.split('/').some(part => !part || part === '.' || part === '..')) return null;
+  try {
+    const url = new URL(prUrl || '');
+    const parts = url.pathname.split('/').filter(Boolean);
+    if (url.protocol !== 'https:' || url.hostname !== 'github.com' || url.port || url.username || url.password
+      || parts.length !== 4 || parts[2] !== 'pull' || !/^\d+$/.test(parts[3]!)) return null;
+    return `https://github.com/${parts[0]}/${parts[1]}/blob/${sha}/${path.split('/').map(encodeURIComponent).join('/')}${line && Number.isSafeInteger(line) && line > 0 ? `#L${line}` : ''}`;
+  } catch { return null; }
+}

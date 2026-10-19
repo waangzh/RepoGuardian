@@ -10,6 +10,21 @@ import "../src/styles/workspace.css";
 
 const fixtures = await (await fetch("/tests/fixtures/publication-plans.json")).json() as Record<string, { task: ReviewTask; plan: PublicationPlan; summary: import("../src/types/publication").ReviewSummary }>;
 const variants = await (await fetch("/tests/fixtures/review-comment-options.json")).json();
+if (new URLSearchParams(location.search).has('unsafe')) {
+  for (const { plan } of Object.values(fixtures)) plan.review_comment_markdown += '\n\n<img src="invalid" onerror="document.body.dataset.unsafe=1"><script>document.body.dataset.unsafe=1</script><style>body{display:none}</style>';
+}
+// 仅补充浏览器夹具的身份和 Diff，生产页面仍只使用 API 返回值。
+for (const { task } of Object.values(fixtures)) {
+  task.pr ||= { owner: 'fixture', repo: 'report-ui', number: 95, title: '[合成验收] 修复空返回值与调用方契约',
+    html_url: 'https://github.com/fixture/report-ui/pull/95', clone_url: '', body: '仅用于界面验收',
+    base: { ref: 'main', sha: 'c'.repeat(40), repo_clone_url: '' }, head: { ref: 'fix/empty-result', sha: 'a'.repeat(40), repo_clone_url: '' } };
+  task.changed_files = [{ file_path: 'src/a.py', change_type: 'modified', additions: 1, deletions: 1, is_binary: false,
+    hunks: [{ old_start: 6, old_length: 2, new_start: 6, new_length: 2, hunk_id: 'h1', added_lines: [], removed_lines: [], lines: [
+      { kind: 'context', content: 'def result():', old_line_no: 6, new_line_no: 6 },
+      { kind: 'deleted', content: '    return {}', old_line_no: 7, new_line_no: null },
+      { kind: 'added', content: '    return None', old_line_no: null, new_line_no: 7 },
+    ] }] }];
+}
 const choice = ref("findings");
 const task = ref(fixtures.findings!.task);
 const section = ref<ReviewSection>('report');
@@ -18,6 +33,10 @@ const copiedText = ref('');
 Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { copiedText.value = text; } } });
 const originalFetch = window.fetch.bind(window);
 window.fetch = async (input, init) => {
+  if (typeof input === 'string' && input.endsWith('/publications')) {
+    return new Response(JSON.stringify(init?.method && init.method !== 'GET' ? { detail: '合成验收禁止真实发布' } : []),
+      { status: init?.method && init.method !== 'GET' ? 403 : 200, headers: { 'Content-Type': 'application/json' } });
+  }
   if (typeof input === 'string' && (input.endsWith('/review-comment-check') || input.endsWith('/review-comment-preview'))) {
     const plan = fixtures[choice.value]!.plan;
     const options = JSON.parse(typeof init?.body === 'string' ? init.body : '{}');
