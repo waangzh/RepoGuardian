@@ -58,13 +58,13 @@ def test_compact_comment_is_publishable_and_does_not_repeat_boilerplate():
     task.task_runtime_report["findings"][0]["issue"]["confidence"] = 0.9
     plan = PublicationPlanner().build(task)
     compact = render_review_comment(plan, detail="compact")
-    assert compact.count("Commit") == 1
+    assert compact.count("本结论基于提交") == 1
     assert "独立核验支持此结论" not in compact
     assert "静态审查 · 未执行目标代码" not in compact
-    assert compact.index("回归令牌校验缺失") < compact.index("Commit")
-    # 评论采用图片结构：标题、单行结论、变更概述、问题、其他审查结果、建议。
+    assert compact.index("回归令牌校验缺失") < compact.index("本结论基于提交")
+    # 评论沿用交付原型的四个章节，同时保留完整问题与快照。
     assert compact.startswith("RepoGuardian · PR Code Review\n\n✅ 结论：未发现阻断性问题")
-    for heading in ("## 变更概述", "## 发现的问题", "## 其他审查结果", "## 建议"):
+    for heading in ("## 变更概述", "## 已确认问题", "## 审查局限", "## 建议"):
         assert heading in compact
     assert "非阻断问题" in compact
     # 非阻断问题也必须保留标题、位置和建议，只是省略证据展开。
@@ -85,6 +85,33 @@ def test_detailed_report_states_conclusion_limits_and_steps_once():
     assert report.index("## 附录：审查范围与限制") < report.index("### 验证边界")
     assert "src/b.py" not in report.split("## 附录")[0]
     assert report.count("仍以审查范围与验证边界为准") <= 1
+
+
+def test_delivery_comment_matches_prototype_and_keeps_validation_limits_truthful():
+    task = completed_task()
+    task.task_runtime_report["pr_intent_context"] = "修复空值异常。"
+    task.task_runtime_report["pr_intent_context_truncated"] = False
+    plan = PublicationPlanner().build(task)
+    markdown = plan.review_comment_markdown
+    for phrase in ("**作者目标：**", "作者声明，尚非独立验证结论", "**代码观察：**", "## 已确认问题",
+                   "本轮没有达到发布证据门槛的已确认缺陷。", "## 审查局限", "不能将静态检查视作 CI 通过",
+                   "存在尚未验证的业务预期", "未发现已确认问题不等于代码无缺陷", "本结论基于提交"):
+        assert phrase in markdown
+    assert plan.outcome.confirmed_count == 0
+    assert markdown.index("## 变更概述") < markdown.index("## 已确认问题") < markdown.index("## 审查局限")
+    for state in ("passed", "failed", "independent_results", "unknown"):
+        changed = plan.model_copy(deep=True)
+        changed.digest.validation_state = state
+        result = render_review_comment(changed)
+        assert "没有本轮独立运行的测试或构建结果" not in result
+        if state == "passed":
+            assert "受控验证通过记录" in result
+        elif state == "independent_results":
+            assert "补丁通过不代表当前 PR Head 已通过测试" in result
+        elif state == "unknown":
+            assert "动态验证状态未知" in result
+        elif state == "failed":
+            assert result.count("已有与当前 Head 绑定的验证失败记录，需核对失败原因。") == 1
 
 
 def test_summary_projection_excludes_audit_and_per_finding_payload():
@@ -112,7 +139,7 @@ def test_unchecked_author_claims_do_not_block_merge_but_contradictions_are_shown
     # 对外只有三种合并建议；已确认的 Medium/Low 归入非阻断建议。
     assert plan.digest.merge_decision.status == "conditional_merge"
     assert plan.digest.merge_decision.nonblocking_finding_keys == ["key-a"]
-    # 未核验不进入评论风险；明确矛盾才展示位置。
+    # 未核验只保留声明边界，不成为阻断；明确矛盾才展示位置。
     assert "”尚未核验。" not in plan.review_comment_markdown
     goal = report["initial_scope_coverage"][0]
     goal.update(target_ref="src/a.py", status="examined", result_id="result-1", evidence_ids=["e1"],

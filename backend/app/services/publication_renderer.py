@@ -404,22 +404,22 @@ def _comment_location(plan, finding) -> str:
 
 
 def _comment_change_overview(plan):
-    """一段可读的变更概述；未核验与限制留给“其他审查结果”。"""
+    """分别展示作者声明和绑定证据的代码观察。"""
     understanding = plan.digest.change_understanding
     author = (understanding.author_goal if understanding else plan.digest.author_goal) or ""
     actual = understanding.actual_changes if understanding else ""
     lines = ["## 变更概述", ""]
     if author and author != "未记录明确的作者目标。":
-        lines += [f"**作者目标：** {markdown_text(author, 400)}", ""]
-    lines += [f"**实际变更：** {markdown_text(actual or '未保存可归纳的实际变更。', 800)}"]
+        lines += [f"**作者目标：** {markdown_text(author, 400)}（作者声明，尚非独立验证结论）。", ""]
+    lines += [f"**代码观察：** {markdown_text(actual or '未保存可归纳的实际变更。', 800)}"]
     if plan.digest.author_context_limitation:
         lines += ["", "**作者目标输入限制：** " + markdown_text(plan.digest.author_context_limitation)]
     return lines
 
 
 def _comment_other_results(plan, *, omitted, retained, withheld):
-    """其他审查结果：未决风险、验证边界与未纳入正文的记录。"""
-    lines = ["", "## 其他审查结果", ""]
+    """审查局限：未决风险、验证边界与未纳入正文的记录。"""
+    lines = ["", "## 审查局限", ""]
     entries = list(_comment_risks(plan))
     if plan.digest.incomplete_goals:
         entries.append(f"- 约定目标仍有 {len(plan.digest.incomplete_goals)} 项未完成检查。")
@@ -434,11 +434,18 @@ def _comment_other_results(plan, *, omitted, retained, withheld):
     if withheld:
         entries.append(f"- 另有 {withheld} 项机器确认记录未通过发布准入，详见完整报告；"
                        "当前评论未将其描述为已核验问题。")
-    if entries:
-        lines += entries
+    if plan.digest.validation_state == "not_executed":
+        entries += ["- 本轮主要为只读静态检查，未执行目标仓库代码。",
+                    "- 没有本轮独立运行的测试或构建结果，不能将静态检查视作 CI 通过。"]
     else:
-        lines.append("本轮其余约定目标未发现达到报告门槛的问题。")
-    lines += ["", _validation_sentence(plan)]
+        validation = "- " + _validation_sentence(plan)
+        if validation not in entries:
+            entries.append(validation)
+    if plan.digest.author_goal and (not plan.digest.intent_assessments or any(
+        item.status in {"insufficient", "not_checked"} for item in plan.digest.intent_assessments
+    )):
+        entries.append("- 作者的全部目标声明并未逐项独立核验，存在尚未验证的业务预期。")
+    lines += entries
     return lines
 
 
@@ -473,11 +480,11 @@ def _comment_next_steps(plan, *, has_findings: bool):
     if decision.status == "fix_blockers":
         steps.append("先修复上述阻断问题，并在新快照重新核验后再考虑合并。")
     elif decision.status == "resolve_unknowns":
-        steps.append("先补齐“其他审查结果”中的证据缺口，再判断是否可以合并。")
+        steps.append("先补齐“审查局限”中的证据缺口，再判断是否可以合并。")
     elif has_findings:
         steps.append("请评估上述非阻断问题的业务影响，结合 CI 与必要审批后再决定合并。")
     else:
-        steps.append("请结合项目自身的测试、CI 和人工判断决定是否合并；本轮结论不替代审批。")
+        steps.append("结合 CI、业务预期和人工评审决定是否合并。未发现已确认问题不等于代码无缺陷。")
     if plan.digest.merge_decision.nonblocking_finding_keys and decision.status == "fix_blockers":
         steps.append("非阻断建议可在同一轮修改中一并评估。")
     if plan.digest.incomplete_goals:
@@ -492,13 +499,14 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False):
     withheld = max(0, plan.outcome.confirmed_count - plan.outcome.publishable_count)
     lines = ["RepoGuardian · PR Code Review", "", merge_verdict_line(plan), ""]
     lines += _comment_change_overview(plan)
-    lines += ["", "## 发现的问题", ""]
+    lines += ["", "## 已确认问题", ""]
     if included:
         views = {item.id: item for item in plan.digest.findings}
         for index, finding in enumerate(included, 1):
             lines += _comment_finding_lines(plan, finding, index, views.get(finding.finding_key), full=full)
     else:
-        lines += ["本次没有通过发布准入的已核验问题。", ""]
+        lines += ["本轮没有达到发布证据门槛的已确认缺陷。" if not omitted and not withheld
+                  else "本次没有通过发布准入的已核验问题；已处理或未通过准入的记录见审查局限。", ""]
     lines += _comment_other_results(plan, omitted=omitted, retained=retained, withheld=withheld)
     lines += ["", "## 建议", ""] + _comment_next_steps(plan, has_findings=bool(included))
     if full:
@@ -509,7 +517,7 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False):
         lines += _goal_lines(plan.digest.incomplete_goals, "未完成目标", limit=None)
         lines += [f"- 排除文件：{markdown_text(item.path)}；{markdown_text(item.reason)}" for item in plan.digest.excluded_files]
     lines += ["", "---", "",
-        f"本结论基于 Commit `{markdown_text(plan.snapshot.head_sha or '未记录', 64)}` 的只读静态审查；"
+        f"本结论基于提交 `{markdown_text(plan.snapshot.head_sha or '未记录', 64)}` 的只读审查；"
         "不替代 CI 与人工审批。未发现的问题不代表其他路径已经安全。"]
     # 各段落自行收尾空行；合并后收敛多余空行，保持可发布排版。
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines))

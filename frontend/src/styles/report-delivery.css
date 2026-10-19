@@ -18,3 +18,60 @@
 @media(max-width:760px){.rd-two-col{grid-template-columns:1fr}.rd-metric-strip{gap:5px}.rd-metric-strip>div{padding:9px}.rd-metric-strip strong{font-size:20px}.rd-metric-strip .rd-validation-value{font-size:12px}.rd-audit-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.rd-evidence header{flex-wrap:wrap}.rd-detail-intro{padding:16px}.rd-snapshot{grid-template-columns:1fr;gap:5px}.rd-snapshot dd{margin-bottom:8px}.rd-confirm-dialog>footer{flex-wrap:wrap}}
 
 .rd-aside-metadata{display:grid;grid-template-columns:1fr auto;gap:11px 8px;font-size:11.5px;margin:0}.rd-aside-metadata dt{color:var(--rd-muted)}.rd-aside-metadata dd{margin:0;text-align:right;overflow-wrap:anywhere}.rd-aside-metadata code{font-size:11px}
+
+/* The PR comment has its own document hierarchy, independent of the app headings. */
+.rd-pr-comment {
+  --comment-copy: #4a5b75;
+  --comment-strong: #344560;
+  --comment-heading: #1b2d4b;
+  --comment-snapshot: #386d62;
+  --comment-snapshot-bg: #eef9f5;
+  padding: 23px 26px 26px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: var(--rd-ink);
+  overflow-wrap: anywhere;
+}
+[data-theme="dark"] .rd-pr-comment {
+  --comment-copy: var(--rd-muted);
+  --comment-strong: var(--rd-ink);
+  --comment-heading: var(--rd-ink);
+  --comment-snapshot: var(--rd-teal);
+  --comment-snapshot-bg: var(--rd-teal-soft);
+}
+.rd-workspace .rd-pr-comment > h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.6;
+  letter-spacing: -.3px;
+}
+.rd-comment-conclusion {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.rd-comment-conclusion > .app-icon { flex: none; }
+.rd-comment-conclusion.positive > .app-icon { color: var(--rd-teal); }
+.rd-comment-conclusion.attention > .app-icon { color: var(--amber); }
+.rd-comment-section { padding: 17px 0 19px; border-bottom: 1px solid var(--rd-line); }
+.rd-comment-section:first-of-type { padding-top: 18px; }
+.rd-comment-section:last-child { border-bottom: 0; }
+.rd-comment-section > header { display: flex; align-items: center; justify-content: space-between; gap: 9px; margin-bottom: 12px; }
+.rd-workspace .rd-comment-section > header > h3 { margin: 0; color: var(--comment-heading); font-size: 14px; font-weight: 700; line-height: 1.6; }
+.rd-comment-count { flex: none; padding: 3px 9px; border-radius: 50px; background: var(--rd-teal-soft); color: var(--rd-teal); font-size: 11px; font-weight: 700; }
+.rd-comment-count.has-findings { background: var(--amberWash); color: var(--amber); }
+.rd-workspace .rd-pr-comment .rd-markdown { padding: 0; font-size: 13px; line-height: 1.95; color: var(--comment-copy); }
+.rd-workspace .rd-pr-comment .rd-markdown p { margin: 13px 0; font-size: 13px; line-height: 1.95; }
+.rd-workspace .rd-pr-comment .rd-markdown p:first-child { margin-top: 0; }
+.rd-workspace .rd-pr-comment .rd-markdown p:last-child { margin-bottom: 0; }
+.rd-workspace .rd-pr-comment .rd-markdown strong { color: var(--comment-strong); font-weight: 700; }
+.rd-workspace .rd-pr-comment .rd-markdown ul { padding-left: 18px; margin: 8px 0; }
+.rd-workspace .rd-pr-comment .rd-markdown li { margin: 5px 0; font-size: 12.5px; line-height: 1.9; }
+.rd-comment-snapshot { margin-top: 16px; padding: 8px 12px; border-left: 3px solid #13a28b; border-radius: 5px; background: var(--comment-snapshot-bg); }
+.rd-workspace .rd-comment-snapshot .rd-markdown { color: var(--comment-snapshot); }
+.rd-workspace .rd-comment-snapshot .rd-markdown p { font-size: 12px; line-height: 1.85; }
+.rd-workspace .rd-pr-comment code:not(pre code) { padding: 0; border: 0; background: none; color: inherit; font-size: .92em; }
+@media (max-width: 760px) { .rd-pr-comment { padding: 15px; } }

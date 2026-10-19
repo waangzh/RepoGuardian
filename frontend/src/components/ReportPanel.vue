@@ -12,6 +12,7 @@ import ReportMarkdown from './report/ReportMarkdown.vue';
 import ReportDeliverySidebar from './report/ReportDeliverySidebar.vue';
 import ReportReadableView from './report/ReportReadableView.vue';
 import AuditSummaryView from './report/AuditSummaryView.vue';
+import PrCommentPreview from './report/PrCommentPreview.vue';
 import '../styles/report-delivery.css';
 
 const props = defineProps<{
@@ -41,6 +42,8 @@ const previewLoading = ref(false);
 const previewRevision = ref(0);
 let previewController: AbortController | null = null;
 const customSelection = computed(() => detail.value !== "compact" || excludeResolved.value);
+const visibleFindingCount = computed(() => customSelection.value ? selection.value?.included_finding_keys.length
+  : props.plan ? props.plan.inline_drafts.length + props.plan.summary_findings.length : null);
 const currentMarkdown = computed(() => reportView.value === "comment" ? (customSelection.value ? selection.value?.review_comment_markdown : props.reviewMarkdown)
   : reportView.value === "user" ? props.userMarkdown : props.markdown);
 const currentLabel = computed(() => reportView.value === "comment" ? "PR 交付摘要"
@@ -124,7 +127,11 @@ function exportComments() {
         <div v-else class="rd-doc">
           <div v-if="reportView === 'comment'" class="rd-notice"><AppIcon name="info" :size="17" /><div><strong>这是一份审查摘要，不是合并批准。</strong> 复制或导出前将核对 PR 当前 Head；过期或未知时需要明确确认限制。</div></div>
           <p v-if="selection && reportView === 'comment'" class="rd-context-tip" role="status">包含 {{ selection.included_finding_keys.length }} 项，明确省略 {{ selection.omitted_finding_keys.length }} 项；保留 {{ selection.retained_blocking_keys.length }} 项已处理阻断问题。</p>
-          <div :class="{ 'rd-comment': reportView === 'comment' }"><header v-if="reportView === 'comment'" class="rd-comment-header"><div><strong>评论正文预览</strong><small>与所选交付设置对应的服务端正文</small></div><span class="badge neutral">Markdown</span></header><ReportMarkdown :content="currentMarkdown" /></div>
+          <div :class="{ 'rd-comment': reportView === 'comment' }">
+            <header v-if="reportView === 'comment'" class="rd-comment-header"><div><strong>评论正文预览</strong><small>以下是 GitHub PR 评论将呈现的核心内容</small></div><span class="badge neutral">Markdown</span></header>
+            <PrCommentPreview v-if="reportView === 'comment'" :content="currentMarkdown" :finding-count="visibleFindingCount" />
+            <ReportMarkdown v-else :content="currentMarkdown" />
+          </div>
           <button v-if="commentsMarkdown && reportView === 'audit'" type="button" class="rd-text-button" @click="exportComments">导出逐条评论草稿（技术用途，不检查 Head）</button>
         </div>
 <button v-if="commentsMarkdown && reportView === 'audit' && plan" type="button" class="rd-text-button" @click="exportComments">导出逐条评论草稿（技术用途，不检查 Head）</button>
