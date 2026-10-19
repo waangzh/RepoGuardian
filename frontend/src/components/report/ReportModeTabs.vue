@@ -11,6 +11,7 @@ const modes = [
   { id: 'audit' as const, label: '技术审计', icon: 'code' },
 ];
 function move(event: KeyboardEvent, index: number) {
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
   const next = event.key === 'Home' ? 0 : event.key === 'End' ? 2
     : event.key === 'ArrowRight' ? (index + 1) % 3 : event.key === 'ArrowLeft' ? (index + 2) % 3 : -1;
   if (next < 0) return;
