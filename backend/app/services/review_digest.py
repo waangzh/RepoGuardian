@@ -26,6 +26,11 @@ def execution_record(report) -> dict:
     if not isinstance(report, dict):
         return {}
     record = {key: report[key] for key in _EXECUTION_KEYS if key in report}
+    # 历史报告可能保存了旧版未脱敏的诊断字段；审计导出统一收敛。
+    from app.services.task_review_projection import _safe_diagnostic
+    if isinstance(record.get("diagnostics"), list):
+        record["diagnostics"] = [_safe_diagnostic(value) for value in record["diagnostics"]
+                                 if isinstance(value, dict)]
     for key in _SORTED_KEYS:
         if isinstance(record.get(key), list):
             record[key] = sorted(record[key], key=stable_hash)

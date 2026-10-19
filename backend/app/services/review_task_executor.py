@@ -380,15 +380,11 @@ class ReviewTaskExecutor:
             if self.spec.intent_assessment_contract and targets and not item.intent_assessments:
                 errors.append(RuntimeParseError("examinations", index, "missing_intent_assessment"))
                 continue
-            invalid_intent = any(
-                not self.spec.intent_assessment_contract or assessment.author_quote not in targets
-                or not set(assessment.evidence_ids).issubset(item.evidence_ids)
-                or (assessment.alignment in {"supported", "contradicted"} and
-                    (item.disposition.value != "examined" or not assessment.evidence_ids
-                     or not self._covers(goal, assessment.evidence_ids)))
-                for assessment in item.intent_assessments)
-            if invalid_intent:
-                errors.append(RuntimeParseError("examinations", index, "invalid_intent_assessment_binding"))
+            intent_error = next((reason for reason in (
+                self._intent_assessment_error(goal, item, assessment, targets)
+                for assessment in item.intent_assessments) if reason), None)
+            if intent_error:
+                errors.append(RuntimeParseError("examinations", index, intent_error))
                 continue
             valid_examinations.append(item)
         grouped = {}
@@ -494,6 +490,44 @@ class ReviewTaskExecutor:
     @staticmethod
     def goal_side(goal: ReviewGoal) -> str:
         return "base" if goal.target_kind == "base_source_range" else "head"
+
+    def _intent_assessment_error(self, goal, item, assessment, targets) -> str | None:
+        """返回精确的拒绝原因，供一次纠错和诊断使用。"""
+        from app.services.review_intent import matches_author_target
+        if not self.spec.intent_assessment_contract:
+            return "intent_contract_not_enabled"
+        if not matches_author_target(assessment.author_quote, targets):
+            return "unknown_author_target"
+        if not set(assessment.evidence_ids).issubset(item.evidence_ids):
+            return "intent_evidence_outside_examination"
+        if assessment.alignment not in {"supported", "contradicted"}:
+            return None  # insufficient / not_applicable 不要求局部证据。
+        if item.disposition.value != "examined":
+            return "intent_examination_not_examined"
+        if not assessment.evidence_ids:
+            return "intent_evidence_missing"
+        if not self._assessment_evidence_covers(goal, assessment):
+            return "intent_evidence_scope_mismatch"
+        return None
+
+    def _assessment_evidence_covers(self, goal: ReviewGoal, assessment) -> bool:
+        """目标对照只需局部源码观察；整段目标覆盖由 examination 自身保证。
+
+        v1 冻结契约要求目标对照也覆盖整个目标区间，会把“一个小观察 + 完整检查”
+        误判为非法；v2 只要求 supported/contradicted 引用的证据位于本目标范围内、
+        同文件同侧，不要求覆盖整段。未知路径仍应为 insufficient。
+        """
+        if self.spec.intent_assessment_contract != "structured-intent-v2":
+            return self._covers(goal, assessment.evidence_ids)
+        side = self.goal_side(goal)
+        for identity in assessment.evidence_ids:
+            evidence = self.evidence_catalog.get(identity)
+            if (evidence is None or evidence["file_path"] != goal.target_ref
+                    or evidence.get("side", "head") != side
+                    or evidence["start_line"] < goal.start_line
+                    or evidence["end_line"] > goal.end_line):
+                return False
+        return True
 
     def _covers(self, goal: ReviewGoal, identities: list[str]) -> bool:
         if goal.target_kind not in {"source_range", "base_source_range"}:

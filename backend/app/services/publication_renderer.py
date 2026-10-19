@@ -143,9 +143,11 @@ def merge_heading(plan):
 def merge_advice(plan):
     label, advice = merge_heading(plan)
     decision = plan.digest.merge_decision
-    lines = [f"**{label}**", "", advice,
-        f"阻断问题 {len(decision.blocking_finding_keys)} 项；非阻断建议 {len(decision.nonblocking_finding_keys)} 项。"
-        "严重度映射不替代对部署条件和业务影响的判断，仍需满足项目要求的 CI 与必要审批。"]
+    lines = [f"**{label}**", "", advice]
+    if decision.status != "unavailable" or decision.blocking_finding_keys or decision.nonblocking_finding_keys:
+        lines.append(
+            f"阻断问题 {len(decision.blocking_finding_keys)} 项；非阻断建议 {len(decision.nonblocking_finding_keys)} 项。"
+            "严重度映射不替代对部署条件和业务影响的判断，仍需满足项目要求的 CI 与必要审批。")
     if decision.limits:
         lines += ["", "仍需解决：", *[f"- {value}" for value in decision.limits]]
     return "\n\n".join(lines)
@@ -446,7 +448,14 @@ def render_technical_audit(plan, execution_record=None):
         "## 快照与结论身份", "", f"- 审查记录：{markdown_text(plan.review_id)}",
         f"- Head：{markdown_text(plan.snapshot.head_sha or '未知')}",
         f"- Effective Base：{markdown_text(plan.snapshot.effective_base_sha or '未知')}",
-        f"- 机器结论：{OUTCOME_LABELS[plan.outcome.kind]}", "", merge_advice(plan), "", "## 验证记录", "", *_validation_lines(plan)]
+        f"- 机器结论：{OUTCOME_LABELS[plan.outcome.kind]}"]
+    if plan.outcome.kind == "failed":
+        from app.services.task_review_projection import runtime_failure_summary
+        record = execution_record or {}
+        failure = record.get("failure_summary") or runtime_failure_summary(
+            record.get("diagnostics") or [], termination_reason=record.get("termination_reason"))
+        lines.append(f"- 失败原因：{markdown_text(failure)}")
+    lines += ["", merge_advice(plan), "", "## 验证记录", "", *_validation_lines(plan)]
     for title, data in (("目标符合性与证据引用", [item.model_dump(mode="json") for item in plan.digest.intent_assessments]),
                         ("作者声明输入完整性", {"status": plan.digest.author_context_status,
                             "limitation": plan.digest.author_context_limitation}),

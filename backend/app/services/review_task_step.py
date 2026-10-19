@@ -24,6 +24,14 @@ from app.tools.code_search import CodeSearchTool
 from app.review.run_audit import emit_run_audit
 
 
+_MODEL_CORRECTABLE_ERRORS = {
+    "invalid_json", "invalid_response_kind", "unknown_submit_field", "field_must_be_array",
+    "missing_intent_assessment", "invalid_intent_assessment_binding", "unknown_author_target",
+    "intent_evidence_outside_examination", "intent_evidence_missing",
+    "intent_examination_not_examined", "intent_evidence_scope_mismatch",
+}
+
+
 class InspectTaskStep:
     """仅离线切片入口；复用现有 scope、EvidenceStore 和唯一 RunBudget。"""
 
@@ -122,6 +130,19 @@ class InspectTaskStep:
                 if executor.spec.prompt_version in {"task-review-prompt-v5", "task-review-prompt-v6"}:
                     feedback.update(rejected_items=self.rejected_items,
                         accepted_target_ids=sorted(executor.projection.accepted_target_ids))
+                if executor.spec.intent_assessment_contract:
+                    from app.services.review_intent import author_targets
+                    reasons = sorted({error["reason"] for error in self.repair_errors
+                                      if isinstance(error.get("reason"), str)})
+                    feedback["intent_correction"] = (
+                        "Rejected intent assessment (" + ", ".join(reasons) + "): quote an exact author_target "
+                        "(or one complete sentence from it) and cite visible evidence inside the examined goal "
+                        "range for supported/contradicted. Use insufficient when the observation is only a "
+                        "partial premise.")
+                    feedback["intent_error_reasons"] = sorted({
+                        error["reason"] for error in self.repair_errors
+                        if isinstance(error.get("reason"), str)})
+                    feedback["author_targets"] = author_targets(executor.spec.pr_intent_context)
                 request = replace(request, prompt=request.prompt + "\n" + json.dumps(feedback, ensure_ascii=False))
 
             async def bind_attempt(attempt, admission):
@@ -182,8 +203,10 @@ class InspectTaskStep:
                 parsed.errors.append(RuntimeParseError("read", None, "repeated_read_no_progress"))
             else:
                 self.pending_read = parsed.response
+        # 模型可自行修正的提交错误只允许一次纠错；目标对照绑定错误属于此类，
+        # 不能因为一次引用不精确就终止整轮审查。
         schema_errors = [asdict(error) for error in parsed.errors
-                         if error.reason in {"invalid_json", "invalid_response_kind", "unknown_submit_field"}
+                         if error.reason in _MODEL_CORRECTABLE_ERRORS
                          or "validation error" in error.reason
                          or error.reason == "field_must_be_array"
                          or (error.reason == "incomplete_investigation_evidence"
