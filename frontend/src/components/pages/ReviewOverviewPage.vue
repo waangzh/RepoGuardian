@@ -4,26 +4,86 @@ import type { ReviewTask } from "../../types/review";
 import type { ReviewSummary } from "../../types/publication";
 import type { RuntimeFindingRow, TaskRuntimeSummary } from "../../utils/taskRuntimePresentation";
 import type { ReviewSection } from "../../types/workspace";
-import { evidenceLabel } from "../../utils/workspacePresentation";
 import ReviewOutcomePanel from "../review/ReviewOutcomePanel.vue";
 import PrChangeSummary from "../review/PrChangeSummary.vue";
 import CopyCommentButton from "../review/CopyCommentButton.vue";
 import AppIcon from "../common/AppIcon.vue";
-import EmptyState from "../common/EmptyState.vue";
 const props = defineProps<{ task: ReviewTask; report?: string | null; summaryPlan: ReviewSummary | null; summary: TaskRuntimeSummary | null; findings: RuntimeFindingRow[]; warnings: string[]; terminal: boolean }>();
 const emit = defineEmits<{ navigate: [section: ReviewSection]; finding: [key: string] }>();
-const active = computed(() => props.findings.filter(row => row.group !== "dismissed"));
-const confirmed = computed(() => props.summary?.findings.confirmed ?? (props.task.engine === "task_review_v1" ? null : props.findings.filter(row => row.group === "confirmed").length));
-const unresolved = computed(() => props.summary?.findings.unresolved ?? (props.task.engine === "task_review_v1" ? null : props.findings.filter(row => row.group === "unresolved").length));
-const mergeLabel = computed(() => props.summaryPlan?.digest.merge_decision?.label || "需要补充检查");
+const blocking = computed(() => props.summaryPlan?.digest.merge_decision?.blocking_finding_keys?.length ?? null);
+const unresolved = computed(() => props.summaryPlan?.outcome.unresolved_count ?? props.summary?.findings.unresolved ?? null);
+const examined = computed(() => props.summaryPlan?.outcome.examined_goals ?? props.summary?.scope.examined ?? null);
+const total = computed(() => props.summaryPlan?.outcome.total_goals ?? props.summary?.scope.total ?? null);
+const dynamicValidation = computed(() => props.summaryPlan?.outcome.dynamic_validation
+  || props.summaryPlan?.digest.validation_state || "unknown");
+const validationLabel = computed(() => ({ not_executed: "未执行目标仓库代码、测试或构建",
+  passed: "已有当前 Head 通过结果", failed: "已有当前 Head 失败结果",
+  independent_results: "已有独立补丁结果，当前 Head 未知", unknown: "动态验证状态未知" })[dynamicValidation.value] || "动态验证状态未知");
+const validations = computed(() => props.summaryPlan?.digest.validations || []);
 </script>
 <template>
-  <div class="section-stack">
-    <ReviewOutcomePanel v-if="summaryPlan" :plan="summaryPlan" />
-    <section v-else class="summary-banner"><div class="eyebrow">REVIEW OUTCOME</div><h2>{{ !terminal ? '审查正在进行中' : '审查结果需要结合范围判断' }}</h2><p>结论尚未取得后端发布结果，请参考下方记录与限制。</p></section>
-    <div class="notice"><AppIcon name="info" /><div>本轮结论不等于代码已被证明正确。0 个问题不代表所有业务路径已验证，静态核验不能代替测试。</div></div>
-    <div class="kpis"><section class="card kpi"><div class="cap">静态核验已确认的问题</div><div class="number">{{ confirmed ?? '未知' }}</div><small>按服务端发现状态统计</small></section><section class="card kpi"><div class="cap">待确认候选</div><div class="number">{{ unresolved ?? '未知' }}</div><small>可能需要业务背景或补充依据</small></section><section class="card kpi"><div class="cap">证据不足的补充调查</div><div class="number">{{ summary?.investigations.insufficient_evidence ?? '未知' }}</div><small>调查状态，不等同于缺陷数量</small></section><section class="card kpi"><div class="cap">约定目标已检查</div><div class="number">{{ summary?.scope.examined ?? '—' }}<small> / {{ summary?.scope.total ?? '—' }}</small></div><small>目标完成度，不是测试覆盖率</small></section></div>
-    <div class="grid twoone"><div class="section-stack"><section class="card card-pad"><div class="card-header"><div><h2>需要你关注</h2><p>优先查看结论、证据与触发条件</p></div><button type="button" class="link" @click="emit('navigate', 'findings')">查看全部 →</button></div><button v-for="row in active.slice(0, 5)" :key="row.key" type="button" class="recent-row" @click="emit('finding', row.key)"><AppIcon :name="row.group === 'confirmed' ? 'alert' : 'help'" /><span class="recent-identity"><strong>{{ row.title }}</strong><small>{{ evidenceLabel(row.status, row.issue) }} · {{ row.filePath || '尚无代码定位' }}</small></span><AppIcon name="arrow-right" :size="15" /></button><EmptyState v-if="!active.length" icon="context" :title="terminal ? '本轮没有可展示的待处理发现' : '正在检查本次变更'" description="请同时查看检查完整性、未决调查与未知状态。" /></section><PrChangeSummary :task="task" :report="report" :understanding="summaryPlan?.digest.change_understanding" :author-limitation="summaryPlan?.digest.author_context_limitation" /></div>
-      <aside class="section-stack"><section class="card card-pad"><div class="card-header"><div><h2>本次审查的证据边界</h2><p>完成情况与运行限制分别说明</p></div></div><div class="rg-boundary-row"><AppIcon name="shield" /><div><strong>只读静态检查</strong><p>目标完成 {{ summary ? `${summary.scope.examined} / ${summary.scope.total}` : '未知' }}；不表示代码正确。</p></div></div><div class="rg-boundary-row"><AppIcon name="info" /><div><strong>{{ task.validation.length ? '历史动态验证记录需单独查看' : '未执行目标仓库测试或构建' }}</strong><p>动态结果与静态结论独立。</p></div></div><ul v-if="warnings.length" class="rg-limitations"><li v-for="warning in warnings" :key="warning">{{ warning }}</li></ul><button type="button" class="btn secondary space-top" @click="emit('navigate', 'scope')">查看覆盖范围与局限 →</button></section><section class="card card-pad"><div class="card-header"><h2>完成审查</h2></div><p class="small muted">审查结论：{{ mergeLabel }}。复制前会检查 PR 是否已有新提交。</p><div class="hstack wrap space-top"><CopyCommentButton v-if="summaryPlan" :review-id="task.id" :reviewed-head-sha="summaryPlan.snapshot.head_sha" :markdown="summaryPlan.review_comment_markdown || ''" /><button v-else type="button" class="btn secondary" @click="emit('navigate', 'report')">查看报告</button><button type="button" class="btn secondary" @click="emit('navigate', 'report')">校对详细报告</button></div><p class="small muted space-top">发布到 GitHub 属于可选的高权限操作，可在报告页按需进入。</p></section></aside></div>
+  <div class="section-stack overview-layers">
+    <section class="overview-layer">
+      <div class="layer-label">第一层 · 审查结果</div>
+      <ReviewOutcomePanel v-if="summaryPlan" :plan="summaryPlan" />
+      <section v-else class="summary-banner"><div class="eyebrow">审查结果</div><h2>{{ !terminal ? '审查正在进行中' : '审查结果需要结合范围判断' }}</h2><p>结论尚未取得后端发布结果，请参考下方记录与限制。</p></section>
+    </section>
+    <section class="overview-layer">
+      <div class="layer-label">第二层 · 核心发现</div>
+      <div class="core-findings">
+        <div class="core-finding"><strong>{{ blocking ?? '未知' }}</strong><span>阻断问题</span></div>
+        <div class="core-finding"><strong>{{ unresolved ?? '未知' }}</strong><span>待确认风险</span></div>
+        <div class="core-finding"><strong>{{ examined ?? '未知' }}<small v-if="total !== null"> / {{ total }}</small></strong><span>目标已检查</span></div>
+      </div>
+    </section>
+    <section class="overview-layer">
+      <div class="layer-label">第三层 · 建议行动</div>
+      <div class="overview-actions">
+        <div class="overview-action-cell">
+          <CopyCommentButton v-if="summaryPlan" :review-id="task.id" :reviewed-head-sha="summaryPlan.snapshot.head_sha" :markdown="summaryPlan.review_comment_markdown || ''" />
+          <button v-else type="button" class="btn secondary" @click="emit('navigate', 'report')">查看报告</button>
+        </div>
+        <button type="button" class="btn secondary overview-action" @click="emit('navigate', 'findings')">
+          <AppIcon name="search" :size="16" />查看待确认风险
+        </button>
+      </div>
+    </section>
+    <section class="overview-layer">
+      <div class="layer-label">第四层 · 更多信息</div>
+      <div class="overview-more">
+        <details class="overview-more__item">
+          <summary>PR 变更理解</summary>
+          <div class="overview-more__body"><PrChangeSummary :task="task" :report="report" :understanding="summaryPlan?.digest.change_understanding" :author-limitation="summaryPlan?.digest.author_context_limitation" /></div>
+        </details>
+        <details class="overview-more__item">
+          <summary>审查范围与限制</summary>
+          <div class="overview-more__body">
+            <p class="small muted">只读静态审查：目标完成 {{ examined ?? '未知' }} / {{ total ?? '未知' }}；不表示代码正确，0 个问题也不代表所有业务路径已验证。</p>
+            <p v-if="summaryPlan?.outcome.incomplete_investigations" class="small muted">仍有 {{ summaryPlan.outcome.incomplete_investigations }} 项调查未完成，相关结论需补充证据。</p>
+            <ul v-if="warnings.length" class="rg-limitations"><li v-for="warning in warnings" :key="warning">{{ warning }}</li></ul>
+            <button type="button" class="link" @click="emit('navigate', 'scope')">查看覆盖范围与局限 →</button>
+          </div>
+        </details>
+        <details class="overview-more__item">
+          <summary>动态验证</summary>
+          <div class="overview-more__body">
+            <p class="small muted">{{ validationLabel }}；动态结果与静态结论独立，不替代 CI 与人工审批。</p>
+            <ul v-if="validations.length"><li v-for="item in validations" :key="item.id">{{ item.source }} / {{ item.stage }}：{{ item.status }}。{{ item.reason }}</li></ul>
+          </div>
+        </details>
+        <details class="overview-more__item">
+          <summary>技术记录</summary>
+          <div class="overview-more__body">
+            <p v-if="summary" class="small muted">执行状态：{{ summary.execution.status || '未知' }}；终止记录：{{ summary.execution.termination_reason || '未记录' }}；计量完整性：{{ summary.usage.integrity || '未知' }}。</p>
+            <p v-else class="small muted">技术运行记录尚未取得。</p>
+            <div class="hstack wrap">
+              <button type="button" class="btn secondary" @click="emit('navigate', 'activity')">查看技术记录</button>
+              <button type="button" class="btn secondary" @click="emit('navigate', 'report')">查看详细报告</button>
+              <button type="button" class="btn secondary" @click="emit('navigate', 'publish')">发布到 GitHub</button>
+            </div>
+          </div>
+        </details>
+      </div>
+    </section>
   </div>
 </template>
