@@ -1,31 +1,23 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { PublicationPlan, ReviewSummary } from "../../types/publication";
+import type { ReviewSituation } from "../../utils/reviewSituation";
+import { reviewSituation } from "../../utils/reviewSituation";
 import AppIcon from "../common/AppIcon.vue";
 
-const props = defineProps<{ plan: PublicationPlan | ReviewSummary }>();
+const props = defineProps<{ plan: PublicationPlan | ReviewSummary; stale?: boolean }>();
 const coverageLabels = { complete: "完整", partial: "部分完成", unknown: "未知" };
-// 只呈现一次当前结论；图标与色条由后端三态决定，文案使用服务端 label/advice。
-const mergeStyles = {
-  conditional_merge: { icon: "check-circle", tone: "success" },
-  fix_blockers: { icon: "alert", tone: "danger" },
-  resolve_unknowns: { icon: "help", tone: "warning" },
-} as const;
 const decision = computed(() => props.plan.digest.merge_decision);
-const current = computed(() => {
-  const status = decision.value?.status;
-  const key = status === "conditional_merge" || status === "fix_blockers" ? status : "resolve_unknowns";
-  return { ...mergeStyles[key], label: decision.value?.label || "需要补充检查", description: decision.value?.advice || "" };
-});
+const situation = computed(() => reviewSituation(props.plan, { stale: props.stale }));
 </script>
 <template>
   <article class="summary-banner publication-outcome" aria-label="审查结论">
-    <div class="outcome-verdict" :class="current.tone">
-      <AppIcon :name="current.icon" :size="22" />
+    <div v-if="situation" class="outcome-verdict" :class="situation.tone">
+      <AppIcon :name="situation.icon" :size="22" />
       <div class="outcome-verdict__text">
         <div class="eyebrow">审查结果 · 本轮快照结论</div>
-        <h2>{{ current.label }}</h2>
-        <p>{{ current.description }}</p>
+        <h2>{{ situation.title }}</h2>
+        <p>{{ situation.description }}</p>
       </div>
     </div>
     <details class="runtime-technical outcome-details">

@@ -1,17 +1,24 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import type { ReviewTask } from "../../types/review";
 import type { ReviewSummary } from "../../types/publication";
 import type { RuntimeFindingRow, TaskRuntimeSummary } from "../../utils/taskRuntimePresentation";
 import type { ReviewSection } from "../../types/workspace";
+import type { ReviewSituation, SituationActionKey } from "../../utils/reviewSituation";
+import { reviewSituation } from "../../utils/reviewSituation";
 import ReviewOutcomePanel from "../review/ReviewOutcomePanel.vue";
 import PrChangeSummary from "../review/PrChangeSummary.vue";
 import CopyCommentButton from "../review/CopyCommentButton.vue";
 import AppIcon from "../common/AppIcon.vue";
 const props = defineProps<{ task: ReviewTask; report?: string | null; summaryPlan: ReviewSummary | null; summary: TaskRuntimeSummary | null; findings: RuntimeFindingRow[]; warnings: string[]; terminal: boolean }>();
-const emit = defineEmits<{ navigate: [section: ReviewSection]; finding: [key: string] }>();
-const blocking = computed(() => props.summaryPlan?.digest.merge_decision?.blocking_finding_keys?.length ?? null);
-const unresolved = computed(() => props.summaryPlan?.outcome.unresolved_count ?? props.summary?.findings.unresolved ?? null);
+const emit = defineEmits<{ navigate: [section: ReviewSection]; finding: [key: string]; create: [] }>();
+
+// “PR 已有新提交”只有复制前快照检查才能确认；页面加载不额外访问 GitHub。
+// 复制检查返回 stale 时切换到旧版本情景，用户重新审查前不会误用原结论。
+const stale = ref(false);
+watch(() => props.task.id, () => { stale.value = false; });
+
+const situation = computed<ReviewSituation | null>(() => reviewSituation(props.summaryPlan, { stale: stale.value }));
 const examined = computed(() => props.summaryPlan?.outcome.examined_goals ?? props.summary?.scope.examined ?? null);
 const total = computed(() => props.summaryPlan?.outcome.total_goals ?? props.summary?.scope.total ?? null);
 const dynamicValidation = computed(() => props.summaryPlan?.outcome.dynamic_validation
@@ -20,36 +27,49 @@ const validationLabel = computed(() => ({ not_executed: "未执行目标仓库�
   passed: "已有当前 Head 通过结果", failed: "已有当前 Head 失败结果",
   independent_results: "已有独立补丁结果，当前 Head 未知", unknown: "动态验证状态未知" })[dynamicValidation.value] || "动态验证状态未知");
 const validations = computed(() => props.summaryPlan?.digest.validations || []);
+
+// 建议行动：严格按情景矩阵给出主要操作；无风险时不出现“查看待确认风险”。
+const primaryActions = computed(() => {
+  const keys = situation.value?.actions.map(item => item.key) ?? [];
+  const includeCopy = situation.value?.key === "clean" || situation.value?.key === "nonblocking";
+  return { keys, includeCopy };
+});
+function runAction(key: SituationActionKey) {
+  if (key === "view_blockers" || key === "view_unresolved" || key === "view_findings") emit("navigate", "findings");
+  else if (key === "view_gaps") emit("navigate", "scope");
+  else if (key === "view_validation" || key === "view_activity") emit("navigate", "activity");
+  else if (key === "rereview") emit("create");
+}
 </script>
 <template>
   <div class="section-stack overview-layers">
     <section class="overview-layer">
-      <div class="layer-label">第一层 · 审查结果</div>
-      <ReviewOutcomePanel v-if="summaryPlan" :plan="summaryPlan" />
+      <div class="layer-label">审查结果</div>
+      <ReviewOutcomePanel v-if="summaryPlan" :plan="summaryPlan" :stale="stale" />
       <section v-else class="summary-banner"><div class="eyebrow">审查结果</div><h2>{{ !terminal ? '审查正在进行中' : '审查结果需要结合范围判断' }}</h2><p>结论尚未取得后端发布结果，请参考下方记录与限制。</p></section>
     </section>
     <section class="overview-layer">
-      <div class="layer-label">第二层 · 核心发现</div>
+      <div class="layer-label">核心发现</div>
       <div class="core-findings">
-        <div class="core-finding"><strong>{{ blocking ?? '未知' }}</strong><span>阻断问题</span></div>
-        <div class="core-finding"><strong>{{ unresolved ?? '未知' }}</strong><span>待确认风险</span></div>
+        <div class="core-finding"><strong>{{ situation?.blockingCount ?? '未知' }}</strong><span>阻断问题</span></div>
+        <div class="core-finding"><strong>{{ situation?.unresolvedCount ?? '未知' }}</strong><span>待确认风险</span></div>
         <div class="core-finding"><strong>{{ examined ?? '未知' }}<small v-if="total !== null"> / {{ total }}</small></strong><span>目标已检查</span></div>
       </div>
     </section>
     <section class="overview-layer">
-      <div class="layer-label">第三层 · 建议行动</div>
-      <div class="overview-actions">
-        <div class="overview-action-cell">
-          <CopyCommentButton v-if="summaryPlan" :review-id="task.id" :reviewed-head-sha="summaryPlan.snapshot.head_sha" :markdown="summaryPlan.review_comment_markdown || ''" />
+      <div class="layer-label">建议行动</div>
+      <div class="overview-actions" :class="{ single: !primaryActions.includeCopy && primaryActions.keys.length <= 1 }">
+        <div v-if="primaryActions.includeCopy" class="overview-action-cell">
+          <CopyCommentButton v-if="summaryPlan" :review-id="task.id" :reviewed-head-sha="summaryPlan.snapshot.head_sha" :markdown="summaryPlan.review_comment_markdown || ''" @snapshot="stale = $event === 'stale'" />
           <button v-else type="button" class="btn secondary" @click="emit('navigate', 'report')">查看报告</button>
         </div>
-        <button type="button" class="btn secondary overview-action" @click="emit('navigate', 'findings')">
-          <AppIcon name="search" :size="16" />查看待确认风险
+        <button v-for="key in primaryActions.keys" :key="key" type="button" class="btn secondary overview-action" @click="runAction(key)">
+          <AppIcon :name="(situation?.actions.find(item => item.key === key)?.icon) || 'arrow-right'" :size="16" />{{ situation?.actions.find(item => item.key === key)?.label }}
         </button>
       </div>
     </section>
     <section class="overview-layer">
-      <div class="layer-label">第四层 · 更多信息</div>
+      <div class="layer-label">更多信息</div>
       <div class="overview-more">
         <details class="overview-more__item">
           <summary>PR 变更理解</summary>

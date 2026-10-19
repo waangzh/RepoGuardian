@@ -24,16 +24,17 @@ test("概览使用统一合并建议并区分补丁结果与 Head 验证", async
   const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   try {
     const { default: component } = await server.ssrLoadModule("/src/components/review/ReviewOutcomePanel.vue");
-    const plan = { outcome: { kind: "clean", dynamic_validation: "independent_results", reason_codes: [] }, withheld_findings: [],
+    const plan = { outcome: { kind: "clean", dynamic_validation: "independent_results", reason_codes: [], examined_goals: 2, total_goals: 2,
+      unresolved_count: 0, review_completeness: "complete", finding_conclusion: "no_confirmed_findings", runtime_reliability: "reliable" }, withheld_findings: [],
       digest: { merge_decision: { status: "conditional_merge", label: "未发现阻断性问题", advice: "统一事实要求补查缓存路径",
-        blocking_finding_keys: ["a"], nonblocking_finding_keys: [], limits: ["调用方尚未核验"] },
+        blocking_finding_keys: [], nonblocking_finding_keys: [], limits: ["调用方尚未核验"] },
         validations: [{ id: "v", source: "user_runner", stage: "patched", status: "passed", reason: "不代表当前 Head 已通过" }] } };
     const html = await renderToString(createSSRApp(component, { plan }));
-    for (const value of ["已有独立补丁结果，Head 未知", "未发现阻断性问题", "统一事实要求补查缓存路径",
+    for (const value of ["已有独立补丁结果，Head 未知", "本次静态审查未发现需处理的问题", "在已检查范围内未发现达到报告门槛的缺陷",
       "不代表当前 Head 已通过", "调用方尚未核验"]) assert.ok(html.includes(value));
-    // 只展示当前结论；其余两态不作为选项出现。
-    assert.equal(html.match(/class="(?:success|danger|warning) outcome-verdict"/g)?.length, 1);
-    assert.ok(!html.includes("建议修改后再合并") && !html.includes("需要补充检查"));
+    // 只展示当前情景结论；不出现其他情景或旧合并标签。
+    assert.equal(html.match(/class="(?:success|info|warning|danger) outcome-verdict"/g)?.length, 1);
+    for (const text of ["建议修改后再合并", "需要补充检查", "发现非阻断性问题", "审查结论尚不充分"]) assert.ok(!html.includes(text));
   } finally { await server.close(); }
 });
 

@@ -8,24 +8,23 @@ test("Outcome 显示后端数量，不根据问题列表推断 Clean", async () 
   const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   try {
     const { default: component } = await server.ssrLoadModule("/src/components/review/ReviewOutcomePanel.vue");
-    for (const [kind, status, label] of [["clean", "conditional_merge", "未发现阻断性问题"],
-      ["findings", "fix_blockers", "建议修改后再合并"], ["inconclusive", "resolve_unknowns", "需要补充检查"],
-      ["failed", "unavailable", "需要补充检查"], ["cancelled", "unavailable", "需要补充检查"]]) {
+    // 展示层情景标题由内部状态组合；failed/cancelled 不再复用“需要补充检查”。
+    for (const [kind, status, title] of [["clean", "conditional_merge", "本次静态审查未发现需处理的问题"],
+      ["findings", "fix_blockers", "发现需要优先修复的问题"], ["inconclusive", "resolve_unknowns", "部分审查已完成"],
+      ["failed", "unavailable", "审查未完成"], ["cancelled", "unavailable", "审查已停止"]]) {
       const plan = { schema_version: "review-summary-v1",
         outcome: { kind, coverage: "partial", confirmed_count: 3, publishable_count: 2, unresolved_count: 1,
-        examined_goals: 8, total_goals: 10, incomplete_investigations: 1, reason_codes: ["scope_incomplete"] },
-        digest: { merge_decision: { status, label, advice: "先处理阻断问题" }, validations: [] },
+        examined_goals: 8, total_goals: 10, incomplete_investigations: 1, reason_codes: ["scope_incomplete"],
+        dynamic_validation: "not_executed", review_completeness: "partial", finding_conclusion: "confirmed", runtime_reliability: "reliable" },
+        digest: { merge_decision: { status, label: "服务端标签", advice: "服务端建议", blocking_finding_keys: status === "fix_blockers" ? ["k"] : [],
+          nonblocking_finding_keys: [], limits: [] }, validations: [] },
         withheld_findings: [{ candidate_id: "c1", reason_code: "snapshot_mismatch" }] };
       const html = await renderToString(createSSRApp(component, { plan }));
-      // 结论只出现一次；技术计数与限制收进折叠区，不再重复展示。
-      for (const expected of [label, "技术结论与限制", "scope_incomplete", "snapshot_mismatch"]) assert.ok(html.includes(expected));
-      assert.equal(html.match(new RegExp(label, "g"))?.length, 1);
+      // 结论标题由展示层情景决定，只出现一次；技术细节收进折叠区。
+      for (const expected of [title, "技术结论与限制", "scope_incomplete", "snapshot_mismatch"]) assert.ok(html.includes(expected));
+      assert.equal(html.match(new RegExp(title, "g"))?.length, 1);
       assert.ok(!html.includes("3 项已确认问题") && !html.includes("8 / 10"));
-      // 合并建议只展示当前结论，其他选项不出现。
-      assert.equal(html.match(/class="(?:success|danger|warning) outcome-verdict"/g)?.length, 1);
-      for (const other of ["未发现阻断性问题", "建议修改后再合并", "需要补充检查"].filter(value => value !== label)) {
-        assert.ok(!html.includes(other));
-      }
+      assert.equal(html.match(/class="(?:success|info|warning|danger) outcome-verdict"/g)?.length, 1);
     }
   } finally { await server.close(); }
 });
@@ -77,7 +76,8 @@ test("完整范围和计量限制分开展示；历史维度缺失保持未知",
   try {
     const { default: component } = await server.ssrLoadModule("/src/components/review/ReviewOutcomePanel.vue");
     const plan = { outcome: { kind: 'inconclusive', coverage: 'partial', review_completeness: 'complete',
-      runtime_reliability: 'unreliable', dynamic_validation: 'not_executed', finding_conclusion: 'no_confirmed_findings', reason_codes: [] },
+      runtime_reliability: 'unreliable', dynamic_validation: 'not_executed', finding_conclusion: 'no_confirmed_findings',
+      reason_codes: [], examined_goals: 3, total_goals: 3, unresolved_count: 0 },
       digest: { merge_decision: { status: 'resolve_unknowns', label: '需要补充检查', advice: '先补齐限制' } }, withheld_findings: [] };
     const html = await renderToString(createSSRApp(component, { plan }));
     for (const text of ['审查完整性：完整', '存在计量或执行限制', '未发现已确认缺陷', '未执行']) assert.ok(html.includes(text));
