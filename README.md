@@ -2,7 +2,7 @@
 
 > 基于证据、理解仓库上下文、严格只读的 AI Pull Request 代码审查 Agent。
 
-输入 GitHub PR URL，预览变更并确认审查方案，再由 Agent 探索仓库上下文、核验候选问题，输出带代码证据、检查覆盖情况和实际用量的审查报告。
+输入 GitHub PR URL，先了解变更并确认审查方案，再由 Agent 探索关联代码、核验候选问题，输出可追溯的审查结论、覆盖与限制，以及可复制到 PR 的交付摘要。
 
 **RepoGuardian Server 永远不执行目标仓库代码。** 默认进行只读静态审查；测试与构建需另行配置 GitHub Project CI 或外部 User Runner。
 
@@ -10,11 +10,11 @@
 
 ## 项目特点
 
-- **先预览，再确认方案**：预览变更文件、初始审查分组与风险标签，选择深度、重点、主审范围、模型和资源限额；保存的方案绑定 PR 快照，预览阶段不调用模型。
-- **结合仓库上下文**：Agent 使用只读搜索与文件读取理解关联代码；PR 标题和正文提供背景，但不能替代代码证据。
+- **先了解变更，再决定如何审查**：首先从 GitHub 获取变更概览，无需等待克隆和索引；准备完整方案后选择深度、重点、范围、模型与限额，确认前不调用模型。
+- **区分作者目标与实际行为**：结合 PR 描述和只读代码搜索，检查声明的目标与实际变更是否吻合；摘要保留证据和未确认项，不用作者描述替代代码事实。
 - **目标驱动的分工检查**：将变更规划为审查目标与工作项，在固定快照上独立检查；对证据缺口派生受限调查与独立核验。
 - **证据与人工处理分别记录**：候选问题经过证据解析、策略检查和独立核验；可查看代码位置、依据与限制，并填写原因进行人工确认、忽略或标记已处理。
-- **过程可观察、任务可恢复**：查看检查范围、未决问题、模型用量和耗时；持久化任务与检查记录，恢复时复用兼容的已完成结果。
+- **结论、限制与交付可追溯**：分别呈现执行状态、问题证据与风险，提供 PR 交付摘要、详细报告和技术审计；任务与检查记录持久化，恢复时复用兼容的已完成结果。
 
 可识别 Python、TypeScript/JavaScript、Java、Go 和 Rust。Python 与 TS/JS 使用 Tree-sitter，其他语言目前采用启发式索引，分析深度有所不同。
 
@@ -66,7 +66,7 @@ uv run alembic upgrade head
 uv run uvicorn app.main:app --reload
 ```
 
-API 默认运行在 <http://127.0.0.1:8000>。访问 [健康检查](http://127.0.0.1:8000/health)，应返回 `{"status":"ok"}`；接口文档见 [Swagger UI](http://127.0.0.1:8000/docs)。
+API 默认运行在 `http://127.0.0.1:8000`。访问 [健康检查](http://127.0.0.1:8000/health)，应返回 `{"status":"ok"}`；接口文档见 [Swagger UI](http://127.0.0.1:8000/docs)。
 
 ### 2. 启动前端
 
@@ -78,22 +78,22 @@ npm install
 npm run dev
 ```
 
-打开 Vite 输出的地址（默认 <http://localhost:5173>）。前端开发服务器会将 `/api` 和 `/health` 请求代理到本机的 `8000` 端口，后端需保持运行。
+打开 Vite 输出的地址（默认 `http://localhost:5173`），应看到 **新建审查** 页面。前端开发服务器会将 `/api` 和 `/health` 请求代理到本机的 `8000` 端口，后端需保持运行。
 
 ## 如何使用
 
-1. 在 **新建审查** 输入可访问的 GitHub PR URL，点击 **分析 PR**，查看仓库准备、索引、生成方案等阶段与耗时，再查看变更文件、风险标签和初始分组。预览在服务端执行，刷新后本浏览器会按保存的预览标识恢复查询；可显式取消。预览需要访问 GitHub，但不调用模型。
-2. 在 **确认审查方案** 中选择深度、审查重点、全部变更或自定义文件/模块，以及模型调用次数、Token 和运行时间上限；可在 **高级模型设置** 中选择执行模型。
-3. 修改配置后点击 **校验并保存方案**，再点击 **确认方案并开始审查**。保存的待确认方案有效期为 15 分钟，绑定 Head 与实际 Diff 基准 SHA；过期、快照或关键策略变化时须重新预览，不能直接使用旧方案启动任务。
-4. 在 **结果概览** 查看进度和结论，通过 **覆盖与限制**、**变更文件** 和 **技术记录** 检查实际覆盖、证据、调查结果与未检查项。
+1. 在 **新建审查** 输入可访问的 GitHub PR URL，点击 **预览 PR 变更**。这一步只读取 GitHub 元数据与文件统计，不克隆、不索引、不调用模型；概览最多显示 100 个文件，列表不完整时会提示。
+2. 点击 **准备完整审查方案**，查看仓库准备、索引和方案生成进度，再选择审查深度、重点、全部变更或自定义文件/模块，以及执行模型、调用次数、Token 和运行时间上限。完整预览仍不调用模型，可取消；本浏览器刷新后可恢复查询进度。
+3. 修改配置后点击 **校验并保存方案**，再点击 **确认方案并开始审查**。待确认方案有效期为 15 分钟，绑定 PR 快照与配置；确认时会重新读取 PR 元数据校验，匹配后直接使用保存的方案。PR 提交、标题、正文或关键配置变化时，须重新预览。
+4. 在 **结果概览** 先看结论与下一步行动，再查看作者目标、实际变更和证据限制。通过 **覆盖与限制**、**变更文件** 和 **技术记录** 追踪未检查目标、代码 Diff、关联调查与实际用量。
 5. 审查结束后，在 **问题与证据** 结合代码依据复核发现，填写原因后可执行 **人工确认**、**忽略**、**已处理** 或 **重新打开**。人工处理记录不改变机器证据状态或 GitHub 发布资格。
-6. 在 **审查报告** 切换用户报告、PR Summary 草稿与完整审计，复制或导出 Markdown；在 **审查历史** 中按 PR 链接、仓库、标题或任务 ID 搜索全部历史并重新打开记录。
+6. 在 **审查报告** 选择交付内容，复制或导出 Markdown；也可使用单独配置的 GitHub 发布功能。在 **审查历史** 中按 PR 链接、仓库、标题或任务 ID 搜索并重新打开记录。
 
 审查自动执行至最终报告，不会暂停等待人工回答。证据不足、验证失败和缺少业务规则的内容保留为未确认问题或覆盖缺口；由你在原 PR 决定是否接受、修改或合并，也可自行将报告复制到评论。
 
-大型仓库首次预览仍需克隆和建立索引。相同仓库、Base/Head 与输入协议的成功准备结果可复用，调整方案或确认时仍会获取最新 PR 信息并重新校验。准备缓存保留 24 小时，最多 4 份、每份压缩存储不超过 32 MiB、展开不超过 512 MiB；缓存未命中或校验失败会重新准备，不代表审查失败。方案本身仍遵守 15 分钟确认期限。浏览器存储被禁用或清除时，无法在刷新后自动找回预览。
+大型仓库首次准备完整方案仍需克隆和建立索引；相同固定快照的成功准备结果可复用。准备缓存保留 24 小时并受容量限制，未命中或校验失败时会重新准备；已保存方案的确认不依赖准备缓存，也不会再次克隆、索引或规划。方案仍遵守 15 分钟确认期限。浏览器存储被禁用或清除时，无法在刷新后自动找回完整预览。
 
-升级包含预览作业功能的版本时，先停止后端，在 `backend/` 执行 `uv run alembic upgrade head`，再启动后端；不要只刷新前端。旧审查记录与旧预览凭据保留。
+升级时先停止后端，在 `backend/` 执行 `uv run alembic upgrade head`，再启动后端。历史审查记录可继续查看；旧的未消费预览若缺少当前校验信息，需要重新生成方案。
 
 ### 审查方案与默认偏好
 
@@ -116,21 +116,48 @@ npm run dev
 默认关闭。仅支持可信的本地单用户部署，发布接口要求本机连接及独立 Bearer 操作口令，不支持直接公开到公网。操作口令仅在页面内存中临时使用，不是 GitHub PAT。
 
 1. 在 `backend/.env` 中配置独立的 `REPOGUARDIAN_GITHUB_PUBLISH_TOKEN`（Fine-grained PAT，仅授权目标仓库的 **Pull requests: write**）、数字仓库 ID allowlist、PAT 用户数字 ID，以及至少 32 字符的 `REPOGUARDIAN_PUBLICATION_API_TOKEN`。不会回退使用只读 `GITHUB_TOKEN`。
-2. 在 GitHub 核对该 PAT 的权限后设置 `REPOGUARDIAN_GITHUB_PUBLISH_PULL_REQUESTS_WRITE_CONFIRMED=true`，再启用 `REPOGUARDIAN_GITHUB_PUBLISH_ENABLED=true`。预检还会读取 GitHub 身份与仓库写角色；仓库角色不等于 Token grant，实际写入的 401/403 仍会被明确拒绝。完整配置见 [`.env.example`](.env.example)。
-3. 在 `backend/` 执行 `uv run alembic upgrade head`，再重启后端。在终态审查页展开 **发布到 GitHub**，输入操作口令、选择问题并预检。确认 Summary 创建/更新、Head、Inline 行映射和已有评论后，二次确认写入。
+2. 在 GitHub 核对该 PAT 的权限后设置 `REPOGUARDIAN_GITHUB_PUBLISH_PULL_REQUESTS_WRITE_CONFIRMED=true`，再启用 `REPOGUARDIAN_GITHUB_PUBLISH_ENABLED=true`。预检还会读取 GitHub 身份与仓库写角色；仓库角色不等于 Token grant，实际写入的 401/403 仍会被明确拒绝。完整配置见 [环境变量示例](.env.example)。
+3. 在 `backend/` 执行 `uv run alembic upgrade head`，再重启后端。在终态审查页进入 **发布到 GitHub**，输入操作口令、选择问题并预检。确认 Summary 创建/更新、Head、Inline 行映射和已有评论后，二次确认写入。
 4. 发布状态与 Review Outcome 独立。可通过发布历史重新查看状态及 GitHub 返回的链接。`uncertain` 使用 **检查远端发布状态**：先核对已发送批次，无法确认时保留未知并要求人工处理，不盲目重发 POST。
 
 Summary 复用同一 PR、同一发布身份的主评论；Inline 按同一 Head 的严格内容和定位去重。过期 Base/Head、关闭 PR、未知作者或手工修改的摘要会阻止写入。无法精确映射的已核验问题可降为 Summary-only，需要明确确认部分发布。跨系统写入并非原子事务，不承诺 exactly-once；API 版本复查后仍存在短暂远端竞态窗口。
 
-解读结果时注意：
+### 结果解读与报告交付
 
-- **覆盖情况**：覆盖按审查目标统计；只有该文件的全部目标均为 `examined` 才计为已审查。`partial`、`blocked` 或 `completed_with_warnings` 表示仍有未完整完成的检查。
+概览的合并建议分为 **未发现阻断性问题**、**建议修改后再合并** 和 **需要补充检查**。它们是基于当前快照的审查建议，不代替测试、业务验收或人工合并决定。
+
+- **覆盖情况**：覆盖按审查目标统计；只有该文件的全部目标均为 `examined` 才计为已审查。目标完成比例不是代码或测试覆盖率。`partial`、`blocked` 表示目标尚未完整检查；`completed_with_warnings` 还需结合具体原因核对，不能直接推断范围完整或证据充分。
 - **问题与检查状态**：`checked` 仅表示检查过，零 Issue 不代表代码正确；缺失证据、未执行补查和未知结果需要人工复核。
 - **调用与成本**：初始预览分组与资源上限不代表最终调用数或费用；实际用量还包括派生调查、核验与重试。未配置模型价格或实际用量缺失时，费用保持未知，不能视为零成本或最终账单。
 
+| 报告类型 | 适用场景 |
+| --- | --- |
+| PR 交付摘要 | 面向 PR 作者和 Reviewer，包含变更概述、问题、未决事项与建议；可选择精简或详细内容。 |
+| 详细审查报告 | 复核变更理解、问题依据、触发场景、影响与建议，并跳转到代码和证据。 |
+| 技术审计 | 排查执行、目标、调查和证据记录，查看结构化摘要并按需展开原始字段。 |
+
+复制或导出 **PR 交付摘要** 前会核对远端 Head；有新提交或无法确认时，需明确确认并保留快照限制说明。详细报告支持历史导出。人工处理、机器证据与 GitHub 投递分别记录，人工确认不会自动将候选问题变成已核验或已发布。
+
 ## 配置
 
-配置写入 `backend/.env`，修改后重启后端；完整变量说明见 [`.env.example`](.env.example)。
+配置写入 `backend/.env`，修改后重启后端；完整变量说明见 [环境变量示例](.env.example)。以下为常用配置：
+
+```env
+GITHUB_TOKEN="" # GitHub 读取凭据，私有仓库需授权访问；与发布凭据分开
+REPOGUARDIAN_PROVIDER=openai # 模型供应商标识，与所用服务匹配
+OPENAI_API_KEY=your-api-key # 模型服务的 API Key
+OPENAI_BASE_URL=https://api.openai.com/v1 # 可替换为 OpenAI 兼容服务地址
+REPOGUARDIAN_MODEL=gpt-4.1-mini # 使用该服务实际支持的模型名
+REPOGUARDIAN_RUN_MAX_CALLS=200 # 整次运行的模型请求尝试上限，包含核验与重试
+REPOGUARDIAN_RUN_MAX_TOKENS=1000000 # 整次运行的累计 Token 上限
+REPOGUARDIAN_TASK_REVIEW_TIMEOUT_SECONDS=1800 # 整次运行时限，单位为秒
+REPOGUARDIAN_MODEL_REQUEST_TIMEOUT_SECONDS=60 # 单次模型 HTTP 请求超时，单位为秒
+REPOGUARDIAN_MODEL_REQUEST_PROFILES={} # 按模型名覆盖单次请求窗口，默认使用自动解析
+REPOGUARDIAN_DEFAULT_VALIDATION_BACKEND=none # 默认不发起外部动态验证
+REPOGUARDIAN_GITHUB_PUBLISH_ENABLED=false # 手动发布需另配独立凭据、范围与操作口令
+REPOGUARDIAN_LANGSMITH_TRACING=false # 按需启用 LangSmith 追踪，需另配追踪凭据
+REPOGUARDIAN_LANGSMITH_INCLUDE_CONTENT=false # 启用追踪时，默认不上传代码、提示词和模型输出
+```
 
 - **模型窗口与运行预算是两个概念**：接入自定义模型或非标准服务地址时，可用 `REPOGUARDIAN_MODEL_REQUEST_PROFILES` 按实际模型名指定窗口，或用 `REPOGUARDIAN_MODEL_REQUEST_PROFILE` 设置通用窗口。`context_window` 是单次请求可容纳的 Token 数；`input_output_shared=true` 表示输入与输出共用该窗口，需要为输出和安全余量预留空间。窗口应按供应商实际限制设置，调大整次运行预算不能解决单次请求超长。
 - **预算包含核验与重试**：`REPOGUARDIAN_RUN_MAX_CALLS` 按实际发送尝试计数，`REPOGUARDIAN_RUN_MAX_TOKENS` 覆盖整次运行，`REPOGUARDIAN_TASK_REVIEW_TIMEOUT_SECONDS` 限制运行时间。各深度据此生成资源预设，单次方案不能超过服务端上限；恢复或重试继续使用原预算和期限。
@@ -141,9 +168,9 @@ Summary 复用同一 PR、同一发布身份的主评论；Inline 按同一 Head
 
 ![RepoGuardian 架构图](https://github.com/user-attachments/assets/e405f29f-0587-43b1-aac8-1f2a20ab1066)
 
-准备 PR 与仓库 → 解析变更、建立索引 → 预览分组并校验保存方案 → 确认方案与 PR 快照 → 按冻结配置规划目标与执行检查、派生调查和独立核验 → 返回覆盖、结论、实际用量与报告。
+读取 PR 变更概览 → 准备仓库与索引 → 预览分组并校验保存方案 → 确认方案与 PR 快照 → 按冻结配置执行目标检查、关联调查和独立核验 → 返回结论、覆盖与限制、实际用量与报告。
 
-审查内容以 PR 声明 base 与 head 的唯一 merge base 为基准，等价于 GitHub PR 的三点比较；声明 base 仅保留 PR 身份。无法确定唯一 merge base（无共同祖先或存在多个候选）时明确失败，不退化为两点比较——两点比较会把 base 分支独有提交当作本 PR 的反向变更交给审查。生产、Preview、CLI 与评测共用同一 Diff 生成函数与策略版本，`run_manifest` 同时记录 `base_sha` 与 `effective_base_sha`。
+审查 Diff 使用 PR 的唯一 merge base 到 Head 的三点比较，避免把 Base 分支独有提交混入本次变更。无法确定唯一 merge base 时明确失败，不退化为两点比较；审查记录保留声明 Base 与实际 Diff 基准，便于追溯。
 
 动态验证独立于审查流程，Review 完成时 CI 仍可能运行中。新请求使用 `review`；旧 API 模式值仅作兼容，仍按只读审查处理。
 
@@ -166,7 +193,7 @@ Summary 复用同一 PR、同一发布身份的主评论；Inline 按同一 Head
 
 后端使用 Python、FastAPI 与 LangGraph，前端使用 Vue 3、TypeScript 与 Vite。先按快速开始安装依赖；本地开发分别运行后端与前端，代码修改后会自动重载。
 
-提交变更前，从仓库根目录执行对应检查：
+检查命令如下，从仓库根目录开始执行；按改动范围选择适用项：
 
 ```sh
 cd backend
@@ -181,7 +208,8 @@ cd ..
 git diff --check
 ```
 
-- 后端逻辑变更运行 pytest 与 Ruff；前端变更运行测试、类型检查与构建。
+- 后端逻辑变更运行相关 pytest 测试与 Ruff，可在 `uv run pytest` 后指定测试文件；前端变更运行相关测试与 `npm run build`（包含类型检查）。
+- 默认选择与改动直接相关的测试；文档变更核对命令、字段、链接和最终差异，无需运行业务测试。上面的 `uv run pytest` 不带路径时会执行完整后端测试集。
 - 修改配置时同步 `.env.example`；修改 API 响应时同步前端类型与调用方，覆盖输入校验、拒绝路径和旧数据兼容性。
 - 开发测试可执行本项目代码，RepoGuardian Server 仍不得执行被审查的目标仓库代码。
 - 不提交 `.env`、API Key、Token、数据库或任务运行产物。
