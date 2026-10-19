@@ -96,6 +96,37 @@ test("完整评论与单条评论共用快照、确认和请求生命周期边�
         assert.equal(writes.length, 0); assert.equal(c.state.pendingCopy.value, null);
       } finally { c.scope.stop(); }
     });
+    await t.test("单独校验只更新 Head 状态，交付时仍重新检查", async () => {
+      const c = setup();
+      try {
+        const check = c.state.checkHead(); c.requests[0].resolve(c.result('stale')); await check;
+        assert.equal(c.state.headCheck.value.status, 'stale');
+        assert.equal(c.state.pendingCopy.value, null); assert.equal(writes.length, 0);
+        const copy = c.state.copyCheckedComment();
+        assert.equal(c.requests.length, 2);
+        c.requests[1].resolve(c.result()); await copy;
+        assert.equal(writes.length, 1);
+      } finally { c.scope.stop(); }
+    });
+    await t.test("过期导出确认保留原操作，取消和选项变化使确认失效", async () => {
+      const c = setup(); const downloads = [];
+      try {
+        const first = c.state.checkedComment(text => downloads.push(text));
+        c.requests[0].resolve(c.result('stale')); await first;
+        assert.deepEqual(downloads, []);
+        await c.state.copyAcknowledged();
+        assert.deepEqual(downloads, [c.result('stale').review_comment_markdown]);
+        assert.deepEqual(writes, []);
+        const second = c.state.checkedComment(text => downloads.push(text));
+        c.requests[1].resolve(c.result('unknown')); await second;
+        c.state.cancelPending(); await c.state.copyAcknowledged();
+        assert.equal(downloads.length, 1);
+        const third = c.state.checkedComment(text => downloads.push(text));
+        c.requests[2].resolve(c.result('stale')); await third;
+        c.exclude.value = true; await c.state.copyAcknowledged();
+        assert.equal(downloads.length, 1); assert.equal(c.state.headCheck.value, null);
+      } finally { c.scope.stop(); }
+    });
     await t.test("网络失败和剪贴板拒绝不能显示复制成功", async () => {
       const c = setup(true);
       try {

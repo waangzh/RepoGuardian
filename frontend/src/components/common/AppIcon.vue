@@ -11,6 +11,9 @@ const props = withDefaults(defineProps<{
 });
 
 const paths: Record<string, string[]> = {
+  copy: ['M8 8h12v12H8z', 'M16 8V4H4v12h4'],
+  download: ['M12 3v12', 'm7 10 5 5 5-5', 'M4 16v5h16v-5'],
+  external: ['M14 3h7v7', 'M21 3 10 14', 'M10 3H3v18h18v-7'],
   "arrow-right": ["M4 12h16", "m14 6 6 6-6 6"],
   activity: ["M2 12h4l3-8 6 16 3-8h4"],
   menu: ["M4 6h16", "M4 12h16", "M4 18h16"],
