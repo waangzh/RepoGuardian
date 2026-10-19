@@ -35,17 +35,6 @@ MERGE_LABELS = {
     "conditional_merge": "未发现阻断性问题",
     "unavailable": "需要补充检查",
 }
-LIMIT_LABELS = {
-    "author_context_truncated": "作者声明输入已截断，未输入部分的目标尚未核验",
-    "author_context_unknown": "作者声明输入是否完整未知，目标范围仍需确认",
-    "finding_severity_unknown": "存在严重度未知的问题记录",
-    "author_intent_unresolved": "作者目标仍有未核验路径或矛盾",
-    "head_validation_failed": "当前 Head 的已有验证记录为失败",
-    "head_validation_unknown": "已有验证记录无法确定当前 Head 结果",
-    "confirmed_findings_withheld": "仍有未通过发布准入的机器确认记录",
-}
-
-
 def markdown_text(value: str, limit: int = 2000) -> str:
     text = " ".join("".join(char for char in value if not unicodedata.category(char).startswith("C") or char in "\n\t").split())
     text = text[:limit] + ("…" if len(text) > limit else "")
@@ -149,11 +138,6 @@ def finding_location(plan, finding):
 def merge_heading(plan):
     decision = plan.digest.merge_decision
     return MERGE_LABELS.get(decision.status, decision.label), decision.advice
-
-
-def merge_limits(plan):
-    decision = plan.digest.merge_decision
-    return [LIMIT_LABELS.get(reason, REASON_LABELS.get(reason, reason)) for reason in decision.unresolved_reasons]
 
 
 def merge_advice(plan):
