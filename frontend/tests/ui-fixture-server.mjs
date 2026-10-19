@@ -68,6 +68,7 @@ const server = createServer(async (request, response) => {
       if (action === '/stream') { response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' }); response.write(': fixture stream\n\n'); streams.add(response); request.on('close', () => streams.delete(response)); return; }
       if (action === '/cancel') { run.status = 'cancelled'; run.task_runtime_report.execution_status = 'cancelled'; return json(response, { task_id: id, status: 'cancelled' }); }
       const fixture = Object.values(fixtures).find(value => value.task.id === id) || fixtures.findings;
+      if (action === '/publication-summary') return json(response, { ...fixture.summary, review_id: id });
       if (action === '/publication-plan') return json(response, { ...fixture.plan, review_id: id, user_report_markdown: `${fixture.plan.user_report_markdown}\n\n<img src=x onerror="window.__unsafeReport=true">` });
       if (action === '/report') { response.writeHead(200, { 'Content-Type': 'text/plain' }); return response.end(task.report_markdown || '# 测试审计报告'); }
       if (action === '/publication-preflight') return json(response, { ready: true, review_id: id, plan_hash: 'fixture-hash', head_sha: task.pr.head.sha, head_sha_matches: true, pr_open: true, permissions_ok: true, summary_action: 'create', summary_comment_id: null, finding_keys: ['key-a'], inline: { selected: 1, ready: 1, already_published: 0, summary_fallback: 0, blocked: 0 }, inline_previews: [], summary_markdown: '# 测试预检摘要', requires_partial_acknowledgement: false, warnings: [] });

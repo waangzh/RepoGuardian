@@ -127,7 +127,10 @@ def test_evidence_summary_uses_bound_verification_basis_and_ignores_unbound_code
     finding = PublicationPlanner().build(task).inline_drafts[0]
     assert finding.evidence_summary == record["publication"]["basis"] == "独立核对主张"
     assert finding.evidence_ids == ["e1"]
-    assert "代码证据" in finding.body_markdown and "独立核验支持此结论" in finding.body_markdown
+    assert "代码证据" in finding.body_markdown
+    # 免责声明与 Commit 只在评论/报告末尾出现一次，问题正文不重复。
+    assert "独立核验支持此结论" not in finding.body_markdown
+    assert "Commit" not in finding.body_markdown
     assert "未被核验的新主张" not in finding.body_markdown
     record["publication"]["basis"] = "未绑定的证据解释"
     plan = PublicationPlanner().build(task)

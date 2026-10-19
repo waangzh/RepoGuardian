@@ -8,7 +8,7 @@ import "../src/styles.css";
 import "../src/styles/prototype.css";
 import "../src/styles/workspace.css";
 
-const fixtures = await (await fetch("/tests/fixtures/publication-plans.json")).json() as Record<string, { task: ReviewTask; plan: PublicationPlan }>;
+const fixtures = await (await fetch("/tests/fixtures/publication-plans.json")).json() as Record<string, { task: ReviewTask; plan: PublicationPlan; summary: import("../src/types/publication").ReviewSummary }>;
 const variants = await (await fetch("/tests/fixtures/review-comment-options.json")).json();
 const choice = ref("findings");
 const task = ref(fixtures.findings!.task);
@@ -30,6 +30,11 @@ window.fetch = async (input, init) => {
   }
   if (typeof input === 'string' && input.endsWith('/findings')) {
     return new Response(JSON.stringify({ items: fixtures[choice.value]!.plan.digest.findings || [] }), { headers: { 'Content-Type': 'application/json' } });
+  }
+  if (typeof input === "string" && input.endsWith("/publication-summary")) {
+    if (choice.value === "error") return new Response("加载失败", { status: 503 });
+    const fixture = fixtures[choice.value];
+    return new Response(JSON.stringify(fixture!.summary), { headers: { "Content-Type": "application/json" } });
   }
   if (typeof input === "string" && input.endsWith("/publication-plan")) {
     if (choice.value === "error") return new Response("加载失败", { status: 503 });

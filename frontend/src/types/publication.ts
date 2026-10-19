@@ -38,12 +38,18 @@ export interface DigestInvestigation {
   limitations: string[];
   requested_ranges: DigestGoal[];
 }
+export interface ChangeUnderstanding {
+  author_goal: string;
+  actual_changes: string;
+  alignment: string;
+}
 export interface ReviewDigest {
   pr_url?: string | null;
   author_goal?: string | null;
   author_context_status?: "complete" | "truncated" | "unknown" | "not_recorded";
   author_context_limitation?: string | null;
   actual_changes?: string[];
+  change_understanding?: ChangeUnderstanding | null;
   intent_alignment?: string;
   intent_assessments?: DigestIntent[];
   findings?: import('./reviewPlan').FindingView[];
@@ -58,7 +64,6 @@ export interface ReviewDigest {
   validation_state: ReviewOutcome['dynamic_validation'];
   validations?: DigestValidation[];
   merge_decision?: MergeDecision;
-  execution_record?: Record<string, unknown>;
   checked_areas: ("head_source_ranges" | "base_source_ranges" | "file_changes")[];
   termination_reason: string | null;
 }
@@ -85,10 +90,12 @@ export interface DigestValidation {
 }
 export interface MergeDecision {
   status: "unavailable" | "fix_blockers" | "resolve_unknowns" | "review_suggestions" | "conditional_merge";
+  label: string;
   advice: string;
   blocking_finding_keys: string[];
   nonblocking_finding_keys: string[];
   unresolved_reasons: string[];
+  limits: string[];
 }
 export interface ReviewCommentOptions {
   detail: "compact" | "full";
@@ -117,6 +124,9 @@ export interface PublicationFinding {
   anchor: PublicationAnchor;
   title: string;
   body_markdown: string;
+  affected_behavior: string;
+  failure_scenario: string;
+  recommendation: string;
   category: string | null;
   evidence_summary: string | null;
   evidence_ids: string[];
@@ -138,6 +148,32 @@ export interface PublicationPlan {
   review_comment_markdown?: string;
   inline_drafts: PublicationFinding[];
   summary_findings: PublicationFinding[];
+  withheld_findings: WithheldFinding[];
+  content_eligible: boolean;
+  blocking_reasons: string[];
+}
+
+export interface ReviewSummaryDigest {
+  author_goal?: string | null;
+  author_context_status?: "complete" | "truncated" | "unknown" | "not_recorded";
+  author_context_limitation?: string | null;
+  change_understanding?: ChangeUnderstanding | null;
+  actual_changes?: string[];
+  intent_alignment?: string;
+  merge_decision?: MergeDecision;
+  excluded_files: DigestExcludedFile[];
+  validation_state: ReviewOutcome['dynamic_validation'];
+  validations?: DigestValidation[];
+  checked_areas: ("head_source_ranges" | "base_source_ranges" | "file_changes")[];
+  termination_reason: string | null;
+}
+export interface ReviewSummary {
+  schema_version: "review-summary-v1";
+  review_id: string;
+  snapshot: PublicationSnapshot;
+  outcome: ReviewOutcome;
+  digest: ReviewSummaryDigest;
+  review_comment_markdown?: string;
   withheld_findings: WithheldFinding[];
   content_eligible: boolean;
   blocking_reasons: string[];

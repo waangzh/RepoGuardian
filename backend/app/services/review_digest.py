@@ -1,15 +1,138 @@
-"""报告共用的确定性事实投影；作者声明与静态事实不合成为目标实现证明。"""
+"""报告共用的确定性事实投影；作者声明与静态事实不合并成目标实现证明。"""
 
 import re
 
 from pydantic import ValidationError
 
-from app.models.publication import DigestGoal, DigestInvestigation, DigestIntent
+from app.models.publication import ChangeUnderstanding, DigestGoal, DigestInvestigation, DigestIntent
 from app.models.review_runtime import IntentAssessment
 from app.services.review_intent import author_targets
 from app.services.review_validation_digest import validation_digest
 from app.services.review_findings import finding_views
 from app.services.fingerprints import stable_hash
+
+_EXECUTION_KEYS = (
+    "execution_status", "termination_reason", "usage_integrity", "sent_calls", "settled_tokens",
+    "unknown_attempts", "total_tokens", "work_items", "diagnostics", "relationship_hints",
+    "initial_scope_coverage", "admitted_investigations", "unscheduled_leads", "findings",
+    "failure_summary", "coverage_version",
+)
+_SORTED_KEYS = ("initial_scope_coverage", "admitted_investigations", "unscheduled_leads",
+                "relationship_hints", "findings")
+
+
+def execution_record(report) -> dict:
+    """技术审计专用的原始运行投影；只由审计文档按需使用，不进入轻量结果接口。"""
+    if not isinstance(report, dict):
+        return {}
+    record = {key: report[key] for key in _EXECUTION_KEYS if key in report}
+    for key in _SORTED_KEYS:
+        if isinstance(record.get(key), list):
+            record[key] = sorted(record[key], key=stable_hash)
+    return record
+
+
+def _first_paragraph(value: str | None, limit: int = 240) -> str:
+    """提取作者声明中第一段可读自然语言，去掉标题、代码块与表格。"""
+    if not value:
+        return ""
+    in_fence = False
+    for raw in re.sub(r"<!--.*?-->", "", value, flags=re.DOTALL).splitlines():
+        line = raw.strip()
+        if line.startswith(("```", "~~~")):
+            in_fence = not in_fence
+            continue
+        if in_fence or not line or line.startswith(("#", "|", ">", "![", "---")):
+            continue
+        if re.fullmatch(r"(?:[-*_]\s*){3,}", line):
+            continue
+        line = re.sub(r"^[-*+]\s+", "", line)
+        line = re.sub(r"\*\*([^*]+)\*\*", r"\1", line)
+        text = " ".join(line.split())
+        if text:
+            return text[:limit] + ("…" if len(text) > limit else "")
+    return ""
+
+
+def _module_summary(paths: list[str]) -> str:
+    """按顶层目录归纳，避免把文件清单当作变更理解。"""
+    groups: dict[str, int] = {}
+    for path in paths:
+        parts = path.split("/")
+        group = "/".join(parts[:2]) if len(parts) > 2 else (parts[0] if len(parts) > 1 else "仓库根目录")
+        groups[group] = groups.get(group, 0) + 1
+    ranked = sorted(groups.items(), key=lambda item: (-item[1], item[0]))[:3]
+    return "、".join(f"{name}（{count} 个文件）" for name, count in ranked)
+
+
+def _change_understanding(digest, task, report) -> ChangeUnderstanding:
+    goal = _first_paragraph(digest.author_goal)
+    author_goal = (f"作者声明（未经独立验证）：{goal}" if goal else "未记录明确的作者目标。")
+    if digest.author_context_limitation:
+        author_goal += "（作者声明的输入范围有限制，见下方说明。）"
+    observed_goals = [goal for goal in digest.examined_goals if goal.reason and goal.reason.strip()]
+    paths = [file.file_path for file in task.changed_files]
+    additions = sum(file.additions for file in task.changed_files)
+    deletions = sum(file.deletions for file in task.changed_files)
+    kinds = {kind: sum(file.change_type == kind for file in task.changed_files)
+             for kind in ("added", "deleted", "modified", "renamed")}
+    kind_text = "、".join(f"{label} {count}" for label, count in (
+        ("新增", kinds["added"]), ("删除", kinds["deleted"]), ("修改", kinds["modified"]), ("重命名", kinds["renamed"])) if count)
+    stats = f"共 {len(paths)} 个文件（+{additions} / -{deletions}）" + (f"，其中 {kind_text}" if kind_text else "")
+    observed = []
+    for item in digest.intent_assessments:
+        for observation in item.observations:
+            behavior = " ".join(str(observation.get("actual_behavior") or "").split())
+            if observation.get("alignment") in {"supported", "contradicted"} and behavior:
+                observed.append(behavior)
+    if not observed:
+        # 没有结构化目标对照时，使用已检查目标的静态理由，仍不推断作者目标已经实现。
+        observed = [((goal.path + "：") if goal.path else "") + " ".join(goal.reason.split())
+                    for goal in observed_goals]
+    observed = list(dict.fromkeys(observed))[:2]
+    if observed:
+        actual = (f"根据已绑定证据的局部检查，代码行为表现为：{'；'.join(observed)}。"
+                  + (f"本次 Diff {stats}。" if paths else ""))
+    elif paths:
+        symbols = set()
+        for file in task.changed_files:
+            for hunk in file.hunks:
+                for line in hunk.lines:
+                    if line.kind not in {"added", "deleted"}:
+                        continue
+                    match = re.match(
+                        r"\s*(?:(?:export|async|public|private|static)\s+)*(?:def|class|function|const|let|interface|type)\s+([\w$]+)",
+                        line.content)
+                    if match:
+                        symbols.add(match.group(1))
+        names = "、".join(sorted(symbols)[:8])
+        actual = (f"本次 Diff {stats}，主要集中在 {_module_summary(paths)}"
+                  + (f"；变更声明包括 {names}。" if names else "。")
+                  + " 尚未形成可引用的局部行为观察，以上仅为变更元数据。")
+    else:
+        actual = "未保存变更明细，无法归纳实际修改。"
+    if digest.intent_assessments:
+        total = len(digest.intent_assessments)
+        supported = sum(item.status == "observed" for item in digest.intent_assessments)
+        contradicted = sum(item.status == "contradicted" for item in digest.intent_assessments)
+        not_applicable = sum(item.status == "not_applicable" for item in digest.intent_assessments)
+        unresolved = total - supported - contradicted - not_applicable
+        parts = [f"作者目标共 {total} 项"]
+        if supported:
+            parts.append(f"{supported} 项获得局部静态证据支持")
+        if contradicted:
+            parts.append(f"{contradicted} 项存在静态证据矛盾")
+        if unresolved:
+            parts.append(f"{unresolved} 项证据不足或尚未核验")
+        if not_applicable:
+            parts.append(f"{not_applicable} 项当前检查不适用")
+        alignment = "，".join(parts) + "。局部观察不构成作者全部目标已实现的验收结论。"
+    elif report is not None and report.pr_intent_context:
+        alignment = ("已冻结作者声明，但本轮没有逐目标的结构化符合性记录；"
+                     "不能用已检查目标数量推断作者目标已经实现。")
+    else:
+        alignment = "未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。"
+    return ChangeUnderstanding(author_goal=author_goal, actual_changes=actual, alignment=alignment)
 
 
 def enrich_review_digest(digest, task, report, dispositions):
@@ -46,13 +169,6 @@ def enrich_review_digest(digest, task, report, dispositions):
                 digest.author_context_limitation = ("历史审查未记录作者声明是否完整输入，无法确认是否遗漏作者目标；"
                     "请重新审查以确认输入范围。")
         digest.validation_state, digest.validations = validation_digest(task)
-        record = report.model_dump(mode="json")
-        digest.execution_record = {key: record[key] for key in (
-            "execution_status", "termination_reason", "usage_integrity", "sent_calls", "settled_tokens",
-            "unknown_attempts", "total_tokens", "work_items", "diagnostics", "relationship_hints",
-            "initial_scope_coverage", "admitted_investigations", "unscheduled_leads", "findings", "failure_summary", "coverage_version")}
-        for key in ("initial_scope_coverage", "admitted_investigations", "unscheduled_leads", "relationship_hints", "findings"):
-            digest.execution_record[key] = sorted(digest.execution_record[key], key=stable_hash)
         if report.pr_intent_context:
             digest.author_goal = report.pr_intent_context
             digest.intent_alignment = ("本轮静态检查已提供冻结的作者声明，具体目标对照及证据缺口见已检查行为的理由。"
@@ -110,4 +226,5 @@ def enrich_review_digest(digest, task, report, dispositions):
             digest.investigations.append(investigation)
         digest.unresolved_leads = [str(item.get("proposition") or item.get("lead_id") or "未命名线索") + "：" +
             str(item.get("reason") or "未记录原因") for item in report.unscheduled_leads if item.get("status") != "duplicate"]
+    digest.change_understanding = _change_understanding(digest, task, report)
     return digest

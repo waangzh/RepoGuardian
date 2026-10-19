@@ -61,7 +61,7 @@ async def test_existing_budgeted_inspection_compares_author_intent_and_preserves
     assert plan.digest.author_goal == statement
     assert "具体目标对照及证据缺口" in plan.digest.intent_alignment
     assert reason in plan.review_comment_markdown
-    assert "独立验收结论" in plan.user_report_markdown
+    assert "局部观察不构成作者全部目标已实现的验收结论" in plan.user_report_markdown
 
 
 async def test_intent_does_not_create_an_extra_call_or_bypass_zero_budget(tmp_path):
