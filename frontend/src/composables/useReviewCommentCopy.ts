@@ -14,13 +14,15 @@ export function useReviewCommentCopy(source: CommentSource, load = checkReviewCo
   const feedback = ref("");
   const checking = ref(false);
   const pendingCopy = ref<ReviewCommentCheck | null>(null);
+  const headCheck = ref<ReviewCommentCheck | null>(null);
+  let pendingAction: ((content: string) => Promise<void> | void) | null = null;
   let controller: AbortController | null = null;
   let revision = 0;
 
   function resetCopy() {
     revision += 1;
     controller?.abort(); controller = null;
-    checking.value = false; pendingCopy.value = null; copied.value = false; feedback.value = "";
+    checking.value = false; pendingCopy.value = null; pendingAction = null; headCheck.value = null; copied.value = false; feedback.value = "";
   }
   watch([source.reviewId, source.reviewedHeadSha, source.markdown, () => source.options().detail,
     () => source.options().exclude_resolved, () => source.options().finding_key], resetCopy, { flush: "sync" });
@@ -37,7 +39,7 @@ export function useReviewCommentCopy(source: CommentSource, load = checkReviewCo
     }
   }
 
-  async function checkedComment(onReady: (content: string) => Promise<void> | void) {
+  async function checkedComment(onReady: (content: string) => Promise<void> | void, checkOnly = false) {
     if (!source.markdown() || checking.value) return;
     const id = source.reviewId();
     const head = source.reviewedHeadSha() ?? null;
@@ -53,11 +55,18 @@ export function useReviewCommentCopy(source: CommentSource, load = checkReviewCo
           || !["current", "stale", "unknown"].includes(result.status)
           || typeof result.review_comment_markdown !== "string" || !result.review_comment_markdown
           || result.detail !== options.detail
+          || !Array.isArray(result.included_finding_keys) || !Array.isArray(result.omitted_finding_keys)
+          || !Array.isArray(result.retained_blocking_keys)
           || (options.finding_key && (result.included_finding_keys?.length !== 1 || result.included_finding_keys[0] !== options.finding_key))
           || (result.status === "current" && (!head || result.latest_head_sha !== head))) throw new Error("快照或所选问题不匹配");
-      if (result.status === "current") await onReady(result.review_comment_markdown);
+      headCheck.value = result;
+      if (checkOnly) {
+        feedback.value = result.status === 'current' ? 'PR Head 与本次审查快照一致；交付时将再次检查。'
+          : result.status === 'stale' ? 'PR 已有新提交，交付前需确认旧快照限制。' : '远端 Head 无法确认，交付前需确认未知状态限制。';
+      } else if (result.status === "current") await onReady(result.review_comment_markdown);
       else {
         pendingCopy.value = result;
+        pendingAction = onReady;
         feedback.value = result.status === "stale"
           ? "PR 已有新提交：当前评论基于旧 Head。建议重新审查，或明确复制带旧快照说明的评论。"
           : "未能确认远端 Head：无法判断评论是否过期。可重试，或明确复制带状态说明的评论。";
@@ -72,9 +81,13 @@ export function useReviewCommentCopy(source: CommentSource, load = checkReviewCo
 
   async function copyAcknowledged() {
     const result = pendingCopy.value;
+    const action = pendingAction;
     pendingCopy.value = null;
-    if (result) await writeClipboard(result.review_comment_markdown);
+    pendingAction = null;
+    if (result && action) await action(result.review_comment_markdown);
   }
-  return { copied, feedback, checking, pendingCopy, resetCopy, writeClipboard, checkedComment,
+  function cancelPending() { pendingCopy.value = null; pendingAction = null; }
+  const checkHead = () => checkedComment(() => {}, true);
+  return { copied, feedback, checking, pendingCopy, headCheck, checkHead, cancelPending, resetCopy, writeClipboard, checkedComment,
     copyCheckedComment, copyAcknowledged };
 }
