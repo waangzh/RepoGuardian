@@ -512,7 +512,8 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False):
         f"本结论基于 Commit `{markdown_text(plan.snapshot.head_sha or '未记录', 64)}` 的只读静态审查；"
         "未执行目标代码、测试或构建，不替代 CI 与人工审批。"
         "未发现的问题不代表其他路径已经安全。"]
-    return "\n".join(lines)
+    # 各段落自行收尾空行；合并后收敛多余空行，保持可发布排版。
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines))
 
 
 def render_finding_comment(plan, finding):
