@@ -1020,6 +1020,7 @@ export interface ReviewTask {
 
 export interface TaskRuntimeReport {
   pr_intent_context?: string | null;
+  pr_intent_context_truncated?: boolean | null;
   diagnostics?: Record<string, unknown>[];
   engine: "task_review_v1";
   coverage_version: "task-goals-v1";

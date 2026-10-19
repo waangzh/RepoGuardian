@@ -78,6 +78,7 @@ def project_task_runtime(runtime, steps, goals, *, termination_reason, budget=No
     spec = next(iter(steps.values())).executor.spec if steps else None
     return TaskRuntimeReport(execution_status=execution, termination_reason=termination_reason,
         pr_intent_context=spec.pr_intent_context if spec else None,
+        pr_intent_context_truncated=spec.pr_intent_context_truncated if spec else None,
         failure_summary=runtime_failure_summary(runtime.failures) if execution == "failed" else None,
         readable_scope_hash=spec.readable_scope_hash if spec and spec.readable_scope_files else None,
         readable_file_count=len(spec.readable_scope_files) if spec else None,

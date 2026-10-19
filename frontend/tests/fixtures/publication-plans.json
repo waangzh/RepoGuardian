@@ -353,6 +353,8 @@
       "digest": {
         "pr_url": "https://github.com/o/r/pull/1",
         "author_goal": null,
+        "author_context_status": "not_recorded",
+        "author_context_limitation": null,
         "actual_changes": [],
         "intent_alignment": "未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。",
         "intent_assessments": [],
@@ -840,6 +842,8 @@
       "digest": {
         "pr_url": "https://github.com/o/r/pull/1",
         "author_goal": null,
+        "author_context_status": "not_recorded",
+        "author_context_limitation": null,
         "actual_changes": [],
         "intent_alignment": "未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。",
         "intent_assessments": [],
@@ -1126,6 +1130,8 @@
       "digest": {
         "pr_url": "https://github.com/o/r/pull/1",
         "author_goal": null,
+        "author_context_status": "not_recorded",
+        "author_context_limitation": null,
         "actual_changes": [],
         "intent_alignment": "未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。",
         "intent_assessments": [],
@@ -1561,6 +1567,8 @@
       "digest": {
         "pr_url": "https://github.com/o/r/pull/1",
         "author_goal": null,
+        "author_context_status": "not_recorded",
+        "author_context_limitation": null,
         "actual_changes": [],
         "intent_alignment": "未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。",
         "intent_assessments": [],
@@ -2186,6 +2194,8 @@
       "digest": {
         "pr_url": "https://github.com/o/r/pull/1",
         "author_goal": null,
+        "author_context_status": "not_recorded",
+        "author_context_limitation": null,
         "actual_changes": [],
         "intent_alignment": "未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。",
         "intent_assessments": [],
@@ -2809,6 +2819,8 @@
       "digest": {
         "pr_url": "https://github.com/o/r/pull/1",
         "author_goal": null,
+        "author_context_status": "not_recorded",
+        "author_context_limitation": null,
         "actual_changes": [],
         "intent_alignment": "未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。",
         "intent_assessments": [],

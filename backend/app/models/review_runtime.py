@@ -101,6 +101,7 @@ class ReviewRunSpec(BaseModel):
     readable_scope_files: tuple[RelativePath, ...] = ()
     review_strategy: dict = Field(default_factory=dict)
     pr_intent_context: str | None = Field(default=None, min_length=1, max_length=4_000)
+    pr_intent_context_truncated: bool | None = Field(default=None, strict=True)
     intent_assessment_contract: Literal["structured-intent-v1"] | None = None
 
     @model_serializer(mode="wrap")
@@ -110,6 +111,8 @@ class ReviewRunSpec(BaseModel):
             value.pop("review_strategy", None)
         if self.pr_intent_context is None:
             value.pop("pr_intent_context", None)
+        if self.pr_intent_context_truncated is None:
+            value.pop("pr_intent_context_truncated", None)
         if self.intent_assessment_contract is None:
             value.pop("intent_assessment_contract", None)
         return value
@@ -431,12 +434,15 @@ class TaskRuntimeReport(BaseModel):
     work_items: list[dict] = Field(default_factory=list)
     diagnostics: list[dict] = Field(default_factory=list)
     pr_intent_context: str | None = Field(default=None, min_length=1, max_length=4_000)
+    pr_intent_context_truncated: bool | None = Field(default=None, strict=True)
 
     @model_serializer(mode="wrap")
     def serialize_intent_context(self, handler):
         value = handler(self)
         if self.pr_intent_context is None:
             value.pop("pr_intent_context", None)
+        if self.pr_intent_context_truncated is None:
+            value.pop("pr_intent_context_truncated", None)
         return value
 
 

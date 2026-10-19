@@ -28,6 +28,7 @@ watch(() => props.task.id, () => { authorOpen.value = false; });
       <p v-if="digest.investigations_known === true" class="small muted space-top">{{ answered.length }} 项关联调查有明确答案；仅针对记录中的命题。</p>
       <p v-else class="small muted space-top">未获得有效调查记录，状态未知。</p>
       <p class="small muted space-top"><strong>目标符合性：</strong>{{ digest.intent_alignment || '未保存独立核验记录，当前未知。' }}</p>
+      <p v-if="digest.author_context_limitation" class="notice warn space-top" role="status">{{ digest.author_context_limitation }}</p>
       <details v-for="(item, index) in digest.intent_assessments || []" :key="index" class="space-top" open>
         <summary>{{ item.author_target }} · {{ ({ observed: '局部静态证据支持', contradicted: '存在静态证据矛盾', insufficient: '证据不足', not_applicable: '当前检查不适用', not_checked: '尚未核验' })[item.status] }}</summary>
         <ul><li v-for="(observation, n) in item.observations" :key="n">{{ observation.actual_behavior }}；<code>{{ observation.path }}:{{ observation.start_line || '未知' }}（{{ observation.side }}）</code>；证据 {{ observation.evidence_ids.join('、') || '未获得有效证据' }}<p v-for="(limit, k) in observation.limitations" :key="k" class="small muted">限制：{{ limit }}</p></li></ul>

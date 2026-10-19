@@ -108,6 +108,8 @@ def render_summary(plan: PublicationPlan, *, discussion_urls: dict[str, str] | N
     lines += ["", "### 验证边界", "", *_validation_lines(plan)]
     if outcome.kind != "clean":
         lines += ["", "此结果不应视为 Approve 或质量检查通过。"]
+    if digest.author_context_limitation:
+        lines += ["", "作者目标输入限制：" + digest.author_context_limitation]
     lines += ["", f"审查 Commit：{markdown_text(plan.snapshot.head_sha or '未记录', 64)}。", "",
               f"审查记录：{markdown_text(plan.review_id, 160)}。"]
     return "\n".join(lines)
@@ -262,6 +264,8 @@ def merge_advice(plan):
     lines.append("所有合并判断仍需满足项目要求的 CI 与必要审批；本建议不替代分支保护规则。")
     if decision.unresolved_reasons:
         labels = {"confirmed_findings_withheld": "仍有未通过发布准入的机器确认记录",
+            "author_context_truncated": "作者声明输入已截断，未输入部分的目标尚未核验",
+            "author_context_unknown": "作者声明输入是否完整未知，需确认目标范围",
             "finding_severity_unknown": "问题严重度未知", "author_intent_unresolved": "作者目标仍有未核验路径或矛盾",
             "head_validation_failed": "当前 Head 验证失败", "head_validation_unknown": "已有验证记录无法确定当前 Head 结果"}
         lines.append("仍需解决：" + "；".join(REASON_LABELS.get(reason, labels.get(reason, reason))
@@ -277,6 +281,8 @@ def _change_understanding(plan, *, compact=False):
         *(["- " + markdown_text(item, 1000) for item in (changes[:5] if compact else changes)] or ["未保存变更明细，无法归纳实际修改。"])]
     if compact and len(changes) > 5:
         lines.append(f"另有 {len(changes) - 5} 个文件变更，完整清单见详细报告。")
+    if plan.digest.author_context_limitation:
+        lines += ["", "**作者目标输入限制：** " + plan.digest.author_context_limitation]
     checked = [goal for goal in plan.digest.examined_goals if goal.reason]
     lines += ["", "**已检查的关键行为（静态检查记录，不能推导所有路径正确）：**", ""]
     if not checked:
@@ -403,6 +409,8 @@ def render_technical_audit(plan):
         f"- Effective Base：{markdown_text(plan.snapshot.effective_base_sha or '未知')}",
         f"- 机器结论：{OUTCOME_LABELS[plan.outcome.kind]}", "", merge_advice(plan), "", "## 验证记录", "", *_validation_lines(plan)]
     for title, data in (("目标符合性与证据引用", [item.model_dump(mode="json") for item in plan.digest.intent_assessments]),
+                        ("作者声明输入完整性", {"status": plan.digest.author_context_status,
+                            "limitation": plan.digest.author_context_limitation}),
                         ("问题与人工处理身份", [item.model_dump(mode="json") for item in plan.digest.findings]),
                         ("发布准入扣留记录", [item.model_dump(mode="json") for item in plan.withheld_findings]),
                         ("运行、计量与证据追踪", plan.digest.execution_record)):

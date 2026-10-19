@@ -115,6 +115,8 @@ class MergeDecision(BaseModel):
 class ReviewDigest(BaseModel):
     pr_url: str | None = None
     author_goal: str | None = None
+    author_context_status: Literal["complete", "truncated", "unknown", "not_recorded"] = "not_recorded"
+    author_context_limitation: str | None = None
     actual_changes: list[str] = Field(default_factory=list)
     intent_alignment: str = "未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。"
     intent_assessments: list[DigestIntent] = Field(default_factory=list)
