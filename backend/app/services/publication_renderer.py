@@ -510,8 +510,7 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False):
         lines += [f"- 排除文件：{markdown_text(item.path)}；{markdown_text(item.reason)}" for item in plan.digest.excluded_files]
     lines += ["", "---", "",
         f"本结论基于 Commit `{markdown_text(plan.snapshot.head_sha or '未记录', 64)}` 的只读静态审查；"
-        "未执行目标代码、测试或构建，不替代 CI 与人工审批。"
-        "未发现的问题不代表其他路径已经安全。"]
+        "不替代 CI 与人工审批。未发现的问题不代表其他路径已经安全。"]
     # 各段落自行收尾空行；合并后收敛多余空行，保持可发布排版。
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines))
 
@@ -559,7 +558,7 @@ def render_summary(plan, *, discussion_urls: dict[str, str] | None = None) -> st
     outcome = plan.outcome
     digest = plan.digest
     label, advice = merge_heading(plan)
-    lines = ["## RepoGuardian · PR Review", "", f"**{label}**", "", advice, "",
+    lines = ["## RepoGuardian · PR Review", "", merge_verdict_line(plan), "", advice, "",
              f"- 已确认问题：{outcome.confirmed_count}",
              f"- 审查目标完成：{outcome.examined_goals} / {outcome.total_goals}",
              f"- 未决候选：{outcome.unresolved_count}", "", "### 审查范围", ""]
