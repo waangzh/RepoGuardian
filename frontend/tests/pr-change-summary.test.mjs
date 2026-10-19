@@ -66,5 +66,18 @@ test("概览使用简短变更摘要，作者 Markdown 与审查结论保持分�
       assert.match(html, /查看作者原始说明/);
       assert.doesNotMatch(html, /<img|onerror|原始说明。|\+51|初始分组/);
     });
+    await t.test("统一事实优先于标题兜底，具体检查行为与符合性限制同时可见", async () => {
+      const digest = { author_goal: '修正空值处理 <script>恶意脚本</script>', actual_changes: ['修改 src/service.py（+3 / -1）'],
+        examined_goals: [{ path: 'src/service.py', start_line: 7, reason: '已核对先拒绝空值再读取字段' }],
+        investigations_known: true, investigations: [{ proposition: '返回值契约', answer: 'refuted' }], intent_alignment: '尚未核对作者目标的全部前提' };
+      const html = await renderToString(createSSRApp(component, { task: task(), digest }));
+      for (const text of ['来自后端统一审查事实', 'src/service.py', '已核对先拒绝空值再读取字段', '尚未核对作者目标的全部前提']) assert.ok(html.includes(text));
+      assert.doesNotMatch(html, /修复 stats 相关问题|<script>/);
+      assert.match(html, /1 项关联调查有明确答案/);
+      const historical = await renderToString(createSSRApp(component, { task: task(), digest: { examined_goals: [] } }));
+      assert.match(historical, /未获得有效调查记录，状态未知/);
+      assert.match(historical, /未保存变更明细/);
+      assert.doesNotMatch(historical, /0 项关联调查有明确答案/);
+    });
   } finally { await server.close(); }
 });

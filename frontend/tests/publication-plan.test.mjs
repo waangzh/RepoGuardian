@@ -50,3 +50,15 @@ test("切换任务、重试与卸载丢弃旧请求；失败不产生本地草�
     assert.equal(state.plan.value, null);
   } finally { scope.stop(); await server.close(); }
 });
+
+test("完整范围和计量限制分开展示；历史维度缺失保持未知", async () => {
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  try {
+    const { default: component } = await server.ssrLoadModule("/src/components/review/ReviewOutcomePanel.vue");
+    const plan = { outcome: { kind: 'inconclusive', coverage: 'partial', review_completeness: 'complete',
+      runtime_reliability: 'unreliable', dynamic_validation: 'not_executed', finding_conclusion: 'no_confirmed_findings', reason_codes: [] }, withheld_findings: [] };
+    const html = await renderToString(createSSRApp(component, { plan }));
+    for (const text of ['约定检查范围：完整', '存在计量或执行限制', '未发现已确认缺陷', '未执行']) assert.ok(html.includes(text));
+    assert.ok(!html.includes('覆盖部分完成'));
+  } finally { await server.close(); }
+});

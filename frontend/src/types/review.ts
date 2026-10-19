@@ -1019,6 +1019,8 @@ export interface ReviewTask {
 }
 
 export interface TaskRuntimeReport {
+  pr_intent_context?: string | null;
+  diagnostics?: Record<string, unknown>[];
   engine: "task_review_v1";
   coverage_version: "task-goals-v1";
   execution_status: "running" | "completed" | "failed" | "cancelled";

@@ -75,12 +75,25 @@ class DigestExcludedFile(BaseModel):
     reason: str
 
 
+class DigestInvestigation(BaseModel):
+    work_item_id: str | None = None
+    proposition: str
+    answer: Literal["supported", "refuted", "unresolved"] = "unresolved"
+    reason: str | None = None
+    limitations: list[str] = Field(default_factory=list)
+    requested_ranges: list[DigestGoal] = Field(default_factory=list)
+
+
 class ReviewDigest(BaseModel):
     pr_url: str | None = None
     author_goal: str | None = None
     actual_changes: list[str] = Field(default_factory=list)
     intent_alignment: str = "未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。"
     findings: list[FindingView] = Field(default_factory=list)
+    investigations_known: bool = False
+    investigations: list[DigestInvestigation] = Field(default_factory=list)
+    unresolved_leads: list[str] = Field(default_factory=list)
+    execution_status: str | None = None
     examined_goals: list[DigestGoal] = Field(default_factory=list)
     incomplete_goals: list[DigestGoal] = Field(default_factory=list)
     reviewed_files: list[str] = Field(default_factory=list)

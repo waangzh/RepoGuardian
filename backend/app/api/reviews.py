@@ -29,7 +29,7 @@ from app.models.review import (
 from app.models.review_runtime import TaskRuntimeRetryResult
 from app.models.quick_preview import QuickPreviewRequest, QuickPreviewResponse
 from app.tools.github_tool import GitHubToolError
-from app.models.publication import PublicationPlan
+from app.models.publication import PublicationPlan, ReviewCommentCheck
 from app.models.persistence import (
     PatchDetail,
     ReviewIssueDetail,
@@ -314,12 +314,48 @@ async def get_file_context(task_id: str, file_id: int) -> FileContextResponse:
 })
 async def get_publication_plan(task_id: str) -> PublicationPlan:
     """从保存的终态快照生成草稿，不调用模型或 GitHub，不持久化发布状态。"""
-    task = await asyncio.to_thread(get_review_service().get_task, task_id)
+    service = get_review_service()
+    task = await asyncio.to_thread(service.get_task, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     if task.status not in {TaskStatus.completed, TaskStatus.completed_with_warnings, TaskStatus.failed, TaskStatus.cancelled}:
         raise HTTPException(status_code=409, detail="Review is not finished")
-    return await asyncio.to_thread(PublicationPlanner().build, task.model_copy(deep=True))
+    dispositions = await _report_dispositions(service, task_id)
+    return await asyncio.to_thread(PublicationPlanner().build, task.model_copy(deep=True), dispositions=dispositions)
+
+
+async def _report_dispositions(service, task_id):
+    repository = getattr(service, "_repository", None)
+    return (await asyncio.to_thread(repository.finding_dispositions, task_id) if repository
+            else getattr(service, "_dispositions", {}).get(task_id, {}))
+
+
+@router.post("/{task_id}/review-comment-check", response_model=ReviewCommentCheck)
+async def check_review_comment(task_id: str):
+    """只读检查复制时的 Head；不使用发布权限、不保存发布状态。"""
+    import re
+    from datetime import datetime, timezone
+    from app.services.publication_renderer import markdown_text
+
+    plan = await get_publication_plan(task_id)
+    latest = None
+    state = "unknown"
+    if plan.snapshot.head_sha and re.fullmatch(r"[a-f0-9]{40,64}", plan.snapshot.head_sha):
+        try:
+            live = await GitHubTool(token=settings.github_token).fetch_pr(plan.digest.pr_url or "")
+            if re.fullmatch(r"[a-f0-9]{40,64}", live.head.sha):
+                latest = live.head.sha
+                state = "current" if latest == plan.snapshot.head_sha else "stale"
+        except (GitHubToolError, ValueError, httpx.HTTPError, TimeoutError):
+            pass  # 未能确认保持 unknown；不导出凭据、响应正文或异常文本。
+    checked_at = datetime.now(timezone.utc)
+    label = {"current": "检查时远端 Head 与审查快照一致", "stale": "PR 已有新提交，当前评论基于旧 Head，建议重新审查",
+             "unknown": "未能确认远端 Head，无法判断当前评论是否已经过期"}[state]
+    note = (f"\n\n> 快照检查：{label}。\n> 检查时间：{checked_at.isoformat()}；"
+            f"审查 Head：{markdown_text(plan.snapshot.head_sha or '未记录', 64)}；"
+            f"远端 Head：{markdown_text(latest or '未知', 64)}。此状态仅代表检查时点。")
+    return ReviewCommentCheck(review_id=task_id, status=state, reviewed_head_sha=plan.snapshot.head_sha,
+        latest_head_sha=latest, checked_at=checked_at, review_comment_markdown=plan.review_comment_markdown + note)
 
 
 @router.get("/{task_id}/report")

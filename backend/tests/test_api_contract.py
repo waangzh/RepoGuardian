@@ -3,6 +3,7 @@ from pathlib import Path
 
 from app.main import app
 from app.models.review import ReviewMode, ReviewPreviewResponse, ReviewTask, ReviewUnitResult
+from app.models.review_runtime import TaskRuntimeReport
 
 
 FRONTEND_TYPES = Path(__file__).parents[2] / "frontend" / "src" / "types" / "review.ts"
@@ -16,7 +17,7 @@ def _interface_body(source: str, name: str) -> str:
 
 def test_frontend_response_interfaces_cover_backend_contract() -> None:
     source = FRONTEND_TYPES.read_text(encoding="utf-8")
-    for model in (ReviewPreviewResponse, ReviewUnitResult, ReviewTask):
+    for model in (ReviewPreviewResponse, ReviewUnitResult, ReviewTask, TaskRuntimeReport):
         body = _interface_body(source, model.__name__)
         missing = [name for name in model.model_fields if re.search(rf"\b{name}\??\s*:", body) is None]
         assert not missing, f"{model.__name__} missing frontend fields: {missing}"
@@ -50,11 +51,12 @@ def test_review_mode_enum_is_kept_in_frontend_contract() -> None:
 def test_publication_interfaces_cover_backend_fields() -> None:
     from app.models.publication import (PublicationPlan, PublicationFinding, PublicationAnchor,
         PublicationSnapshot, ReviewOutcome, WithheldFinding, PublicationAttempt, PublicationItem,
-        PublicationSelection, PublicationPreflightResult, PublicationAccepted, ReviewDigest, DigestGoal, DigestExcludedFile)
+        PublicationSelection, PublicationPreflightResult, PublicationAccepted, ReviewDigest, DigestGoal, DigestExcludedFile, ReviewCommentCheck,
+        DigestInvestigation)
     source = FRONTEND_TYPES.with_name("publication.ts").read_text(encoding="utf-8")
     for model in (PublicationPlan, PublicationFinding, PublicationAnchor, PublicationSnapshot, ReviewOutcome, WithheldFinding,
                   PublicationAttempt, PublicationItem, PublicationSelection, PublicationPreflightResult, PublicationAccepted,
-                  ReviewDigest, DigestGoal, DigestExcludedFile):
+                  ReviewDigest, DigestGoal, DigestExcludedFile, ReviewCommentCheck, DigestInvestigation):
         body = _interface_body(source, model.__name__)
         assert all(re.search(rf"\b{name}\??\s*:", body) for name in model.model_fields)
 

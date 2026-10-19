@@ -24,6 +24,7 @@ const publicationFindings = computed(() => [...(plan.value?.inline_drafts || [])
 const comments = computed(() => publicationFindings.value.map(item => item.body_markdown).join('\n\n---\n\n'));
 const legacy = computed(() => props.task.engine !== 'task_review_v1');
 watch(() => props.task.id, () => { focusKey.value = ''; });
+watch(() => props.section, section => { if (section === 'report') reload(); });
 function openFinding(key: string) { focusKey.value = key; emit('navigate', 'findings'); }
 const githubLink = computed(() => {
   try { const url = new URL(props.task.pr?.html_url || props.task.pr_url); return url.protocol === 'https:' && url.hostname === 'github.com' ? url.href : null; }
@@ -41,7 +42,7 @@ const githubLink = computed(() => {
   <ReviewScopePage v-else-if="section === 'scope'" :task="task" :runtime="runtime" :terminal="terminal && !legacy" :retrying-unit-id="retryingUnitId" @retry="emit('retry', $event)" />
   <ReviewFilesPage v-else-if="section === 'files'" :key="task.id" :task="task" :findings="findings" @finding="openFinding" />
   <template v-else-if="section === 'activity'"><ReviewActivityPage :task="task" :runtime="runtime" :duration="duration" /><details v-if="legacy" class="card card-pad space-top"><summary>完整历史审查、证据与契约记录</summary><ReviewViewer :task="task" :report="report" :status-text="statusText" :task-duration="duration" :cancelling="false" :retrying-unit-id="null" @new-review="emit('create')" /></details></template>
-  <template v-else-if="section === 'report'"><div class="page-head"><div><h1>报告与导出</h1><p class="title-sub">开发者报告、PR Summary 草稿与完整审计；正文来自后端，导出到本地。</p></div></div><ReportPanel :markdown="report || task.report_markdown" :user-markdown="plan?.user_report_markdown" :summary-markdown="plan?.summary_markdown" :comments-markdown="comments" :filename-prefix="`repoguardian-${task.pr?.number || task.id.slice(0, 8)}`" /></template>
+  <template v-else-if="section === 'report'"><div class="page-head"><div><h1>审查报告与交付</h1><p class="title-sub">复制完整 PR 评论，阅读详细报告；高级入口保留技术审计记录。</p></div></div><ReportPanel :key="task.id" :markdown="report || task.report_markdown" :user-markdown="plan?.user_report_markdown" :review-markdown="plan?.review_comment_markdown" :review-id="task.id" :reviewed-head-sha="plan?.snapshot.head_sha" :comments-markdown="comments" :filename-prefix="`repoguardian-${task.pr?.number || task.id.slice(0, 8)}`" /></template>
   <template v-else-if="section === 'publish'"><div class="page-head"><div><h1>发布到 GitHub</h1><p class="title-sub">选择内容 → 服务端预检 → 预览与二次确认 → 写入与远端对账。</p></div><span class="badge neutral">发布状态以服务端回执为准</span></div><GitHubPublicationPanel v-if="!legacy && terminal && plan?.content_eligible" :key="task.id" :review-id="task.id" :plan="plan" open /><section v-else class="card card-pad"><EmptyState icon="shield" title="当前结果不可发布" :description="plan?.blocking_reasons.join('；') || (legacy ? '历史引擎仅供查看，请新建审查。' : !terminal ? '请等待审查结束。' : '后端尚未提供合格发布计划，请检查计划加载状态。')" /></section></template>
   <footer class="app-footer"><span>只读静态审查 · 证据可追溯 · 结论仅适用于本次快照</span><code>{{ task.pr?.head.sha?.slice(0, 12) || task.id.slice(0, 12) }}</code></footer>
 </template>

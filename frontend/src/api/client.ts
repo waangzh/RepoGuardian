@@ -98,6 +98,10 @@ export function getPublicationPlan(taskId: string, signal?: AbortSignal): Promis
   return request<PublicationPlan>(`/api/reviews/${encodeURIComponent(taskId)}/publication-plan`, { signal });
 }
 
+export function checkReviewComment(taskId: string, signal?: AbortSignal) {
+  return request<import('../types/publication').ReviewCommentCheck>(`/api/reviews/${encodeURIComponent(taskId)}/review-comment-check`, { method: 'POST', signal });
+}
+
 async function request<T>(path: string, init?: RequestInit, conflictMessage: string | null = '方案已失效或任务状态冲突，请重新预览后确认。'): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: {

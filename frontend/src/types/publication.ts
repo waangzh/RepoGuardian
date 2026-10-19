@@ -30,12 +30,24 @@ export interface DigestExcludedFile {
   path: string;
   reason: string;
 }
+export interface DigestInvestigation {
+  work_item_id: string | null;
+  proposition: string;
+  answer: "supported" | "refuted" | "unresolved";
+  reason: string | null;
+  limitations: string[];
+  requested_ranges: DigestGoal[];
+}
 export interface ReviewDigest {
   pr_url?: string | null;
   author_goal?: string | null;
   actual_changes?: string[];
   intent_alignment?: string;
   findings?: import('./reviewPlan').FindingView[];
+  investigations_known?: boolean;
+  investigations?: DigestInvestigation[];
+  unresolved_leads?: string[];
+  execution_status?: string | null;
   examined_goals: DigestGoal[];
   incomplete_goals: DigestGoal[];
   reviewed_files: string[];
