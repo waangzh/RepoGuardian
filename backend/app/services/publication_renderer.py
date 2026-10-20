@@ -532,7 +532,9 @@ def _comment_finding_lines(plan, finding, index, view, *, full):
 def _comment_history_lines(plan):
     """历史状态独立呈现；平台 resolved 和人工注记均不等于代码修复。"""
     represented = {match.get("discussion_id") for finding in _ordered_findings(plan)
-                   for match in finding.discussion_matches}
+                   for match in finding.discussion_matches
+                   if match.get("same_subject") is True and match.get("same_trigger") is True
+                   and match.get("same_impact") is True and match.get("new_information") is False}
     lines = []
     for item in plan.digest.discussion_rechecks:
         status = item.get("status")
@@ -644,7 +646,7 @@ def _comment_next_steps(plan, *, has_findings: bool):
 
 
 def render_review_comment(plan, *, detail="compact", exclude_resolved=False, include_discussed=False):
-    """按实际风险展开评论；阻断问题始终保留证据和触发条件。"""
+    """按实际风险展开评论；历史重复项可压缩为风险摘要。"""
     included, omitted, retained = comment_selection(plan, exclude_resolved=exclude_resolved,
                                                      include_discussed=include_discussed)
     full = detail == "full"
@@ -674,7 +676,7 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False, inc
         result = ["", f"## {title}", ""]
         for index, finding in enumerate(findings, 1):
             discussed = finding.default_selection_reason == "historical_duplicate"
-            needs_evidence = (full or finding.severity in {"high", "critical"}
+            needs_evidence = (full or (discussed and include_discussed) or finding.severity in {"high", "critical"}
                 or finding.finding_key in blockers)
             if discussed and not include_discussed and not full:
                 needs_evidence = False

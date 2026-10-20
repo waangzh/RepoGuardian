@@ -36,9 +36,9 @@ async def test_copy_check_binds_snapshot_keeps_human_annotations_and_network_unk
     assert body["preview_markdown"] == plan["review_comment_markdown"]
     assert body["review_comment_markdown"].startswith(body["preview_markdown"])
     assert "快照检查" not in body["preview_markdown"]
-    # 正常状态只在正文保留一条简短 Commit 声明；过期或未知才追加检查说明。
+    # 正常状态只在正文保留一条简短提交声明；过期或未知才追加检查说明。
     assert ("快照检查" in body["review_comment_markdown"]) is (expected != "current")
-    assert body["review_comment_markdown"].count("Commit") == 1
+    assert body["preview_markdown"].count(f"`{'a' * 40}`") == 1
     assert "人工处理：已处理" in body["review_comment_markdown"]
     assert "人工处理：已处理" in plan["user_report_markdown"]
     assert calls == [task.pr_url]  # 普通计划读取不会增加远端访问。
@@ -79,6 +79,7 @@ async def test_persisted_disposition_refreshes_delivery_without_rewriting_frozen
     monkeypatch.setattr(reviews.GitHubTool, "fetch_pr", fetch)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         original = (await client.get("/api/reviews/run/publication-plan")).json()
+        preview = (await client.post("/api/reviews/run/review-comment-preview", json={})).json()
         response = await client.patch("/api/reviews/run/findings/key-a/disposition",
             json={"status": "resolved", "reason": "已提交人工修复，尚未重新运行机器审查"})
         assert response.status_code == 200
@@ -88,6 +89,9 @@ async def test_persisted_disposition_refreshes_delivery_without_rewriting_frozen
     assert "人工处理：已处理" in plan["user_report_markdown"]
     assert "时间：未记录" not in plan["user_report_markdown"]
     assert "尚未重新运行机器审查" in copy["review_comment_markdown"]
+    assert preview["preview_markdown"] == original["review_comment_markdown"]
+    assert copy["preview_markdown"] == plan["review_comment_markdown"]
+    assert copy["preview_markdown"] != preview["preview_markdown"]
     assert plan["outcome"] == original["outcome"] and plan["inline_drafts"] == original["inline_drafts"]
     assert audit == task.report_markdown
     assert repository.get_task(task.id).task_runtime_report == task.task_runtime_report
