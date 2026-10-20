@@ -1,4 +1,4 @@
-/* Report delivery tokens follow UI/RepoGuardian_Report_Delivery/index.html. */
+/* Report delivery tokens follow UI/Report_Delivery_Design/index.html. */
 .rd-context--embedded .rd-meta { margin-top: 0; }
 .rd-workspace{--rd-ink:#182742;--rd-muted:#53637b;--rd-faint:#8490a4;--rd-line:#e4eaf2;--rd-soft:#fafcff;--rd-surface:#fff;--rd-blue:#3d61ec;--rd-blue-soft:#edf2ff;--rd-teal:#078d77;--rd-teal-soft:#e8f8f3;--rd-radius:12px;--rd-shadow:0 12px 36px #1e335809,0 2px 5px #1e335805;color:var(--rd-ink);min-width:0}
 [data-theme="dark"] .rd-workspace{--rd-ink:var(--ink);--rd-muted:var(--muted);--rd-faint:var(--faint);--rd-line:var(--line);--rd-soft:var(--surface2);--rd-surface:var(--surface);--rd-blue:var(--primary);--rd-blue-soft:var(--blueWash);--rd-teal:#60cea0;--rd-teal-soft:#15382e}
@@ -25,6 +25,7 @@
   --comment-copy: #4a5b75;
   --comment-strong: #344560;
   --comment-heading: #1b2d4b;
+  --comment-line: #edf1f6;
   --comment-snapshot: #386d62;
   --comment-snapshot-bg: #eef9f5;
   padding: 23px 26px 26px;
@@ -36,6 +37,7 @@
   --comment-copy: var(--rd-muted);
   --comment-strong: var(--rd-ink);
   --comment-heading: var(--rd-ink);
+  --comment-line: var(--rd-line);
   --comment-snapshot: var(--rd-teal);
   --comment-snapshot-bg: var(--rd-teal-soft);
 }
@@ -57,7 +59,7 @@
 .rd-comment-conclusion > .app-icon { flex: none; }
 .rd-comment-conclusion.positive > .app-icon { color: var(--rd-teal); }
 .rd-comment-conclusion.attention > .app-icon { color: var(--amber); }
-.rd-comment-section { padding: 17px 0 19px; border-bottom: 1px solid var(--rd-line); }
+.rd-comment-section { padding: 17px 0 19px; border-bottom: 1px solid var(--comment-line); }
 .rd-comment-section:first-of-type { padding-top: 18px; }
 .rd-comment-section:last-child { border-bottom: 0; }
 .rd-comment-section > header { display: flex; align-items: center; justify-content: space-between; gap: 9px; margin-bottom: 12px; }
@@ -65,6 +67,7 @@
 .rd-comment-count { flex: none; padding: 3px 9px; border-radius: 50px; background: var(--rd-teal-soft); color: var(--rd-teal); font-size: 11px; font-weight: 700; }
 .rd-comment-count.has-findings { background: var(--amberWash); color: var(--amber); }
 .rd-workspace .rd-pr-comment .rd-markdown { padding: 0; font-size: 13px; line-height: 1.95; color: var(--comment-copy); }
+.rd-workspace .rd-pr-comment > .rd-comment-intro { margin-top: 13px; }
 .rd-workspace .rd-pr-comment .rd-markdown p { margin: 13px 0; font-size: 13px; line-height: 1.95; }
 .rd-workspace .rd-pr-comment .rd-markdown p:first-child { margin-top: 0; }
 .rd-workspace .rd-pr-comment .rd-markdown p:last-child { margin-bottom: 0; }

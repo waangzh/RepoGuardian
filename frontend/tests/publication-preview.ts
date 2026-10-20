@@ -11,6 +11,12 @@ import "../src/styles/workspace.css";
 
 const fixtures = await (await fetch("/tests/fixtures/publication-plans.json")).json() as Record<string, { task: ReviewTask; plan: PublicationPlan; summary: import("../src/types/publication").ReviewSummary }>;
 const variants = await (await fetch("/tests/fixtures/review-comment-options.json")).json();
+if (new URLSearchParams(location.search).has('intro')) {
+  for (const { plan } of Object.values(fixtures)) {
+    plan.review_comment_markdown = plan.review_comment_markdown.replace('\n\n## ',
+      '\n\n当前结论针对本轮变更范围；已参考 2 项历史讨论，另有 2 项历史事项未核验。\n\n## ');
+  }
+}
 if (new URLSearchParams(location.search).has('unsafe')) {
   for (const { plan } of Object.values(fixtures)) plan.review_comment_markdown += '\n\n<img src="invalid" onerror="document.body.dataset.unsafe=1"><script>document.body.dataset.unsafe=1</script><style>body{display:none}</style>';
 }
