@@ -16,6 +16,7 @@ import ReviewPlanPage from "./components/pages/ReviewPlanPage.vue";
 import ReviewWorkspace from "./components/review/ReviewWorkspace.vue";
 import { reviewSections, type ReviewSection } from "./types/workspace";
 import { validPullRequestUrl } from "./utils/workspacePresentation";
+import { rereviewInput } from "./utils/reviewRestart";
 import type { AppPage, ProviderModelInfo } from "./types/operations";
 import type { ReviewMode, ReviewPreviewResponse, ReviewTask, ValidationBackend } from "./types/review";
 import { reviewCompletionMessage } from "./utils/taskRuntimePresentation";
@@ -49,10 +50,12 @@ const validationBackend = ref<ValidationBackend>("none");
 import type { ReviewCapabilities, ReviewPlanOptions } from './types/reviewPlan';
 const capabilities = ref<ReviewCapabilities | null>(null);
 const draftPlan = ref<ReviewPlanOptions | undefined>();
+const rereviewContext = ref<ReturnType<typeof rereviewInput>>(null);
+let reviewInputGeneration = 0;
 const planDirty = ref(false);
 let restoringPreview = false;
 watch(model, () => { if (!restoringPreview) { planDirty.value = true; cancelPreview(); } });
-watch(prUrl, () => { if (!restoringPreview) { draftPlan.value = undefined; planDirty.value = true; } });
+watch(prUrl, () => { if (!restoringPreview) { draftPlan.value = undefined; rereviewContext.value = null; planDirty.value = true; } });
 const preview = ref<ReviewPreviewResponse | null>(null);
 function changePlan(plan: ReviewPlanOptions) { draftPlan.value = plan; planDirty.value = true; }
 const previewTracker = usePreviewJob();
@@ -276,7 +279,7 @@ function backToInput() {
   // 仅解绑本地跟踪；按现有约定，只有显式取消才调用服务端取消接口。
   previewTracker.detach(true);
   preview.value = null;
-  draftPlan.value = undefined;
+  if (!rereviewContext.value) draftPlan.value = undefined;
   planDirty.value = false;
   error.value = null;
   createdTaskId.value = null;
@@ -298,6 +301,8 @@ async function retryUnit(unitId: string) {
 
 async function openHistoricalReview(taskId: string) {
   if (submitting.value || opening.value) return;
+  reviewInputGeneration++;
+  rereviewContext.value = null;
   opening.value = true;
   reviewSection.value = 'overview';
   clearAll(false);
@@ -487,18 +492,45 @@ function showReviewResult() {
 
 function startNewReview() {
   if (taskActive.value || submitting.value || opening.value) return;
+  reviewInputGeneration++;
   clearAll();
+  dismissNotice();
   task.value = null;
   report.value = null;
   preview.value = null;
   error.value = null;
   prUrl.value = "";
+  model.value = "";
+  mode.value = "review";
+  generatePatches.value = false;
+  validationBackend.value = "none";
+  rereviewContext.value = null;
   draftPlan.value = undefined;
   planDirty.value = false;
   createdTaskId.value = null;
   activePage.value = "dashboard";
   reviewSection.value = "overview";
   mobileOpen.value = false;
+}
+
+async function rereviewCurrentPr() {
+  if (!task.value || taskActive.value || submitting.value || opening.value) return;
+  const input = rereviewInput(task.value);
+  if (!input) {
+    error.value = "原审查未保存有效的 GitHub PR 链接，请使用新建审查输入链接。";
+    return;
+  }
+  startNewReview();
+  const generation = reviewInputGeneration;
+  prUrl.value = input.prUrl;
+  model.value = input.model;
+  // Let input watchers invalidate the old plan before applying the new editable draft.
+  await nextTick();
+  if (generation !== reviewInputGeneration || task.value || prUrl.value !== input.prUrl) return;
+  draftPlan.value = input.plan;
+  planDirty.value = true;
+  rereviewContext.value = input;
+  await loadQuickPreview();
 }
 
 function clearPolling() {
@@ -548,7 +580,7 @@ onBeforeUnmount(() => {
     <div class="main">
       <AppHeader :title="pageTitle" :status-text="statusText" :menu-open="mobileOpen" @menu="mobileOpen = !mobileOpen" />
       <main v-if="activePage === 'dashboard'" id="workspace-content" class="page">
-        <ReviewWorkspace v-if="task" :key="task.id" :task="task" :report="report" :section="reviewSection" :status-text="statusText" :duration="taskDuration" :cancelling="cancelling" :retrying-unit-id="retryingUnitId" @navigate="navigateReview" @cancel="cancelCurrentReview" @create="startNewReview" @retry="retryUnit" />
+        <ReviewWorkspace v-if="task" :key="task.id" :task="task" :report="report" :section="reviewSection" :status-text="statusText" :duration="taskDuration" :cancelling="cancelling" :retrying-unit-id="retryingUnitId" @navigate="navigateReview" @cancel="cancelCurrentReview" @create="startNewReview" @rereview="rereviewCurrentPr" @retry="retryUnit" />
         <ReviewPlanPage v-else-if="preview" v-model:model="model" :preview="preview" :capabilities="capabilities" :dirty="planDirty" :previewing="previewing" @change="changePlan" @repreview="loadPreview" :pr-url="prUrl" :models="models" :default-model="defaultModel" :models-loading="modelsLoading" :models-error="modelsError" :submitting="submitting || Boolean(createdTaskId && !task)" :created="Boolean(createdTaskId && !task && !submitting)" @submit="submitReview" @back="backToInput" @open-created="createdTaskId && openHistoricalReview(createdTaskId)" />
         <section v-else-if="opening" class="card card-pad workspace-loading" role="status" aria-live="polite">正在打开审查记录…</section>
         <QuickPreviewPage v-else-if="quickOverview || quickLoading || quickError" :overview="quickOverview" :loading="quickLoading" :error="quickError" :pr-url="prUrl" @prepare="loadPreview" @retry="loadQuickPreview" @back="backToInput" />

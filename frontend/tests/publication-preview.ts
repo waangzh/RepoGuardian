@@ -75,7 +75,8 @@ window.fetch = async (input, init) => {
 function workspace() {
   return h(ReviewWorkspace, { task: task.value, report: task.value.report_markdown, statusText: task.value.status,
     section: section.value, 'onNavigate': (value: ReviewSection) => { section.value = value; },
-    onCreate: () => { createRequested.value = true; }, duration: "1 秒", cancelling: false, retryingUnitId: null });
+    onCreate: () => { createRequested.value = true; }, onRereview: () => { createRequested.value = true; },
+    duration: "1 秒", cancelling: false, retryingUnitId: null });
 }
 createApp({ setup: () => () => h("div", [
   h("div", { style: "padding:16px;background:#fff3dd;display:flex;gap:16px" }, [

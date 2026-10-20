@@ -56,7 +56,7 @@ const ACTION_META: Record<SituationActionKey, { label: string; icon: string }> =
   view_activity: { label: "查看技术记录", icon: "activity" },
   view_retained: { label: "查看已保留结果", icon: "search" },
   view_report: { label: "查看完整报告", icon: "report" },
-  rereview: { label: "重新审查", icon: "plus" },
+  rereview: { label: "重新审查此 PR", icon: "plus" },
 };
 
 const COPY_PR = { label: "复制 PR 评论", prominence: "primary" as const, partial: false };
