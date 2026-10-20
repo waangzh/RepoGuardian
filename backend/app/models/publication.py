@@ -124,6 +124,8 @@ class ChangeUnderstanding(BaseModel):
 
 
 class ReviewDigest(BaseModel):
+    discussion_stats: dict | None = None
+    discussion_rechecks: list[dict] = Field(default_factory=list)
     pr_url: str | None = None
     author_goal: str | None = None
     author_context_status: Literal["complete", "truncated", "unknown", "not_recorded"] = "not_recorded"
@@ -177,6 +179,10 @@ class PublicationFinding(BaseModel):
     category: str | None = None
     evidence_summary: str | None = None
     evidence_ids: list[str] = Field(default_factory=list)
+    default_selected: bool = True
+    default_selection_reason: str | None = None
+    discussion_urls: list[str] = Field(default_factory=list)
+    discussion_matches: list[dict] = Field(default_factory=list)
 
 
 class WithheldFinding(BaseModel):
@@ -188,6 +194,7 @@ class ReviewSummaryDigest(BaseModel):
     """结果概览所需的轻量投影；不含逐条问题正文、目标明细或执行追踪。"""
 
     author_goal: str | None = None
+    discussion_stats: dict | None = None
     author_context_status: Literal["complete", "truncated", "unknown", "not_recorded"] = "not_recorded"
     author_context_limitation: str | None = None
     change_understanding: ChangeUnderstanding | None = None
@@ -235,6 +242,7 @@ class ReviewCommentOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
     detail: Literal["compact", "full"] = "compact"
     exclude_resolved: bool = False
+    include_discussed: bool = False
     finding_key: str | None = Field(default=None, min_length=1, max_length=256)
 
     @model_validator(mode="after")

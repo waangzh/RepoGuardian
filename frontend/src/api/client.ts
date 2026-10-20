@@ -19,6 +19,14 @@ import type { PublicationPlan } from "../types/publication";
 import type { PublicationSelection, PublicationPreflightResult, PublicationAccepted, PublicationAttempt } from "../types/publication";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
+
+export function getPrDiscussions(taskId: string, query: {
+  page?: number; discussion_id?: string; comment_offset?: number;
+} = {}, signal?: AbortSignal): Promise<import("../types/prDiscussion").DiscussionPage> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) if (value !== undefined) params.set(key, String(value));
+  return request(`/api/reviews/${encodeURIComponent(taskId)}/discussions?${params}`, { signal });
+}
 import type { PreviewJob, PreviewRequest } from '../types/previewJob';
 import type { QuickPreview } from '../types/quickPreview';
 

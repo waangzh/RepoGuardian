@@ -12,6 +12,8 @@ from app.models.review import UnitEvidenceStore
 from app.models.review_runtime import (Candidate, ExaminationResult, ProposedLead, RuntimeReadResponse,
                                       InvestigationResult, VerificationResult)
 from app.models.review_runtime import ReviewGoal, ReviewWorkItem
+from app.models.review_runtime import DiscussionRuntimeReadResponse
+from app.models.review_runtime import DiscussionInvestigationResult
 from app.services.coordination_runtime import CoordinationLeaseLost
 from app.services.review_run_budget import AttemptState
 from app.services.review_task_executor import TaskProjection
@@ -100,7 +102,7 @@ class TaskRuntimeCheckpoint:
             "verification": projection.verification.model_dump(mode="json") if projection.verification else None,
             "invalidated_results": projection.invalidated_results,
         }
-        if executor.spec.prompt_version in {"task-review-prompt-v5", "task-review-prompt-v6"}:
+        if executor.spec.prompt_version in {"task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7"}:
             session["rejected_items"] = step.rejected_items
         return session
 
@@ -112,14 +114,18 @@ class TaskRuntimeCheckpoint:
             candidates={k: Candidate.model_validate(v) for k, v in payload["candidates"].items()},
             leads=[ProposedLead.model_validate(v) for v in payload["leads"]],
             accepted_target_ids=set(payload["accepted"]), pending_target_ids=set(payload["pending"]),
-            investigation=InvestigationResult.model_validate(payload["investigation"]) if payload.get("investigation") else None,
+            investigation=((DiscussionInvestigationResult if "resolution" in payload["investigation"]
+                else InvestigationResult).model_validate(payload["investigation"]))
+                if payload.get("investigation") else None,
             verification=VerificationResult.model_validate(payload["verification"]) if payload.get("verification") else None,
             invalidated_results=payload.get("invalidated_results", []),
         )
         executor.evidence_catalog = payload["evidence"]
         executor.active_evidence_ids = set(payload["active"])
         executor.request_id, executor.attempt_id = payload["request_id"], payload["attempt_id"]
-        step.pending_read = RuntimeReadResponse.model_validate(payload["pending_read"]) if payload["pending_read"] else None
+        read = payload["pending_read"]
+        schema = DiscussionRuntimeReadResponse if read and read.get("tool") == "discussion_read" else RuntimeReadResponse
+        step.pending_read = schema.model_validate(read) if read else None
         step.repair_errors = payload["repair_errors"]
         step.rejected_items = payload.get("rejected_items", [])
         step.store = UnitEvidenceStore.model_validate(payload["store"])

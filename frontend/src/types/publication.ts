@@ -44,6 +44,8 @@ export interface ChangeUnderstanding {
   alignment: string;
 }
 export interface ReviewDigest {
+  discussion_stats?: import("./prDiscussion").DiscussionStats | null;
+  discussion_rechecks?: import("./prDiscussion").DiscussionRecheck[];
   pr_url?: string | null;
   author_goal?: string | null;
   author_context_status?: "complete" | "truncated" | "unknown" | "not_recorded";
@@ -101,6 +103,7 @@ export interface MergeDecision {
 export interface ReviewCommentOptions {
   detail: "compact" | "full";
   exclude_resolved: boolean;
+  include_discussed?: boolean;
   finding_key?: string | null;
 }
 
@@ -119,6 +122,10 @@ export interface PublicationAnchor {
 
 export interface PublicationFinding {
   finding_key: string;
+  default_selected?: boolean;
+  default_selection_reason?: string | null;
+  discussion_urls?: string[];
+  discussion_matches?: { discussion_id: string; reason: string }[];
   candidate_id: string;
   severity: "critical" | "high" | "medium" | "low";
   placement: "inline" | "summary";
@@ -157,6 +164,7 @@ export interface PublicationPlan {
 }
 
 export interface ReviewSummaryDigest {
+  discussion_stats?: import("./prDiscussion").DiscussionStats | null;
   author_goal?: string | null;
   author_context_status?: "complete" | "truncated" | "unknown" | "not_recorded";
   author_context_limitation?: string | null;

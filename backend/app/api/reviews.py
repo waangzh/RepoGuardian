@@ -352,8 +352,10 @@ def _comment_content(plan, options):
         if selected is None:
             raise HTTPException(status_code=409, detail="Selected finding is no longer eligible for a comment")
         return [selected], [item for item in findings if item.finding_key != selected.finding_key], [], render_finding_comment(plan, selected)
-    included, omitted, retained = comment_selection(plan, exclude_resolved=options.exclude_resolved)
-    return included, omitted, retained, render_review_comment(plan, detail=options.detail, exclude_resolved=options.exclude_resolved)
+    included, omitted, retained = comment_selection(plan, exclude_resolved=options.exclude_resolved,
+                                                     include_discussed=options.include_discussed)
+    return included, omitted, retained, render_review_comment(plan, detail=options.detail,
+        exclude_resolved=options.exclude_resolved, include_discussed=options.include_discussed)
 
 
 @router.post("/{task_id}/review-comment-check", response_model=ReviewCommentCheck)
@@ -404,6 +406,26 @@ async def preview_review_comment(task_id: str, options: ReviewCommentOptions):
         review_comment_markdown=comment,
         included_finding_keys=[item.finding_key for item in included], omitted_finding_keys=[item.finding_key for item in omitted],
         retained_blocking_keys=retained)
+
+
+@router.get("/{task_id}/discussions")
+async def get_pr_discussions(task_id: str, page: int = Query(1, ge=1),
+                             page_size: int = Query(20, ge=1, le=100),
+                             discussion_id: str | None = Query(None, max_length=256),
+                             comment_offset: int = Query(0, ge=0),
+                             comment_limit: int = Query(20, ge=1, le=100)):
+    from app.services.pr_discussions import discussion_page
+    service = get_review_service()
+    task = await asyncio.to_thread(service.get_task, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Review not found")
+    try:
+        return await discussion_page(task, getattr(service, "_repository", None), page=page, page_size=page_size,
+            discussion_id=discussion_id, comment_offset=comment_offset, comment_limit=comment_limit)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Discussion not found") from None
+    except (ValueError, OSError):
+        raise HTTPException(status_code=409, detail="Discussion snapshot is missing or invalid") from None
 
 
 @router.get("/{task_id}/report")

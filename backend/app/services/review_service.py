@@ -733,7 +733,9 @@ class ReviewService:
             task.review.status = task.status
             task.review.completed = False
             task.warnings.append("review_deadline: 已达到冻结方案期限，未完成范围仍未检查，用量可能未知。")
-            if task.task_runtime_report:
+            if task.task_runtime_report and not (
+                    task.task_runtime_report.get("execution_status") == "completed"
+                    and task.task_runtime_report.get("termination_reason") == "plan_exhausted"):
                 task.task_runtime_report.update(execution_status="completed", termination_reason="deadline",
                                                 scope_complete=False, usage_integrity="unknown")
             task.report_markdown = self._report_service.generate(task)
@@ -996,6 +998,7 @@ class ReviewService:
         task.report_markdown = rebuilt.report_markdown
         task.task_runtime_configuration = rebuilt.task_runtime_configuration
         task.task_runtime_report = rebuilt.task_runtime_report
+        task.pr_discussion = rebuilt.pr_discussion
         if task.status == TaskStatus.failed and task.task_runtime_report:
             from app.services.task_review_projection import runtime_failure_summary
             task.error = runtime_failure_summary(task.task_runtime_report.get("diagnostics") or [],

@@ -712,6 +712,61 @@ class ReviewRepository:
             row = session.get(SideEffectOrm, f"task-review-v1:{task_id}")
             return dict(row.result) if row and row.result else None
 
+    def load_discussion_runtime(self, task_id: str) -> dict | None:
+        with self._session_factory() as session:
+            row = session.get(SideEffectOrm, f"pr-discussion-v1:{task_id}")
+            return dict(row.result) if row and row.result else None
+
+    def save_discussion_runtime(self, task_id: str, payload: dict, expected_revision: int,
+                                lease: dict | None = None) -> None:
+        from app.services.coordination_runtime import CoordinationLeaseLost
+        if (payload.get("task_id") != task_id or payload.get("version") != "pr-discussion-context-v1"
+                or payload.get("revision") != expected_revision + 1):
+            raise ValueError("invalid discussion runtime identity")
+        try:
+            with self._session_factory.begin() as session:
+                task = session.get(ReviewTaskOrm, task_id)
+                if task is None or task.deleted_at is not None or task.status == TaskStatus.cancelled.value:
+                    raise CoordinationLeaseLost("discussion task unavailable")
+                if self._load_task_snapshot(task).get("engine") != "task_review_v1":
+                    raise ValueError("discussion engine mismatch")
+                if lease:
+                    job = session.get(WorkerJobOrm, lease["job_id"])
+                    if (job is None or job.task_id != task_id or job.status != "leased"
+                            or job.lease_owner != lease["owner"] or job.attempts != lease["attempt"]
+                            or job.lease_until is None or job.lease_until.replace(tzinfo=timezone.utc) <= utcnow()):
+                        raise CoordinationLeaseLost("discussion worker lease lost")
+                key = f"pr-discussion-v1:{task_id}"
+                row = session.get(SideEffectOrm, key)
+                if row is None:
+                    if expected_revision != -1:
+                        raise CoordinationLeaseLost("discussion runtime missing")
+                    session.add(SideEffectOrm(idempotency_key=key, task_id=task_id,
+                        effect_type="pr-discussion-context-v1", target=task_id, status="active",
+                        request_hash=stable_hash(payload.get("identity")), result=payload))
+                else:
+                    if row.result.get("identity") != payload.get("identity"):
+                        raise ValueError("discussion snapshot identity mismatch")
+                    for frozen in ("snapshot", "input"):
+                        if row.result.get(frozen) and row.result[frozen] != payload.get(frozen):
+                            raise ValueError("discussion input changed")
+                    changed = session.execute(update(SideEffectOrm).where(
+                        SideEffectOrm.idempotency_key == key,
+                        SideEffectOrm.result["revision"].as_integer() == expected_revision,
+                    ).values(result=payload))
+                    if changed.rowcount != 1:
+                        raise CoordinationLeaseLost("discussion revision changed")
+                for ref in payload.get("artifacts", []):
+                    expected_prefix = (self._artifacts.root / task_id).as_uri() + "/"
+                    if not ref["uri"].startswith(expected_prefix):
+                        raise ValueError("discussion artifact outside task")
+                    content = self._artifacts.read_text(ref["uri"]).encode("utf-8")
+                    if hashlib.sha256(content).hexdigest() != ref["sha256"] or len(content) != ref["size_bytes"]:
+                        raise ValueError("discussion artifact invalid")
+                    self._record_artifact(session, task_id, "pr-discussion-v1", ref["uri"])
+        except IntegrityError as exc:
+            raise _runtime_integrity_error(exc, "discussion runtime") from None
+
     def save_task_review_runtime(self, task_id: str, payload: dict, expected_revision: int,
                                  lease: dict | None = None) -> None:
         """新引擎独立 namespace；任何取消/过期 lease 都不能继续发布。"""

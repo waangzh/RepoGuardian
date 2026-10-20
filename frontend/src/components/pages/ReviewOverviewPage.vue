@@ -12,6 +12,7 @@ import OverviewResults from "../review/OverviewResults.vue";
 import OverviewNextSteps from "../review/OverviewNextSteps.vue";
 import PrChangeSummary from "../review/PrChangeSummary.vue";
 import AppIcon from "../common/AppIcon.vue";
+import PrDiscussionContext from "../review/PrDiscussionContext.vue";
 import "../../styles/review-overview.css";
 
 const props = defineProps<{
@@ -50,6 +51,7 @@ function runAction(key: SituationActionKey) {
     <div class="ov-main">
       <OverviewVerdict :plan="summaryPlan" :situation="situation" :execution="execution" :summary-error="summaryError" :summary-loading="summaryLoading" @navigate="emit('navigate', $event)" />
       <OverviewResults :plan="summaryPlan" :runtime="summary" :warnings="warnings" :stale="stale" @navigate="emit('navigate', $event)" />
+      <PrDiscussionContext :review-id="task.id" :stats="summaryPlan?.digest.discussion_stats" />
       <section class="ov-panel ov-understanding" aria-labelledby="overview-understanding-title">
         <header class="ov-section-head">
           <div><h2 id="overview-understanding-title">这次 PR 改变了什么？</h2><p>将作者意图和静态证据分开，避免用 PR 描述替代事实。</p></div>

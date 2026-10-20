@@ -8,7 +8,7 @@ import json
 
 from app.models.review import ReviewToolScope, UnitEvidenceStore, ContextRetrievalPlan, ChangedFile
 from app.agents.providers import LLMProviderError, provider_failure_info
-from app.models.review_runtime import RuntimeReadResponse
+from app.models.review_runtime import RuntimeReadResponse, DiscussionRuntimeReadResponse
 from app.services.evidence_store import put_chunks, store_chunks, evidence_snapshot
 from app.services.review_input_context import build_context_evidence
 from app.services.review_run_budget import (
@@ -75,6 +75,7 @@ class InspectTaskStep:
         self.runtime = None
         self.tool_observations: list[dict] = []
         self.read_observations: dict[str, dict] = {}
+        self.discussion_store = None
 
     async def advance(self) -> dict:
         if self._lock.locked():
@@ -85,7 +86,8 @@ class InspectTaskStep:
                 read_key = json.dumps([self.pending_read.tool, self.pending_read.arguments.model_dump()], sort_keys=True)
                 observation = await self._read()
                 emit_run_audit("tool", operation=read.tool, work_item_id=self.executor.work_item.work_item_id,
-                    arguments=read.arguments.model_dump(mode="json"), observation=observation)
+                    arguments=read.arguments.model_dump(mode="json"),
+                    observation={key: value for key, value in observation.items() if key != "content"})
                 fingerprint = json.dumps(observation, sort_keys=True)
                 previous = self.read_observations.get(read_key, {})
                 repeats = previous.get("repeats", 0) + 1 if previous.get("fingerprint") == fingerprint else 1
@@ -117,17 +119,24 @@ class InspectTaskStep:
                 active_evidence_ids=executor.active_evidence_ids,
                 evidence_catalog=executor.evidence_catalog,
                 related_goals=[executor.goals[identity] for identity in related_ids])
+            executor.visible_discussions = getattr(self.protocol, "visible_discussions", [])
             if self.tool_observations:
-                from dataclasses import replace
-                request = replace(request, prompt=request.prompt + "\n" + json.dumps({
-                    "recent_tool_observations": self.tool_observations}, ensure_ascii=False))
+                if executor.spec.discussion_manifest_hash:
+                    from app.services.pr_discussions import fit_discussion_observations
+                    request, self.tool_observations = fit_discussion_observations(
+                        request, self.tool_observations, executor.spec)
+                    executor.visible_discussions = json.loads(request.prompt.split("\n")[0]).get("pr_discussions", [])
+                else:
+                    from dataclasses import replace
+                    request = replace(request, prompt=request.prompt + "\n" + json.dumps({
+                        "recent_tool_observations": self.tool_observations}, ensure_ascii=False))
             if self.repair_errors:
                 from dataclasses import replace
                 feedback = {
                     "correction": self.repair_errors,
                     "instruction": "Only resubmit rejected items; accepted results are stored by server.",
                 }
-                if executor.spec.prompt_version in {"task-review-prompt-v5", "task-review-prompt-v6"}:
+                if executor.spec.prompt_version in {"task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7"}:
                     feedback.update(rejected_items=self.rejected_items,
                         accepted_target_ids=sorted(executor.projection.accepted_target_ids))
                 if executor.spec.intent_assessment_contract:
@@ -162,6 +171,14 @@ class InspectTaskStep:
                     raise asyncio.CancelledError()
 
             async def save_response(attempt, raw, usage):
+                if self.discussion_store is not None:
+                    for thread in executor.visible_discussions:
+                        ids = {c["id"] for c in thread["comments"] if c["body"]}
+                        ids.update((thread.get("summary") or {}).get("covered_comment_ids", []))
+                        await self.discussion_store.used(thread["id"], ids)
+                    for observation in self.tool_observations:
+                        if observation.get("discussion_id") and observation.get("content"):
+                            await self.discussion_store.used(observation["discussion_id"], observation.get("comment_ids", []))
                 if self.checkpoint is not None:
                     await self.checkpoint.save_response(self, attempt, raw, usage)
 
@@ -196,7 +213,7 @@ class InspectTaskStep:
         """恢复重放与在线结果使用同一解析/纠错入口。"""
         executor = self.executor
         parsed = executor.parse_and_apply(raw)
-        if isinstance(parsed.response, RuntimeReadResponse) and not parsed.errors:
+        if isinstance(parsed.response, (RuntimeReadResponse, DiscussionRuntimeReadResponse)) and not parsed.errors:
             read_key = json.dumps([parsed.response.tool, parsed.response.arguments.model_dump()], sort_keys=True)
             if self.read_observations.get(read_key, {}).get("repeats", 0) >= 2:
                 from app.services.review_task_executor import RuntimeParseError
@@ -251,6 +268,11 @@ class InspectTaskStep:
         self.pending_read = None
         executor = self.executor
         args = read.arguments
+        if read.tool == "discussion_read":
+            if self.discussion_store is None:
+                return {"action": "tool", "status": "rejected", "reason": "discussion_context_unavailable"}
+            from app.services.pr_discussions import read_original
+            return await read_original(self.discussion_store, args)
         if read.tool != "file_read":
             return await self._other_read(read)
         if args.end_line - args.start_line + 1 > self.scope.max_lines_per_read:
