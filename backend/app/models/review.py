@@ -349,10 +349,9 @@ class ContextRetrievalPlan(BaseModel):
     @field_validator("target_symbols")
     @classmethod
     def validate_target_symbols(cls, values: list[str]) -> list[str]:
-        import re
-
-        symbol_pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
-        if any(not symbol_pattern.fullmatch(value) for value in values):
+        if any(not value or len(value) > 500
+               or not all(part.isidentifier() or part.replace("$", "_").isidentifier()
+                          for part in value.split(".")) for value in values):
             raise ValueError("target symbols must be indexed symbol names")
         return list(dict.fromkeys(values))
 

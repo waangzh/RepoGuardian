@@ -13,7 +13,7 @@ from app.services.fingerprints import stable_hash
 from app.tools.git_tool import DIFF_CONTEXT_LINES, DIFF_POLICY_VERSION
 
 logger = logging.getLogger("RepoGuardian.PreviewCache")
-INDEX_CACHE_VERSION = "preview-input-v2"
+INDEX_CACHE_VERSION = "preview-input-v3"
 MAX_BYTES = 32 * 1024 * 1024
 MAX_RAW_BYTES = 512 * 1024 * 1024
 MAX_ENTRIES = 4

@@ -139,6 +139,11 @@ class TreeSitterLanguageAdapter(RegexLanguageAdapter):
                     symbol.python_binding_safe = symbol.start_line in stable
                     symbol.calls = [call.model_copy(update=bindings.get((call.line, call.callee), {}))
                                     for call in symbol.calls]
+            elif self.language_id in {"go", "java", "rust"}:
+                from app.languages.compiled import analyze_compiled
+
+                symbols, imports = analyze_compiled(
+                    tree.root_node, source, relative_path, self.language_id, parser_id)
             else:
                 symbols = _ecmascript_symbols(tree.root_node, source, relative_path, parser_id)
                 imports = _ecmascript_imports(tree.root_node, source, parser_id)
@@ -160,6 +165,24 @@ def load_python_grammar(_: str) -> Any:
     import tree_sitter_python
 
     return tree_sitter_python.language()
+
+
+def load_go_grammar(_: str) -> Any:
+    import tree_sitter_go
+
+    return tree_sitter_go.language()
+
+
+def load_java_grammar(_: str) -> Any:
+    import tree_sitter_java
+
+    return tree_sitter_java.language()
+
+
+def load_rust_grammar(_: str) -> Any:
+    import tree_sitter_rust
+
+    return tree_sitter_rust.language()
 
 
 def load_typescript_grammar(extension: str) -> Any:

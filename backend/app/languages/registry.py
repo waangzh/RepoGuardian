@@ -5,10 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.languages.adapters import (
-    RegexLanguageAdapter,
     TreeSitterLanguageAdapter,
+    load_go_grammar,
+    load_java_grammar,
     load_javascript_grammar,
     load_python_grammar,
+    load_rust_grammar,
     load_typescript_grammar,
 )
 from app.languages.base import AnalysisLevel, FileAnalysis, LanguageAnalysisAdapter
@@ -71,7 +73,7 @@ default_language_registry = LanguageAnalysisRegistry([
     TreeSitterLanguageAdapter(
         "javascript", {".js", ".jsx", ".mjs", ".cjs"}, load_javascript_grammar
     ),
-    RegexLanguageAdapter("java", {".java"}),
-    RegexLanguageAdapter("go", {".go"}),
-    RegexLanguageAdapter("rust", {".rs"}),
+    TreeSitterLanguageAdapter("java", {".java"}, load_java_grammar),
+    TreeSitterLanguageAdapter("go", {".go"}, load_go_grammar),
+    TreeSitterLanguageAdapter("rust", {".rs"}, load_rust_grammar),
 ])
