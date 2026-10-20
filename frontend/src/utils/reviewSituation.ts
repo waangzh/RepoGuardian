@@ -47,7 +47,7 @@ export interface SituationSource {
 }
 
 const ACTION_META: Record<SituationActionKey, { label: string; icon: string }> = {
-  view_blockers: { label: "查看阻断问题", icon: "alert" },
+  view_blockers: { label: "查看高优先级问题", icon: "alert" },
   view_unresolved: { label: "查看待确认风险", icon: "search" },
   view_findings: { label: "查看问题", icon: "search" },
   view_gaps: { label: "查看缺口", icon: "shield" },
@@ -88,53 +88,54 @@ export function reviewSituation(
 
   // PR 已更新时原结论不再适用，优先于其他状态；不提供复制，避免继续交付旧结论。
   if (options.stale) {
-    return { ...counts, key: "stale", title: "审查结果基于旧代码版本",
-      description: "当前 PR 已更新，原结论可能不再适用。", tone: "warning", icon: "history",
+    return { ...counts, key: "stale", title: "PR 已更新，当前结论可能已过期",
+      description: "原结论只适用于审查时的 Head；请在新提交上重新审查后再判断。", tone: "warning", icon: "history",
       actions: actions("rereview"), copy: null };
   }
-  // 失败与取消只保留已有记录：主操作是理解现状，复制是明确标注的部分记录。
+  // 失败与用户停止只保留已有记录：主操作是理解现状，复制是明确标注的部分记录。
   if (outcome.kind === "failed") {
-    return { ...counts, key: "failed", title: "审查未完成",
-      description: "执行过程中发生错误，无法生成本轮可信的完整审查结论。", tone: "danger", icon: "alert",
+    return { ...counts, key: "failed", title: "审查因执行错误中断",
+      description: "执行过程中发生错误，未形成本轮完整结论；已保留中断前的检查记录。", tone: "danger", icon: "alert",
       actions: actions("view_error", "rereview"), copy: COPY_PARTIAL };
   }
   if (outcome.kind === "cancelled") {
-    return { ...counts, key: "cancelled", title: "审查已停止",
-      description: "已保留停止前的检查记录，剩余范围未完成。", tone: "warning", icon: "x",
+    return { ...counts, key: "cancelled", title: "审查已由用户停止",
+      description: "剩余范围未完成；已保留停止前的检查记录，不能作为完整审查结论。", tone: "warning", icon: "x",
       actions: actions(confirmedOrUnresolved(outcome) ? "view_retained" : "view_activity", "rereview"), copy: COPY_PARTIAL };
   }
   if (outcome.dynamic_validation === "failed") {
-    return { ...counts, key: "validation_failed", title: "已有验证未通过",
-      description: "与当前代码版本绑定的验证记录失败，需要查看失败原因。", tone: "danger", icon: "flask",
+    return { ...counts, key: "validation_failed", title: "当前版本已有验证失败记录",
+      description: "与当前代码版本绑定的验证记录失败；请核对失败原因，修复后重新验证。", tone: "danger", icon: "flask",
       actions: actions("view_validation", "rereview"), copy: COPY_RECORD };
   }
   if (blockingCount > 0 || status === "fix_blockers") {
     const extra: SituationActionKey[] = unresolvedCount > 0 ? ["view_unresolved"] : [];
-    return { ...counts, key: "blockers", title: "发现需要优先修复的问题",
-      description: `已确认 ${blockingCount || 1} 项高严重度问题，建议修复并重新审查后再考虑合并。`,
+    return { ...counts, key: "blockers", title: "发现高优先级问题，建议修复后再合并",
+      description: `已确认 ${blockingCount || 1} 项高优先级问题；请修复后在新提交上重新审查，再决定是否合并。`,
       tone: "danger", icon: "alert", actions: actions("view_blockers", ...extra), copy: COPY_REVIEW };
   }
   if (status === "resolve_unknowns" || status === "unavailable" || outcome.kind === "inconclusive") {
     const scopeIncomplete = reasons.includes("scope_incomplete")
       || (totalGoals > 0 && examinedGoals < totalGoals);
     if (scopeIncomplete) {
-      return { ...counts, key: "scope_incomplete", title: "部分审查已完成",
+      return { ...counts, key: "scope_incomplete",
+        title: totalGoals > 0 ? "部分检查尚未完成" : "检查范围尚不明确",
         description: totalGoals > 0
           ? `已完成 ${examinedGoals}/${totalGoals} 个约定目标，剩余部分尚未检查。`
-          : "没有可用的约定目标记录，无法判断检查范围。",
+          : "没有可用的约定目标记录，无法判断检查范围；请先补齐范围或重新审查。",
         tone: "warning", icon: "clock", actions: actions("view_gaps", "rereview"), copy: COPY_RECORD };
     }
-    return { ...counts, key: "evidence_gaps", title: "审查结论尚不充分",
-      description: "部分问题或调用路径尚未核验，无法形成可靠的完整判断。", tone: "warning", icon: "help",
+    return { ...counts, key: "evidence_gaps", title: "部分内容尚未核实，暂不能给出完整建议",
+      description: "仍有问题或调用路径未完成核验；请先核对缺口，再决定是否补查或交付本轮记录。", tone: "warning", icon: "help",
       actions: actions("view_gaps", "rereview"), copy: COPY_RECORD };
   }
   if (nonblockingCount > 0) {
-    return { ...counts, key: "nonblocking", title: "发现非阻断性问题",
-      description: `已确认 ${nonblockingCount} 项改进建议，是否需要合并前处理取决于项目要求和实际影响。`,
+    return { ...counts, key: "nonblocking", title: "未发现阻断性问题，但有改进建议",
+      description: `已确认 ${nonblockingCount} 项改进建议；是否在合并前处理取决于项目要求和实际影响。`,
       tone: "info", icon: "info", actions: actions("view_findings"), copy: COPY_PR };
   }
-  return { ...counts, key: "clean", title: "本次静态审查未发现需处理的问题",
-    description: "在已检查范围内未发现达到报告门槛的缺陷；合并仍需结合 CI 与审批。",
+  return { ...counts, key: "clean", title: "已检查范围内未发现需处理的问题",
+    description: "在已检查范围内未发现达到报告门槛的缺陷；未覆盖路径仍需结合 CI、审批和人工判断，该结论不代表代码已经通过验证。",
     tone: "success", icon: "check-circle", actions: actions("view_report"), copy: COPY_PR };
 }
 

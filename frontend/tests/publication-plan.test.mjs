@@ -9,9 +9,9 @@ test("Outcome 显示后端数量，不根据问题列表推断 Clean", async () 
   try {
     const { default: component } = await server.ssrLoadModule("/src/components/review/ReviewOutcomePanel.vue");
     // 展示层情景标题由内部状态组合；failed/cancelled 不再复用“需要补充检查”。
-    for (const [kind, status, title] of [["clean", "conditional_merge", "本次静态审查未发现需处理的问题"],
-      ["findings", "fix_blockers", "发现需要优先修复的问题"], ["inconclusive", "resolve_unknowns", "部分审查已完成"],
-      ["failed", "unavailable", "审查未完成"], ["cancelled", "unavailable", "审查已停止"]]) {
+    for (const [kind, status, title] of [["clean", "conditional_merge", "已检查范围内未发现需处理的问题"],
+      ["findings", "fix_blockers", "发现高优先级问题，建议修复后再合并"], ["inconclusive", "resolve_unknowns", "部分检查尚未完成"],
+      ["failed", "unavailable", "审查因执行错误中断"], ["cancelled", "unavailable", "审查已由用户停止"]]) {
       const plan = { schema_version: "review-summary-v1",
         outcome: { kind, coverage: "partial", confirmed_count: 3, publishable_count: 2, unresolved_count: 1,
         examined_goals: 8, total_goals: 10, incomplete_investigations: 1, reason_codes: ["scope_incomplete"],

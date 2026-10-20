@@ -21,9 +21,9 @@ const technicalReasons = computed(() => [...new Set([
   ...(props.plan?.digest.merge_decision?.unresolved_reasons || []),
 ])]);
 const kicker = computed(() => ({
-  clean: "已完成静态审查", nonblocking: "存在改进建议", blockers: "需要优先处理",
-  evidence_gaps: "需要补充证据", scope_incomplete: "范围未完整覆盖",
-  stale: "快照已过期", failed: "执行失败", cancelled: "审查已停止",
+  clean: "已检查范围内无阻断问题", nonblocking: "有改进建议", blockers: "需要优先处理",
+  evidence_gaps: "需要补充核实", scope_incomplete: "范围未完整覆盖",
+  stale: "PR 已更新", failed: "执行错误中断", cancelled: "用户已停止",
   validation_failed: "已有验证失败",
 })[props.situation?.key || "evidence_gaps"]);
 function navigate(section: ReviewSection) {

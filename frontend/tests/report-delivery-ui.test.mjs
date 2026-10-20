@@ -27,8 +27,8 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
         assert.ok(audit.includes('查看原始结构化记录'));
         assert.ok(audit.includes(plan.snapshot.head_sha));
         const context = await renderToString(createSSRApp(Context, { task, plan }));
-        if (name === 'failed') assert.ok(context.includes('审查未完成'));
-        if (name === 'cancelled') assert.ok(context.includes('审查已停止'));
+        if (name === 'failed') assert.ok(context.includes('审查因执行错误中断'));
+        if (name === 'cancelled') assert.ok(context.includes('审查已由用户停止'));
         assert.equal(JSON.stringify(plan), before);
       });
     }
@@ -44,7 +44,7 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
       plan.digest.incomplete_goals.push({ path: 'src/gap.ts', reason: '证据尚未核验' });
       assert.ok(reportLimitations(plan).some(item => item.includes('证据尚未核验')));
       const context = await renderToString(createSSRApp(Context, { task: fixtures.clean.task, plan, stale: true }));
-      assert.ok(context.includes('审查结果基于旧代码版本'));
+      assert.ok(context.includes('PR 已更新，当前结论可能已过期'));
     });
     await t.test('旧目标包装只影响展示，来源、输入缺口与代码观察仍保留', async () => {
       const plan = structuredClone(fixtures.findings.plan);

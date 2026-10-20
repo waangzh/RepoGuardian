@@ -75,7 +75,7 @@ def _append_task_runtime_report(lines: list[str], report: dict) -> None:
     if report.get("usage_integrity") != "complete":
         lines.append(f"- 用量记录{('不一致' if report.get('usage_integrity') == 'inconsistent' else '尚不完整')}；{report.get('unknown_attempts', 0)} 次调用用量未知，已结算数不能视为完整消耗。")
     if report.get("execution_status") == "cancelled":
-        lines.append("- 审查已取消，以下仅为停止前取得的结果。")
+        lines.append("- 审查已由用户停止，以下仅为停止前取得的结果。")
     if report.get("execution_status") == "failed":
         lines.append(f"- 失败原因：{_report_text(report.get('failure_summary') or runtime_failure_summary(report.get('diagnostics') or [], termination_reason=report.get('termination_reason')))}")
     stops = {"budget_exhausted": "预算耗尽", "deadline": "运行超时", "no_progress": "无进展停止"}

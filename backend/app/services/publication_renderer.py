@@ -8,14 +8,15 @@ from urllib.parse import quote
 from app.models.publication import PublicationFinding, PublicationPlan
 
 
-OUTCOME_LABELS = {"clean": "未发现可行动问题", "findings": "发现已确认问题", "inconclusive": "本次审查未得出完整结论",
-                  "failed": "审查失败", "cancelled": "审查已取消"}
+OUTCOME_LABELS = {"clean": "已检查范围内未发现需处理的问题", "findings": "发现已确认问题",
+                  "inconclusive": "未得出完整结论", "failed": "审查因执行错误中断",
+                  "cancelled": "审查已由用户停止"}
 OUTCOME_DESCRIPTIONS = {
-    "clean": "已完成本次约定范围的静态审查，未发现具有充分代码证据、需要 PR 作者处理的问题。未发现问题不等于证明代码正确。",
+    "clean": "已完成本次约定范围的静态审查，在已检查范围内未发现具有充分代码证据、需要 PR 作者处理的问题。未发现问题不等于证明代码正确。",
     "findings": "请逐项核对下列已确认问题及建议；仍需关注的限制见下方说明。",
     "inconclusive": "目前没有可确认的问题，但审查仍存在缺口或可靠性限制，不能据此认定本次变更没有问题。",
-    "failed": "审查执行失败，请处理运行故障并重新审查；已有记录不能视为完整结论。",
-    "cancelled": "审查已取消，请补查剩余范围后再判断本次变更。",
+    "failed": "审查因执行错误中断，请处理运行故障并重新审查；已有记录不能视为完整结论。",
+    "cancelled": "审查已由用户停止，请补查剩余范围后再判断本次变更。",
 }
 REASON_LABELS = {
     "task_failed": "任务或运行时执行失败", "task_cancelled": "任务或运行时已取消",
@@ -32,8 +33,8 @@ REASON_LABELS = {
 MERGE_LABELS = {
     "fix_blockers": "建议修改后再合并",
     "resolve_unknowns": "需要补充检查",
-    "conditional_merge": "未发现阻断性问题",
-    "unavailable": "需要补充检查",
+    "conditional_merge": "已检查范围内未发现阻断性问题",
+    "unavailable": "暂不能给出合并建议",
 }
 MERGE_SYMBOLS = {
     "fix_blockers": "⚠️",
@@ -146,32 +147,34 @@ def finding_location(plan, finding):
 
 
 def merge_heading(plan):
+    # 优先使用已保存的标签：失败/停止等情景的标签由 Planner 按事实生成，
+    # 静态映射只作为旧冻结计划的回退。
     decision = plan.digest.merge_decision
-    return MERGE_LABELS.get(decision.status, decision.label), decision.advice
+    return decision.label or MERGE_LABELS.get(decision.status, "暂不能给出合并建议"), decision.advice
 
 
 def merge_verdict_line(plan) -> str:
     """评论与概览共用的单行结论：符号 + 结论 + 合并建议。
 
-    失败/取消时不能再输出通用的“需要补充检查”，否则复制内容会被误读为
+    失败/用户停止时不能再输出通用的“需要补充检查”，否则复制内容会被误读为
     一次完成的 PR Review；这里显式标注为部分审查记录。
     """
     kind = plan.outcome.kind
     if kind == "failed":
-        return "❌ 结论：审查未完成（部分审查记录）"
+        return "❌ 结论：审查因执行错误中断（部分审查记录）"
     if kind == "cancelled":
-        return "⏹ 结论：审查已取消（部分审查记录）"
+        return "⏹ 结论：审查已由用户停止（部分审查记录）"
     label, _ = merge_heading(plan)
     symbol = MERGE_SYMBOLS.get(plan.digest.merge_decision.status, "❓")
     return f"{symbol} 结论：{label}"
 
 
 def partial_review_note(plan) -> str:
-    """失败/取消后复制的内容必须自述为部分记录，而不是正常完成的审查结论。"""
+    """失败/用户停止后复制的内容必须自述为部分记录，而不是正常完成的审查结论。"""
     if plan.outcome.kind == "failed":
         return "> 以下为执行失败前已保留的部分审查记录，不是完整审查结论；未完成范围不代表代码安全。"
     if plan.outcome.kind == "cancelled":
-        return "> 以下为取消前已保留的部分审查记录，不是完整审查结论；未完成范围不代表代码安全。"
+        return "> 以下为用户停止前已保留的部分审查记录，不是完整审查结论；未完成范围不代表代码安全。"
     return ""
 
 
@@ -512,9 +515,9 @@ def _comment_next_steps(plan, *, has_findings: bool):
     decision = plan.digest.merge_decision
     steps = []
     if plan.outcome.kind == "failed":
-        return ["审查执行失败，以下建议不构成完整审查结论；请处理运行故障后重新审查。"]
+        return ["审查因执行错误中断，以下建议不构成完整审查结论；请处理运行故障后重新审查。"]
     if plan.outcome.kind == "cancelled":
-        return ["审查已取消，以下建议仅基于停止前保留的记录；请补查剩余范围后重新审查。"]
+        return ["审查已由用户停止，以下建议仅基于停止前保留的记录；请补查剩余范围后重新审查。"]
     if decision.status == "fix_blockers":
         steps.append("先修复上述阻断问题，并在新快照重新核验后再考虑合并。")
     elif decision.status == "resolve_unknowns":
@@ -522,7 +525,7 @@ def _comment_next_steps(plan, *, has_findings: bool):
     elif has_findings:
         steps.append("请评估上述非阻断问题的业务影响，结合 CI 与必要审批后再决定合并。")
     else:
-        steps.append("结合 CI、业务预期和人工评审决定是否合并。未发现已确认问题不等于代码无缺陷。")
+        steps.append("结合 CI、业务预期和人工评审决定是否合并。已检查范围内未发现需处理的问题，不等于代码无缺陷。")
     if plan.digest.merge_decision.nonblocking_finding_keys and decision.status == "fix_blockers":
         steps.append("非阻断建议可在同一轮修改中一并评估。")
     if plan.digest.incomplete_goals:

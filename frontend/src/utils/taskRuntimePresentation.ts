@@ -9,7 +9,7 @@ const statusLabels: Record<string, string> = {
   plan_exhausted: "计划处理结束", budget_exhausted: "预算耗尽", deadline: "运行超时",
   no_progress: "无进展停止", technical_failure: "技术失败", model_response_rejected: "模型输出未通过验收",
   cancelled: "已取消", running: "运行中",
-  completed: "本轮审查已结束", failed: "审查失败", published: "已发布（报告）",
+  completed: "本轮审查已结束", failed: "执行失败", published: "已发布（报告）",
 };
 
 export interface TaskRuntimeSummary {
@@ -114,7 +114,7 @@ export function runtimeWarnings(report: TaskRuntimeReport): string[] {
   const summary = taskRuntimeSummary(report);
   const warnings: string[] = [];
   if (report.execution_status === "failed") warnings.push(report.failure_summary || "审查遇到技术故障，尚未形成完整结论。");
-  if (report.execution_status === "cancelled") warnings.push("审查已取消，以下仅保留停止前取得的结果。");
+  if (report.execution_status === "cancelled") warnings.push("审查已由用户停止，以下仅保留停止前取得的结果。");
   if (summary.scope.incomplete) warnings.push(`${summary.scope.incomplete} 项约定目标尚未完成检查。`);
   if (!summary.scope.total) warnings.push("尚无可核对的范围记录，不能据此判断检查完整性。");
   const investigations = summary.investigations;
