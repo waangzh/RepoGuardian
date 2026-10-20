@@ -60,10 +60,11 @@ class SymbolRef(BaseModel):
     exported: bool | None = None
     container: str | None = None
     python_binding_safe: bool = False
+    symbol_id: str | None = None
 
     def to_index_entry(self) -> dict[str, object]:
         """保留旧索引字段，同时公开带置信度的统一 CallRef。"""
-        return {
+        entry = {
             "file": self.file,
             "symbol": self.name,
             "type": self.kind,
@@ -79,6 +80,9 @@ class SymbolRef(BaseModel):
             "container": self.container,
             "python_binding_safe": self.python_binding_safe,
         }
+        if self.symbol_id is not None:
+            entry["symbol_id"] = self.symbol_id
+        return entry
 
 
 class FileAnalysis(BaseModel):

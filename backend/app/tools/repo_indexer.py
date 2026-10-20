@@ -128,6 +128,7 @@ class RepoIndexer(BaseTool):
                     "python_namespace": analysis.python_namespace,
                     "analysis_level": int(analysis.level),
                     "parser_id": analysis.parser_id,
+                    "diagnostics": analysis.diagnostics,
                 })
         return sorted(index, key=lambda f: f["path"])
 
@@ -135,7 +136,7 @@ class RepoIndexer(BaseTool):
         return await asyncio.to_thread(self._build_symbol_index_sync, repo_path)
 
     def _build_symbol_index_sync(self, repo_path: str) -> list[dict[str, Any]]:
-        """使用 tree-sitter 解析 Python 文件，提取函数/类/方法符号。"""
+        """通过内置语言适配器提取声明与调用，保留解析器和置信度。"""
         index: list[dict[str, Any]] = []
         root = Path(repo_path)
         tracked_files = GitTool().list_tracked_files(root)

@@ -177,7 +177,7 @@ async def test_project_meta_exposes_language_analysis_capabilities(tmp_path):
     capabilities = {item["language_id"]: item for item in meta["analysis_capabilities"]}
 
     assert capabilities["typescript"]["max_level"] == 2
-    assert capabilities["java"]["max_level"] == 1
+    assert capabilities["java"]["max_level"] == 2
 
 
 @pytest.mark.asyncio

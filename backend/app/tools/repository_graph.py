@@ -76,7 +76,7 @@ def build_repository_graph(
                 if target is not None:
                     candidates = {(_symbol_id(target),): target}
                 else:
-                    candidates = {(str(item["file"]), str(item["symbol"])): item
+                    candidates = {_symbol_id(item): item
                         for item in by_name.get(simple, [])
                         if item is not caller and files[str(item["file"])].get("language") == "python"}
                     if len(candidates) != 1 and not call_ref.get("import_binding"):
@@ -93,9 +93,10 @@ def build_repository_graph(
                             "expression": call, "import_binding": call_ref.get("import_binding")}]))
                 continue
             candidates = {
-                (str(item["file"]), str(item["symbol"])): item
+                _symbol_id(item): item
                 for item in by_name.get(simple, [])
-                if item is not caller and _call_language_family(files[str(item["file"])]) == caller_family
+                if (item is not caller or caller.get("symbol_id"))
+                and _call_language_family(files[str(item["file"])]) == caller_family
             }
             if len(candidates) != 1:
                 continue
@@ -107,6 +108,9 @@ def build_repository_graph(
             bound = (bool(prefix) and prefix in imported_modules
                      and member == str(callee.get("symbol"))
                      and (str(callee["file"]), 0.99) in resolve_import(str(caller["file"]), prefix, files, lookup))
+            syntax_only = bool(caller.get("symbol_id"))
+            if syntax_only:
+                bound = False
             edges.append(_edge(
                 "symbol", _symbol_id(caller), "symbol", _symbol_id(callee),
                 "calls", min(0.92, float(call_ref.get("confidence", 0.7))),
@@ -116,6 +120,7 @@ def build_repository_graph(
                 resolution_status="resolved" if bound else "unresolved",
                 resolution_basis="qualified_import_module" if bound else "unique_name",
                 call_expression=call,
+                **({"relationship_level": "search_hint"} if syntax_only else {}),
             ))
 
     for test_path in sorted(lookup["test_files"]):
@@ -455,7 +460,7 @@ def _edge(
 
 
 def _symbol_id(symbol: dict[str, Any]) -> str:
-    return f"{symbol.get('file')}::{symbol.get('symbol')}"
+    return str(symbol.get("symbol_id") or f"{symbol.get('file')}::{symbol.get('symbol')}")
 
 
 def _call_language_family(file: dict[str, Any]) -> str:

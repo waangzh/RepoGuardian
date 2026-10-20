@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from app.languages.registry import default_language_registry
 from app.models.review import ContextRetrievalPlan, RetrievalRelevanceType, ReviewToolScope
 from app.tools.base import BaseTool
 from app.tools.git_tool import GitTool
@@ -134,6 +135,22 @@ class CodeSearchTool(BaseTool):
         ]
         relevance = set(normalized_plan.relevance_types)
 
+        languages = {item["path"]: item.get("language", "unknown") for item in file_index}
+
+        def family(symbol: dict[str, Any]) -> str:
+            language = languages.get(symbol["file"]) or default_language_registry.detect_language(symbol["file"])
+            if language == "unknown":
+                language = default_language_registry.detect_language(symbol["file"])
+            return "ecmascript" if language in {"javascript", "typescript"} else language
+
+        def calls_symbol(caller: dict[str, Any], callee: dict[str, Any]) -> bool:
+            if family(caller) == "unknown" or family(caller) != family(callee):
+                return False
+            if caller.get("symbol_id"):
+                return any(ref.get("simple_name") == callee["symbol"].rsplit(".", 1)[-1]
+                           for ref in caller.get("call_refs", []))
+            return any(_call_matches_symbol(call, callee["symbol"]) for call in caller.get("calls", []))
+
         def add_symbol(symbol: dict[str, Any], kind: str) -> None:
             _append_symbol_snippet(snippets, git_tool, repo_path, symbol, kind)
 
@@ -144,18 +161,14 @@ class CodeSearchTool(BaseTool):
         if normalized_plan.include_callers or RetrievalRelevanceType.caller in relevance:
             for target in selected_symbols:
                 for candidate in symbol_index:
-                    if candidate is not target and any(
-                        _call_matches_symbol(call, target["symbol"])
-                        for call in candidate.get("calls", [])
-                    ):
+                    if candidate is not target and calls_symbol(candidate, target):
                         add_symbol(candidate, "caller")
 
         if normalized_plan.include_callees or RetrievalRelevanceType.callee in relevance:
             for target in selected_symbols:
-                for call in target.get("calls", []):
-                    for candidate in symbol_index:
-                        if _call_matches_symbol(call, candidate["symbol"]):
-                            add_symbol(candidate, "callee")
+                for candidate in symbol_index:
+                    if calls_symbol(target, candidate):
+                        add_symbol(candidate, "callee")
 
         source_files = target_files or {symbol["file"] for symbol in selected_symbols}
         if normalized_plan.include_tests or RetrievalRelevanceType.test in relevance:
@@ -182,7 +195,9 @@ class CodeSearchTool(BaseTool):
             for source_file in sorted(source_files):
                 for candidate in symbol_index:
                     if candidate["file"] == source_file and (
-                        candidate.get("type") == "class" or "Protocol" in candidate.get("signature", "")
+                        candidate.get("type") in {
+                            "class", "interface", "type", "struct", "enum", "record", "trait", "annotation",
+                        } or "Protocol" in candidate.get("signature", "")
                     ):
                         add_symbol(candidate, "type_definition")
 
@@ -297,6 +312,9 @@ def _append_symbol_snippet(
             "content": content,
             "relevance": relevance,
             "symbol": symbol["symbol"],
+            **({"symbol_id": symbol["symbol_id"]} if symbol.get("symbol_id") else {}),
+            **({"resolution_status": "unresolved", "relationship_level": "search_hint"}
+               if symbol.get("symbol_id") and relevance in {"caller", "callee"} else {}),
         })
 
 
@@ -435,10 +453,12 @@ def _find_test_files(
 
 
 def _dedupe_and_limit(snippets: list[dict[str, Any]], max_results: int) -> list[dict[str, Any]]:
-    seen: set[tuple[str, int, int]] = set()
+    seen: set[tuple] = set()
     deduped: list[dict[str, Any]] = []
     for snippet in sorted(snippets, key=_relevance_rank):
         key = (snippet["file"], snippet["start_line"], snippet["end_line"])
+        if snippet.get("symbol_id"):
+            key += (snippet["symbol_id"],)
         if key not in seen:
             seen.add(key)
             deduped.append(snippet)
