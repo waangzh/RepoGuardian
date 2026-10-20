@@ -67,6 +67,53 @@ test("概览保留未知计数、真实限制及独立验证边界", async () =>
   } finally { await server.close(); }
 });
 
+test("概览正常状态短显，具体限制仅在可信边界常驻展示", async () => {
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  try {
+    const { overviewFacts, overviewConclusionDescription, overviewNextSteps } = await server.ssrLoadModule("/src/utils/overviewPresentation.ts");
+    const { reviewSituation } = await server.ssrLoadModule("/src/utils/reviewSituation.ts");
+    const { default: Overview } = await server.ssrLoadModule("/src/components/pages/ReviewOverviewPage.vue");
+    const fixtures = JSON.parse(await readFile(new URL("./fixtures/publication-plans.json", import.meta.url), "utf8"));
+    const fixture = structuredClone(fixtures.clean);
+    fixture.summary.digest.merge_decision.limits = [];
+    fixture.summary.digest.merge_decision.unresolved_reasons = [];
+    fixture.summary.outcome.dynamic_validation = "not_executed";
+    const facts = overviewFacts(fixture.summary, null);
+    assert.equal(facts.boundaries[0].description, "");
+    assert.equal(facts.boundaries[1].description, "");
+    assert.equal(facts.boundaries[2].description, "");
+    assert.equal(facts.boundaries[2].tone, "neutral");
+    assert.equal(facts.boundaries[2].value, "未执行");
+    assert.equal(overviewConclusionDescription(null), "");
+    for (const name of ["clean", "findings", "inconclusive", "failed", "cancelled", "runtime_limits"]) {
+      const situation = reviewSituation(fixtures[name].summary);
+      assert.ok(overviewConclusionDescription(situation));
+      assert.doesNotMatch(overviewConclusionDescription(situation), /请点击/);
+      assert.ok(overviewNextSteps(situation).steps.length > 0);
+    }
+    const props = { task: fixture.task, report: null, summaryPlan: fixture.summary, summary: null, findings: [], warnings: [], terminal: true };
+    const html = await renderToString(createSSRApp(Overview, props));
+    assert.match(html, /<details class="ov-step-details"><summary>查看处理步骤<\/summary>/);
+    assert.doesNotMatch(html, /<details[^>]*class="ov-step-details"[^>]*\sopen(?:[\s=>])/);
+    assert.equal((html.match(/查看完整报告/g) || []).length, 1);
+    assert.doesNotMatch(html, /阅读详细审查报告/);
+    assert.doesNotMatch(html, /ov-note|ov-verdict__limitation/);
+    assert.doesNotMatch(html, /<dt>动态验证<\/dt>/, "快照不再重复验证状态");
+    fixture.summary.digest.merge_decision.limits = ["具体限制：下游消费路径尚未核验"];
+    props.warnings = ["具体限制：下游消费路径尚未核验", "独立提示：模型用量尚不完整", "独立提示：模型用量尚不完整"];
+    const limited = await renderToString(createSSRApp(Overview, props));
+    assert.equal((limited.match(/具体限制：下游消费路径尚未核验/g) || []).length, 1);
+    assert.equal((limited.match(/独立提示：模型用量尚不完整/g) || []).length, 1);
+    const stale = await renderToString(createSSRApp(Overview, { ...props, stale: true }));
+    assert.match(stale, /以上数量来自旧快照，不适用于最新 Head/);
+    assert.match(stale, /复制历史审查记录/);
+    fixture.summary.outcome.dynamic_validation = "unknown";
+    assert.match(overviewFacts(fixture.summary, null).boundaries[2].description, /未知/);
+    fixture.summary.outcome.dynamic_validation = "failed";
+    assert.match(overviewFacts(fixture.summary, null).boundaries[2].description, /失败/);
+  } finally { await server.close(); }
+});
+
 test("概览使用后端结构化理解，作者文本不能补造成代码观察", async () => {
   const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   try {

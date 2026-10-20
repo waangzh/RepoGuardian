@@ -4,7 +4,7 @@ import { Dialog, DialogPanel, DialogTitle } from "@headlessui/vue";
 import type { ReviewSummary } from "../../types/publication";
 import type { ReviewSituation } from "../../utils/reviewSituation";
 import type { ReviewSection } from "../../types/workspace";
-import { overviewFacts } from "../../utils/overviewPresentation";
+import { overviewConclusionDescription, overviewFacts } from "../../utils/overviewPresentation";
 import { coverageLabel, reportValidationLabel } from "../../utils/reportPresentation";
 import AppIcon from "../common/AppIcon.vue";
 
@@ -40,8 +40,7 @@ function navigate(section: ReviewSection) {
     <div class="ov-verdict__inner">
       <div class="ov-verdict__kicker"><AppIcon :name="situation?.icon || 'info'" :size="18" />本轮结论 · {{ plan ? kicker : "摘要暂不可用" }}</div>
       <h2 id="overview-conclusion">{{ situation?.title || (summaryLoading ? "正在读取审查结论" : summaryError ? "当前无法读取完整审查结论" : "暂时无法形成完整结论") }}</h2>
-      <p class="ov-verdict__description">{{ situation?.description || (summaryLoading ? "正在读取摘要，加载完成前不能判断合并建议。请稍候，或查看技术记录核对执行情况。" : "摘要缺失不代表零问题或审查失败，当前不能判断合并建议。请点击“重试加载摘要”，或查看技术记录核对执行情况。") }}</p>
-      <p v-if="facts.limitations[0]" class="ov-verdict__limitation"><AppIcon name="info" :size="15" />{{ facts.limitations[0] }}</p>
+      <p class="ov-verdict__description">{{ overviewConclusionDescription(situation) || (summaryLoading ? "正在读取摘要，加载完成前不能判断合并建议。" : "摘要缺失不代表零问题或审查失败，当前不能判断合并建议。") }}</p>
       <div class="ov-verdict__bottom">
         <div class="ov-verdict__meta">
           <span><AppIcon name="activity" :size="15" />{{ execution }}</span>
@@ -77,6 +76,7 @@ function navigate(section: ReviewSection) {
           </template>
           <p v-else>摘要尚未取得，完整性、问题数量与验证状态保持未知。</p>
           <h3>阅读时需要区分</h3>
+          <p>静态审查不能证明代码完全正确，也不能代替项目 CI 或人工审批。</p>
           <ul><li>目标已检查：仅描述约定静态目标的检查记录。</li><li>未核验线索：调查提示，不等于已确认缺陷。</li><li>验证未执行或未知：不能推断项目测试、构建或 CI 已通过。</li></ul>
         </div>
         <footer class="ov-dialog__footer">

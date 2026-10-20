@@ -15,7 +15,29 @@ test("历史讨论区分平台状态与代码核验，旧记录不显示零条",
       stats: { status: "partial", collected: 5, comments: 12, referenced: 2, referenced_comments: 4,
         checked: 1, unchecked: 4, limitations: ["inline_thread_state_unavailable"], termination_reason: "budget_exhausted" } }) }));
     for (const text of ["已参考 2", "包含 4", "已采集 5", "未核验 4", "线程已解决不代表代码问题已修复", "不完整"]) assert.ok(html.includes(text), text);
+    assert.match(html, /<details class="pd-limits"><summary>讨论统计口径<\/summary>/);
     assert.ok(!html.includes("<pre>"));
+  } finally { await server.close(); }
+});
+
+test("完整且为空的讨论使用中性空状态，未采集与不可用仍保留警示", async () => {
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  try {
+    const { default: Component } = await server.ssrLoadModule("/src/components/review/PrDiscussionContext.vue");
+    const stats = { status: "complete", collected: 0, comments: 0, referenced: 0, referenced_comments: 0,
+      checked: 0, unchecked: 0, limitations: [], termination_reason: null };
+    const render = value => renderToString(createSSRApp({ render: () => h(Component, { reviewId: "empty", stats: value }) }));
+    const empty = await render(stats);
+    assert.match(empty, /采集已完成，未发现可用的 PR 讨论线程/);
+    assert.doesNotMatch(empty, /pd-notice amber|pd-summary-grid|代码安全的证明/);
+    assert.match(empty, /查看讨论与核验详情/);
+    for (const [status, text] of [["not_recorded", "不代表没有评论"], ["unavailable", "无法判断"], ["partial", "采集不完整"]]) {
+      const html = await render({ ...stats, status, limitations: ["保留的采集限制"] });
+      assert.match(html, /pd-notice amber/);
+      assert.ok(html.includes(text));
+      assert.match(html, /保留的采集限制/);
+      assert.doesNotMatch(html, /采集已完成，未发现/);
+    }
   } finally { await server.close(); }
 });
 
