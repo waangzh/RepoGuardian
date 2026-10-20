@@ -127,6 +127,8 @@ test("概览使用后端结构化理解，作者文本不能补造成代码观�
     fixture.summary.outcome.review_completeness = "complete";
     fixture.summary.outcome.reason_codes = ["investigation_incomplete"];
     fixture.summary.digest.merge_decision.unresolved_reasons = ["investigation_incomplete"];
+    // 旧冻结计划缺少可用标签时，展示层才回退到“未核实事项”措辞。
+    fixture.summary.digest.merge_decision.label = "暂不能给出合并建议";
     const props = { task: fixture.task, report: null, summaryPlan: fixture.summary, summary: null, findings: [], warnings: [], terminal: true };
     const html = await renderToString(createSSRApp(Overview, props));
     for (const text of ["存在未核实事项，暂不能给出完整建议", "真实作者目标", "真实代码观察", "尚未确认下游契约", "作者声明 · 未独立验证", "结论依据与可信边界", "本轮审查快照"]) {

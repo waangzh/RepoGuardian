@@ -65,6 +65,26 @@ test("结果概览情景矩阵与主要操作", async () => {
     // 无风险时不应提供“查看待确认风险”之类无意义操作。
     assert.ok(!reviewSituation(clean).actions.some(item => item.key === "view_unresolved"));
     assert.equal(reviewSituation(null), null);
+
+    // 主结论以后端标签为准：同一审查在概览与详细报告中必须得到同一标题。
+    const combined = { outcome: { ...clean.outcome, kind: "findings", dynamic_validation: "failed" },
+      digest: { merge_decision: { status: "fix_blockers", label: "发现 1 项高优先级问题，另有当前版本验证失败",
+        blocking_finding_keys: ["a"], nonblocking_finding_keys: [] } } };
+    const blockedAndFailed = reviewSituation(combined);
+    assert.equal(blockedAndFailed.key, "blockers");
+    assert.equal(blockedAndFailed.title, "发现 1 项高优先级问题，另有当前版本验证失败");
+    assert.deepEqual(blockedAndFailed.actions.map(item => item.key), ["view_blockers", "view_validation"]);
+    assert.match(blockedAndFailed.description, /另有验证失败记录/);
+    // 仅有验证失败且后端已给出标签时，展示层不另造标题。
+    const failedOnly = { outcome: { ...clean.outcome, dynamic_validation: "failed" },
+      digest: { merge_decision: { status: "resolve_unknowns", label: "当前版本存在验证失败记录，需检查原因",
+        blocking_finding_keys: [], nonblocking_finding_keys: [] } } };
+    assert.equal(reviewSituation(failedOnly).title, "当前版本存在验证失败记录，需检查原因");
+    // 旧冻结计划缺少标签时保留展示层回退，不显示占位文案。
+    const legacy = { outcome: { ...clean.outcome, kind: "findings", confirmed_count: 1 },
+      digest: { merge_decision: { status: "fix_blockers", label: "暂不能给出合并建议",
+        blocking_finding_keys: ["a"], nonblocking_finding_keys: [] } } };
+    assert.equal(reviewSituation(legacy).title, "发现 1 项高优先级问题，建议修复后再合并");
   } finally { await server.close(); }
 });
 
@@ -86,6 +106,9 @@ test("缺口按实际原因区分，混合限制和旧记录不伪装成代码�
     runtime.digest.merge_decision.unresolved_reasons = ["author_context_truncated"];
     assert.equal(reviewSituation(runtime).key, "evidence_gaps");
     runtime.digest.merge_decision.unresolved_reasons = [];
+    // 主结论取后端标签；标签缺失（旧冻结计划）才回退到展示层措辞。
+    assert.equal(reviewSituation(runtime).title, runtime.digest.merge_decision.label);
+    runtime.digest.merge_decision.label = "暂不能给出合并建议";
     assert.equal(reviewSituation(runtime).title, "审查结论暂不完整");
     assert.doesNotMatch(reviewSituation(runtime).description, /仍有候选/);
     runtime.outcome.total_goals = 0;
