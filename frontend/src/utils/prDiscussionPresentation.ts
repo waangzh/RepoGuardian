@@ -33,6 +33,6 @@ export function discussionNotice(stats?: DiscussionStats | null) {
   if (!stats || stats.status === "not_recorded") return "未记录历史讨论。这是旧任务或未采集记录，不代表没有评论。新建审查才会采集，恢复任务不会补采。";
   if (stats.status === "unavailable") return "讨论采集不可用，无法判断该 PR 是否存在历史讨论。请检查采集限制与数据来源。";
   if (stats.status === "partial") return "讨论采集不完整。仅展示本轮已保存的线程，不应将未采集的讨论视为不存在。";
-  if (stats.collected === 0) return "采集已完成，未发现可用的 PR 讨论线程。这不是代码安全的证明。";
+  if (stats.collected === 0) return "采集已完成，未发现可用的 PR 讨论线程。";
   return "本页区分 GitHub 线程状态与当前代码核验结果。历史讨论不能代替代码证据，也不会自动成为本轮确认问题。";
 }

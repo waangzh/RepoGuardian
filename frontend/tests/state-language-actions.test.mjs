@@ -93,7 +93,8 @@ test("状态文案区分事实、合并影响与可执行入口", async t => {
       const copyButton = [...clean.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/g)]
         .find(([, , content]) => content.replace(/<[^>]*>/g, "").trim() === "复制 PR 评论");
       assert.ok(copyButton && /\bbutton--primary\b/.test(copyButton[1]), "复制评论应呈现为主要操作");
-      assert.ok(clean.includes("请点击“复制 PR 评论”"));
+      assert.ok(clean.includes("阅读报告，或预览并复制 PR 评论。"));
+      assert.ok(!clean.includes("请点击“复制 PR 评论”"), "结论区不再重复操作教学");
     });
     await t.test("执行完成不是质量结论，验证通过只覆盖已记录检查", async () => {
       const { reportValidationLabel } = await server.ssrLoadModule("/src/utils/reportPresentation.ts");
