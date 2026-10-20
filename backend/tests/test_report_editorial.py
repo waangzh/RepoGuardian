@@ -91,6 +91,28 @@ def test_detailed_report_states_conclusion_limits_and_steps_once():
     assert report.count("仍以审查范围与验证边界为准") <= 1
 
 
+def test_blockers_with_failed_head_validation_share_one_combined_conclusion():
+    """同一审查的阻断问题与验证失败必须由一个后端标签表达，避免前端各自覆盖主结论。"""
+    from app.models.review import TestRunResult as RunResult, ValidationSnapshot
+
+    task = publishable_task(severity="high", claim="权限绕过导致未授权数据访问")
+    task.task_runtime_report["findings"][0]["issue"]["confidence"] = 0.9
+    task.validation_snapshots = [ValidationSnapshot(stage="head", sha=task.run_manifest.head_sha, passed=False,
+        failure_kind="code_regression", command_results=[RunResult(tool="test_runner", command="pytest", exit_code=1, passed=False)])]
+    plan = PublicationPlanner().build(task)
+    decision = plan.digest.merge_decision
+    assert decision.status == "fix_blockers"
+    assert decision.label == "发现 1 项高优先级问题，另有当前版本验证失败"
+    # 主结论只出现一次，且同一标签进入评论、详细报告与轻量摘要。
+    for markdown in (plan.review_comment_markdown, plan.user_report_markdown, plan.summary_markdown):
+        assert markdown.count(decision.label) == 1
+    assert "当前版本存在验证失败记录" not in plan.review_comment_markdown
+    assert "验证失败" in decision.advice
+    assert summary_projection(plan).digest.merge_decision.label == decision.label
+    # 阻断建议仍保留修复与重新核验的顺序。
+    assert plan.review_comment_markdown.index(decision.label) < plan.review_comment_markdown.index("## 阻断问题")
+
+
 def test_clean_comment_is_brief_and_keeps_one_validation_boundary():
     task = completed_task()
     task.task_runtime_report["pr_intent_context"] = "修复空值异常。"

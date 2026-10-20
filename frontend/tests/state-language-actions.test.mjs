@@ -15,18 +15,23 @@ test("状态文案区分事实、合并影响与可执行入口", async t => {
       for (const name of ["clean", "findings", "blockers", "inconclusive", "runtime_limits", "failed", "cancelled"]) {
         assert.equal(reviewSituation(fixtures[name].summary).title, fixtures[name].plan.digest.merge_decision.label, name);
       }
+      // 主结论始终是后端标签；展示层只补操作与说明，不另造标题。
       const mixed = structuredClone(fixtures.runtime_limits.summary);
       mixed.outcome.unresolved_count = 2;
       mixed.outcome.incomplete_investigations = 3;
-      assert.equal(reviewSituation(mixed).title, "2 项问题尚未核实，暂不能给出完整建议");
+      assert.equal(reviewSituation(mixed).title, mixed.digest.merge_decision.label);
       assert.deepEqual(reviewSituation(mixed).actions.map(item => item.key), ["view_unresolved", "view_investigations", "rereview"]);
+      // 旧冻结计划没有可用标签时才回退到展示层措辞。
       const unknown = structuredClone(fixtures.blockers.summary);
       delete unknown.digest.merge_decision.blocking_finding_keys;
+      unknown.digest.merge_decision.label = "暂不能给出合并建议";
       assert.equal(reviewSituation(unknown).blockingCount, null);
-      assert.ok(!reviewSituation(unknown).title.includes("1 项"));
+      assert.equal(reviewSituation(unknown).title, "发现高优先级问题，建议修复后再合并");
       const inconsistent = structuredClone(fixtures.clean.summary);
       inconsistent.outcome.kind = "inconclusive";
       inconsistent.outcome.reason_codes = ["scope_incomplete"];
+      inconsistent.digest.merge_decision.status = "resolve_unknowns";
+      inconsistent.digest.merge_decision.label = "暂不能给出合并建议";
       assert.equal(reviewSituation(inconsistent).title, "检查范围完整性尚待核对");
     });
     await t.test("操作目标保留筛选与记录区，不止跳到通用页面", () => {

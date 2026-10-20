@@ -43,6 +43,11 @@ def merge_decision(plan):
         decision.advice = ("存在已核验且影响关键行为的问题，需要先处理。"
                            "请优先修复下列机器确认的 High/Critical 问题并在新快照重新核验；"
                            "人工标记已处理不能代替新快照核验。")
+        if "head_validation_failed" in reasons:
+            # 同时存在阻断与验证失败时不能只保留一个标题，否则概览与评论的主结论会不一致。
+            decision.advice += " 另需核对当前 Head 的验证失败记录：静态问题修复不代表动态检查已恢复通过。"
+            decision.label = f"发现 {len(blocking)} 项高优先级问题，另有当前版本验证失败"
+            return decision
     elif reasons:
         decision.status = "resolve_unknowns"
         if "head_validation_failed" in reasons:

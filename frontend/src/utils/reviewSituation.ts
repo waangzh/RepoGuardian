@@ -142,6 +142,10 @@ export function reviewSituation(
   const examinedGoals = outcome.examined_goals ?? 0;
   const totalGoals = outcome.total_goals ?? 0;
   const counts = { blockingCount, nonblockingCount, unresolvedCount, examinedGoals, totalGoals };
+  // 主结论以后端已保存的决策标签为准；只有旧冻结计划缺少标签时才回退到展示层措辞。
+  const backendTitle = decision?.label?.trim() && decision.label.trim() !== "暂不能给出合并建议"
+    ? decision.label.trim() : null;
+  const titleOf = (fallback: string) => backendTitle || fallback;
 
   // 保留历史记录入口，避免切换情景时卸载尚待确认的复制组件。
   if (options.stale) {
@@ -154,33 +158,36 @@ export function reviewSituation(
   }
   // 失败与用户停止只保留已有记录：主操作是理解现状，复制是明确标注的部分记录。
   if (outcome.kind === "failed") {
-    return { ...counts, key: "failed", title: "审查因执行错误中断，已保留部分记录",
+    return { ...counts, key: "failed", title: titleOf("审查因执行错误中断，已保留部分记录"),
       description: "现有记录不能作为完整合并建议。请点击“查看错误”定位中断原因，再选择“重新审查此 PR”。", tone: "danger", icon: "alert",
       actions: actions("view_error", "rereview"), copy: COPY_PARTIAL };
   }
   if (outcome.kind === "cancelled") {
-    return { ...counts, key: "cancelled", title: "审查已停止，已保留停止前的记录",
+    return { ...counts, key: "cancelled", title: titleOf("审查已停止，已保留停止前的记录"),
       description: "审查由用户主动停止，不能将保留记录当作完整结论。请点击“查看已保留结果”核对问题与证据，或重新审查。", tone: "warning", icon: "x",
       actions: actions("view_retained", "rereview"), copy: COPY_PARTIAL };
   }
-  if (outcome.dynamic_validation === "failed") {
-    return { ...counts, key: "validation_failed", title: "当前版本存在验证失败记录，需检查原因",
-      description: "已有与本次 Head 绑定的受控检查失败记录，不能据此宣称验证通过。请点击“查看验证记录”核对检查范围与失败原因。", tone: "danger", icon: "flask",
-      actions: actions("view_validation", "rereview"), copy: COPY_RECORD };
-  }
+  // 与后端决策同序：已确认的 High/Critical 问题优先，验证失败作为并列事实而不是覆盖结论。
   if ((blockingCount ?? 0) > 0 || status === "fix_blockers") {
     const extra: SituationActionKey[] = unresolvedCount > 0 ? ["view_unresolved"] : [];
+    if (outcome.dynamic_validation === "failed") extra.push("view_validation");
     return { ...counts, key: "blockers",
-      title: blockingCount ? `发现 ${blockingCount} 项高优先级问题，建议修复后再合并` : "发现高优先级问题，建议修复后再合并",
-      description: "这些问题可能影响关键行为。请点击“查看阻断问题”核对证据和修复建议，再于新提交上重新审查。",
+      title: titleOf(blockingCount ? `发现 ${blockingCount} 项高优先级问题，建议修复后再合并` : "发现高优先级问题，建议修复后再合并"),
+      description: "这些问题可能影响关键行为。请点击“查看阻断问题”核对证据和修复建议，再于新提交上重新审查。"
+        + (outcome.dynamic_validation === "failed" ? "当前 Head 另有验证失败记录，需一并核对原因。" : ""),
       tone: "danger", icon: "alert", actions: actions("view_blockers", ...extra), copy: COPY_REVIEW };
+  }
+  if (outcome.dynamic_validation === "failed") {
+    return { ...counts, key: "validation_failed", title: titleOf("当前版本存在验证失败记录，需检查原因"),
+      description: "已有与本次 Head 绑定的受控检查失败记录，不能据此宣称验证通过。请点击“查看验证记录”核对检查范围与失败原因。", tone: "danger", icon: "flask",
+      actions: actions("view_validation", "rereview"), copy: COPY_RECORD };
   }
   if (status === "resolve_unknowns" || status === "unavailable" || outcome.kind === "inconclusive") {
     const limitation = reviewLimitationKind(outcome, decision?.unresolved_reasons);
     if (limitation === "scope_incomplete") {
       return { ...counts, key: "scope_incomplete",
-        title: totalGoals > examinedGoals ? `仍有 ${totalGoals - examinedGoals} 项检查目标未完成`
-          : totalGoals > 0 ? "检查范围完整性尚待核对" : "检查范围尚不明确",
+        title: titleOf(totalGoals > examinedGoals ? `仍有 ${totalGoals - examinedGoals} 项检查目标未完成`
+          : totalGoals > 0 ? "检查范围完整性尚待核对" : "检查范围尚不明确"),
         description: totalGoals > 0
           ? `已检查 ${examinedGoals}/${totalGoals} 项；范围完整性尚不能确认。请点击“查看未检查范围”核对未完成目标和原因，再决定是否补查。`
           : "没有可用的约定目标记录，无法判断检查范围。请点击“查看未检查范围”核对记录，或重新审查。",
@@ -191,25 +198,25 @@ export function reviewSituation(
       const action = unresolvedCount > 0 ? "view_unresolved"
         : outcome.incomplete_investigations > 0 || reasons.some(reason => ["investigation_incomplete", "unscheduled_investigation"].includes(reason))
           ? "view_investigations" : "view_report";
-      return { ...counts, key: "evidence_gaps", title: evidenceTitle(outcome, reasons),
+      return { ...counts, key: "evidence_gaps", title: titleOf(evidenceTitle(outcome, reasons)),
         description: `未决事项不等于已确认代码缺陷，但会限制合并判断。请点击“${ACTION_META[action].label}”补齐代码或目标依据，再决定是否交付本轮记录。`,
         tone: "warning", icon: "help",
         actions: actions(action, ...(unresolvedCount > 0 && outcome.incomplete_investigations > 0 ? ["view_investigations" as const] : []), "rereview"),
         copy: COPY_RECORD };
     }
     return { ...counts, key: "runtime_limits",
-      title: limitation ? "审查运行记录存在限制，需核对结果完整性" : "审查结论暂不完整",
+      title: titleOf(limitation ? "审查运行记录存在限制，需核对结果完整性" : "审查结论暂不完整"),
       description: limitation
         ? `${totalGoals > 0 ? `约定静态目标已检查 ${examinedGoals}/${totalGoals} 项` : "约定静态目标的检查范围尚不明确"}；运行或计量异常本身不代表代码缺陷，未知用量不能当作完整统计。请点击“查看运行限制”核对执行、计量及验证记录。`
         : "限制原因或可靠性记录尚不明确，不能据此推断存在代码缺陷或审查已完整完成。请点击“查看运行限制”核对记录。",
       tone: "warning", icon: "activity", actions: actions("view_limits", "rereview"), copy: COPY_RECORD };
   }
   if (nonblockingCount > 0) {
-    return { ...counts, key: "nonblocking", title: `发现 ${nonblockingCount} 项改进建议，未发现阻断性问题`,
+    return { ...counts, key: "nonblocking", title: titleOf(`发现 ${nonblockingCount} 项改进建议，未发现阻断性问题`),
       description: "是否在合并前处理取决于项目要求和实际影响。请点击“查看建议”评估证据，或复制 PR 评论与作者讨论；仍需结合 CI 与审批。",
       tone: "info", icon: "info", actions: actions("view_findings"), copy: COPY_PR };
   }
-  return { ...counts, key: "clean", title: "已检查范围内未发现需处理的问题",
+  return { ...counts, key: "clean", title: titleOf("已检查范围内未发现需处理的问题"),
     description: "本结论仅限已检查范围，不代表 PR 安全或项目 CI 全部通过。请点击“复制 PR 评论”预览交付内容，并结合项目验证和人工审批决定是否合并。",
     tone: "success", icon: "check-circle", actions: actions("view_report"), copy: COPY_PR };
 }
