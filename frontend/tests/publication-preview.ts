@@ -57,7 +57,8 @@ window.fetch = async (input, init) => {
     const preview = input.endsWith('/review-comment-preview');
     return new Response(JSON.stringify({ ...variant, review_id: task.value.id, status: preview ? 'unknown' : snapshotState.value,
       reviewed_head_sha: plan.snapshot.head_sha, latest_head_sha: snapshotState.value === 'current' ? plan.snapshot.head_sha : 'd'.repeat(40),
-      checked_at: new Date().toISOString(), review_comment_markdown: variant.review_comment_markdown + (preview ? '' : `\n\n快照检查：${snapshotState.value}`) }),
+      checked_at: new Date().toISOString(), preview_markdown: variant.review_comment_markdown,
+      review_comment_markdown: variant.review_comment_markdown + (preview ? '' : `\n\n快照检查：${snapshotState.value}`) }),
       { headers: { 'Content-Type': 'application/json' } });
   }
   if (typeof input === 'string' && input.endsWith('/findings')) {

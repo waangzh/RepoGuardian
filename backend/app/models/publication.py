@@ -4,7 +4,7 @@ from enum import StrEnum
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from app.models.review_plan import FindingView
 
@@ -40,11 +40,27 @@ class OutcomeReason(StrEnum):
     RUNTIME_REPORT_MISSING = "runtime_report_missing"
     RUNTIME_REPORT_INVALID = "runtime_report_invalid"
     UNSUPPORTED_LEGACY_PROJECTION = "unsupported_legacy_projection"
+    HISTORICAL_DISCUSSION_UNRESOLVED = "historical_discussion_unresolved"
+
+
+class HistoricalDiscussionOutcome(BaseModel):
+    """历史 PR 讨论复核的独立结论；与当前 Diff 主审查分别判定。"""
+
+    status: Literal["not_recorded", "completed", "partial", "timed_out", "unavailable"] = "not_recorded"
+    collected: int = Field(default=0, ge=0)
+    checked: int = Field(default=0, ge=0)
+    unchecked: int = Field(default=0, ge=0)
+    verified_defects: list[dict] = Field(default_factory=list)
+    termination_reason: str | None = None
+    limitations: list[str] = Field(default_factory=list)
+    usage: dict = Field(default_factory=dict)
+    affects_risk: bool = False
 
 
 class ReviewOutcome(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # 外层字段描述当前 Diff 主审查；历史讨论复核作为独立结果并列返回。
     kind: ReviewOutcomeKind
     coverage: CoverageKind
     confirmed_count: int = Field(default=0, ge=0)
@@ -58,6 +74,16 @@ class ReviewOutcome(BaseModel):
     review_completeness: CoverageKind = CoverageKind.UNKNOWN
     runtime_reliability: Literal["reliable", "unreliable", "unknown"] = "unknown"
     dynamic_validation: Literal["not_executed", "passed", "failed", "independent_results", "unknown"] = "unknown"
+    # 历史讨论复核结果明确与主审查并列；其超时或计量缺失不写入上方主审查字段。
+    historical_discussion: HistoricalDiscussionOutcome = Field(default_factory=HistoricalDiscussionOutcome)
+
+    @model_serializer(mode="wrap")
+    def serialize_historical_discussion(self, handler):
+        value = handler(self)
+        # 没有讨论记录的任务保持旧计划字节一致；有记录时才并列输出。
+        if self.historical_discussion.status == "not_recorded":
+            value.pop("historical_discussion", None)
+        return value
 
 
 class DigestGoal(BaseModel):
@@ -126,6 +152,7 @@ class ChangeUnderstanding(BaseModel):
 class ReviewDigest(BaseModel):
     discussion_stats: dict | None = None
     discussion_rechecks: list[dict] = Field(default_factory=list)
+    discussion_links: dict[str, str] = Field(default_factory=dict)
     pr_url: str | None = None
     author_goal: str | None = None
     author_context_status: Literal["complete", "truncated", "unknown", "not_recorded"] = "not_recorded"
@@ -259,6 +286,8 @@ class ReviewCommentCheck(BaseModel):
     latest_head_sha: str | None = None
     checked_at: datetime
     review_comment_markdown: str
+    # 稳定的正文，不含随检查时点变化的过期/未知快照附注。
+    preview_markdown: str | None = None
     included_finding_keys: list[str] = Field(default_factory=list)
     omitted_finding_keys: list[str] = Field(default_factory=list)
     retained_blocking_keys: list[str] = Field(default_factory=list)

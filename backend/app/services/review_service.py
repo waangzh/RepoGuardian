@@ -735,11 +735,17 @@ class ReviewService:
             task.review.status = task.status
             task.review.completed = False
             task.warnings.append("review_deadline: 已达到冻结方案期限，未完成范围仍未检查，用量可能未知。")
-            # 外层期限也可能落在主审查完成后的 discussion_recheck 中。此时运行预算
-            # 或讨论日志可能已有未结算的模型调用；不能因为主报告已是 plan_exhausted
-            # 就保留 usage_integrity=complete 或静默丢弃复核元数据。
+            # 外层期限也可能落在主审查完成后的 discussion_recheck 中。此时主审查的
+            # 结论与计量保持不变，复核阶段的在途调用单独结算进 discussion_usage，
+            # 复核元数据从日志恢复，不静默丢弃。
             _apply_deadline_accounting(task.task_runtime_report, deadline_budget)
             task.pr_discussion = await self._discussion_metadata_after_deadline(task)
+            _merge_discussion_usage(task.task_runtime_report, task.pr_discussion)
+            # 期限落在 report 节点之前时，主审查已完成但尚无清单；从已保存事实
+            # 重建本次快照的清单，避免把已完成的 Diff 结论降级为快照缺失。
+            if (task.engine == "task_review_v1" and task.run_manifest is None
+                    and (task.task_runtime_report or {}).get("execution_status") == "completed"):
+                task.run_manifest = _manifest_after_deadline(task)
             task.report_markdown = self._report_service.generate(task)
             self._touch(task)
             self._persist(task)
@@ -832,6 +838,14 @@ class ReviewService:
                 state = chunk.get("data")
                 if isinstance(state, dict):
                     result = state
+                    # 外层期限可能在后续补充节点中断流，主报告的完成状态必须
+                    # 在节点结束时即落到任务上，不能只留在进程内局部变量。
+                    runtime_report = state.get("task_runtime_report")
+                    if task.engine == "task_review_v1" and isinstance(runtime_report, dict):
+                        task.task_runtime_report = TaskRuntimeReport.model_validate(
+                            runtime_report).model_dump(mode="json")
+                        self._touch(task)
+                        await asyncio.to_thread(self._persist, task)
                 continue
             if chunk_type == "custom":
                 progress = chunk.get("data")
@@ -1102,7 +1116,16 @@ class ReviewService:
             store = await DiscussionStore(task.id, identity, repository=self._repository).load()
             if not store.data.get("snapshot"):
                 raise ValueError("discussion journal missing")
-            return await metadata(store)
+            value = await metadata(store)
+            stats = dict(value.get("stats") or {})
+            if stats.get("termination_reason") in {None, "main_review_not_completed"}:
+                # 期限中断只影响补充性的历史复核；显式记录，不冒充复核已完成。
+                stats["termination_reason"] = "deadline"
+                limitations = list(stats.get("limitations") or [])
+                if "history_recheck:deadline" not in limitations:
+                    limitations.append("history_recheck:deadline")
+                stats["limitations"] = limitations
+            return {**value, "stats": stats}
         except Exception:
             # 日志不可读时保留旧元数据，但显式标记其不可用，不伪装为完整。
             logger.warning("任务 %s 的讨论日志在期限中断后不可读", task.id[:8], exc_info=True)
@@ -1120,34 +1143,80 @@ class ReviewService:
             self._tasks[task.id] = task
 
 
-def _unknown_usage_attempts(budget) -> list:
-    """已发送但用量不可用的调用；deadline 期间在途响应都按未知结算。"""
-    if budget is None:
-        return []
-    return [attempt for attempt in budget.attempts.values()
-            if attempt.sent and not attempt.usage_available]
+def _manifest_after_deadline(task: ReviewTask):
+    """期限落在补充节点时，用已冻结配置与已保存报告重建本次快照清单。"""
+    from app.models.review import ReviewRunManifest
+    from app.services.review_manifest import build_review_manifest
+    configuration = task.task_runtime_configuration or {}
+    snapshot = configuration.get("snapshot") or {}
+    if not (snapshot.get("head_sha") and snapshot.get("effective_base_sha")):
+        return None
+    state = {"engine": "task_review_v1", "task_id": task.id, "pr_info": task.pr.model_dump(mode="json") if task.pr else {},
+             "head_sha": snapshot["head_sha"], "base_sha": snapshot.get("declared_base_sha"),
+             "effective_base_sha": snapshot["effective_base_sha"], "created_at": task.created_at.isoformat(),
+             "task_runtime_configuration": configuration, "task_runtime_report": task.task_runtime_report,
+             "review_coverage": task.coverage.model_dump(mode="json"), "model_usages": [], "warnings": task.warnings}
+    manifest = build_review_manifest(state, datetime.now(timezone.utc))
+    # 重建只补齐清单，不改变已有结论字段；类型由模型本身校验。
+    return ReviewRunManifest.model_validate(manifest.model_dump(mode="json"))
+
+
+def _merge_discussion_usage(report: dict | None, pr_discussion: dict | None) -> None:
+    """讨论日志的独立计量与预算账本取并集；未知用量优先，缺失保持缺失。"""
+    from app.models.pr_discussion import DiscussionUsage
+    if report is None or not pr_discussion:
+        return
+    recorded = ((pr_discussion.get("stats") or {}).get("usage")) or {}
+    current = report.get("discussion_usage") or {}
+    values = DiscussionUsage.model_validate(recorded)
+    previous = DiscussionUsage.model_validate(current)
+    if previous.sent_calls or previous.usage_integrity != "not_recorded":
+        values = DiscussionUsage(
+            sent_calls=max(values.sent_calls, previous.sent_calls),
+            settled_tokens=max(values.settled_tokens, previous.settled_tokens),
+            unknown_attempts=max(values.unknown_attempts, previous.unknown_attempts),
+            usage_integrity="unknown" if "unknown" in {values.usage_integrity, previous.usage_integrity}
+                else "complete" if "complete" in {values.usage_integrity, previous.usage_integrity}
+                else "not_recorded",
+            total_tokens=None if "unknown" in {values.usage_integrity, previous.usage_integrity}
+                else max(values.total_tokens or 0, previous.total_tokens or 0))
+    if values.sent_calls or values.usage_integrity != "not_recorded":
+        report["discussion_usage"] = values.model_dump(mode="json")
+        # 讨论统计与运行报告共用同一独立计量，避免两处显示不同。
+        stats = pr_discussion.get("stats")
+        if isinstance(stats, dict):
+            stats["usage"] = values.model_dump(mode="json")
 
 
 def _apply_deadline_accounting(report: dict | None, budget) -> None:
-    """外层期限终止运行：保留已结算量，但绝不报告 usage_integrity=complete。
+    """外层期限终止运行：只改写真正被中断的部分，不降级已完成的主审查。
 
-    主审查已完成时只中断了补充性的历史复核；此时保留主审查的 scope_complete，
-    不能把已完成 Diff 范围降级为未完成。期限与用量状态则如实改写。
+    主审查运行结束（含其自身预算或期限终止）后，外层期限只可能落在历史讨论
+    复核；此时保留主审查的 execution_status/termination_reason/scope_complete 与
+    用量完整性，把补充阶段的调用单独记入 discussion_usage。
+    只有主审查本身仍在运行时，才把期限如实写回主报告。
     """
-    if report is None:
+    from app.models.pr_discussion import DiscussionUsage
+    from app.services.review_run_budget import attempt_accounting, is_discussion_attempt
+    if report is None or budget is None:
+        # 账本不可用时保持报告原值，绝不把真实调用量改写为零。
         return
-    unknown = _unknown_usage_attempts(budget)
-    main_completed = (
-        report.get("execution_status") == "completed"
-        and report.get("termination_reason") == "plan_exhausted"
-    )
-    report.update(execution_status="completed", termination_reason="deadline",
-                  usage_integrity="unknown", unknown_attempts=len(unknown), total_tokens=None)
-    if not main_completed:
-        report["scope_complete"] = False
-    if budget is not None:
-        report["sent_calls"] = sum(attempt.sent for attempt in budget.attempts.values())
-        report["settled_tokens"] = budget.settled_actual
+    values = list(budget.attempts.values())
+    primary = [attempt for attempt in values if not is_discussion_attempt(attempt)]
+    discussion = [attempt for attempt in values if is_discussion_attempt(attempt)]
+    main_completed = report.get("execution_status") != "running"
+    prior_integrity = report.get("usage_integrity")
+    if main_completed:
+        # 主审查已结束：期限只中断了补充性复核，不能改写主结论身份。
+        report.update(attempt_accounting(primary, prior_integrity=prior_integrity))
+    else:
+        report.update(execution_status="completed", termination_reason="deadline",
+                      scope_complete=False, **attempt_accounting(primary))
+    if discussion:
+        report["discussion_usage"] = DiscussionUsage(
+            **attempt_accounting(discussion)).model_dump(mode="json")
+    else:
+        report.pop("discussion_usage", None)
 
 
 async def _cleanup_repo(repo_path: Path) -> bool:

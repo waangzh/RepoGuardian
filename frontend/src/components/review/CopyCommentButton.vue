@@ -20,7 +20,7 @@ const props = withDefaults(defineProps<{
 // 复制前的快照检查结果回传给页面，供概览切换到“旧代码版本”情景；不改变复制行为。
 const emit = defineEmits<{ snapshot: [status: "current" | "stale" | "unknown"]; rereview: [] }>();
 const dialog = ref<HTMLDialogElement | null>(null);
-const { copied, feedback, checking, pendingCopy, headCheck, cancelPending, copyCheckedComment, copyAcknowledged, retryPending } = useReviewCommentCopy({
+const { copied, feedback, checking, pendingCopy, headCheck, previewMarkdown, cancelPending, copyCheckedComment, copyAcknowledged, retryPending } = useReviewCommentCopy({
   reviewId: () => props.reviewId, reviewedHeadSha: () => props.reviewedHeadSha, markdown: () => props.markdown,
   options: () => ({ detail: props.detail || "compact", exclude_resolved: false }),
 });
@@ -30,7 +30,7 @@ watch(headCheck, result => {
 });
 // DOMPurify 依赖浏览器 DOM；SSR/测试环境没有 document 时保留空预览正文，不影响复制。
 const rendered = computed(() => typeof DOMPurify.sanitize !== "function" ? ""
-  : DOMPurify.sanitize(marked.parse(props.markdown || "", { async: false }) as string,
+  : DOMPurify.sanitize(marked.parse(previewMarkdown.value || "", { async: false }) as string,
     { USE_PROFILES: { html: true }, FORBID_TAGS: ["style"] }));
 async function copy() { await copyCheckedComment(); if (copied.value) dialog.value?.close(); }
 function close() { cancelPending(); dialog.value?.close(); }

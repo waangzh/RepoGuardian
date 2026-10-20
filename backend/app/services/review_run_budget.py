@@ -83,6 +83,8 @@ class AttemptRecord:
     settled_at: str | None = None
     actual_cost_microusd: int | None = None
     price_snapshot: dict[str, Any] | None = None
+    # primary（当前 Diff 主审查）或 discussion（历史讨论补充）；旧账本缺省即主审查。
+    phase: str = "primary"
 
 
 @dataclass
@@ -221,7 +223,8 @@ class ReviewRunBudget:
                       output_tokens: int = 0, task_id: str | None = None,
                       request_hash: str | None = None, obligation_id: str | None = None,
                       estimated_cost_microusd: int | None = None,
-                      price_snapshot: dict[str, Any] | None = None) -> AttemptRecord:
+                      price_snapshot: dict[str, Any] | None = None,
+                      phase: str = "primary") -> AttemptRecord:
         if estimated_tokens < 0 or output_tokens < 0 or (estimated_cost_microusd is not None and estimated_cost_microusd < 0):
             raise ValueError("request reservation must not be negative")
         async with self._mutation():
@@ -249,7 +252,7 @@ class ReviewRunBudget:
                 task_id=task_id, operation=operation,
                 request_hash=request_hash or hashlib.sha256(request_id.encode()).hexdigest(),
                 estimated_tokens=estimated_tokens, reserved_tokens=estimated_tokens,
-                output_tokens=output_tokens,
+                output_tokens=output_tokens, phase=phase,
                 reserved_cost_microusd=estimated_cost_microusd,
                 price_snapshot=copy.deepcopy(price_snapshot),
             )
@@ -470,6 +473,9 @@ class ReviewRunBudget:
 
 
 _active_run_budget: ContextVar[ReviewRunBudget | None] = ContextVar("active_review_run_budget", default=None)
+# 当前调用属于主审查还是历史讨论补充；决定用量归属，不影响共享预算本身。
+_active_run_budget_phase: ContextVar[str] = ContextVar("active_review_run_budget_phase", default="primary")
+run_budget_phase = _active_run_budget_phase
 run_budget_attempt_observer: ContextVar[Any] = ContextVar("run_budget_attempt_observer", default=None)
 run_budget_dispatch_guard: ContextVar[Any] = ContextVar("run_budget_dispatch_guard", default=None)
 run_budget_response_observer: ContextVar[Any] = ContextVar("run_budget_response_observer", default=None)
@@ -478,6 +484,31 @@ run_budget_task_id: ContextVar[str | None] = ContextVar("run_budget_task_id", de
 
 def current_run_budget() -> ReviewRunBudget | None:
     return _active_run_budget.get()
+
+
+def _attempt_field(attempt, name, default=None):
+    return attempt.get(name, default) if isinstance(attempt, dict) else getattr(attempt, name, default)
+
+
+def is_discussion_attempt(attempt) -> bool:
+    """历史讨论补充阶段（摘要或复核）的调用；旧账本按 task_id 前缀识别。"""
+    if _attempt_field(attempt, "phase", "primary") == "discussion":
+        return True
+    return str(_attempt_field(attempt, "task_id", "") or "").startswith(("discussion:", "history-"))
+
+
+def attempt_accounting(attempts, *, prior_integrity: str | None = None):
+    """按同一口径结算一组 attempt；未知用量不记为零，既有不一致不得被升级。"""
+    values = list(attempts)
+    unknown = [attempt for attempt in values
+               if _attempt_field(attempt, "sent") and not _attempt_field(attempt, "usage_available")]
+    settled = sum(_attempt_field(attempt, "actual_tokens") or 0 for attempt in values
+                  if _attempt_field(attempt, "usage_available"))
+    integrity = "unknown" if unknown else "inconsistent" if prior_integrity == "inconsistent" else "complete"
+    return {"sent_calls": sum(bool(_attempt_field(attempt, "sent")) for attempt in values),
+            "settled_tokens": settled, "unknown_attempts": len(unknown),
+            "usage_integrity": integrity,
+            "total_tokens": None if integrity != "complete" else settled}
 
 
 @contextmanager

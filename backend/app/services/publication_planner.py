@@ -17,8 +17,12 @@ def build_review_digest(task, report):
     digest = ReviewDigest(excluded_files=[DigestExcludedFile(path=item.file_path, reason=item.reason)
         for item in sorted(task.excluded_files, key=lambda item: (item.file_path, item.reason))])
     if task.pr_discussion:
+        from app.services.pr_discussion_matching import safe_discussion_url
+
         digest.discussion_stats = task.pr_discussion.get("stats")
         digest.discussion_rechecks = task.pr_discussion.get("rechecks") or []
+        digest.discussion_links = {identity: safe for identity, url in (task.pr_discussion.get("links") or {}).items()
+            if (safe := safe_discussion_url(url, task.pr_url))}
     if report is None:
         return digest
     digest.validation_state = "not_executed"

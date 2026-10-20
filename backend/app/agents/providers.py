@@ -228,7 +228,7 @@ class OpenAICompatibleProvider(LLMProvider):
         from app.services.review_run_budget import (
             RunBudgetError, current_run_budget, run_budget_attempt_observer,
             run_budget_dispatch_guard, run_budget_response_observer,
-            run_budget_task_id,
+            run_budget_task_id, run_budget_phase,
         )
         from app.services.model_pricing import estimate_cost_microusd
         from app.core.config import settings
@@ -271,6 +271,7 @@ class OpenAICompatibleProvider(LLMProvider):
                         estimated_tokens=admission["reserved_tokens"],
                         output_tokens=request.output_tokens,
                         request_hash=admission.get("request_hash"),
+                        phase=run_budget_phase.get(),
                         estimated_cost_microusd=estimated_cost,
                         price_snapshot={"provider": self._provider_name,
                             "endpoint": self._base_url, "model": requested_model,

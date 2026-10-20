@@ -971,6 +971,8 @@ export interface ReviewTask {
   engine?: ReviewEngine; // 缺省字段的旧任务属于 legacy_units；新任务恒为 task_review_v1
   task_runtime_configuration?: Record<string, unknown> | null;
   task_runtime_report?: TaskRuntimeReport | null;
+  /** 历史讨论冻结元数据；轻量展示以摘要 digest.discussion_stats 为准。 */
+  pr_discussion?: Record<string, unknown> | null;
   task_runtime_retry_unit_id?: string | null;
   mode: ReviewMode;
   generate_patches: boolean;
@@ -1040,6 +1042,8 @@ export interface TaskRuntimeReport {
   settled_tokens: number;
   unknown_attempts: number;
   total_tokens?: number | null;
+  /** 历史讨论补充阶段的独立计量；与上方主审查用量字段分开记录。 */
+  discussion_usage?: import("./prDiscussion").DiscussionUsage | null;
   work_items: Array<Record<string, unknown>>;
 }
 

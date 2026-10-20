@@ -399,7 +399,12 @@ async def test_history_only_gaps_do_not_change_diff_outcome_or_legacy_inputs(tmp
         "referenced_comments": 1, "checked": 0, "unchecked": 1, "limitations": [], "termination_reason": "budget_exhausted"},
         "rechecks": [{"discussion_id": "inline:1", "status": "not_checked", "reason": "budget"}]}
     plan = PublicationPlanner().build(task)
-    assert plan.outcome == original
+    # 历史复核缺口只进入独立的 historical_discussion，不改变主审查结论字段。
+    assert plan.outcome.kind == original.kind and plan.outcome.reason_codes == original.reason_codes
+    assert plan.outcome.review_completeness == original.review_completeness
+    assert plan.outcome.runtime_reliability == original.runtime_reliability
+    assert plan.outcome.historical_discussion.status == "partial"
+    assert plan.outcome.historical_discussion.affects_risk is False
     assert summary_projection(plan).digest.discussion_stats["unchecked"] == 1
     assert "历史讨论复核" in plan.user_report_markdown and "本轮变更范围" in plan.review_comment_markdown
     assert await prepare_discussions_node({"task_runtime_configuration": {}}) == {}
@@ -513,7 +518,8 @@ def test_duplicate_default_does_not_withhold_risk_and_explicit_selection_restore
     assert plan.outcome.confirmed_count == plan.outcome.publishable_count == 1
     assert len(plan.inline_drafts) == 1 and not plan.withheld_findings
     assert plan.inline_drafts[0].default_selected is False
-    assert "默认不重复列出" in plan.review_comment_markdown
+    assert "已有讨论不代表已修复" in plan.review_comment_markdown
+    assert plan.inline_drafts[0].title in plan.review_comment_markdown
     assert plan.inline_drafts[0].title in render_review_comment(plan, include_discussed=True)
     verification["discussion_matches"][0]["new_information"] = True
     assert PublicationPlanner().build(task).inline_drafts[0].default_selected is True

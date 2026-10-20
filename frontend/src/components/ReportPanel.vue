@@ -47,16 +47,17 @@ const previewLoading = ref(false);
 const previewRevision = ref(0);
 let previewController: AbortController | null = null;
 const customSelection = computed(() => detail.value !== "compact" || excludeResolved.value || includeDiscussed.value);
-const visibleFindingCount = computed(() => customSelection.value ? selection.value?.included_finding_keys.length
-  : props.plan ? [...props.plan.inline_drafts, ...props.plan.summary_findings].filter(item => item.default_selected !== false).length : null);
-const currentMarkdown = computed(() => reportView.value === "comment" ? (customSelection.value ? selection.value?.review_comment_markdown : props.reviewMarkdown)
+const visibleFindingCount = computed(() => headCheck.value?.included_finding_keys.length ?? (customSelection.value ? selection.value?.included_finding_keys.length
+  : props.plan ? [...props.plan.inline_drafts, ...props.plan.summary_findings].length : null));
+const sourceMarkdown = computed(() => reportView.value === "comment" ? (customSelection.value ? selection.value?.review_comment_markdown : props.reviewMarkdown)
   : reportView.value === "user" ? props.userMarkdown : props.markdown);
 const currentLabel = computed(() => reportView.value === "comment" ? "PR 评论草稿"
   : reportView.value === "user" ? "详细审查报告" : "技术审计导出");
-const { copied, feedback, checking, pendingCopy, headCheck, checkHead, cancelPending, resetCopy, writeClipboard, copyCheckedComment, copyAcknowledged, checkedComment, retryPending } = useReviewCommentCopy({
-  reviewId: () => props.reviewId, reviewedHeadSha: () => props.reviewedHeadSha, markdown: () => currentMarkdown.value,
+const { copied, feedback, checking, pendingCopy, headCheck, previewMarkdown, checkHead, cancelPending, resetCopy, writeClipboard, copyCheckedComment, copyAcknowledged, checkedComment, retryPending } = useReviewCommentCopy({
+  reviewId: () => props.reviewId, reviewedHeadSha: () => props.reviewedHeadSha, markdown: () => sourceMarkdown.value,
   options: () => ({ detail: detail.value, exclude_resolved: excludeResolved.value, include_discussed: includeDiscussed.value }),
 });
+const currentMarkdown = computed(() => reportView.value === "comment" ? previewMarkdown.value : sourceMarkdown.value);
 watch(headCheck, result => { if (result) emit("snapshot", result.status); });
 const snapshotStale = computed(() => props.stale || headCheck.value?.status === "stale");
 watch([() => props.reviewMarkdown, () => props.userMarkdown, () => props.reviewId], () => { reportView.value = initialView(); });
@@ -120,7 +121,7 @@ function rereview() { cancelPending(); emit("rereview"); }
 </script>
 
 <template>
-  <label v-if="reportView === 'comment' && plan && [...plan.inline_drafts, ...plan.summary_findings].some(item => item.default_selected === false)" class="rd-history-toggle"><input v-model="includeDiscussed" type="checkbox" />纳入已有讨论的重复意见（风险仍保留在完整报告中）</label>
+  <label v-if="reportView === 'comment' && plan && [...plan.inline_drafts, ...plan.summary_findings].some(item => item.default_selection_reason === 'historical_duplicate')" class="rd-history-toggle"><input v-model="includeDiscussed" type="checkbox" />展开已有讨论问题的完整证据（默认保留风险摘要与讨论链接）</label>
   <section id="review-report" class="rd-workspace" :class="{ 'rd-workspace--embedded': embedded }">
     <header v-if="!embedded" class="rd-heading">
       <div><div class="rd-eyebrow">Review delivery workspace</div><h1>审查报告与交付</h1><p>先确认结论与局限，再生成适合不同读者的交付内容。</p></div>

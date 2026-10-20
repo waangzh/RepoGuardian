@@ -12,6 +12,19 @@ const store = workspace?.store || usePrDiscussions(() => props.reviewId);
 const opened = ref(false), trigger = ref<HTMLButtonElement>();
 const stats = computed(() => store.stats.value || props.stats);
 const recorded = computed(() => stats.value && stats.value.status !== "not_recorded");
+// 只展示讨论补充阶段的独立状态；不把它并入主审查结论。
+const historyStatus = computed(() => {
+  const termination = stats.value?.termination_reason;
+  if (!termination || termination === "plan_exhausted") return "";
+  return ({
+    deadline: "复核超时中断，未完成项保持未核验",
+    cancelled: "复核被取消，未完成项保持未核验",
+    no_located_targets: "部分历史事项无法定位到当前源码",
+    budget_exhausted: "复核预算耗尽，未完成项保持未核验",
+    main_review_not_completed: "主审查未完成，复核未执行",
+    journal_unavailable_after_deadline: "复核日志不可读，结果不可用",
+  } as Record<string, string>)[termination] || `复核终止：${termination}`;
+});
 function open() { if (workspace) workspace.open(); else opened.value = true; }
 async function back() { opened.value = false; await nextTick(); trigger.value?.focus(); }
 watch(() => props.reviewId, () => { opened.value = false; });
@@ -25,6 +38,7 @@ onBeforeUnmount(() => { if (!workspace) store.cancel(); });
       <div class="pd-summary-grid"><div class="pd-module-stat"><b>{{ stats?.collected }}</b><span>已采集 {{ stats?.collected }} 项讨论 · {{ stats?.comments }} 条评论</span></div><div class="pd-module-stat"><b>{{ stats?.checked }}</b><span>有代码核验结论</span></div><div class="pd-module-stat"><b>{{ stats?.unchecked }}</b><span>尚未核验充分 · 未核验 {{ stats?.unchecked }} 项</span></div></div>
       <p class="pd-reference">已参考 {{ stats?.referenced }} 项相关讨论，包含 {{ stats?.referenced_comments }} 条评论。</p>
     </template>
+    <p v-if="historyStatus" class="pd-reference">历史复核：{{ historyStatus }}。该阶段独立于当前 Diff 审查，其超时或计量缺失不会改变主审查结论。</p>
     <p v-if="!recorded || stats?.status !== 'complete'" class="pd-notice amber"><AppIcon name="alert" :size="17" />{{ discussionNotice(stats) }}</p>
     <p v-else-if="stats.collected === 0" class="pd-reference">{{ discussionNotice(stats) }}</p>
     <details v-if="stats?.limitations.length" class="pd-limits"><summary>采集限制（{{ stats.limitations.length }}）</summary><ul><li v-for="(value, index) in stats.limitations" :key="index">{{ value }}</li></ul></details>

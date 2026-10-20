@@ -389,7 +389,7 @@ async def check_review_comment(task_id: str, options: ReviewCommentOptions | Non
                 f"审查 Head：{markdown_text(plan.snapshot.head_sha or '未记录', 64)}；"
                 f"远端 Head：{markdown_text(latest or '未知', 64)}。此状态仅代表检查时点。")
     return ReviewCommentCheck(review_id=task_id, status=state, reviewed_head_sha=plan.snapshot.head_sha,
-        latest_head_sha=latest, checked_at=checked_at, review_comment_markdown=comment + note,
+        latest_head_sha=latest, checked_at=checked_at, review_comment_markdown=comment + note, preview_markdown=comment,
         included_finding_keys=[item.finding_key for item in included], omitted_finding_keys=[item.finding_key for item in omitted],
         retained_blocking_keys=retained, detail=options.detail)
 
@@ -403,7 +403,7 @@ async def preview_review_comment(task_id: str, options: ReviewCommentOptions):
     included, omitted, retained, comment = _comment_content(plan, options)
     return ReviewCommentCheck(review_id=task_id, status="unknown", reviewed_head_sha=plan.snapshot.head_sha,
         checked_at=datetime.now(timezone.utc), detail=options.detail,
-        review_comment_markdown=comment,
+        review_comment_markdown=comment, preview_markdown=comment,
         included_finding_keys=[item.finding_key for item in included], omitted_finding_keys=[item.finding_key for item in omitted],
         retained_blocking_keys=retained)
 

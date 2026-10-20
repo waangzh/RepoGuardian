@@ -11,7 +11,7 @@ from app.services.artifact_store import LocalArtifactStore
 from app.services.fingerprints import stable_hash
 from app.services.review_run_budget import (
     RunBudgetError, activate_run_budget, run_budget_attempt_observer, run_budget_dispatch_guard,
-    run_budget_response_observer, run_budget_task_id,
+    run_budget_phase, run_budget_response_observer, run_budget_task_id,
 )
 
 
@@ -146,7 +146,8 @@ class DiscussionStore:
         tokens = [(run_budget_attempt_observer, run_budget_attempt_observer.set(bind)),
                   (run_budget_dispatch_guard, run_budget_dispatch_guard.set(guard)),
                   (run_budget_response_observer, run_budget_response_observer.set(response)),
-                  (run_budget_task_id, run_budget_task_id.set("discussion:" + key))]
+                  (run_budget_task_id, run_budget_task_id.set("discussion:" + key)),
+                  (run_budget_phase, run_budget_phase.set("discussion"))]
         try:
             with activate_run_budget(budget):
                 result = await provider.task_review_step(request)

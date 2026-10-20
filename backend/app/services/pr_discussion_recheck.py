@@ -83,6 +83,7 @@ def _record_completed_rechecks(store, snapshot, steps):
         result = step.executor.projection.investigation
         if result:
             store.data["rechecks"][thread.id] = DiscussionRecheck(discussion_id=thread.id,
+                path=thread.path,
                 status=getattr(result, "resolution", "insufficient_evidence"), reason=result.reason,
                 evidence_ids=result.evidence_ids, limitations=result.limitations).model_dump(mode="json")
 
@@ -137,7 +138,8 @@ async def recheck_discussions_node(state, runtime=None, config=None):
         path = thread_path(thread, set(readable), renames)
         if path is None:
             store.data["rechecks"].setdefault(thread.id, DiscussionRecheck(discussion_id=thread.id,
-                status="not_checked", reason="无法将历史事项定位到允许读取的当前源码；路径删除不代表问题已修复。",
+                path=thread.path, status="not_checked",
+                reason="无法将历史事项定位到允许读取的当前源码；路径删除不代表问题已修复。",
                 limitations=["code_target_not_located"]).model_dump(mode="json"))
             continue
         identity = "history-" + stable_hash(thread.id)[:32]
@@ -169,7 +171,8 @@ async def recheck_discussions_node(state, runtime=None, config=None):
         items.append(work)
         goals.append(goal)
         store.data["rechecks"].setdefault(thread.id, DiscussionRecheck(discussion_id=thread.id,
-            status="not_checked", reason="尚未完成历史问题代码核验。").model_dump(mode="json"))
+            path=thread.path, status="not_checked",
+            reason="尚未完成历史问题代码核验。").model_dump(mode="json"))
     await store.save()
     queue = TaskReviewRuntime(items, concurrency=1)
     if steps:
@@ -218,11 +221,18 @@ async def result_state(store, state):
     unique = {u["id"]: u for u in usages}
     report = deepcopy(state.get("task_runtime_report"))
     if report is not None and budget is not None:
-        unknown = [a for a in budget.attempts.values() if a.sent and not a.usage_available]
-        report.update(sent_calls=sum(a.sent for a in budget.attempts.values()),
-            settled_tokens=budget.settled_actual, unknown_attempts=len(unknown),
-            total_tokens=None if unknown else budget.settled_actual,
-            usage_integrity="unknown" if unknown else report["usage_integrity"])
+        # 历史复核与主审查共享预算，但计量归属独立：主报告只统计主审查调用，
+        # 讨论补充阶段的未知用量记录到讨论统计，不把已完成的主审查降级为 unknown。
+        from app.services.review_run_budget import attempt_accounting, is_discussion_attempt
+        primary = [a for a in budget.attempts.values() if not is_discussion_attempt(a)]
+        discussion = [a for a in budget.attempts.values() if is_discussion_attempt(a)]
+        report.update(attempt_accounting(primary, prior_integrity=report.get("usage_integrity")))
+        if discussion:
+            from app.models.pr_discussion import DiscussionUsage
+            report["discussion_usage"] = DiscussionUsage(
+                **attempt_accounting(discussion)).model_dump(mode="json")
+        else:
+            report.pop("discussion_usage", None)
     return {"pr_discussion": await metadata(store), "model_usages": list(unique.values()),
             "run_budget": budget.snapshot() if budget else state.get("run_budget"),
             "task_runtime_report": report, "status": report["execution_status"] if report else state.get("status")}
