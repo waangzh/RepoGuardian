@@ -66,11 +66,24 @@ class DiscussionStore:
             raise
         self.data = value
 
-    async def used(self, discussion_id, comment_ids):
+    async def mark_used(self, usage: dict[str, set[str]]) -> None:
+        """一次响应内合并引用，内容无变化不写盘；有变化只做一次 CAS 保存。"""
         async with self.lock:
-            existing = set(self.data["used"].get(discussion_id, []))
-            self.data["used"][discussion_id] = sorted(existing | set(comment_ids))
-            await self.save()
+            changed = False
+            for discussion_id, comment_ids in usage.items():
+                values = {value for value in comment_ids if value}
+                if not values:
+                    continue
+                existing = set(self.data["used"].get(discussion_id, []))
+                if values <= existing:
+                    continue
+                self.data["used"][discussion_id] = sorted(existing | values)
+                changed = True
+            if changed:
+                await self.save()
+
+    async def used(self, discussion_id, comment_ids):
+        await self.mark_used({discussion_id: set(comment_ids)})
 
     async def call(self, key, request, provider, budget, *, token_cap=None, call_cap=None):
         """One durable logical operation. An unknown sent attempt is never retried here."""

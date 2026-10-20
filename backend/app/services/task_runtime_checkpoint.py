@@ -353,6 +353,8 @@ class TaskRuntimeCheckpoint:
                     step.last_response = response["raw"]
                     step.repair_errors = []
                     step.apply_response(response["raw"])
+                    # 在线路径在检查点写盘前登记；重放补齐崩溃窗口内的同口径统计。
+                    await step.record_discussion_usage(response["raw"])
                     call.update(applied=True, state="applied")
                 if call["applied"]:
                     available_applied.append(call)

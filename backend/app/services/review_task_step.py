@@ -32,6 +32,48 @@ _MODEL_CORRECTABLE_ERRORS = {
 }
 
 
+def discussion_usage(raw, visible_discussions: list[dict], observations: list[dict]) -> dict[str, set[str]]:
+    """只登记模型本响应实际引用的评论，而不是全部可见讨论。
+
+    - verification.discussion_matches 的 quote 必须出现在可见评论或摘要引文中，
+      未通过该绑定的条目不计数；
+    - discussion_read 观察项只登记本次调用的工具结果中实际返回的评论；
+    - 模型只引用摘要时，按 summary.covered_comment_ids 的现有语义登记对应评论。
+    """
+    try:
+        value = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        value = None
+    usage: dict[str, set[str]] = {}
+    if isinstance(value, dict):
+        verification = value.get("verification")
+        matches = verification.get("discussion_matches") if isinstance(verification, dict) else None
+        if isinstance(matches, list):
+            threads = {thread["id"]: thread for thread in visible_discussions if thread.get("id")}
+            for match in matches:
+                if not isinstance(match, dict):
+                    continue
+                thread = threads.get(match.get("discussion_id"))
+                comment_id, quote = match.get("comment_id"), match.get("quote")
+                if thread is None or not comment_id or not isinstance(quote, str) or not quote.strip():
+                    continue
+                comments = {comment["id"]: comment.get("body") or "" for comment in thread["comments"]}
+                if comment_id in comments and quote in comments[comment_id]:
+                    usage.setdefault(thread["id"], set()).add(comment_id)
+                    continue
+                summary = thread.get("summary") or {}
+                # 只引用摘要时，按既有语义登记该摘要覆盖的评论，而不是整条线程。
+                if quote in (summary.get("quotes") or {}).get(comment_id, ""):
+                    covered = [value for value in summary.get("covered_comment_ids") or [] if value]
+                    usage.setdefault(thread["id"], set()).update(covered or [comment_id])
+    for observation in observations:
+        if observation.get("discussion_id") and observation.get("content"):
+            ids = [value for value in observation.get("comment_ids") or [] if value]
+            if ids:
+                usage.setdefault(observation["discussion_id"], set()).update(ids)
+    return usage
+
+
 class InspectTaskStep:
     """仅离线切片入口；复用现有 scope、EvidenceStore 和唯一 RunBudget。"""
 
@@ -171,16 +213,9 @@ class InspectTaskStep:
                     raise asyncio.CancelledError()
 
             async def save_response(attempt, raw, usage):
-                if self.discussion_store is not None:
-                    for thread in executor.visible_discussions:
-                        ids = {c["id"] for c in thread["comments"] if c["body"]}
-                        ids.update((thread.get("summary") or {}).get("covered_comment_ids", []))
-                        await self.discussion_store.used(thread["id"], ids)
-                    for observation in self.tool_observations:
-                        if observation.get("discussion_id") and observation.get("content"):
-                            await self.discussion_store.used(observation["discussion_id"], observation.get("comment_ids", []))
                 if self.checkpoint is not None:
                     await self.checkpoint.save_response(self, attempt, raw, usage)
+                await self.record_discussion_usage(raw)
 
             observer = run_budget_attempt_observer.set(bind_attempt)
             dispatch_token = run_budget_dispatch_guard.set(guard)
@@ -208,6 +243,14 @@ class InspectTaskStep:
             if self.checkpoint is not None:
                 await self.checkpoint.applied(self)
             return observation
+
+    async def record_discussion_usage(self, raw: str) -> None:
+        """在线响应与恢复重放共用；只登记本响应实际引用/读取的评论。"""
+        if self.discussion_store is None:
+            return
+        usage = discussion_usage(raw, self.executor.visible_discussions or [], self.tool_observations)
+        if usage:
+            await self.discussion_store.mark_used(usage)
 
     def apply_response(self, raw: str) -> dict:
         """恢复重放与在线结果使用同一解析/纠错入口。"""
