@@ -24,7 +24,8 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
           busy: false, copied: false, headLabel: '尚未检查', headTone: 'neutral', headNote: '',
           canCheck: true, canPublish: true,
         }));
-      for (const text of ['PR 评论草稿', '详细审查报告', '技术记录',
+      // 报告标签不再复用主导航“技术记录”，避免两个入口同名但内容不同。
+      for (const text of ['PR 评论草稿', '详细审查报告', '技术审计导出',
         '简洁评论 · 包含所有可交付问题及处理建议', '详细评论 · 增加证据、触发场景与审查范围']) assert.ok(html.includes(text));
       for (const text of ['PR 交付摘要', '保留全部问题正文', '附加完整范围信息', '>PR Summary<']) assert.ok(!html.includes(text));
       const audit = await renderToString(createSSRApp(Audit, { task, plan }));
@@ -36,7 +37,7 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
         const { task, plan } = fixtures[name];
         const before = JSON.stringify(plan);
         const html = await renderToString(createSSRApp(Readable, { plan }));
-        for (const id of ['conclusion', 'changes', 'evidence', 'gaps', 'actions']) assert.ok(html.includes(`id="rd-detail-${id}"`));
+        for (const id of ['conclusion', 'changes', 'evidence', 'gaps', 'actions', 'appendix']) assert.ok(html.includes(`id="rd-detail-${id}"`));
         assert.ok(html.includes('<h4>PR 目标</h4>'));
         assert.ok(html.includes('来源与验证边界'));
         assert.ok(html.includes(reportValidationLabel(plan.outcome.dynamic_validation)));
@@ -49,6 +50,23 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
         assert.equal(JSON.stringify(plan), before);
       });
     }
+    await t.test('交互式详细报告覆盖后端未发布记录与审查附录', async () => {
+      const { plan } = fixtures.withheld;
+      const html = await renderToString(createSSRApp(Readable, { plan }));
+      // 后端 render_user_report 会输出“机器已确认但未形成发布意见”；交互视图必须给出同一事实。
+      assert.ok(html.includes('id="rd-detail-retained"'));
+      assert.ok(html.includes('机器已确认但未形成发布意见'));
+      assert.ok(html.includes('空返回值破坏调用方契约'));
+      assert.ok(html.includes('机器已确认，发布准入未通过'));
+      // 扣留原因以可读文本呈现，原始 ID 仍可追溯。
+      assert.ok(html.includes('核验用量未知，不能视为完整证据'));
+      assert.ok(html.includes('candidate-a'));
+      // 附录覆盖范围、调查、原因代码与历史讨论复核入口。
+      for (const text of ['审查范围与记录', '发布准入扣留记录']) assert.ok(html.includes(text));
+      const findingsHtml = await renderToString(createSSRApp(Readable, { plan: fixtures.findings.plan }));
+      assert.ok(!findingsHtml.includes('id="rd-detail-retained"'));
+      assert.ok(findingsHtml.includes('id="rd-detail-appendix"'));
+    });
     await t.test('旧字段与缺失验证保留未知，文本按 Vue 转义', async () => {
       assert.equal(coverageLabel(undefined), '未知');
       assert.equal(reportValidationLabel(undefined), '未知');
