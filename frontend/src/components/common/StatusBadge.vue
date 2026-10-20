@@ -19,7 +19,7 @@ const labels: Record<string, string> = {
   waiting_for_human: "历史审查已中止",
   needs_human: "未确认",
   unresolved: "未确认",
-  completed: "已完成",
+  completed: "执行已完成",
   completed_with_warnings: "存在警告",
   failed: "失败",
   timed_out: "已超时",
@@ -41,7 +41,7 @@ const labels: Record<string, string> = {
   stale: "已过期",
   abandoned: "已放弃",
   superseded: "已替代",
-  passed: "已通过",
+  passed: "所选检查通过",
   inconclusive: "不确定",
   unsupported: "不支持",
   infrastructure_error: "环境错误",
@@ -91,5 +91,5 @@ const text = computed(() => props.label || labels[props.status] || props.status)
 </script>
 
 <template>
-  <span class="status-badge" :data-tone="tone" :title="status">{{ text }}</span>
+  <span class="status-badge" :data-tone="tone" :title="status === 'completed' ? '仅表示任务或步骤执行结束，不代表 PR 安全或可以合并' : status === 'passed' ? '仅表示该记录覆盖的检查通过，不代表整个项目 CI 全部通过' : status">{{ text }}</span>
 </template>

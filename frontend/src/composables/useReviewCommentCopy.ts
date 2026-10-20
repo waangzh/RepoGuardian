@@ -62,14 +62,14 @@ export function useReviewCommentCopy(source: CommentSource, load = checkReviewCo
       headCheck.value = result;
       if (checkOnly) {
         feedback.value = result.status === 'current' ? 'PR Head 与本次审查快照一致；交付时将再次检查。'
-          : result.status === 'stale' ? 'PR 已有新提交，交付前需确认旧快照限制。' : '远端 Head 无法确认，交付前需确认未知状态限制。';
+          : result.status === 'stale' ? 'PR 已更新，本轮结论不适用于最新提交；建议重新审查。' : '暂时无法确认 PR 是否有新提交。请点击“重试检查”；本轮记录不能作为当前版本结论。';
       } else if (result.status === "current") await onReady(result.review_comment_markdown);
       else {
         pendingCopy.value = result;
         pendingAction = onReady;
         feedback.value = result.status === "stale"
-          ? "PR 已有新提交：当前评论基于旧 Head。建议重新审查，或明确复制带旧快照说明的评论。"
-          : "未能确认远端 Head：无法判断评论是否过期。可重试，或明确复制带状态说明的评论。";
+          ? "PR 已更新，本轮结论不适用于最新提交。请重新审查，或明确复制带旧快照说明的历史记录。"
+          : "暂时无法确认 PR 是否有新提交，无法判断评论是否过期。请点击“重试检查”，或明确复制带状态说明的历史记录。";
       }
     } catch { if (!request.signal.aborted) feedback.value = "快照检查失败或所选问题已不可复制，请重试；尚未复制。"; }
     finally { if (controller === request) { checking.value = false; controller = null; } }
@@ -77,6 +77,10 @@ export function useReviewCommentCopy(source: CommentSource, load = checkReviewCo
 
   async function copyCheckedComment() {
     await checkedComment(writeClipboard);
+  }
+  async function retryPending() {
+    const action = pendingAction;
+    if (action) await checkedComment(action);
   }
 
   async function copyAcknowledged() {
@@ -89,5 +93,5 @@ export function useReviewCommentCopy(source: CommentSource, load = checkReviewCo
   function cancelPending() { pendingCopy.value = null; pendingAction = null; }
   const checkHead = () => checkedComment(() => {}, true);
   return { copied, feedback, checking, pendingCopy, headCheck, checkHead, cancelPending, resetCopy, writeClipboard, checkedComment,
-    copyCheckedComment, copyAcknowledged };
+    copyCheckedComment, copyAcknowledged, retryPending };
 }

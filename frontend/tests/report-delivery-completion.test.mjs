@@ -30,7 +30,7 @@ test("概览使用统一合并建议并区分补丁结果与 Head 验证", async
         blocking_finding_keys: [], nonblocking_finding_keys: [], limits: ["调用方尚未核验"] },
         validations: [{ id: "v", source: "user_runner", stage: "patched", status: "passed", reason: "不代表当前 Head 已通过" }] } };
     const html = await renderToString(createSSRApp(component, { plan }));
-    for (const value of ["已有独立补丁结果，Head 未知", "已检查范围内未发现需处理的问题", "在已检查范围内未发现达到报告门槛的缺陷",
+    for (const value of ["独立结果 · Head 未知", "已检查范围内未发现需处理的问题", "本结论仅限已检查范围",
       "不代表当前 Head 已通过", "调用方尚未核验"]) assert.ok(html.includes(value));
     // 只展示当前情景结论；不出现其他情景或旧合并标签。
     assert.equal(html.match(/class="(?:success|info|warning|danger) outcome-verdict"/g)?.length, 1);

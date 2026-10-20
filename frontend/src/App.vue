@@ -141,8 +141,8 @@ const statusText = computed(() => {
   const labels: Record<string, string> = {
     pending: "等待审查", queued: "等待审查", planning: "正在准备", reviewing: "正在审查",
     resolving_evidence: "解析证据", verifying_issues: "核验问题", generating_patches: "生成补丁",
-    validating: "验证补丁", waiting_for_human: "历史审查已中止", completed: "审查已完成",
-    completed_with_warnings: "已完成，有警告", failed: "任务失败", cancelled: "任务已取消",
+    validating: "验证补丁", waiting_for_human: "历史审查已中止", completed: "审查执行已完成",
+    completed_with_warnings: "执行已结束，有运行提示", failed: "任务失败", cancelled: "任务已取消",
   };
   return labels[task.value.status] ?? `未知状态：${task.value.status}`;
 });
@@ -458,14 +458,14 @@ async function loadReportOnce(next: ReviewTask): Promise<void> {
 function showTerminalNotice(next: ReviewTask) {
   const completed = ["completed", "completed_with_warnings"].includes(next.status);
   showNotice({
-    tone: next.status === "failed" ? "danger" : next.status === "completed" ? "success" : "warning",
-    title: next.status === "failed" ? "审查任务失败" : next.status === "cancelled" ? "审查任务已取消" : "审查已完成",
+    tone: next.status === "failed" ? "danger" : next.status === "completed" ? "info" : "warning",
+    title: next.status === "failed" ? "审查执行失败" : next.status === "cancelled" ? "审查已由用户停止" : "审查执行已结束",
     message: completed
       ? reviewCompletionMessage(next)
       : (next.error || "任务已停止。"),
     actionLabel: completed ? "查看结果" : undefined,
   }, 7000);
-  document.title = completed ? "审查完成 · RepoGuardian" : "任务需要关注 · RepoGuardian";
+  document.title = completed ? "审查执行已结束 · RepoGuardian" : "任务需要关注 · RepoGuardian";
 }
 
 function showNotice(next: TaskNotice, duration = 5000) {

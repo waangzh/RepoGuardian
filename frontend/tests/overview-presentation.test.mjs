@@ -20,6 +20,8 @@ test("概览保留未知计数、真实限制及独立验证边界", async () =>
     incomplete.outcome.examined_goals = 2;
     incomplete.outcome.total_goals = 2;
     incomplete.outcome.dynamic_validation = "not_executed";
+    incomplete.outcome.reason_codes = ["investigation_incomplete"];
+    incomplete.outcome.incomplete_investigations = 1;
     incomplete.digest.merge_decision.limits = ["真实限制：关联返回值消费路径未核验"];
     const facts = overviewFacts(incomplete, null);
     assert.equal(facts.blockers, 0);
@@ -50,6 +52,18 @@ test("概览保留未知计数、真实限制及独立验证边界", async () =>
     assert.equal(overviewFacts(clean, null).boundaries[1].value, "存在已知限制", "静态验证边界不推断为证据缺口");
     clean.outcome.reason_codes = ["scope_incomplete"];
     assert.equal(overviewFacts(clean, null).boundaries[0].tone, "warning", "保留后端显式范围缺口");
+    const runtimeFacts = overviewFacts(fixtures.runtime_limits.summary, null);
+    assert.equal(runtimeFacts.boundaries[0].value, "1/1 项已检查");
+    assert.equal(runtimeFacts.boundaries[0].tone, "success");
+    assert.equal(runtimeFacts.boundaries[1].value, "运行或计量记录受限");
+    assert.equal(runtimeFacts.boundaries[1].tone, "warning");
+    const investigation = structuredClone(fixtures.runtime_limits.summary);
+    investigation.outcome.reason_codes = ["investigation_incomplete"];
+    investigation.outcome.review_completeness = "partial";
+    investigation.outcome.incomplete_investigations = 1;
+    const separate = overviewFacts(investigation, null);
+    assert.equal(separate.boundaries[0].description.includes("仍有约定目标未完整检查"), false);
+    assert.equal(separate.boundaries[1].value, "1 项调查未完成");
   } finally { await server.close(); }
 });
 
@@ -65,9 +79,10 @@ test("概览使用后端结构化理解，作者文本不能补造成代码观�
     fixture.summary.outcome.total_goals = 2;
     fixture.summary.outcome.review_completeness = "complete";
     fixture.summary.outcome.reason_codes = ["investigation_incomplete"];
+    fixture.summary.digest.merge_decision.unresolved_reasons = ["investigation_incomplete"];
     const props = { task: fixture.task, report: null, summaryPlan: fixture.summary, summary: null, findings: [], warnings: [], terminal: true };
     const html = await renderToString(createSSRApp(Overview, props));
-    for (const text of ["部分问题尚未核实，暂不能给出完整建议", "真实作者目标", "真实代码观察", "尚未确认下游契约", "作者声明 · 未独立验证", "结论依据与可信边界", "本轮审查快照"]) {
+    for (const text of ["存在未核实事项，暂不能给出完整建议", "真实作者目标", "真实代码观察", "尚未确认下游契约", "作者声明 · 未独立验证", "结论依据与可信边界", "本轮审查快照"]) {
       assert.ok(html.includes(text), text);
     }
     assert.ok(!html.includes("审查已通过"));

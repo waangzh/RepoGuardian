@@ -12,6 +12,8 @@ const props = defineProps<{
   plan: ReviewSummary | null;
   situation: ReviewSituation | null;
   execution: string;
+  summaryError?: boolean;
+  summaryLoading?: boolean;
 }>();
 const emit = defineEmits<{ navigate: [section: ReviewSection] }>();
 const explanationOpen = ref(false);
@@ -23,6 +25,7 @@ const technicalReasons = computed(() => [...new Set([
 const kicker = computed(() => ({
   clean: "已检查范围内无阻断问题", nonblocking: "有改进建议", blockers: "需要优先处理",
   evidence_gaps: "需要补充核实", scope_incomplete: "范围未完整覆盖",
+  runtime_limits: "运行记录需核对",
   stale: "PR 已更新", failed: "执行错误中断", cancelled: "用户已停止",
   validation_failed: "已有验证失败",
 })[props.situation?.key || "evidence_gaps"]);
@@ -36,8 +39,8 @@ function navigate(section: ReviewSection) {
   <section class="ov-panel ov-verdict" :data-tone="situation?.tone || 'info'" aria-labelledby="overview-conclusion">
     <div class="ov-verdict__inner">
       <div class="ov-verdict__kicker"><AppIcon :name="situation?.icon || 'info'" :size="18" />本轮结论 · {{ plan ? kicker : "摘要暂不可用" }}</div>
-      <h2 id="overview-conclusion">{{ situation?.title || "暂时无法形成完整结论" }}</h2>
-      <p class="ov-verdict__description">{{ situation?.description || "尚未取得后端审查摘要，请重试加载或查看技术记录。缺失数据不能视为零问题。" }}</p>
+      <h2 id="overview-conclusion">{{ situation?.title || (summaryLoading ? "正在读取审查结论" : summaryError ? "当前无法读取完整审查结论" : "暂时无法形成完整结论") }}</h2>
+      <p class="ov-verdict__description">{{ situation?.description || (summaryLoading ? "正在读取摘要，加载完成前不能判断合并建议。请稍候，或查看技术记录核对执行情况。" : "摘要缺失不代表零问题或审查失败，当前不能判断合并建议。请点击“重试加载摘要”，或查看技术记录核对执行情况。") }}</p>
       <p v-if="facts.limitations[0]" class="ov-verdict__limitation"><AppIcon name="info" :size="15" />{{ facts.limitations[0] }}</p>
       <div class="ov-verdict__bottom">
         <div class="ov-verdict__meta">

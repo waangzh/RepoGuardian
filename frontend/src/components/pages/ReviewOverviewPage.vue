@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed } from "vue";
 import type { ReviewTask } from "../../types/review";
 import type { ReviewSummary } from "../../types/publication";
 import type { RuntimeFindingRow, TaskRuntimeSummary } from "../../utils/taskRuntimePresentation";
@@ -22,32 +22,33 @@ const props = defineProps<{
   findings: RuntimeFindingRow[];
   warnings: string[];
   terminal: boolean;
+  stale?: boolean;
+  summaryError?: boolean;
+  summaryLoading?: boolean;
 }>();
 const emit = defineEmits<{
   navigate: [section: ReviewSection];
   finding: [key: string];
   file: [path: string];
   rereview: [];
+  snapshot: [status: "current" | "stale" | "unknown"];
+  action: [key: Exclude<SituationActionKey, "rereview">];
+  reload: [];
 }>();
 // 只采用显式快照检查的结果，页面加载不访问 GitHub 或假定 Head 仍是最新。
-const stale = ref(false);
-watch(() => props.task.id, () => { stale.value = false; });
-const situation = computed(() => reviewSituation(props.summaryPlan, { stale: stale.value }));
+const situation = computed(() => reviewSituation(props.summaryPlan, { stale: props.stale }));
 const execution = computed(() => runtimeLabel(props.summary?.execution.status || props.task.status));
 
 function runAction(key: SituationActionKey) {
-  if (["view_blockers", "view_unresolved", "view_findings", "view_retained"].includes(key)) emit("navigate", "findings");
-  else if (key === "view_gaps") emit("navigate", "scope");
-  else if (["view_validation", "view_activity", "view_error"].includes(key)) emit("navigate", "activity");
-  else if (key === "view_report") emit("navigate", "report");
-  else if (key === "rereview") emit("rereview");
+  if (key === "rereview") emit("rereview");
+  else emit("action", key);
 }
 </script>
 
 <template>
   <div class="rg-overview">
     <div class="ov-main">
-      <OverviewVerdict :plan="summaryPlan" :situation="situation" :execution="execution" @navigate="emit('navigate', $event)" />
+      <OverviewVerdict :plan="summaryPlan" :situation="situation" :execution="execution" :summary-error="summaryError" :summary-loading="summaryLoading" @navigate="emit('navigate', $event)" />
       <OverviewResults :plan="summaryPlan" :runtime="summary" :warnings="warnings" :stale="stale" @navigate="emit('navigate', $event)" />
       <section class="ov-panel ov-understanding" aria-labelledby="overview-understanding-title">
         <header class="ov-section-head">
@@ -57,6 +58,6 @@ function runAction(key: SituationActionKey) {
         <PrChangeSummary compact :task="task" :report="report" :understanding="summaryPlan?.digest.change_understanding" :author-limitation="summaryPlan?.digest.author_context_limitation" @file="emit('file', $event)" @evidence="emit('navigate', 'report')" />
       </section>
     </div>
-    <OverviewNextSteps :situation="situation" :plan="summaryPlan" :task="task" :execution="execution" @action="runAction" @navigate="emit('navigate', $event)" @snapshot="stale = $event === 'stale'" />
+    <OverviewNextSteps :situation="situation" :plan="summaryPlan" :task="task" :execution="execution" :summary-error="summaryError" :summary-loading="summaryLoading" @reload="emit('reload')" @action="runAction" @navigate="emit('navigate', $event)" @snapshot="emit('snapshot', $event)" />
   </div>
 </template>

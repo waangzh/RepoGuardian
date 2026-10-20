@@ -1,7 +1,7 @@
 """显式的报告建议策略；不授予 Approve 或合并权限。"""
 
 from app.models.publication import MergeDecision
-from app.services.publication_renderer import MERGE_LABELS, REASON_LABELS
+from app.services.publication_renderer import MERGE_LABELS, REASON_LABELS, review_limitation_kind, review_limitation_label
 
 _LIMITS = {
     "confirmed_findings_withheld": "仍有未通过发布准入的机器确认记录",
@@ -11,9 +11,6 @@ _LIMITS = {
     "head_validation_failed": "当前 Head 的已有验证记录为失败",
     "head_validation_unknown": "已有验证记录无法确定当前 Head 结果",
 }
-# 这些原因描述的是执行与审查边界，而不是代码本身存在缺陷。
-_BOUNDARY_REASONS = {"budget_exhausted", "deadline_exceeded", "usage_integrity_unknown",
-                     "termination_incomplete", "runtime_report_missing", "runtime_report_invalid"}
 
 
 def merge_decision(plan):
@@ -37,8 +34,8 @@ def merge_decision(plan):
     if plan.outcome.kind in {"failed", "cancelled"} or not plan.content_eligible:
         decision.status = "unavailable"
         # 失败与用户停止的原因不同，标签必须让读者知道为什么没有结论。
-        decision.label = {"failed": "审查因执行错误中断",
-                          "cancelled": "审查已由用户停止"}.get(
+        decision.label = {"failed": "审查因执行错误中断，已保留部分记录",
+                          "cancelled": "审查已停止，已保留停止前的记录"}.get(
                               plan.outcome.kind, MERGE_LABELS["unavailable"])
         return decision
     if blocking:
@@ -48,11 +45,28 @@ def merge_decision(plan):
                            "人工标记已处理不能代替新快照核验。")
     elif reasons:
         decision.status = "resolve_unknowns"
-        code_gaps = [reason for reason in reasons if reason not in _BOUNDARY_REASONS
-                     and not reason.startswith(("head_validation_", "author_context_"))]
-        decision.advice = ("当前审查存在足以影响决策的证据缺口；请先补齐下列事项。"
-                           if code_gaps else
-                           "当前审查的代码结论没有新增阻断项，但执行范围或验证记录仍有限制；补齐后再决定是否合并。")
+        if "head_validation_failed" in reasons:
+            decision.label = "当前版本存在验证失败记录，需检查原因"
+            decision.advice = "当前 Head 的已记录受控检查失败，请核对验证记录中的范围、来源与失败原因；不能将部分检查当作整个项目 CI。"
+            return decision
+        limitation = review_limitation_kind(plan.outcome, reasons)
+        decision.label = review_limitation_label(plan.outcome, reasons)
+        if limitation == "scope_incomplete":
+            if not plan.outcome.total_goals:
+                decision.label = "检查范围尚不明确"
+                decision.advice = "没有可用的约定目标记录，无法判断检查范围；请先补齐范围或重新审查。"
+            else:
+                decision.advice = (f"约定目标已检查 {plan.outcome.examined_goals}/{plan.outcome.total_goals} 项；"
+                    "请先核对并补查未完成范围，再决定是否合并。")
+        elif limitation == "evidence_gaps":
+            decision.advice = "仍有候选、关联调查或发布证据需要核对；请先核对限制说明并补齐代码或目标依据。"
+        elif limitation == "runtime_limits":
+            decision.advice = (f"约定静态目标已检查 {plan.outcome.examined_goals}/{plan.outcome.total_goals} 项；"
+                "执行、计量或验证记录仍有限制，请分别核对检查范围与运行记录。"
+                "运行或计量异常本身不代表发现代码缺陷，未知用量不能当作完整统计。")
+        else:
+            decision.advice = "尚无足够记录说明限制原因，请核对详细报告；不能据此判断代码存在缺陷或审查已完成。"
+        return decision
     elif suggestions:
         # 只有非阻断建议时不能与“无问题”共用同一句结论，否则读者无法区分是否还有事项要处理。
         decision.status = "conditional_merge"
@@ -61,7 +75,7 @@ def merge_decision(plan):
     elif plan.outcome.kind == "clean":
         decision.status = "conditional_merge"
         decision.advice = "在已检查范围内，本次静态审查没有发现需要阻止合并的问题；请结合 CI、审批和人工判断决定是否合并。"
-    decision.label = (MERGE_LABELS["conditional_merge_with_suggestions"]
-                      if decision.status == "conditional_merge" and suggestions
+    decision.label = (f"发现 {len(blocking)} 项高优先级问题，建议修复后再合并" if blocking
+                      else f"发现 {len(suggestions)} 项改进建议，未发现阻断性问题" if suggestions
                       else MERGE_LABELS[decision.status])
     return decision

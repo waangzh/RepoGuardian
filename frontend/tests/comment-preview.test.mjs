@@ -21,7 +21,7 @@ test('评论分节保留真实问题、选择说明、快照限制和历史正�
           for (const phrase of ['本次未包含的事项', '未通过发布准入', '已标记处理的阻断问题', '动态验证状态未知']) {
             if (value.review_comment_markdown.includes(phrase)) assert.ok(renderedBody.includes(phrase));
           }
-          assert.equal(document.sections.some(item => item.title === '审查范围'), value.detail === 'full');
+          assert.equal(renderedBody.includes('### 审查范围'), value.detail === 'full');
         }
       });
     }
@@ -57,6 +57,28 @@ ${verdict}
         assert.deepEqual(document.sections.slice(0, 4).map(item => item.title), ['变更概述', '已确认问题', '审查局限', '建议']);
         assert.ok(document.sections[0].markdown.includes('部分审查记录'));
       }
+    });
+    await t.test('阻断问题与建议分章计数，不将总问题数重复显示', async () => {
+      const value = variants.blockers['compact:false'];
+      const document = parseCommentPreview(value.review_comment_markdown);
+      assert.deepEqual(document.sections.map(item => item.title), ['阻断问题', '变更理解', '其他局限', '建议']);
+      const blockers = document.sections[0], suggestions = document.sections[3];
+      assert.equal(blockers.findingCount, 1);
+      assert.equal(suggestions.findingCount, 1);
+      assert.ok(!blockers.markdown.includes('缓存改进建议'));
+      assert.ok(suggestions.markdown.includes('缓存改进建议'));
+      const { createSSRApp } = await import('vue');
+      const { renderToString } = await import('@vue/server-renderer');
+      const { default: Preview } = await server.ssrLoadModule('/src/components/report/PrCommentPreview.vue');
+      const { default: Markdown } = await server.ssrLoadModule('/src/components/report/ReportMarkdown.vue');
+      const render = Markdown.ssrRender;
+      // 本测试只检查章节计数；正文清洗依赖浏览器 DOM，不在 Node 中执行。
+      Markdown.ssrRender = () => {};
+      try {
+        const html = await renderToString(createSSRApp(Preview, { content: value.review_comment_markdown, findingCount: 2 }));
+        assert.equal((html.match(/>1 项<\/span>/g) || []).length, 2);
+        assert.ok(!html.includes('>2 项</span>'));
+      } finally { Markdown.ssrRender = render; }
     });
     await t.test('旧版标题兼容，代码块与额外章节不丢失', () => {
       const markdown = 'RepoGuardian · PR Code Review\n\n❓ 结论：需要补充检查\n\n## 变更概述\n\n**实际变更：** 真实观察。\n\n## 发现的问题\n\n```md\n## 不能当成章节\n---\n```\n\n## 其他审查结果\n\n证据不足。\n\n## 额外说明\n\n保留额外段落。\n\n---\n\n本结论基于 Commit `head` 的只读静态审查。\n\nPR 已有新提交，仅适用于旧 Head。';

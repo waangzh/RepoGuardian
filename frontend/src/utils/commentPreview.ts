@@ -4,6 +4,7 @@ export interface CommentPreviewSection {
   title: string;
   markdown: string;
   findings: boolean;
+  findingCount?: number;
 }
 
 /** Split only the known delivery document; unknown or historical formats keep their full Markdown. */
@@ -51,5 +52,14 @@ export function parseCommentPreview(markdown: string) {
     }
   }
   if (!sections.length) return null;
+  for (const section of sections) {
+    if (!["阻断问题", "建议项", "建议"].includes(section.title)) continue;
+    const count = marked.lexer(section.markdown).filter(token => token.type === "paragraph"
+      && /^\*\*\[(Critical|High|Medium|Low)(?:\s|·|\])/.test(token.text)).length;
+    if (count || section.title !== "建议") {
+      section.findings = true;
+      section.findingCount = count;
+    }
+  }
   return { title, conclusion: match[2]!, positive: match[1] === '✅', sections, snapshot: snapshot.trim() };
 }

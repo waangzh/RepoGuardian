@@ -9,7 +9,7 @@ const statusLabels: Record<string, string> = {
   plan_exhausted: "计划处理结束", budget_exhausted: "预算耗尽", deadline: "运行超时",
   no_progress: "无进展停止", technical_failure: "技术失败", model_response_rejected: "模型输出未通过验收",
   cancelled: "已取消", running: "运行中",
-  completed: "本轮审查已结束", failed: "执行失败", published: "已发布（报告）",
+  completed: "审查执行已结束", failed: "执行失败", published: "已发布（报告）",
 };
 
 export interface TaskRuntimeSummary {

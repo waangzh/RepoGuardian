@@ -51,6 +51,9 @@ test("完整评论与单条评论共用快照、确认和请求生命周期边�
             assert.equal(c.state.pendingCopy.value.status, status);
             await c.state.copyAcknowledged(); await c.state.copyAcknowledged();
             assert.deepEqual(writes, [c.result(status).review_comment_markdown]);
+            assert.equal(c.state.copied.value, true);
+            assert.equal(c.state.headCheck.value.status, status, "复制成功不改变快照状态");
+            assert.equal(c.state.pendingCopy.value, null);
           } finally { c.scope.stop(); }
         });
       }
@@ -137,6 +140,22 @@ test("完整评论与单条评论共用快照、确认和请求生命周期边�
         assert.equal(c.state.copied.value, false); assert.match(c.state.feedback.value, /复制失败/);
         assert.equal(writes.length, 0);
       } finally { denyClipboard = false; c.scope.stop(); }
+    });
+    await t.test("未知快照重试保留原导出动作，取消后不能重放", async () => {
+      const c = setup(); const downloads = [];
+      try {
+        const first = c.state.checkedComment(text => downloads.push(text));
+        c.requests[0].resolve(c.result("unknown")); await first;
+        const retry = c.state.retryPending();
+        c.requests[1].resolve(c.result("current")); await retry;
+        assert.deepEqual(downloads, [c.result("current").review_comment_markdown]);
+        assert.deepEqual(writes, []);
+        const next = c.state.copyCheckedComment();
+        c.requests[2].resolve(c.result("unknown")); await next;
+        c.state.cancelPending(); await c.state.retryPending();
+        assert.equal(c.requests.length, 3);
+        assert.deepEqual(writes, []);
+      } finally { c.scope.stop(); }
     });
   } finally {
     if (previousNavigator) Object.defineProperty(globalThis, "navigator", previousNavigator);
