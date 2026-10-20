@@ -66,7 +66,7 @@ def test_compact_comment_is_publishable_and_does_not_repeat_boilerplate():
     assert "静态审查 · 未执行目标代码" not in compact
     assert compact.index("回归令牌校验缺失") < compact.index("本结论基于提交")
     # 评论沿用交付原型的四个章节，同时保留完整问题与快照。
-    assert compact.startswith("RepoGuardian · PR Code Review\n\n✅ 结论：未发现阻断性问题")
+    assert compact.startswith("RepoGuardian · PR Code Review\n\n✅ 结论：已检查范围内未发现阻断性问题")
     for heading in ("## 变更概述", "## 已确认问题", "## 审查局限", "## 建议"):
         assert heading in compact
     assert "非阻断问题" in compact
@@ -98,7 +98,7 @@ def test_delivery_comment_matches_prototype_and_keeps_validation_limits_truthful
     markdown = plan.review_comment_markdown
     for phrase in ("**PR 目标：** 修复空值异常。", "来源与验证边界", "不代表目标已实现", "**代码观察：**", "## 已确认问题",
                    "本轮没有达到发布证据门槛的已确认缺陷。", "## 审查局限", "不能将静态检查视作 CI 通过",
-                   "存在尚未验证的业务预期", "未发现已确认问题不等于代码无缺陷", "本结论基于提交"):
+                   "存在尚未验证的业务预期", "已检查范围内未发现需处理的问题，不等于代码无缺陷", "本结论基于提交"):
         assert phrase in markdown
     assert plan.outcome.confirmed_count == 0
     assert markdown.index("## 变更概述") < markdown.index("## 已确认问题") < markdown.index("## 审查局限")
@@ -200,7 +200,7 @@ def test_merge_decision_separates_code_blockers_from_runtime_limits():
     assert "修复上方阻断问题" not in bounded.user_report_markdown
     clean = PublicationPlanner().build(completed_task())
     assert clean.digest.merge_decision.status == "conditional_merge"
-    assert clean.digest.merge_decision.label == "未发现阻断性问题"
+    assert clean.digest.merge_decision.label == "已检查范围内未发现阻断性问题"
     assert clean.digest.merge_decision.limits == []
 
 
@@ -212,11 +212,11 @@ def test_failed_or_cancelled_copy_is_explicitly_a_partial_record():
     plan = PublicationPlanner().build(failed)
     assert plan.outcome.kind == "failed"
     for markdown in (plan.review_comment_markdown, render_review_comment(plan, detail="full")):
-        assert "审查未完成（部分审查记录）" in markdown
+        assert "审查因执行错误中断（部分审查记录）" in markdown
         assert "以下为执行失败前已保留的部分审查记录" in markdown
         # 不再复用正常审查的合并建议措辞。
         assert "需要补充检查" not in markdown.split("## 建议")[0]
-        assert "审查执行失败，以下建议不构成完整审查结论" in markdown
+        assert "审查因执行错误中断，以下建议不构成完整审查结论" in markdown
     assert "部分审查记录" in plan.summary_markdown
     assert "部分审查记录" not in PublicationPlanner().build(completed_task()).review_comment_markdown
 
@@ -226,6 +226,6 @@ def test_failed_or_cancelled_copy_is_explicitly_a_partial_record():
     plan = PublicationPlanner().build(cancelled)
     assert plan.outcome.kind == "cancelled"
     for markdown in (plan.review_comment_markdown, render_review_comment(plan, detail="full")):
-        assert "审查已取消（部分审查记录）" in markdown
-        assert "以下为取消前已保留的部分审查记录" in markdown
-        assert "审查已取消，以下建议仅基于停止前保留的记录" in markdown
+        assert "审查已由用户停止（部分审查记录）" in markdown
+        assert "以下为用户停止前已保留的部分审查记录" in markdown
+        assert "审查已由用户停止，以下建议仅基于停止前保留的记录" in markdown

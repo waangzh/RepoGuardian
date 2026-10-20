@@ -34,7 +34,7 @@ const depth = computed(() => props.task.confirmed_plan
         <button type="button" class="btn secondary" @click="emit('navigate', 'report')"><AppIcon name="report" :size="16" />阅读详细审查报告</button>
         <template v-if="situation?.copy && plan">
           <CopyCommentButton :review-id="task.id" :reviewed-head-sha="plan.snapshot.head_sha" :markdown="plan.review_comment_markdown || ''" :label="situation.copy.label" :primary="false" :partial="situation.copy.partial" @snapshot="emit('snapshot', $event)" />
-          <p>{{ situation.copy.partial ? "仅复制停止或失败前保留的部分审查记录。" : "复制前会核对 PR 当前 Head，内容仅适用于本次快照。" }}</p>
+          <p>{{ situation.copy.partial ? "仅复制用户停止或执行失败前保留的部分审查记录。" : "复制前会核对 PR 当前 Head，内容仅适用于本次快照。" }}</p>
         </template>
       </div>
     </section>

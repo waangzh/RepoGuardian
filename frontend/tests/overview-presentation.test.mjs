@@ -67,7 +67,7 @@ test("概览使用后端结构化理解，作者文本不能补造成代码观�
     fixture.summary.outcome.reason_codes = ["investigation_incomplete"];
     const props = { task: fixture.task, report: null, summaryPlan: fixture.summary, summary: null, findings: [], warnings: [], terminal: true };
     const html = await renderToString(createSSRApp(Overview, props));
-    for (const text of ["审查结论尚不充分", "真实作者目标", "真实代码观察", "尚未确认下游契约", "作者声明 · 未独立验证", "结论依据与可信边界", "本轮审查快照"]) {
+    for (const text of ["部分内容尚未核实，暂不能给出完整建议", "真实作者目标", "真实代码观察", "尚未确认下游契约", "作者声明 · 未独立验证", "结论依据与可信边界", "本轮审查快照"]) {
       assert.ok(html.includes(text), text);
     }
     assert.ok(!html.includes("审查已通过"));
@@ -80,6 +80,6 @@ test("概览使用后端结构化理解，作者文本不能补造成代码观�
     const unavailable = await renderToString(createSSRApp(Overview, props));
     assert.ok(unavailable.includes("暂时无法形成完整结论"));
     assert.ok(unavailable.includes("摘要未提供准确数量"));
-    assert.ok(!unavailable.includes("本次静态审查未发现需处理的问题"));
+    assert.ok(!unavailable.includes("已检查范围内未发现需处理的问题"));
   } finally { await server.close(); }
 });

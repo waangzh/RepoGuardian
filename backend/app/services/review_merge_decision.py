@@ -36,7 +36,10 @@ def merge_decision(plan):
                              limits=[_LIMITS.get(reason) or REASON_LABELS.get(reason, reason) for reason in reasons])
     if plan.outcome.kind in {"failed", "cancelled"} or not plan.content_eligible:
         decision.status = "unavailable"
-        decision.label = MERGE_LABELS["unavailable"]
+        # 失败与用户停止的原因不同，标签必须让读者知道为什么没有结论。
+        decision.label = {"failed": "审查因执行错误中断",
+                          "cancelled": "审查已由用户停止"}.get(
+                              plan.outcome.kind, MERGE_LABELS["unavailable"])
         return decision
     if blocking:
         decision.status = "fix_blockers"
@@ -53,10 +56,10 @@ def merge_decision(plan):
     elif suggestions:
         # 图片与业内常用做法只保留三态；已确认的 Medium/Low 属于非阻断建议，并入“未发现阻断性问题”。
         decision.status = "conditional_merge"
-        decision.advice = ("本次静态审查没有发现需要阻止合并的问题；请结合 CI、审批和人工判断决定是否合并。"
+        decision.advice = ("在已检查范围内，本次静态审查没有发现需要阻止合并的问题；请结合 CI、审批和人工判断决定是否合并。"
                            f"另有 {len(suggestions)} 项已确认的非阻断问题，建议评估影响后处理。")
     elif plan.outcome.kind == "clean":
         decision.status = "conditional_merge"
-        decision.advice = "本次静态审查没有发现需要阻止合并的问题；请结合 CI、审批和人工判断决定是否合并。"
+        decision.advice = "在已检查范围内，本次静态审查没有发现需要阻止合并的问题；请结合 CI、审批和人工判断决定是否合并。"
     decision.label = MERGE_LABELS[decision.status]
     return decision
