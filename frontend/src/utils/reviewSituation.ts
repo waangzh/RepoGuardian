@@ -72,7 +72,7 @@ const COPY_PARTIAL = { label: "复制部分审查记录", prominence: "secondary
 const EVIDENCE_REASONS = new Set([
   "verification_unresolved", "finding_status_unknown", "investigation_incomplete",
   "unscheduled_investigation", "confirmed_findings_withheld", "finding_severity_unknown",
-  "author_context_truncated", "author_context_unknown",
+  "author_context_truncated", "author_context_unknown", "historical_discussion_unresolved",
 ]);
 const RUNTIME_REASONS = new Set([
   "budget_exhausted", "deadline_exceeded", "usage_integrity_unknown", "termination_incomplete",
@@ -121,6 +121,7 @@ export function situationActionTarget(key: Exclude<SituationActionKey, "rereview
 }
 
 function evidenceTitle(outcome: ReviewOutcome, reasons: string[]): string {
+  if (reasons.includes("historical_discussion_unresolved")) return "历史讨论中的问题经代码核验仍存在，需先核对";
   if (outcome.unresolved_count > 0) return `${outcome.unresolved_count} 项问题尚未核实，暂不能给出完整建议`;
   if (outcome.incomplete_investigations > 0) return `${outcome.incomplete_investigations} 项关联调查尚未核实，暂不能给出完整建议`;
   if (reasons.some(reason => reason.startsWith("author_context_"))) return "作者声明范围尚待核对，暂不能给出完整建议";
@@ -195,11 +196,14 @@ export function reviewSituation(
     }
     if (limitation === "evidence_gaps") {
       const reasons = [...(outcome.reason_codes ?? []), ...(decision?.unresolved_reasons ?? [])];
+      const historical = reasons.includes("historical_discussion_unresolved");
       const action = unresolvedCount > 0 ? "view_unresolved"
         : outcome.incomplete_investigations > 0 || reasons.some(reason => ["investigation_incomplete", "unscheduled_investigation"].includes(reason))
           ? "view_investigations" : "view_report";
       return { ...counts, key: "evidence_gaps", title: titleOf(evidenceTitle(outcome, reasons)),
-        description: `未决事项不等于已确认代码缺陷，但会限制合并判断。请点击“${ACTION_META[action].label}”补齐代码或目标依据，再决定是否交付本轮记录。`,
+        description: historical
+          ? "历史复核已用当前固定代码确认部分既有问题仍然存在；它们不计入本轮 Diff 的新增问题，但会影响合并判断。请点击“查看完整报告”核对证据与影响范围。"
+          : `未决事项不等于已确认代码缺陷，但会限制合并判断。请点击“${ACTION_META[action].label}”补齐代码或目标依据，再决定是否交付本轮记录。`,
         tone: "warning", icon: "help",
         actions: actions(action, ...(unresolvedCount > 0 && outcome.incomplete_investigations > 0 ? ["view_investigations" as const] : []), "rereview"),
         copy: COPY_RECORD };

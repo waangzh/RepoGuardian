@@ -33,6 +33,9 @@ async def test_copy_check_binds_snapshot_keeps_human_annotations_and_network_unk
     body = result.json()
     assert body["status"] == expected and body["reviewed_head_sha"] == "a" * 40
     assert body["checked_at"] and body["review_id"] == task.id
+    assert body["preview_markdown"] == plan["review_comment_markdown"]
+    assert body["review_comment_markdown"].startswith(body["preview_markdown"])
+    assert "快照检查" not in body["preview_markdown"]
     # 正常状态只在正文保留一条简短 Commit 声明；过期或未知才追加检查说明。
     assert ("快照检查" in body["review_comment_markdown"]) is (expected != "current")
     assert body["review_comment_markdown"].count("Commit") == 1

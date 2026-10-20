@@ -15,7 +15,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator, model_serializer
 from app.models.review import (FileReadRequest, FileFindRequest, CodeSearchRequest,
                               FileReadDiffRequest, IssueCategory, Severity)
-from app.models.pr_discussion import DiscussionReadArguments, DiscussionMatch
+from app.models.pr_discussion import DiscussionReadArguments, DiscussionMatch, DiscussionUsage
 
 
 Revision = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$", min_length=40, max_length=40)]
@@ -479,6 +479,8 @@ class TaskRuntimeReport(BaseModel):
     total_tokens: int | None = Field(default=None, ge=0)
     work_items: list[dict] = Field(default_factory=list)
     diagnostics: list[dict] = Field(default_factory=list)
+    # 历史讨论补充阶段的独立计量；不改变上方当前 Diff 主审查的字段与完整性。
+    discussion_usage: DiscussionUsage | None = None
     pr_intent_context: str | None = Field(default=None, min_length=1, max_length=4_000)
     pr_intent_context_truncated: bool | None = Field(default=None, strict=True)
 
@@ -489,6 +491,8 @@ class TaskRuntimeReport(BaseModel):
             value.pop("pr_intent_context", None)
         if self.pr_intent_context_truncated is None:
             value.pop("pr_intent_context_truncated", None)
+        if self.discussion_usage is None:
+            value.pop("discussion_usage", None)
         return value
 
 

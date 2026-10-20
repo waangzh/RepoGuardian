@@ -319,6 +319,16 @@ async def prepare_discussions_node(state, runtime=None, config=None):
     return {"pr_discussion": await metadata(store), "run_budget": budget.snapshot(), **store_state(store)}
 
 
+def discussion_usage():
+    """历史讨论阶段的实际调用计量；与主审查的用量完整性分开记录。"""
+    from app.models.pr_discussion import DiscussionUsage
+    from app.services.review_run_budget import attempt_accounting, current_run_budget, is_discussion_attempt
+    budget = current_run_budget()
+    values = [] if budget is None else [
+        attempt for attempt in budget.attempts.values() if is_discussion_attempt(attempt)]
+    return DiscussionUsage(**attempt_accounting(values)) if values else DiscussionUsage()
+
+
 def stats_for(store, snapshot):
     """基于已读取并校验的 snapshot 计算统计；调用方不得为 stats 再读一次 artifact。"""
     used = store.data["used"]
@@ -331,7 +341,7 @@ def stats_for(store, snapshot):
         referenced=len(used), referenced_comments=len({c for ids in used.values() for c in ids}),
         checked=checked, unchecked=len(snapshot.threads) - checked,
         limitations=[*snapshot.limitations, *store.data.get("limitations", [])],
-        termination_reason=store.data.get("termination_reason"))
+        termination_reason=store.data.get("termination_reason"), usage=discussion_usage())
 
 
 async def metadata(store):

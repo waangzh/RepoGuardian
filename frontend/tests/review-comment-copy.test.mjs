@@ -24,13 +24,36 @@ test("完整评论与单条评论共用快照、确认和请求生命周期边�
         markdown: () => markdown.value, options: () => ({ detail: detail.value, exclude_resolved: exclude.value, finding_key: key.value }) }, load));
       function result(status = "current", update = {}) {
         return { review_id: "run", reviewed_head_sha: "a".repeat(40), latest_head_sha: status === "current" ? "a".repeat(40) : "d".repeat(40),
-          status, detail: "compact", checked_at: "2026-10-19T00:00:00Z", review_comment_markdown: `服务端最新正文 · 快照检查：${status}`,
+          status, detail: "compact", checked_at: "2026-10-19T00:00:00Z", preview_markdown: "旧预览正文",
+          review_comment_markdown: `旧预览正文 · 快照检查：${status}`,
           included_finding_keys: [key.value || "key-a"], omitted_finding_keys: [], retained_blocking_keys: [], ...update };
       }
       return { state, requests, scope, result, id, head, markdown, key, detail, exclude };
     }
 
     for (const single of [false, true]) {
+      for (const status of ["current", "stale", "unknown"]) {
+        await t.test(`${single ? "单条" : "完整"}评论 ${status} 正文改变先刷新预览，再次交付才执行动作`, async () => {
+          const c = setup(single); const deliveries = [];
+          try {
+            const update = { preview_markdown: "人工状态变化后的正文", review_comment_markdown: "人工状态变化后的正文 · 检查附注" };
+            const first = c.state.checkedComment(text => deliveries.push(text));
+            c.requests[0].resolve(c.result(status, update)); await first;
+            assert.equal(c.state.previewMarkdown.value, update.preview_markdown);
+            assert.match(c.state.feedback.value, /评论内容已更新，请重新确认/);
+            assert.equal(c.state.pendingCopy.value, null);
+            await c.state.copyAcknowledged(); await c.state.retryPending();
+            assert.deepEqual(deliveries, []); assert.deepEqual(writes, []);
+            const second = c.state.checkedComment(text => deliveries.push(text));
+            c.requests[1].resolve(c.result(status, update)); await second;
+            if (status !== "current") {
+              assert.deepEqual(deliveries, []);
+              await c.state.copyAcknowledged();
+            }
+            assert.deepEqual(deliveries, [update.review_comment_markdown]);
+          } finally { c.scope.stop(); }
+        });
+      }
       await t.test(`${single ? "单条" : "完整"}评论只复制服务端检查后的正文`, async () => {
         const c = setup(single);
         try {
@@ -58,6 +81,18 @@ test("完整评论与单条评论共用快照、确认和请求生命周期边�
         });
       }
     }
+    await t.test("旧接口无独立预览正文时也必须先确认变化，来源变化清除更新后的预览", async () => {
+      const c = setup();
+      try {
+        const copy = c.state.copyCheckedComment();
+        c.requests[0].resolve(c.result("current", { preview_markdown: undefined, review_comment_markdown: "新版正文" }));
+        await copy;
+        assert.deepEqual(writes, []); assert.equal(c.state.previewMarkdown.value, "新版正文");
+        c.markdown.value = "来源再次刷新";
+        assert.equal(c.state.previewMarkdown.value, "来源再次刷新");
+        assert.equal(c.state.headCheck.value, null);
+      } finally { c.scope.stop(); }
+    });
 
     for (const update of [{ review_id: "other" }, { reviewed_head_sha: "b".repeat(40) }, { latest_head_sha: "b".repeat(40) },
       { detail: "full" }, { included_finding_keys: ["key-b"] }, { review_comment_markdown: "" }, { status: "future" }]) {

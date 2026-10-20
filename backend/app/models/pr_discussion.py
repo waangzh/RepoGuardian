@@ -94,6 +94,15 @@ class DiscussionMatch(BaseModel):
     reason: str = Field(min_length=1, max_length=2_000)
 
 
+class DiscussionUsage(BaseModel):
+    """历史讨论补充阶段的独立计量；不计入当前 Diff 主审查的用量完整性。"""
+    sent_calls: int = Field(default=0, ge=0)
+    settled_tokens: int = Field(default=0, ge=0)
+    unknown_attempts: int = Field(default=0, ge=0)
+    usage_integrity: Literal["not_recorded", "complete", "unknown"] = "not_recorded"
+    total_tokens: int | None = Field(default=None, ge=0)
+
+
 class DiscussionStats(BaseModel):
     status: Literal["not_recorded", "complete", "partial", "unavailable"] = "not_recorded"
     collected: int = 0
@@ -104,10 +113,12 @@ class DiscussionStats(BaseModel):
     unchecked: int = 0
     limitations: list[str] = Field(default_factory=list)
     termination_reason: str | None = None
+    usage: DiscussionUsage = Field(default_factory=DiscussionUsage)
 
 
 class DiscussionRecheck(BaseModel):
     discussion_id: str
+    path: str | None = None
     status: Literal["still_present", "not_present", "fixed", "insufficient_evidence", "not_checked", "background"]
     reason: str
     evidence_ids: list[str] = Field(default_factory=list)

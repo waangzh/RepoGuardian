@@ -1,10 +1,17 @@
+export interface DiscussionUsage {
+  sent_calls: number; settled_tokens: number; unknown_attempts: number;
+  usage_integrity: "not_recorded" | "complete" | "unknown"; total_tokens: number | null;
+}
 export interface DiscussionStats {
   status: "not_recorded" | "complete" | "partial" | "unavailable";
   collected: number; comments: number; referenced: number; referenced_comments: number;
   checked: number; unchecked: number; limitations: string[]; termination_reason: string | null;
+  /** 历史讨论阶段的独立计量；不计入主审查的用量完整性。 */
+  usage?: DiscussionUsage;
 }
 export interface DiscussionRecheck {
   discussion_id: string;
+  path?: string | null;
   status: "still_present" | "not_present" | "fixed" | "insufficient_evidence" | "not_checked" | "background";
   reason: string; evidence_ids: string[]; limitations: string[];
 }

@@ -110,3 +110,50 @@ def test_incomplete_investigation_does_not_invent_abnormal_termination():
 def test_abnormal_runtime_is_not_hidden_by_completed_task_label(execution, termination):
     outcome = derive_review_outcome(completed_task(execution_status=execution, termination_reason=termination))
     assert "termination_incomplete" in outcome.reason_codes and outcome.runtime_reliability == "unreliable"
+
+
+def discussion(stats=None, rechecks=None):
+    return {"stats": {"status": "complete", "collected": 2, "comments": 3, "referenced": 2,
+                      "referenced_comments": 2, "checked": 1, "unchecked": 1, "limitations": [],
+                      "termination_reason": "plan_exhausted", **(stats or {})},
+            "rechecks": rechecks or []}
+
+
+def test_historical_discussion_timeout_and_usage_never_degrade_completed_primary_review():
+    task = completed_task()
+    task.pr_discussion = discussion({"termination_reason": "deadline", "checked": 1, "unchecked": 1,
+        "limitations": ["history_recheck:deadline"],
+        "usage": {"sent_calls": 1, "settled_tokens": 0, "unknown_attempts": 1,
+                  "usage_integrity": "unknown", "total_tokens": None}},
+        [{"discussion_id": "inline:1", "status": "not_checked", "reason": "超时"}])
+    outcome = derive_review_outcome(task)
+    # 主审查结论保持 clean；补充阶段的超时与未知计量只出现在独立字段。
+    assert outcome.kind == "clean" and outcome.reason_codes == []
+    assert outcome.review_completeness == "complete" and outcome.runtime_reliability == "reliable"
+    assert outcome.historical_discussion.status == "timed_out"
+    assert outcome.historical_discussion.usage["usage_integrity"] == "unknown"
+    assert outcome.historical_discussion.affects_risk is False
+
+
+def test_only_code_verified_historical_defect_affects_overall_risk():
+    task = completed_task()
+    task.pr_discussion = discussion(rechecks=[
+        {"discussion_id": "inline:1", "path": "src/a.py", "status": "still_present",
+         "reason": "当前实现仍返回空值", "evidence_ids": ["e1"], "limitations": []},
+        {"discussion_id": "inline:2", "status": "not_checked", "reason": "未核验"}])
+    outcome = derive_review_outcome(task)
+    assert outcome.kind == "inconclusive"
+    assert "historical_discussion_unresolved" in outcome.reason_codes
+    # 历史证据不改变当前 Diff 的范围完整性与运行可靠性。
+    assert outcome.review_completeness == "complete" and outcome.runtime_reliability == "reliable"
+    assert outcome.historical_discussion.affects_risk is True
+    assert [item["discussion_id"] for item in outcome.historical_discussion.verified_defects] == ["inline:1"]
+
+
+def test_unverified_historical_claim_without_evidence_does_not_affect_risk():
+    task = completed_task()
+    task.pr_discussion = discussion(rechecks=[
+        {"discussion_id": "inline:1", "status": "still_present", "reason": "无证据自述",
+         "evidence_ids": [], "limitations": []}])
+    outcome = derive_review_outcome(task)
+    assert outcome.kind == "clean" and outcome.historical_discussion.affects_risk is False

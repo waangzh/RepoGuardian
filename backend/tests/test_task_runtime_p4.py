@@ -612,17 +612,21 @@ async def test_outer_deadline_during_discussion_recheck_marks_usage_unknown(pers
 
     saved = repository.get_task("run")
     assert saved.status == TaskStatus.completed_with_warnings
-    assert saved.task_runtime_report["termination_reason"] == "deadline"
-    assert saved.task_runtime_report["usage_integrity"] != "complete"
-    assert saved.task_runtime_report["unknown_attempts"] >= 1
-    assert saved.task_runtime_report["total_tokens"] is None
-    assert saved.task_runtime_report["scope_complete"] is True  # 主审查范围没有被降级
+    # 主审查已完成：期限只中断了补充性历史复核，不能把主结论改写为 deadline/unknown。
+    assert saved.task_runtime_report["execution_status"] == "completed"
+    assert saved.task_runtime_report["termination_reason"] == "plan_exhausted"
+    assert saved.task_runtime_report["usage_integrity"] == "complete"
+    assert saved.task_runtime_report["scope_complete"] is True
+    # 复核阶段的未知用量单独记录，不混入主审查计量。
+    usage = saved.task_runtime_report["discussion_usage"]
+    assert usage["unknown_attempts"] >= 1 and usage["usage_integrity"] == "unknown"
     assert saved.pr_discussion and saved.pr_discussion["stats"]["termination_reason"] != "journal_unavailable_after_deadline"
     # 已完成的复核结果从日志恢复，不能因期限中断丢失。
     assert [item["status"] for item in saved.pr_discussion["rechecks"]] == ["still_present"]
-    # 技术记录中的运行计量必须反映 unknown，不能沿用主审查的 complete。
-    assert '"usage_integrity": "unknown"' in saved.report_markdown
-    assert '"termination_reason": "deadline"' in saved.report_markdown
+    # 技术审计保留补充阶段的独立未知计量，且不冒充主审查结论。
+    assert '"discussion_usage"' in saved.report_markdown
+    assert '"usage_integrity": "unknown"' in saved.report_markdown.split('"discussion_usage"', 1)[1]
+    assert saved.pr_discussion["stats"]["usage"]["usage_integrity"] == "unknown"
 
 
 async def _async_none():

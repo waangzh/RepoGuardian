@@ -50,6 +50,13 @@ def merge_decision(plan):
             return decision
     elif reasons:
         decision.status = "resolve_unknowns"
+        if "historical_discussion_unresolved" in reasons:
+            # 历史复核只在取得独立代码证据时进入这里；这是已核验的风险，
+            # 不是“未核实事项”，措辞必须与证据缺口区分。
+            decision.label = "历史讨论中的问题经代码核验仍存在，需先核对"
+            decision.advice = ("历史复核确认部分既有问题在当前固定代码中仍然成立；"
+                "它们不属于本轮 Diff 新增问题，但会影响合并判断。请核对证据、影响范围与修复状态后再决定是否合并。")
+            return decision
         if "head_validation_failed" in reasons:
             decision.label = "当前版本存在验证失败记录，需检查原因"
             decision.advice = "当前 Head 的已记录受控检查失败，请核对验证记录中的范围、来源与失败原因；不能将部分检查当作整个项目 CI。"

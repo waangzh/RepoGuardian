@@ -28,6 +28,7 @@ REASON_LABELS = {
     "unscheduled_investigation": "仍有未处理的调查线索", "usage_integrity_unknown": "模型请求计量不完整或不一致",
     "snapshot_missing": "审查快照缺失或身份无效", "runtime_report_missing": "缺少任务运行报告",
     "runtime_report_invalid": "任务运行报告格式无效", "unsupported_legacy_projection": "历史引擎不支持此发布协议，请查看原始审计报告",
+    "historical_discussion_unresolved": "历史讨论复核确认原问题在当前代码中仍存在，需核对",
 }
 # 对外只保留三种合并建议；review_suggestions 仅为旧冻结计划兼容。
 MERGE_LABELS = {
@@ -51,7 +52,7 @@ INCOMPLETE_LABELS = {
 _EVIDENCE_REASONS = {
     "verification_unresolved", "finding_status_unknown", "investigation_incomplete",
     "unscheduled_investigation", "confirmed_findings_withheld", "finding_severity_unknown",
-    "author_context_truncated", "author_context_unknown",
+    "author_context_truncated", "author_context_unknown", "historical_discussion_unresolved",
 }
 _RUNTIME_REASONS = {
     "budget_exhausted", "deadline_exceeded", "usage_integrity_unknown", "termination_incomplete",
@@ -393,10 +394,25 @@ def discussion_report_lines(plan, task=None):
     stats = plan.digest.discussion_stats
     if stats is None:
         return ["", "## 历史讨论复核", "", "未记录历史讨论，不能推断该 PR 没有讨论。"]
+    history = plan.outcome.historical_discussion
+    status_labels = {"completed": "复核完成", "partial": "复核未完整完成", "timed_out": "复核超时中断",
+                     "unavailable": "复核记录不可用", "not_recorded": "未记录"}
     lines = ["", "## 历史讨论复核", "",
+        f"复核状态：{status_labels.get(history.status, '未知')}；"
         f"已参考 {stats['referenced']} 项相关讨论／包含 {stats['referenced_comments']} 条评论；"
         f"已采集 {stats['collected']} 项，已核验 {stats['checked']} 项，未核验 {stats['unchecked']} 项。",
-        "本节独立于当前 Diff 的审查结论与覆盖率；平台已解决和作者修复声明不是代码证据。"]
+        "本节独立于当前 Diff 的审查结论与覆盖率；平台已解决和作者修复声明不是代码证据。"
+        "历史复核的超时或计量缺失不改变已完成的主审查结论。"]
+    usage = history.usage or {}
+    if usage.get("sent_calls"):
+        lines.append(f"复核调用：{usage.get('sent_calls')} 次；已结算 {usage.get('settled_tokens', 0)} tokens；"
+                     f"未知用量 {usage.get('unknown_attempts', 0)} 次（单独记录，不计入主审查计量）。")
+    if history.verified_defects:
+        lines.append("经独立代码核验确认仍存在的问题：")
+        for item in history.verified_defects:
+            location = markdown_text(item.get("path") or "未记录文件", 500)
+            lines.append(f"- {markdown_text(str(item.get('discussion_id')), 200)}（{location}）："
+                         + markdown_text(item.get("reason") or "未记录原因"))
     labels = {"still_present": "问题仍存在", "not_present": "当前快照中该主张不成立", "fixed": "已核验修复",
               "insufficient_evidence": "证据不足", "not_checked": "未核验", "background": "背景说明"}
     for item in plan.digest.discussion_rechecks:
@@ -513,6 +529,23 @@ def _comment_finding_lines(plan, finding, index, view, *, full):
     return lines
 
 
+def _comment_history_lines(plan):
+    """历史状态独立呈现；平台 resolved 和人工注记均不等于代码修复。"""
+    represented = {match.get("discussion_id") for finding in _ordered_findings(plan)
+                   for match in finding.discussion_matches}
+    lines = []
+    for item in plan.digest.discussion_rechecks:
+        status = item.get("status")
+        if status in {"fixed", "not_present", "background"} or item.get("discussion_id") in represented:
+            continue
+        identity = item.get("discussion_id") or "未记录"
+        url = plan.digest.discussion_links.get(identity)
+        source = f"[历史讨论]({url})" if url else f"历史讨论 {markdown_text(identity)}"
+        label = "复核仍存在" if status == "still_present" else "待核实，不能判断已修复"
+        lines.append(f"- {source}：{label}；{markdown_text(item.get('reason') or '缺少充分代码证据', 240)}。")
+    return lines
+
+
 def _comment_location(plan, finding) -> str:
     """评论正文中的位置行；有严格解析的 PR 身份时使用不可变快照链接。"""
     label = _finding_location_text(finding)
@@ -549,6 +582,7 @@ def _comment_other_results(plan, *, omitted, retained, withheld, full, title="�
     if withheld:
         entries.append(f"- 另有 {withheld} 项机器确认记录未通过发布准入，详见完整报告；"
                        "当前评论未将其描述为已核验问题。")
+    entries += _comment_history_lines(plan)
     if full:
         source = _author_source_lines(plan)
         if source:
@@ -576,9 +610,9 @@ def comment_selection(plan, *, exclude_resolved=False, include_discussed=False):
     findings = _ordered_findings(plan)
     resolved = {item.id for item in plan.digest.findings if item.disposition and item.disposition.status == "resolved"}
     blockers = set(plan.digest.merge_decision.blocking_finding_keys)
-    omitted = [item for item in findings if (not include_discussed and not item.default_selected)
-               or (exclude_resolved and item.finding_key in resolved
-                   and item.severity in {"medium", "low"} and item.finding_key not in blockers)]
+    # 行内发布的默认选择不决定完整评论是否披露当前风险。
+    omitted = [item for item in findings if exclude_resolved and item.finding_key in resolved
+               and item.severity in {"medium", "low"} and item.finding_key not in blockers]
     omitted_keys = {item.finding_key for item in omitted}
     included = [item for item in findings if item.finding_key not in omitted_keys]
     retained = [item.finding_key for item in included if exclude_resolved and item.finding_key in resolved
@@ -620,8 +654,8 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False, inc
         stats = plan.digest.discussion_stats
         lines += [f"当前结论针对本轮变更范围；已参考 {stats['referenced']} 项历史讨论，"
                   f"另有 {stats['unchecked']} 项历史事项未核验。", ""]
-    if any(not item.default_selected for item in omitted):
-        lines += ["部分已确认风险已有历史讨论，本次默认不重复列出；风险统计与合并建议仍保留。", ""]
+    if any(item.default_selection_reason == "historical_duplicate" for item in included):
+        lines += ["已有历史讨论的当前问题仍保留风险摘要；已有讨论不代表已修复。", ""]
     note = partial_review_note(plan)
     if note:
         lines += [note, ""]
@@ -639,9 +673,19 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False, inc
     def finding_section(findings, title):
         result = ["", f"## {title}", ""]
         for index, finding in enumerate(findings, 1):
+            discussed = finding.default_selection_reason == "historical_duplicate"
             needs_evidence = (full or finding.severity in {"high", "critical"}
                 or finding.finding_key in blockers)
+            if discussed and not include_discussed and not full:
+                needs_evidence = False
             result += _comment_finding_lines(plan, finding, index, views.get(finding.finding_key), full=needs_evidence)
+            if discussed:
+                from app.services.pr_discussion_matching import safe_discussion_url
+
+                urls = [safe for url in finding.discussion_urls
+                        if (safe := safe_discussion_url(url, plan.digest.pr_url))]
+                links = "、".join(f"[历史讨论 {i}]({url})" for i, url in enumerate(urls, 1))
+                result += ["当前快照仍确认此问题。" + (f"已有讨论：{links}。" if links else "未保存可用的历史讨论链接。"), ""]
         return result
 
     scope_lines = []
@@ -674,7 +718,7 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False, inc
         lines += ["", *_comment_change_overview(plan, title="变更理解")]
         lines += finding_section(suggestions, "建议项")
         if not suggestions:
-            lines += ["已处理的非阻断建议已按本次选择省略；省略明细见下方局限。", ""]
+            lines += ["人工标记已处理的非阻断建议已按本次选择省略；这不代表机器重新核验通过，明细见下方局限。", ""]
         lines += next_steps
         lines += limitations("局限")
     elif incomplete:

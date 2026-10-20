@@ -15,6 +15,20 @@ export interface ReviewOutcome {
   review_completeness: CoverageKind;
   runtime_reliability: "reliable" | "unreliable" | "unknown";
   dynamic_validation: "not_executed" | "passed" | "failed" | "independent_results" | "unknown";
+  /** 历史讨论复核的独立结果；其超时或计量缺失不影响上方主审查字段。 */
+  historical_discussion?: HistoricalDiscussionOutcome;
+}
+
+export interface HistoricalDiscussionOutcome {
+  status: "not_recorded" | "completed" | "partial" | "timed_out" | "unavailable";
+  collected: number;
+  checked: number;
+  unchecked: number;
+  verified_defects: { discussion_id: string | null; path: string | null; reason: string | null; evidence_ids: string[] }[];
+  termination_reason: string | null;
+  limitations: string[];
+  usage: Record<string, unknown>;
+  affects_risk: boolean;
 }
 
 export interface DigestGoal {
@@ -46,6 +60,7 @@ export interface ChangeUnderstanding {
 export interface ReviewDigest {
   discussion_stats?: import("./prDiscussion").DiscussionStats | null;
   discussion_rechecks?: import("./prDiscussion").DiscussionRecheck[];
+  discussion_links?: Record<string, string>;
   pr_url?: string | null;
   author_goal?: string | null;
   author_context_status?: "complete" | "truncated" | "unknown" | "not_recorded";
@@ -197,6 +212,7 @@ export interface ReviewCommentCheck {
   latest_head_sha: string | null;
   checked_at: string;
   review_comment_markdown: string;
+  preview_markdown?: string | null;
   included_finding_keys: string[];
   omitted_finding_keys: string[];
   retained_blocking_keys: string[];

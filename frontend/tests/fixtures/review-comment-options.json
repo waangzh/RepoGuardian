@@ -11,7 +11,7 @@
     },
     "compact:true": {
       "detail": "compact",
-      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n✅ 结论：发现 1 项改进建议，未发现阻断性问题\n\n## 变更理解\n\n**代码观察：** 根据已绑定证据的局部检查，代码行为表现为：src/a\\.py：固定源码检查。\n\n## 建议项\n\n已处理的非阻断建议已按本次选择省略；省略明细见下方局限。\n\n结合 CI、业务预期和人工评审决定是否合并。已检查范围内未发现需处理的问题，不等于代码无缺陷。\n\n## 局限\n\n**本次未包含的事项（人工标记已处理，不代表机器重新核验通过）：**\n- [medium] 空返回值破坏调用方契约；src/a\\.py:7（head）\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
+      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n✅ 结论：发现 1 项改进建议，未发现阻断性问题\n\n## 变更理解\n\n**代码观察：** 根据已绑定证据的局部检查，代码行为表现为：src/a\\.py：固定源码检查。\n\n## 建议项\n\n人工标记已处理的非阻断建议已按本次选择省略；这不代表机器重新核验通过，明细见下方局限。\n\n结合 CI、业务预期和人工评审决定是否合并。已检查范围内未发现需处理的问题，不等于代码无缺陷。\n\n## 局限\n\n**本次未包含的事项（人工标记已处理，不代表机器重新核验通过）：**\n- [medium] 空返回值破坏调用方契约；src/a\\.py:7（head）\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
       "included_finding_keys": [],
       "omitted_finding_keys": [
         "key-a"
@@ -29,7 +29,7 @@
     },
     "full:true": {
       "detail": "full",
-      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n✅ 结论：发现 1 项改进建议，未发现阻断性问题\n\n## 变更理解\n\n**代码观察：** 根据已绑定证据的局部检查，代码行为表现为：src/a\\.py：固定源码检查。\n\n## 建议项\n\n已处理的非阻断建议已按本次选择省略；省略明细见下方局限。\n\n结合 CI、业务预期和人工评审决定是否合并。已检查范围内未发现需处理的问题，不等于代码无缺陷。\n\n## 局限\n\n**本次未包含的事项（人工标记已处理，不代表机器重新核验通过）：**\n- [medium] 空返回值破坏调用方契约；src/a\\.py:7（head）\n\n### 审查范围\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
+      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n✅ 结论：发现 1 项改进建议，未发现阻断性问题\n\n## 变更理解\n\n**代码观察：** 根据已绑定证据的局部检查，代码行为表现为：src/a\\.py：固定源码检查。\n\n## 建议项\n\n人工标记已处理的非阻断建议已按本次选择省略；这不代表机器重新核验通过，明细见下方局限。\n\n结合 CI、业务预期和人工评审决定是否合并。已检查范围内未发现需处理的问题，不等于代码无缺陷。\n\n## 局限\n\n**本次未包含的事项（人工标记已处理，不代表机器重新核验通过）：**\n- [medium] 空返回值破坏调用方契约；src/a\\.py:7（head）\n\n### 审查范围\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
       "included_finding_keys": [],
       "omitted_finding_keys": [
         "key-a"

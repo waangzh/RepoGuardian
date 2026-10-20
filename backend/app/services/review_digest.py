@@ -15,7 +15,7 @@ _EXECUTION_KEYS = (
     "execution_status", "termination_reason", "usage_integrity", "sent_calls", "settled_tokens",
     "unknown_attempts", "total_tokens", "work_items", "diagnostics", "relationship_hints",
     "initial_scope_coverage", "admitted_investigations", "unscheduled_leads", "findings",
-    "failure_summary", "coverage_version",
+    "failure_summary", "coverage_version", "discussion_usage",
 )
 _SORTED_KEYS = ("initial_scope_coverage", "admitted_investigations", "unscheduled_leads",
                 "relationship_hints", "findings")

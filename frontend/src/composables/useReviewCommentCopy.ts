@@ -1,4 +1,4 @@
-import { onScopeDispose, ref, watch } from "vue";
+import { computed, onScopeDispose, ref, watch } from "vue";
 import { checkReviewComment } from "../api/client";
 import type { ReviewCommentCheck, ReviewCommentOptions } from "../types/publication";
 
@@ -15,6 +15,8 @@ export function useReviewCommentCopy(source: CommentSource, load = checkReviewCo
   const checking = ref(false);
   const pendingCopy = ref<ReviewCommentCheck | null>(null);
   const headCheck = ref<ReviewCommentCheck | null>(null);
+  const updatedPreview = ref<string | null>(null);
+  const previewMarkdown = computed(() => updatedPreview.value ?? source.markdown());
   let pendingAction: ((content: string) => Promise<void> | void) | null = null;
   let controller: AbortController | null = null;
   let revision = 0;
@@ -26,7 +28,7 @@ export function useReviewCommentCopy(source: CommentSource, load = checkReviewCo
   }
   watch([source.reviewId, source.reviewedHeadSha, source.markdown, () => source.options().detail,
     () => source.options().exclude_resolved, () => source.options().include_discussed,
-    () => source.options().finding_key], resetCopy, { flush: "sync" });
+    () => source.options().finding_key], () => { updatedPreview.value = null; resetCopy(); }, { flush: "sync" });
   onScopeDispose(resetCopy);
 
   async function writeClipboard(content: string) {
@@ -45,6 +47,7 @@ export function useReviewCommentCopy(source: CommentSource, load = checkReviewCo
     const id = source.reviewId();
     const head = source.reviewedHeadSha() ?? null;
     const options = { ...source.options() };
+    const expectedMarkdown = previewMarkdown.value;
     if (!id) { feedback.value = "缺少审查身份，无法检查复制快照。"; return; }
     resetCopy();
     const request = new AbortController();
@@ -61,6 +64,14 @@ export function useReviewCommentCopy(source: CommentSource, load = checkReviewCo
           || (options.finding_key && (result.included_finding_keys?.length !== 1 || result.included_finding_keys[0] !== options.finding_key))
           || (result.status === "current" && (!head || result.latest_head_sha !== head))) throw new Error("快照或所选问题不匹配");
       headCheck.value = result;
+      const latestPreview = result.preview_markdown ?? result.review_comment_markdown;
+      if (typeof latestPreview !== "string" || !latestPreview) throw new Error("评论正文无效");
+      // 逐字比较比摘要比较更严格；快照附注不参与，避免检查时点使正文永远变化。
+      if (latestPreview !== expectedMarkdown) {
+        updatedPreview.value = latestPreview;
+        feedback.value = "评论内容已更新，请重新确认；预览已刷新，尚未复制或导出。";
+        return;
+      }
       if (checkOnly) {
         feedback.value = result.status === 'current' ? 'PR Head 与本次审查快照一致；交付时将再次检查。'
           : result.status === 'stale' ? 'PR 已更新，本轮结论不适用于最新提交；建议重新审查。' : '暂时无法确认 PR 是否有新提交。请点击“重试检查”；本轮记录不能作为当前版本结论。';
@@ -93,6 +104,6 @@ export function useReviewCommentCopy(source: CommentSource, load = checkReviewCo
   }
   function cancelPending() { pendingCopy.value = null; pendingAction = null; }
   const checkHead = () => checkedComment(() => {}, true);
-  return { copied, feedback, checking, pendingCopy, headCheck, checkHead, cancelPending, resetCopy, writeClipboard, checkedComment,
+  return { copied, feedback, checking, pendingCopy, headCheck, previewMarkdown, checkHead, cancelPending, resetCopy, writeClipboard, checkedComment,
     copyCheckedComment, copyAcknowledged, retryPending };
 }

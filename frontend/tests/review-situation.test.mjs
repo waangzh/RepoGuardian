@@ -88,6 +88,40 @@ test("结果概览情景矩阵与主要操作", async () => {
   } finally { await server.close(); }
 });
 
+// 历史复核是补充结果：超时或计量缺失不得把已完成的主审查显示为运行限制。
+test("历史讨论复核的独立状态不改变主审查情景", async () => {
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  try {
+    const { reviewSituation } = await server.ssrLoadModule("/src/utils/reviewSituation.ts");
+    const clean = { outcome: { kind: "clean", confirmed_count: 0, unresolved_count: 0, examined_goals: 10, total_goals: 10,
+      incomplete_investigations: 0, reason_codes: [], dynamic_validation: "not_executed", review_completeness: "complete",
+      runtime_reliability: "reliable",
+      historical_discussion: { status: "timed_out", collected: 2, checked: 1, unchecked: 1, verified_defects: [],
+        termination_reason: "deadline", limitations: ["history_recheck:deadline"],
+        usage: { sent_calls: 1, settled_tokens: 0, unknown_attempts: 1, usage_integrity: "unknown", total_tokens: null },
+        affects_risk: false } },
+      digest: { merge_decision: { status: "conditional_merge", blocking_finding_keys: [], nonblocking_finding_keys: [] } } };
+    const situation = reviewSituation(clean);
+    assert.equal(situation.key, "clean");
+    assert.equal(situation.title, "已检查范围内未发现需处理的问题");
+
+    // 只有经独立代码核验确认仍存在的历史问题才进入证据缺口情景。
+    const affected = structuredClone(clean);
+    affected.outcome.kind = "inconclusive";
+    affected.outcome.reason_codes = ["historical_discussion_unresolved"];
+    affected.outcome.historical_discussion.status = "completed";
+    affected.outcome.historical_discussion.affects_risk = true;
+    affected.outcome.historical_discussion.verified_defects = [{ discussion_id: "inline:1", path: "src/a.py",
+      reason: "当前实现仍返回空值", evidence_ids: ["e1"] }];
+    affected.digest.merge_decision.status = "resolve_unknowns";
+    const verified = reviewSituation(affected);
+    assert.equal(verified.key, "evidence_gaps");
+    assert.equal(verified.title, "历史讨论中的问题经代码核验仍存在，需先核对");
+    assert.match(verified.description, /已用当前固定代码确认/);
+    assert.doesNotMatch(verified.description, /未决事项不等于已确认代码缺陷/);
+  } finally { await server.close(); }
+});
+
 test("缺口按实际原因区分，混合限制和旧记录不伪装成代码缺陷", async () => {
   const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   try {
