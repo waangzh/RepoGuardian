@@ -342,7 +342,7 @@ def _appendix_lines(plan, task):
         lines += ["", "未进入发布正文的记录：", *[
             f"- {markdown_text(item.candidate_id, 160)}：{markdown_text(item.reason_code)}"
             for item in plan.withheld_findings]]
-    lines += ["", "运行过程与证据追踪请查看技术记录；此 Markdown 不代表全部原始事件。"]
+    lines += ["", "运行过程与证据追踪请查看技术审计导出；此 Markdown 不代表全部原始事件。"]
     return lines
 
 
@@ -432,7 +432,7 @@ def _risk_section(plan):
     else:
         lines += items
     if plan.digest.investigations_known and len(pending) > 5:
-        lines.append(f"- 另有 {len(pending) - 5} 项未决调查，完整记录见技术记录。")
+        lines.append(f"- 另有 {len(pending) - 5} 项未决调查，完整记录见技术审计导出。")
     answered = [item for item in plan.digest.investigations if item.answer != "unresolved"]
     if answered:
         lines += ["", "### 关键调查摘要", ""]
@@ -442,7 +442,7 @@ def _risk_section(plan):
                          + (f"；{markdown_text(item.reason)}" if item.reason else "")
                          + "".join(f"；限制：{markdown_text(value)}" for value in item.limitations))
         if len(answered) > 5:
-            lines.append(f"- 另有 {len(answered) - 5} 项已回答调查，完整记录见技术记录。")
+            lines.append(f"- 另有 {len(answered) - 5} 项已回答调查，完整记录见技术审计导出。")
     return lines
 
 
@@ -710,7 +710,7 @@ def render_finding_comment(plan, finding):
 def render_technical_audit(plan, execution_record=None):
     import json
 
-    lines = ["# RepoGuardian 技术记录", "", "格式化的执行与证据索引，不代表全部原始事件或模型完整输入输出。", "",
+    lines = ["# RepoGuardian 技术审计记录", "", "格式化的执行与证据索引，不代表全部原始事件或模型完整输入输出。", "",
         "## 快照与结论身份", "", f"- 审查记录：{markdown_text(plan.review_id)}",
         f"- Head：{markdown_text(plan.snapshot.head_sha or '未知')}",
         f"- Effective Base：{markdown_text(plan.snapshot.effective_base_sha or '未知')}",

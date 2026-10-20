@@ -52,7 +52,7 @@ const visibleFindingCount = computed(() => customSelection.value ? selection.val
 const currentMarkdown = computed(() => reportView.value === "comment" ? (customSelection.value ? selection.value?.review_comment_markdown : props.reviewMarkdown)
   : reportView.value === "user" ? props.userMarkdown : props.markdown);
 const currentLabel = computed(() => reportView.value === "comment" ? "PR 评论草稿"
-  : reportView.value === "user" ? "详细审查报告" : "技术记录");
+  : reportView.value === "user" ? "详细审查报告" : "技术审计导出");
 const { copied, feedback, checking, pendingCopy, headCheck, checkHead, cancelPending, resetCopy, writeClipboard, copyCheckedComment, copyAcknowledged, checkedComment, retryPending } = useReviewCommentCopy({
   reviewId: () => props.reviewId, reviewedHeadSha: () => props.reviewedHeadSha, markdown: () => currentMarkdown.value,
   options: () => ({ detail: detail.value, exclude_resolved: excludeResolved.value, include_discussed: includeDiscussed.value }),
@@ -130,7 +130,7 @@ function rereview() { cancelPending(); emit("rereview"); }
     <section class="rd-shell" aria-label="审查报告工作台">
       <ReportModeTabs v-model="reportView" :panel-id="panelId" />
       <div class="rd-layout"><section :id="panelId" class="rd-main" role="tabpanel" :aria-label="currentLabel" tabindex="0">
-        <div class="rd-view-title"><div><h2>{{ currentLabel }}</h2><p>{{ reportView === 'comment' ? '供 PR 作者和 Reviewer 阅读，可复制为 GitHub Markdown 评论，也可导出。' : reportView === 'user' ? '面向开发者的分析报告：先读结论，再追踪代码观察、证据、局限与建议。' : '供排障、复核与历史追溯使用。先读结构化摘要，原始字段按需展开。' }}</p></div><span class="badge" :class="reportView === 'comment' ? 'blue' : reportView === 'user' ? 'success' : 'neutral'">{{ reportView === 'comment' ? '默认交付' : reportView === 'user' ? '证据导向' : '高级内容' }}</span></div>
+        <div class="rd-view-title"><div><h2>{{ currentLabel }}</h2><p>{{ reportView === 'comment' ? '供 PR 作者和 Reviewer 阅读，可复制为 GitHub Markdown 评论，也可导出。' : reportView === 'user' ? '面向开发者的分析报告：结论、变更理解、代码依据、未发布记录、局限与建议，与后端 Markdown 覆盖同一组事实。' : '供排障、复核与历史追溯使用。先读结构化摘要，原始字段按需展开；与主导航“技术记录”运行页不同。' }}</p></div><span class="badge" :class="reportView === 'comment' ? 'blue' : reportView === 'user' ? 'success' : 'neutral'">{{ reportView === 'comment' ? '默认交付' : reportView === 'user' ? '证据导向' : '高级内容' }}</span></div>
         <p v-if="feedback" class="rd-notice rd-feedback" role="status">{{ feedback }}</p>
         <div v-if="previewLoading && reportView === 'comment'" class="rd-notice" role="status">正在生成所选内容预览…</div>
         <ReportReadableView v-else-if="reportView === 'user' && plan" :plan="plan" :pr-url="task?.pr_url" @file="emit('file', $event)" @finding="emit('finding', $event)" />
@@ -144,9 +144,8 @@ function rereview() { cancelPending(); emit("rereview"); }
             <PrCommentPreview v-if="reportView === 'comment'" :content="currentMarkdown" :finding-count="visibleFindingCount" />
             <ReportMarkdown v-else :content="currentMarkdown" />
           </div>
-          <button v-if="commentsMarkdown && reportView === 'audit'" type="button" class="rd-text-button" @click="exportComments">导出逐条评论草稿（技术用途，不检查 Head）</button>
         </div>
-<button v-if="commentsMarkdown && reportView === 'audit' && plan" type="button" class="rd-text-button" @click="exportComments">导出逐条评论草稿（技术用途，不检查 Head）</button>
+        <button v-if="commentsMarkdown && reportView === 'audit'" type="button" class="rd-text-button" @click="exportComments">导出逐条评论草稿（技术用途，不检查 Head）</button>
       </section><ReportDeliverySidebar :task="task" :plan="plan" v-model:detail="detail" v-model:exclude-resolved="excludeResolved" :mode="reportView" :available="Boolean(currentMarkdown) && !previewLoading" :busy="busy" :copied="copied" :head-label="headCheck || checking || snapshotStale ? headLabel : '尚未检查'" :head-tone="snapshotStale ? 'warning' : headCheck?.status === 'current' ? 'success' : headCheck ? 'warning' : 'neutral'" :head-note="headNote" :retry-check="headCheck?.status === 'unknown'" :can-check="Boolean(reviewId && reviewMarkdown)" :can-publish="Boolean(task)" @copy="copyMarkdown" @download="exportMarkdown" @check="checkHead" @publish="emit('publish')" @full="reportDialog?.showModal()" /></div>
     </section>
     <dialog ref="reportDialog" class="rd-dialog" aria-label="完整 Markdown 报告" @click.self="reportDialog?.close()"><header><strong>{{ currentLabel }} · 完整正文</strong><button type="button" class="icon-button" aria-label="关闭报告" @click="reportDialog?.close()"><AppIcon name="x" :size="16" /></button></header><ReportMarkdown :content="currentMarkdown || ''" /></dialog>
