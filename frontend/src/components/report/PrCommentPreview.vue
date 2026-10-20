@@ -18,7 +18,7 @@ const document = computed(() => parseCommentPreview(props.content));
     <section v-for="(section, index) in document.sections" :key="index" class="rd-comment-section">
       <header>
         <h3>{{ section.title }}</h3>
-        <span v-if="section.findings && findingCount != null" class="rd-comment-count" :class="{ 'has-findings': findingCount > 0 }">{{ findingCount }} 项</span>
+        <span v-if="section.findings && (section.findingCount ?? findingCount) != null" class="rd-comment-count" :class="{ 'has-findings': (section.findingCount ?? findingCount ?? 0) > 0 }">{{ section.findingCount ?? findingCount }} 项</span>
       </header>
       <ReportMarkdown class="rd-comment-content" :content="section.markdown" />
       <div v-if="index === document.sections.length - 1 && document.snapshot" class="rd-comment-snapshot">

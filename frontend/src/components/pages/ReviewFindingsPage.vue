@@ -9,7 +9,8 @@ import { evidenceLabel, fileMatches, severityLabel } from "../../utils/workspace
 import ReviewDiff from "../review/ReviewDiff.vue";
 import CommentDraftPanel from "../review/CommentDraftPanel.vue";
 import EmptyState from "../common/EmptyState.vue";
-const props = defineProps<{ task: ReviewTask; findings: RuntimeFindingRow[]; focusKey: string; publicationFindings: PublicationFinding[] }>();
+import type { FindingEntryFilter } from "../../utils/reviewSituation";
+const props = defineProps<{ task: ReviewTask; findings: RuntimeFindingRow[]; focusKey: string; publicationFindings: PublicationFinding[]; initialFilter?: FindingEntryFilter; blockingKeys?: string[]; suggestionKeys?: string[] }>();
 const emit = defineEmits<{ activity: [] }>();
 const status = ref("all");
 const severity = ref("all");
@@ -41,14 +42,23 @@ function effectiveSeverity(row: RuntimeFindingRow) {
 }
 const visible = computed(() => props.findings.filter(row => {
   const human = row.issue?.requires_human_confirmation || row.status === "needs_human";
-  const stateMatch = status.value === "all" || (status.value === "human" ? human : status.value === "insufficient" ? row.group === "unresolved" && !human : row.group === status.value);
-  return stateMatch && (severity.value === "all" || effectiveSeverity(row) === severity.value);
+  const stateMatch = status.value === "all" || (status.value === "human" ? human : status.value === "unresolved" ? row.group === "unresolved" || row.status === "needs_human" : status.value === "insufficient" ? row.group === "unresolved" && !human : row.group === status.value);
+  const level = effectiveSeverity(row);
+  const severityMatch = severity.value === "all" || (severity.value === "blockers"
+    ? props.blockingKeys ? props.blockingKeys.includes(row.key) : level === "high" || level === "critical"
+    : severity.value === "suggestions" ? props.suggestionKeys ? props.suggestionKeys.includes(row.key) : level === "medium" || level === "low"
+      : level === severity.value);
+  return stateMatch && severityMatch;
 }));
 const selected = computed(() => visible.value.find(row => row.key === selection.value) || visible.value[0] || null);
 const issue = computed(() => selected.value?.issue || null);
 const file = computed(() => props.task.changed_files.find(item => fileMatches(item, selected.value?.filePath || "")) || null);
 const draft = computed(() => props.publicationFindings.find(item => item.finding_key === selected.value?.key || item.candidate_id === issue.value?.id));
-watch(() => props.focusKey, value => { selection.value = value; status.value = "all"; severity.value = "all"; });
+watch([() => props.focusKey, () => props.initialFilter], ([key, filter]) => {
+  selection.value = key;
+  status.value = filter === "unresolved" ? "unresolved" : filter === "blockers" || filter === "suggestions" ? "confirmed" : "all";
+  severity.value = filter === "blockers" || filter === "suggestions" ? filter : "all";
+}, { immediate: true });
 watch(() => selected.value?.key, () => { copied.value = ""; });
 async function copyConclusion() {
   const row = selected.value;
@@ -61,7 +71,7 @@ async function copyConclusion() {
   <div class="page-head"><div><h1>问题与证据</h1><p class="title-sub">先阅读结论，再结合代码证据和未验证的假设判断是否需要处理。</p></div><span class="badge blue">{{ findings.length }} 条发现记录</span></div>
   <div class="review-workspace rg-findings">
     <section class="card card-pad rg-finding-list"><div class="card-header"><div><h2>发现列表</h2><p>严重程度与证据状态独立展示</p></div></div>
-      <div class="rg-filters"><select v-model="status" class="select" aria-label="证据状态筛选"><option value="all">全部证据状态</option><option value="confirmed">静态核验已确认</option><option value="human">待人工确认</option><option value="insufficient">证据不足 / 待核验</option><option value="dismissed">已排除</option><option value="unknown">状态未知 / 仅定位</option></select><select v-model="severity" class="select" aria-label="严重程度筛选"><option value="all">全部级别</option><option value="critical">严重</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select></div>
+      <div class="rg-filters"><select v-model="status" class="select" aria-label="证据状态筛选"><option value="all">全部证据状态</option><option value="confirmed">静态核验已确认</option><option value="unresolved">未决问题 / 待核验</option><option value="human">待人工确认</option><option value="insufficient">证据不足 / 待核验</option><option value="dismissed">已排除</option><option value="unknown">状态未知 / 仅定位</option></select><select v-model="severity" class="select" aria-label="严重程度筛选"><option value="all">全部级别</option><option value="blockers">阻断问题（严重 / 高）</option><option value="suggestions">改进建议（中 / 低）</option><option value="critical">严重</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select></div>
       <button v-for="row in visible" :key="row.key" type="button" class="rg-finding-row" :class="{ active: selected?.key === row.key }" :aria-pressed="selected?.key === row.key" @click="selection = row.key"><span class="hstack wrap"><span class="badge" :class="effectiveSeverity(row) === 'high' || effectiveSeverity(row) === 'critical' ? 'danger' : 'neutral'">{{ severityLabel(effectiveSeverity(row)) }}</span><span class="badge" :class="row.group === 'confirmed' ? 'blue' : row.group === 'unresolved' ? 'warn' : 'neutral'">{{ evidenceLabel(row.status, row.issue) }}</span></span><strong>{{ row.title }}</strong><code>{{ row.filePath || '尚无可核验代码定位' }}{{ row.line ? `:${row.line}` : '' }}</code></button>
       <EmptyState v-if="!visible.length" icon="search" title="当前分类没有发现" description="可切换筛选；没有发现不表示所有路径均已验证。" />
     </section>

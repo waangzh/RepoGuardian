@@ -4,6 +4,7 @@ import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { useReviewCommentCopy } from "../../composables/useReviewCommentCopy";
 import AppIcon from "../common/AppIcon.vue";
+import ReviewCommentConfirmation from "./ReviewCommentConfirmation.vue";
 
 const props = withDefaults(defineProps<{
   reviewId: string;
@@ -17,44 +18,47 @@ const props = withDefaults(defineProps<{
   partial?: boolean;
 }>(), { detail: "compact", label: "复制 PR 评论", primary: true, partial: false });
 // 复制前的快照检查结果回传给页面，供概览切换到“旧代码版本”情景；不改变复制行为。
-const emit = defineEmits<{ snapshot: [status: "current" | "stale" | "unknown"] }>();
+const emit = defineEmits<{ snapshot: [status: "current" | "stale" | "unknown"]; rereview: [] }>();
 const dialog = ref<HTMLDialogElement | null>(null);
-const { copied, feedback, checking, pendingCopy, copyCheckedComment, copyAcknowledged } = useReviewCommentCopy({
+const { copied, feedback, checking, pendingCopy, headCheck, cancelPending, copyCheckedComment, copyAcknowledged, retryPending } = useReviewCommentCopy({
   reviewId: () => props.reviewId, reviewedHeadSha: () => props.reviewedHeadSha, markdown: () => props.markdown,
   options: () => ({ detail: props.detail || "compact", exclude_resolved: false }),
 });
-// 快照检查是只读请求；把结论回传给页面，仅在明确 stale 时切换情景。
-watch(() => [pendingCopy.value?.status, copied.value] as const, () => {
-  if (pendingCopy.value?.status === "stale") emit("snapshot", "stale");
-  else if (copied.value) emit("snapshot", "current");
+// 只回传实际检查结果；剪贴板写入成功不代表 Head 与快照一致。
+watch(headCheck, result => {
+  if (result) emit("snapshot", result.status);
 });
 // DOMPurify 依赖浏览器 DOM；SSR/测试环境没有 document 时保留空预览正文，不影响复制。
 const rendered = computed(() => typeof DOMPurify.sanitize !== "function" ? ""
   : DOMPurify.sanitize(marked.parse(props.markdown || "", { async: false }) as string,
     { USE_PROFILES: { html: true }, FORBID_TAGS: ["style"] }));
 async function copy() { await copyCheckedComment(); if (copied.value) dialog.value?.close(); }
+function close() { cancelPending(); dialog.value?.close(); }
+async function acknowledge() { await copyAcknowledged(); if (copied.value) dialog.value?.close(); }
+async function retry() { await retryPending(); if (copied.value) dialog.value?.close(); }
+function rereview() { close(); emit("rereview"); }
 </script>
 <template>
   <button type="button" class="button button--compact" :class="primary ? 'button--primary' : 'button--secondary'" :disabled="!markdown || checking" @click="dialog?.showModal()">
     <AppIcon name="send" :size="15" />{{ checking ? "检查 PR 版本中…" : copied ? `已${label}` : label }}
   </button>
   <p v-if="feedback" class="runtime-caption" role="status">{{ feedback }}</p>
-  <button v-if="pendingCopy" type="button" class="button button--secondary button--compact" @click="copyAcknowledged">
-    {{ pendingCopy.status === 'stale' ? "仍复制带旧快照说明的评论" : "仍复制带未知状态说明的评论" }}
-  </button>
-  <dialog ref="dialog" class="comment-preview-dialog" aria-label="PR 评论预览" @click.self="dialog?.close()">
-    <header>
-      <div><strong>{{ partial ? "部分审查记录预览" : "PR 评论预览" }}</strong><p>{{ partial ? "这不是一次完整审查的结论，只包含停止或失败前已保留的记录；复制前仍会核对 PR 当前 Head。" : "这是将复制到剪贴板的完整内容；复制前会核对 PR 当前 Head。" }}</p></div>
-      <button type="button" class="icon-button" aria-label="关闭评论预览" @click="dialog?.close()"><AppIcon name="x" :size="16" /></button>
-    </header>
-    <article class="markdown-body comment-preview-dialog__body" v-html="rendered" />
-    <footer>
-      <button type="button" class="button button--ghost button--compact" @click="dialog?.close()">取消</button>
-      <button type="button" class="button button--primary button--compact" :disabled="checking" @click="copy">
-        {{ checking ? "检查 PR 版本中…" : label }}
-      </button>
-    </footer>
-    <p v-if="feedback" class="runtime-caption" role="status">{{ feedback }}</p>
+  <dialog ref="dialog" class="comment-preview-dialog" :aria-label="pendingCopy ? '确认历史记录交付' : 'PR 评论预览'" @cancel="cancelPending" @click.self="close">
+    <ReviewCommentConfirmation v-if="pendingCopy" :pending="pendingCopy" :feedback="feedback" @cancel="close" @acknowledge="acknowledge" @rereview="rereview" @retry="retry" />
+    <template v-else>
+      <header>
+        <div><strong>{{ partial ? "部分审查记录预览" : "PR 评论预览" }}</strong><p>{{ partial ? "这不是一次完整审查的结论，只包含停止或失败前已保留的记录；复制前仍会核对 PR 当前 Head。" : "这是将复制到剪贴板的完整内容；复制前会核对 PR 当前 Head。" }}</p></div>
+        <button type="button" class="icon-button" aria-label="关闭评论预览" @click="close"><AppIcon name="x" :size="16" /></button>
+      </header>
+      <article class="markdown-body comment-preview-dialog__body" v-html="rendered" />
+      <footer>
+        <button type="button" class="button button--ghost button--compact" @click="close">取消</button>
+        <button type="button" class="button button--primary button--compact" :disabled="checking" @click="copy">
+          {{ checking ? "检查 PR 版本中…" : label }}
+        </button>
+      </footer>
+      <p v-if="feedback" class="runtime-caption" role="status">{{ feedback }}</p>
+    </template>
   </dialog>
 </template>
 <style scoped>

@@ -1,5 +1,6 @@
 import type { ReviewSummary } from "../types/publication";
 import type { ReviewSituation, SituationKey } from "./reviewSituation";
+import { reviewLimitationKind } from "./reviewSituation";
 import type { TaskRuntimeSummary } from "./taskRuntimePresentation";
 import type { ReviewSection } from "../types/workspace";
 import { reportValidationLabel } from "./reportPresentation";
@@ -22,6 +23,8 @@ export function overviewFacts(plan: ReviewSummary | null, runtime: TaskRuntimeSu
   const reasonLabels: Record<string, string> = {
     scope_incomplete: "仍有约定目标未完整检查。",
     investigation_incomplete: "关联调查尚未完成，需要补充证据。",
+    usage_integrity_unknown: "模型用量记录不完整或不一致，不能视为完整统计。",
+    termination_incomplete: "运行未可靠完成全部计划，请核对执行记录。",
   };
   const limitations = [...new Set([
     ...(decision?.limits || []),
@@ -30,13 +33,13 @@ export function overviewFacts(plan: ReviewSummary | null, runtime: TaskRuntimeSu
       : reason),
   ])];
   const investigationCount = outcome?.incomplete_investigations ?? null;
-  const evidenceGap = outcome?.kind === "inconclusive" || Boolean(investigationCount)
-    || decision?.status === "resolve_unknowns" || decision?.status === "unavailable"
-    || Boolean(decision?.unresolved_reasons?.length) || outcome?.runtime_reliability === "unreliable";
+  const limitation = outcome ? reviewLimitationKind(outcome, decision?.unresolved_reasons) : null;
+  const evidenceGap = limitation === "evidence_gaps" || Boolean(investigationCount)
+    || Boolean(outcome?.unresolved_count);
   // 完成计数不是结论：范围完整性未知时不能由 n/n 推导为已完整检查。
   const scopeKnown = outcome?.review_completeness === "complete";
-  const scopeIncomplete = outcome?.review_completeness === "partial"
-    || outcome?.reason_codes?.includes("scope_incomplete")
+  const scopeIncomplete = outcome?.reason_codes?.includes("scope_incomplete")
+    || outcome?.reason_codes?.includes("scope_empty")
     || (examined !== null && total !== null && examined < total);
   const boundaries: OverviewBoundary[] = [
     {
@@ -51,11 +54,11 @@ export function overviewFacts(plan: ReviewSummary | null, runtime: TaskRuntimeSu
     {
       title: "关联证据与限制",
       value: !plan ? "证据状态未知" : investigationCount ? `${investigationCount} 项调查未完成`
-        : evidenceGap ? "证据尚不充分" : limitations.length ? "存在已知限制"
+        : evidenceGap ? "证据尚不充分" : limitation === "runtime_limits" ? "运行或计量记录受限" : limitations.length ? "存在已知限制"
         : outcome?.runtime_reliability === "unknown" ? "证据边界待核对" : "查看证据边界",
       description: limitations[0] || (!plan ? "摘要尚未取得，请先查看技术记录或重试加载。"
         : "关联线索与问题候选分别记录；无待确认候选不等于无未核验路径。"),
-      tone: plan && evidenceGap ? "warning" : "neutral",
+      tone: plan && (evidenceGap || limitation === "runtime_limits") ? "warning" : "neutral",
       icon: "help",
       target: "scope",
     },
@@ -63,7 +66,7 @@ export function overviewFacts(plan: ReviewSummary | null, runtime: TaskRuntimeSu
       title: "动态测试与构建",
       value: reportValidationLabel(validation),
       description: validation === "not_executed" ? "未运行目标仓库代码，无法据此推断测试或构建通过。"
-        : validation === "passed" ? "已有当前 Head 绑定的受控验证结果，仅适用于记录的检查。"
+        : validation === "passed" ? "已有当前 Head 绑定的受控验证结果，仅适用于记录的检查，不代表项目 CI 全部通过。"
         : validation === "failed" ? "已有当前 Head 绑定的验证失败记录，请核对失败原因。"
         : validation === "independent_results" ? "独立补丁验证结果不代表当前 PR Head 已通过。"
         : "动态验证状态未知，不能据此宣称测试或构建通过。",
@@ -97,6 +100,11 @@ const NEXT_STEPS: Record<SituationKey, NextSteps> = {
     title: "补齐未完成的检查范围",
     description: "先确认哪些约定目标未检查及中断原因，再决定是否重新审查。",
     steps: [["定位未完成目标", "查看覆盖缺口、原因和相关文件"], ["核对运行限制", "确认预算、时限或执行错误"], ["决定是否重新审查", "重新分析当前 PR 并确认方案"]],
+  },
+  runtime_limits: {
+    title: "先核对运行与计量记录",
+    description: "代码检查情况与运行记录完整性分别判断，运行限制不等于代码缺陷。",
+    steps: [["查看运行记录", "核对终止、计量或验证限制"], ["确认实际检查范围", "目标完成数不代表用量记录完整"], ["决定是否需要重新审查", "不要将未知用量当作完整统计"]],
   },
   blockers: {
     title: "先复核高优先级问题",

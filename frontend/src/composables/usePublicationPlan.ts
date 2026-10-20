@@ -37,7 +37,7 @@ export function usePublicationPlan(task: () => ReviewTask,
           summary.value = result;
         }
       } catch {
-        if (!controller.signal.aborted) error.value = "审查摘要加载失败，请重试；原始审计仍可查看。";
+        if (!controller.signal.aborted) error.value = "审查摘要加载失败，当前无法读取完整审查结论。请点击“重试加载摘要”；原始运行记录仍可查看。";
       } finally {
         if (!controller.signal.aborted) loading.value = false;
       }

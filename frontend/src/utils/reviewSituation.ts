@@ -1,16 +1,17 @@
 import type { MergeDecision, ReviewOutcome } from "../types/publication";
+import type { ReviewSection } from "../types/workspace";
 
 /** 展示层情景：由后端内部状态组合成用户可理解的单一结论，不新增后端顶层状态。 */
 export type SituationKey =
   | "stale" | "failed" | "cancelled" | "validation_failed" | "blockers"
-  | "evidence_gaps" | "scope_incomplete" | "nonblocking" | "clean";
+  | "evidence_gaps" | "scope_incomplete" | "runtime_limits" | "nonblocking" | "clean";
 
 export type SituationTone = "success" | "info" | "warning" | "danger";
 
 export type SituationActionKey =
   | "view_blockers" | "view_unresolved" | "view_findings" | "view_gaps"
   | "view_validation" | "view_error" | "view_activity" | "view_retained"
-  | "view_report" | "rereview";
+  | "view_report" | "view_investigations" | "view_limits" | "rereview";
 
 export interface SituationAction {
   key: SituationActionKey;
@@ -32,7 +33,7 @@ export interface ReviewSituation {
   description: string;
   tone: SituationTone;
   icon: string;
-  blockingCount: number;
+  blockingCount: number | null;
   nonblockingCount: number;
   unresolvedCount: number;
   examinedGoals: number;
@@ -47,15 +48,17 @@ export interface SituationSource {
 }
 
 const ACTION_META: Record<SituationActionKey, { label: string; icon: string }> = {
-  view_blockers: { label: "查看高优先级问题", icon: "alert" },
-  view_unresolved: { label: "查看待确认风险", icon: "search" },
-  view_findings: { label: "查看问题", icon: "search" },
-  view_gaps: { label: "查看缺口", icon: "shield" },
-  view_validation: { label: "查看验证结果", icon: "flask" },
+  view_blockers: { label: "查看阻断问题", icon: "alert" },
+  view_unresolved: { label: "查看未决问题", icon: "search" },
+  view_findings: { label: "查看建议", icon: "search" },
+  view_gaps: { label: "查看未检查范围", icon: "shield" },
+  view_validation: { label: "查看验证记录", icon: "flask" },
   view_error: { label: "查看错误", icon: "alert" },
   view_activity: { label: "查看技术记录", icon: "activity" },
   view_retained: { label: "查看已保留结果", icon: "search" },
   view_report: { label: "查看完整报告", icon: "report" },
+  view_investigations: { label: "查看未决调查", icon: "search" },
+  view_limits: { label: "查看运行限制", icon: "activity" },
   rereview: { label: "重新审查此 PR", icon: "plus" },
 };
 
@@ -66,8 +69,63 @@ const COPY_RECORD = { label: "复制审查记录", prominence: "secondary" as co
 // 失败/取消后复制已有结论时，必须明确自述为部分审查记录。
 const COPY_PARTIAL = { label: "复制部分审查记录", prominence: "secondary" as const, partial: true };
 
+const EVIDENCE_REASONS = new Set([
+  "verification_unresolved", "finding_status_unknown", "investigation_incomplete",
+  "unscheduled_investigation", "confirmed_findings_withheld", "finding_severity_unknown",
+  "author_context_truncated", "author_context_unknown",
+]);
+const RUNTIME_REASONS = new Set([
+  "budget_exhausted", "deadline_exceeded", "usage_integrity_unknown", "termination_incomplete",
+  "snapshot_missing", "runtime_report_missing", "runtime_report_invalid", "unsupported_legacy_projection",
+  "head_validation_failed", "head_validation_unknown",
+]);
+
+export function reviewLimitationKind(outcome: ReviewOutcome, extraReasons: string[] = []) {
+  const reasons = [...(outcome.reason_codes ?? []), ...extraReasons];
+  if (reasons.some(reason => reason === "scope_incomplete" || reason === "scope_empty")
+      || (outcome.total_goals > 0 && outcome.examined_goals < outcome.total_goals)) return "scope_incomplete";
+  if (outcome.unresolved_count > 0 || outcome.incomplete_investigations > 0
+      || reasons.some(reason => EVIDENCE_REASONS.has(reason))) return "evidence_gaps";
+  if (reasons.some(reason => RUNTIME_REASONS.has(reason))
+      || (outcome.runtime_reliability && outcome.runtime_reliability !== "reliable")) return "runtime_limits";
+  return null;
+}
+
 function actions(...keys: SituationActionKey[]): SituationAction[] {
   return keys.map(key => ({ key, ...ACTION_META[key] }));
+}
+
+export type FindingEntryFilter = "all" | "blockers" | "suggestions" | "unresolved";
+export interface SituationTarget {
+  section: ReviewSection;
+  findingFilter?: FindingEntryFilter;
+  scopeFilter?: "incomplete";
+  investigations?: boolean;
+  activityFocus?: "limits" | "validation" | "error";
+}
+export function situationActionTarget(key: Exclude<SituationActionKey, "rereview">): SituationTarget {
+  const targets: Record<Exclude<SituationActionKey, "rereview">, SituationTarget> = {
+    view_blockers: { section: "findings", findingFilter: "blockers" },
+    view_unresolved: { section: "findings", findingFilter: "unresolved" },
+    view_findings: { section: "findings", findingFilter: "suggestions" },
+    view_retained: { section: "findings", findingFilter: "all" },
+    view_gaps: { section: "scope", scopeFilter: "incomplete" },
+    view_investigations: { section: "scope", investigations: true },
+    view_validation: { section: "activity", activityFocus: "validation" },
+    view_error: { section: "activity", activityFocus: "error" },
+    view_limits: { section: "activity", activityFocus: "limits" },
+    view_activity: { section: "activity" },
+    view_report: { section: "report" },
+  };
+  return targets[key];
+}
+
+function evidenceTitle(outcome: ReviewOutcome, reasons: string[]): string {
+  if (outcome.unresolved_count > 0) return `${outcome.unresolved_count} 项问题尚未核实，暂不能给出完整建议`;
+  if (outcome.incomplete_investigations > 0) return `${outcome.incomplete_investigations} 项关联调查尚未核实，暂不能给出完整建议`;
+  if (reasons.some(reason => reason.startsWith("author_context_"))) return "作者声明范围尚待核对，暂不能给出完整建议";
+  if (reasons.includes("confirmed_findings_withheld")) return "部分已确认记录未通过交付准入，需核对证据";
+  return "存在未核实事项，暂不能给出完整建议";
 }
 
 export function reviewSituation(
@@ -78,67 +136,80 @@ export function reviewSituation(
   const outcome = plan.outcome;
   const decision = plan.digest?.merge_decision;
   const status = decision?.status;
-  const reasons = outcome.reason_codes ?? [];
-  const blockingCount = decision?.blocking_finding_keys?.length || (status === "fix_blockers" ? 1 : 0);
+  const blockingCount = decision?.blocking_finding_keys?.length ?? null;
   const nonblockingCount = decision?.nonblocking_finding_keys?.length ?? 0;
   const unresolvedCount = outcome.unresolved_count ?? 0;
   const examinedGoals = outcome.examined_goals ?? 0;
   const totalGoals = outcome.total_goals ?? 0;
   const counts = { blockingCount, nonblockingCount, unresolvedCount, examinedGoals, totalGoals };
 
-  // PR 已更新时原结论不再适用，优先于其他状态；不提供复制，避免继续交付旧结论。
+  // 保留历史记录入口，避免切换情景时卸载尚待确认的复制组件。
   if (options.stale) {
-    return { ...counts, key: "stale", title: "PR 已更新，当前结论可能已过期",
-      description: "原结论只适用于审查时的 Head；请在新提交上重新审查后再判断。", tone: "warning", icon: "history",
-      actions: actions("rereview"), copy: null };
+    return { ...counts, key: "stale", title: "PR 已更新，本轮结论不适用于最新提交",
+      description: "本轮记录仅适用于原 Head，不能用于判断最新提交是否可以合并。请点击“重新审查此 PR”，基于新快照生成方案。", tone: "warning", icon: "history",
+      actions: actions("rereview"), copy: {
+        label: outcome.kind === "failed" || outcome.kind === "cancelled" ? "复制历史部分审查记录" : "复制历史审查记录",
+        prominence: "secondary", partial: outcome.kind === "failed" || outcome.kind === "cancelled",
+      } };
   }
   // 失败与用户停止只保留已有记录：主操作是理解现状，复制是明确标注的部分记录。
   if (outcome.kind === "failed") {
-    return { ...counts, key: "failed", title: "审查因执行错误中断",
-      description: "执行过程中发生错误，未形成本轮完整结论；已保留中断前的检查记录。", tone: "danger", icon: "alert",
+    return { ...counts, key: "failed", title: "审查因执行错误中断，已保留部分记录",
+      description: "现有记录不能作为完整合并建议。请点击“查看错误”定位中断原因，再选择“重新审查此 PR”。", tone: "danger", icon: "alert",
       actions: actions("view_error", "rereview"), copy: COPY_PARTIAL };
   }
   if (outcome.kind === "cancelled") {
-    return { ...counts, key: "cancelled", title: "审查已由用户停止",
-      description: "剩余范围未完成；已保留停止前的检查记录，不能作为完整审查结论。", tone: "warning", icon: "x",
-      actions: actions(confirmedOrUnresolved(outcome) ? "view_retained" : "view_activity", "rereview"), copy: COPY_PARTIAL };
+    return { ...counts, key: "cancelled", title: "审查已停止，已保留停止前的记录",
+      description: "审查由用户主动停止，不能将保留记录当作完整结论。请点击“查看已保留结果”核对问题与证据，或重新审查。", tone: "warning", icon: "x",
+      actions: actions("view_retained", "rereview"), copy: COPY_PARTIAL };
   }
   if (outcome.dynamic_validation === "failed") {
-    return { ...counts, key: "validation_failed", title: "当前版本已有验证失败记录",
-      description: "与当前代码版本绑定的验证记录失败；请核对失败原因，修复后重新验证。", tone: "danger", icon: "flask",
+    return { ...counts, key: "validation_failed", title: "当前版本存在验证失败记录，需检查原因",
+      description: "已有与本次 Head 绑定的受控检查失败记录，不能据此宣称验证通过。请点击“查看验证记录”核对检查范围与失败原因。", tone: "danger", icon: "flask",
       actions: actions("view_validation", "rereview"), copy: COPY_RECORD };
   }
-  if (blockingCount > 0 || status === "fix_blockers") {
+  if ((blockingCount ?? 0) > 0 || status === "fix_blockers") {
     const extra: SituationActionKey[] = unresolvedCount > 0 ? ["view_unresolved"] : [];
-    return { ...counts, key: "blockers", title: "发现高优先级问题，建议修复后再合并",
-      description: `已确认 ${blockingCount || 1} 项高优先级问题；请修复后在新提交上重新审查，再决定是否合并。`,
+    return { ...counts, key: "blockers",
+      title: blockingCount ? `发现 ${blockingCount} 项高优先级问题，建议修复后再合并` : "发现高优先级问题，建议修复后再合并",
+      description: "这些问题可能影响关键行为。请点击“查看阻断问题”核对证据和修复建议，再于新提交上重新审查。",
       tone: "danger", icon: "alert", actions: actions("view_blockers", ...extra), copy: COPY_REVIEW };
   }
   if (status === "resolve_unknowns" || status === "unavailable" || outcome.kind === "inconclusive") {
-    const scopeIncomplete = reasons.includes("scope_incomplete")
-      || (totalGoals > 0 && examinedGoals < totalGoals);
-    if (scopeIncomplete) {
+    const limitation = reviewLimitationKind(outcome, decision?.unresolved_reasons);
+    if (limitation === "scope_incomplete") {
       return { ...counts, key: "scope_incomplete",
-        title: totalGoals > 0 ? "部分检查尚未完成" : "检查范围尚不明确",
+        title: totalGoals > examinedGoals ? `仍有 ${totalGoals - examinedGoals} 项检查目标未完成`
+          : totalGoals > 0 ? "检查范围完整性尚待核对" : "检查范围尚不明确",
         description: totalGoals > 0
-          ? `已完成 ${examinedGoals}/${totalGoals} 个约定目标，剩余部分尚未检查。`
-          : "没有可用的约定目标记录，无法判断检查范围；请先补齐范围或重新审查。",
+          ? `已检查 ${examinedGoals}/${totalGoals} 项；范围完整性尚不能确认。请点击“查看未检查范围”核对未完成目标和原因，再决定是否补查。`
+          : "没有可用的约定目标记录，无法判断检查范围。请点击“查看未检查范围”核对记录，或重新审查。",
         tone: "warning", icon: "clock", actions: actions("view_gaps", "rereview"), copy: COPY_RECORD };
     }
-    return { ...counts, key: "evidence_gaps", title: "部分问题尚未核实，暂不能给出完整建议",
-      description: "仍有问题或调用路径未完成核验；请先核对缺口，再决定是否补查或交付本轮记录。", tone: "warning", icon: "help",
-      actions: actions("view_gaps", "rereview"), copy: COPY_RECORD };
+    if (limitation === "evidence_gaps") {
+      const reasons = [...(outcome.reason_codes ?? []), ...(decision?.unresolved_reasons ?? [])];
+      const action = unresolvedCount > 0 ? "view_unresolved"
+        : outcome.incomplete_investigations > 0 || reasons.some(reason => ["investigation_incomplete", "unscheduled_investigation"].includes(reason))
+          ? "view_investigations" : "view_report";
+      return { ...counts, key: "evidence_gaps", title: evidenceTitle(outcome, reasons),
+        description: `未决事项不等于已确认代码缺陷，但会限制合并判断。请点击“${ACTION_META[action].label}”补齐代码或目标依据，再决定是否交付本轮记录。`,
+        tone: "warning", icon: "help",
+        actions: actions(action, ...(unresolvedCount > 0 && outcome.incomplete_investigations > 0 ? ["view_investigations" as const] : []), "rereview"),
+        copy: COPY_RECORD };
+    }
+    return { ...counts, key: "runtime_limits",
+      title: limitation ? "审查运行记录存在限制，需核对结果完整性" : "审查结论暂不完整",
+      description: limitation
+        ? `${totalGoals > 0 ? `约定静态目标已检查 ${examinedGoals}/${totalGoals} 项` : "约定静态目标的检查范围尚不明确"}；运行或计量异常本身不代表代码缺陷，未知用量不能当作完整统计。请点击“查看运行限制”核对执行、计量及验证记录。`
+        : "限制原因或可靠性记录尚不明确，不能据此推断存在代码缺陷或审查已完整完成。请点击“查看运行限制”核对记录。",
+      tone: "warning", icon: "activity", actions: actions("view_limits", "rereview"), copy: COPY_RECORD };
   }
   if (nonblockingCount > 0) {
-    return { ...counts, key: "nonblocking", title: "未发现阻断性问题，但有改进建议",
-      description: `已确认 ${nonblockingCount} 项改进建议；是否在合并前处理取决于项目要求和实际影响。`,
+    return { ...counts, key: "nonblocking", title: `发现 ${nonblockingCount} 项改进建议，未发现阻断性问题`,
+      description: "是否在合并前处理取决于项目要求和实际影响。请点击“查看建议”评估证据，或复制 PR 评论与作者讨论；仍需结合 CI 与审批。",
       tone: "info", icon: "info", actions: actions("view_findings"), copy: COPY_PR };
   }
   return { ...counts, key: "clean", title: "已检查范围内未发现需处理的问题",
-    description: "在已检查范围内未发现达到报告门槛的缺陷；未覆盖路径仍需结合 CI、审批和人工判断，该结论不代表代码已经通过验证。",
+    description: "本结论仅限已检查范围，不代表 PR 安全或项目 CI 全部通过。请点击“复制 PR 评论”预览交付内容，并结合项目验证和人工审批决定是否合并。",
     tone: "success", icon: "check-circle", actions: actions("view_report"), copy: COPY_PR };
-}
-
-function confirmedOrUnresolved(outcome: ReviewOutcome): boolean {
-  return (outcome.confirmed_count ?? 0) > 0 || (outcome.unresolved_count ?? 0) > 0;
 }

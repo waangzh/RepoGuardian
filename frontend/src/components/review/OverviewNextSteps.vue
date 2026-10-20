@@ -9,11 +9,12 @@ import { reportValidationLabel } from "../../utils/reportPresentation";
 import CopyCommentButton from "./CopyCommentButton.vue";
 import AppIcon from "../common/AppIcon.vue";
 
-const props = defineProps<{ situation: ReviewSituation | null; plan: ReviewSummary | null; task: ReviewTask; execution: string }>();
+const props = defineProps<{ situation: ReviewSituation | null; plan: ReviewSummary | null; task: ReviewTask; execution: string; summaryError?: boolean; summaryLoading?: boolean }>();
 const emit = defineEmits<{
   action: [key: SituationActionKey];
   navigate: [section: ReviewSection];
   snapshot: [status: "current" | "stale" | "unknown"];
+  reload: [];
 }>();
 const next = computed(() => overviewNextSteps(props.situation));
 const head = computed(() => props.plan?.snapshot.head_sha || props.task.snapshot?.head_sha || props.task.pr?.head.sha);
@@ -27,13 +28,14 @@ const depth = computed(() => props.task.confirmed_plan
       <span class="ov-overline">RECOMMENDED NEXT</span>
       <h2>{{ next.title }}</h2><p>{{ next.description }}</p>
       <ol class="ov-steps"><li v-for="([title, description], index) in next.steps" :key="title"><span>{{ index + 1 }}</span><div><strong>{{ title }}</strong><small>{{ description }}</small></div></li></ol>
-      <button v-if="situation?.actions[0]" type="button" class="btn primary ov-main-action" @click="emit('action', situation.actions[0].key)">{{ situation.actions[0].key === "view_gaps" ? "查看证据缺口" : situation.actions[0].label }}<AppIcon name="arrow-right" :size="16" /></button>
+      <button v-if="situation?.actions[0]" type="button" class="btn ov-main-action" :class="situation.key === 'clean' ? 'secondary' : 'primary'" @click="emit('action', situation.actions[0].key)">{{ situation.actions[0].label }}<AppIcon name="arrow-right" :size="16" /></button>
+      <button v-else-if="summaryError || (!summaryLoading && !plan)" type="button" class="btn primary ov-main-action" :disabled="summaryLoading" @click="emit('reload')">重试加载摘要<AppIcon name="arrow-right" :size="16" /></button>
       <button v-else type="button" class="btn primary ov-main-action" @click="emit('navigate', 'activity')">查看技术记录 <AppIcon name="arrow-right" :size="16" /></button>
       <div v-if="situation && situation.actions.length > 1" class="ov-other-actions"><button v-for="action in situation.actions.slice(1)" :key="action.key" type="button" class="ov-link" @click="emit('action', action.key)">{{ action.label }}<AppIcon :name="action.icon" :size="15" /></button></div>
       <div class="ov-next__delivery">
         <button type="button" class="btn secondary" @click="emit('navigate', 'report')"><AppIcon name="report" :size="16" />阅读详细审查报告</button>
         <template v-if="situation?.copy && plan">
-          <CopyCommentButton :review-id="task.id" :reviewed-head-sha="plan.snapshot.head_sha" :markdown="plan.review_comment_markdown || ''" :label="situation.copy.label" :primary="false" :partial="situation.copy.partial" @snapshot="emit('snapshot', $event)" />
+          <CopyCommentButton :review-id="task.id" :reviewed-head-sha="plan.snapshot.head_sha" :markdown="plan.review_comment_markdown || ''" :label="situation.copy.label" :primary="situation.key === 'clean'" :partial="situation.copy.partial" @snapshot="emit('snapshot', $event)" @rereview="emit('action', 'rereview')" />
           <p>{{ situation.copy.partial ? "仅复制用户停止或执行失败前保留的部分审查记录。" : "复制前会核对 PR 当前 Head，内容仅适用于本次快照。" }}</p>
         </template>
       </div>

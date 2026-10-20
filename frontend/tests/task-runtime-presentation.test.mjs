@@ -98,5 +98,5 @@ test("未知发现状态保留，历史通知不自动升级为新引擎", () =>
   assert.equal(runtimeFindingRows(report)[0].status, "future_state");
   assert.match(runtimeWarnings(report).join(" "), /状态未知/);
   assert.match(reviewCompletionMessage({ engine: "legacy_units", issues: [], task_runtime_report: report }), /未发现达到报告门槛/);
-  assert.equal(runtimeLabel("completed"), "本轮审查已结束");
+  assert.equal(runtimeLabel("completed"), "审查执行已结束");
 });

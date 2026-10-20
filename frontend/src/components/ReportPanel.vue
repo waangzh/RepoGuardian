@@ -13,6 +13,7 @@ import ReportDeliverySidebar from './report/ReportDeliverySidebar.vue';
 import ReportReadableView from './report/ReportReadableView.vue';
 import AuditSummaryView from './report/AuditSummaryView.vue';
 import PrCommentPreview from './report/PrCommentPreview.vue';
+import ReviewCommentConfirmation from './review/ReviewCommentConfirmation.vue';
 import '../styles/report-delivery.css';
 
 const props = defineProps<{
@@ -26,8 +27,9 @@ const props = defineProps<{
   task?: ReviewTask;
   plan?: PublicationPlan | null;
   embedded?: boolean;
+  stale?: boolean;
 }>();
-const emit = defineEmits<{ publish: []; file: [path: string]; finding: [key: string] }>();
+const emit = defineEmits<{ publish: []; file: [path: string]; finding: [key: string]; rereview: []; snapshot: [status: "current" | "stale" | "unknown"] }>();
 const panelId = useId();
 const githubLink = computed(() => {
   try { const url = new URL(props.task?.pr?.html_url || props.task?.pr_url || ''); return url.protocol === 'https:' && url.hostname === 'github.com' ? url.href : null; }
@@ -49,10 +51,12 @@ const currentMarkdown = computed(() => reportView.value === "comment" ? (customS
   : reportView.value === "user" ? props.userMarkdown : props.markdown);
 const currentLabel = computed(() => reportView.value === "comment" ? "PR 评论草稿"
   : reportView.value === "user" ? "详细审查报告" : "技术记录");
-const { copied, feedback, checking, pendingCopy, headCheck, checkHead, cancelPending, resetCopy, writeClipboard, copyCheckedComment, copyAcknowledged, checkedComment } = useReviewCommentCopy({
+const { copied, feedback, checking, pendingCopy, headCheck, checkHead, cancelPending, resetCopy, writeClipboard, copyCheckedComment, copyAcknowledged, checkedComment, retryPending } = useReviewCommentCopy({
   reviewId: () => props.reviewId, reviewedHeadSha: () => props.reviewedHeadSha, markdown: () => currentMarkdown.value,
   options: () => ({ detail: detail.value, exclude_resolved: excludeResolved.value }),
 });
+watch(headCheck, result => { if (result) emit("snapshot", result.status); });
+const snapshotStale = computed(() => props.stale || headCheck.value?.status === "stale");
 watch([() => props.reviewMarkdown, () => props.userMarkdown, () => props.reviewId], () => { reportView.value = initialView(); });
 watch(reportView, resetCopy, { flush: 'sync' });
 watch([detail, excludeResolved, previewRevision, () => props.reviewId, () => props.reviewedHeadSha, () => props.reviewMarkdown], async () => {
@@ -74,10 +78,10 @@ onBeforeUnmount(() => previewController?.abort());
 const reportDialog = ref<HTMLDialogElement | null>(null);
 const confirmationDialog = ref<HTMLDialogElement | null>(null);
 const deliveryAction = ref<'copy' | 'download'>('copy');
-watch(pendingCopy, async value => { await nextTick(); if (value) confirmationDialog.value?.showModal(); else confirmationDialog.value?.close(); });
+watch(pendingCopy, async () => { await nextTick(); if (pendingCopy.value) confirmationDialog.value?.showModal(); else confirmationDialog.value?.close(); });
 const busy = computed(() => checking.value || (reportView.value === 'comment' && previewLoading.value));
-const headLabel = computed(() => checking.value ? '检查中' : ({ current: '与快照一致', stale: 'PR 有新提交', unknown: '无法确认' })[headCheck.value?.status || 'unknown']);
-const headNote = computed(() => headCheck.value ? `检查于 ${new Date(headCheck.value.checked_at).toLocaleString('zh-CN')}。复制或导出时将再次核对当前 Head。` : '尚未核对远端版本。复制或导出前将由服务端检查 PR 当前 Head。');
+const headLabel = computed(() => checking.value ? '检查中' : snapshotStale.value ? 'PR 已更新' : ({ current: '与快照一致', stale: 'PR 有新提交', unknown: '无法确认' })[headCheck.value?.status || 'unknown']);
+const headNote = computed(() => headCheck.value ? `检查于 ${new Date(headCheck.value.checked_at).toLocaleString('zh-CN')}。${headCheck.value.status === 'unknown' ? '暂时无法确认 PR 是否有新提交，请点击“重试检查”。' : '复制或导出时将再次核对当前 Head。'}` : snapshotStale.value ? '已检测到 PR 更新；本轮记录仅适用于旧快照，建议重新审查。' : '尚未核对远端版本。复制或导出前将由服务端检查 PR 当前 Head。');
 
 async function copyMarkdown() {
   if (!currentMarkdown.value || checking.value) return;
@@ -110,6 +114,7 @@ async function exportMarkdown() {
 function exportComments() {
   if (props.commentsMarkdown) downloadMarkdown(props.commentsMarkdown, "comments");
 }
+function rereview() { cancelPending(); emit("rereview"); }
 </script>
 
 <template>
@@ -118,7 +123,7 @@ function exportComments() {
       <div><div class="rd-eyebrow">Review delivery workspace</div><h1>审查报告与交付</h1><p>先确认结论与局限，再生成适合不同读者的交付内容。</p></div>
       <div class="rd-top-actions"><a v-if="githubLink && !embedded" class="btn secondary" :href="githubLink" target="_blank" rel="noreferrer"><AppIcon name="external" :size="15" />在 GitHub 查看 PR</a><button type="button" class="btn secondary" :disabled="!currentMarkdown || busy" @click="exportMarkdown"><AppIcon name="download" :size="15" />导出报告</button></div>
     </header>
-    <ReportContext v-if="task" :task="task" :plan="plan" :embedded="embedded" :stale="headCheck?.status === 'stale'" />
+    <ReportContext v-if="task" :task="task" :plan="plan" :embedded="embedded" :stale="snapshotStale" />
     <section class="rd-shell" aria-label="审查报告工作台">
       <ReportModeTabs v-model="reportView" :panel-id="panelId" />
       <div class="rd-layout"><section :id="panelId" class="rd-main" role="tabpanel" :aria-label="currentLabel" tabindex="0">
@@ -139,9 +144,9 @@ function exportComments() {
           <button v-if="commentsMarkdown && reportView === 'audit'" type="button" class="rd-text-button" @click="exportComments">导出逐条评论草稿（技术用途，不检查 Head）</button>
         </div>
 <button v-if="commentsMarkdown && reportView === 'audit' && plan" type="button" class="rd-text-button" @click="exportComments">导出逐条评论草稿（技术用途，不检查 Head）</button>
-      </section><ReportDeliverySidebar :task="task" :plan="plan" v-model:detail="detail" v-model:exclude-resolved="excludeResolved" :mode="reportView" :available="Boolean(currentMarkdown) && !previewLoading" :busy="busy" :copied="copied" :head-label="headCheck || checking ? headLabel : '尚未检查'" :head-tone="headCheck?.status === 'current' ? 'success' : headCheck ? 'warning' : 'neutral'" :head-note="headNote" :can-check="Boolean(reviewId && reviewMarkdown)" :can-publish="Boolean(task)" @copy="copyMarkdown" @download="exportMarkdown" @check="checkHead" @publish="emit('publish')" @full="reportDialog?.showModal()" /></div>
+      </section><ReportDeliverySidebar :task="task" :plan="plan" v-model:detail="detail" v-model:exclude-resolved="excludeResolved" :mode="reportView" :available="Boolean(currentMarkdown) && !previewLoading" :busy="busy" :copied="copied" :head-label="headCheck || checking || snapshotStale ? headLabel : '尚未检查'" :head-tone="snapshotStale ? 'warning' : headCheck?.status === 'current' ? 'success' : headCheck ? 'warning' : 'neutral'" :head-note="headNote" :retry-check="headCheck?.status === 'unknown'" :can-check="Boolean(reviewId && reviewMarkdown)" :can-publish="Boolean(task)" @copy="copyMarkdown" @download="exportMarkdown" @check="checkHead" @publish="emit('publish')" @full="reportDialog?.showModal()" /></div>
     </section>
     <dialog ref="reportDialog" class="rd-dialog" aria-label="完整 Markdown 报告" @click.self="reportDialog?.close()"><header><strong>{{ currentLabel }} · 完整正文</strong><button type="button" class="icon-button" aria-label="关闭报告" @click="reportDialog?.close()"><AppIcon name="x" :size="16" /></button></header><ReportMarkdown :content="currentMarkdown || ''" /></dialog>
-    <dialog ref="confirmationDialog" class="rd-dialog rd-confirm-dialog" aria-labelledby="rd-confirm-title" @cancel="cancelPending" @click.self="cancelPending"><header><strong id="rd-confirm-title">{{ pendingCopy?.status === 'stale' ? 'PR 已有新提交' : '无法确认远端 Head' }}</strong><button type="button" class="icon-button" aria-label="取消交付" @click="cancelPending"><AppIcon name="x" :size="16" /></button></header><div class="rd-dialog-content"><p>当前内容仅适用于审查时的快照。继续交付会保留服务端返回的旧快照或未知状态说明。</p><p class="rd-notice warn">{{ feedback }}</p><code>{{ pendingCopy?.reviewed_head_sha || '未记录 Head' }}</code></div><footer><button type="button" class="btn secondary" @click="cancelPending">取消</button><button type="button" class="btn primary" @click="copyAcknowledged">仍{{ deliveryAction === 'copy' ? '复制' : '导出' }}带限制说明的评论</button></footer></dialog>
+    <dialog ref="confirmationDialog" class="rd-dialog rd-confirm-dialog" aria-label="确认历史记录交付" @cancel="cancelPending" @click.self="cancelPending"><ReviewCommentConfirmation v-if="pendingCopy" :pending="pendingCopy" :action="deliveryAction" :feedback="feedback" @cancel="cancelPending" @acknowledge="copyAcknowledged" @rereview="rereview" @retry="retryPending" /></dialog>
   </section>
 </template>
