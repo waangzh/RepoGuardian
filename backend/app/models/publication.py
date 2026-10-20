@@ -169,6 +169,8 @@ class PublicationFinding(BaseModel):
     anchor: PublicationAnchor
     title: str
     body_markdown: str
+    # 新计划保留纯文本；缺失表示旧计划的 title 已经过 Markdown 转义。
+    raw_title: str | None = None
     affected_behavior: str = ""
     failure_scenario: str = ""
     recommendation: str = ""

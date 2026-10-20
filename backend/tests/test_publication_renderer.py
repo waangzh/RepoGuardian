@@ -1,7 +1,8 @@
 import pytest
 
 from app.services.publication_planner import PublicationPlanner
-from app.services.publication_renderer import markdown_text, render_finding, render_summary, render_user_report
+from app.models.publication import PublicationPlan
+from app.services.publication_renderer import markdown_text, render_finding, render_summary, render_user_report, render_review_comment
 from test_publication_planner import publishable_task
 from test_review_outcome import completed_task
 
@@ -26,6 +27,48 @@ def test_untrusted_markdown_and_html_are_escaped_and_bounded():
     assert "&lt;script&gt;" in text and "&#64;everyone" in text
     assert len(markdown_text("x" * 10000, 100)) == 101
     assert "\u202e" not in markdown_text("a\u202eb")
+
+
+@pytest.mark.parametrize("placement", ["inline", "summary"])
+@pytest.mark.parametrize("claim", [
+    "修复 config[0] 的校验问题",
+    r"保留 C:\config\[0] 与 `key`、*value* 的原文",
+    '<script>alert(1)</script> ![x](https://evil) @everyone &lt; & "value"',
+    "x" * 220 + "[0]",
+])
+def test_titles_remain_plain_text_and_are_escaped_once_at_markdown_boundaries(placement, claim):
+    task = publishable_task(placement=placement, claim=claim)
+    plan = PublicationPlanner().build(task)
+    finding = (plan.inline_drafts + plan.summary_findings)[0]
+    assert finding.raw_title == finding.title == claim
+    escaped = markdown_text(claim, 200)
+    summary = f"1. [Medium] {escaped} — "
+    heading = f"### {escaped}\n"
+    comment = f"**[Medium · Correctness] {escaped}**"
+    assert summary in plan.summary_markdown
+    assert heading in plan.user_report_markdown
+    assert comment in finding.body_markdown
+    for detail in ("compact", "full"):
+        assert comment in render_review_comment(plan, detail=detail)
+    restored = PublicationPlan.model_validate_json(plan.model_dump_json())
+    assert restored == plan
+    assert heading in render_user_report(task, restored)
+
+
+def test_legacy_titles_are_not_escaped_again_and_frozen_bodies_are_unchanged():
+    task = publishable_task(claim=r"修复 config[0] 与 C:\config 的校验问题")
+    saved = PublicationPlanner().build(task).model_dump(mode="json")
+    finding = saved["inline_drafts"][0]
+    finding.pop("raw_title")
+    finding["title"] = markdown_text(finding["title"], 200)
+    restored = PublicationPlan.model_validate(saved)
+    assert restored.inline_drafts[0].raw_title is None
+    for field in ("summary_markdown", "user_report_markdown", "review_comment_markdown"):
+        assert getattr(restored, field) == saved[field]
+    assert restored.inline_drafts[0].body_markdown == finding["body_markdown"]
+    assert f"### {finding['title']}\n" in render_user_report(task, restored)
+    assert f"**[Medium · Correctness] {finding['title']}**" in render_review_comment(restored)
+    assert f"1. [Medium] {finding['title']} — " in render_summary(restored)
 
 
 def test_digest_is_based_on_goals_not_requested_focus_and_escapes_reasons():

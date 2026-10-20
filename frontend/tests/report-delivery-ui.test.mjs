@@ -63,6 +63,34 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
       const context = await renderToString(createSSRApp(Context, { task: fixtures.clean.task, plan, stale: true }));
       assert.ok(context.includes('PR 已更新，本轮结论不适用于最新提交'));
     });
+    await t.test('新旧问题标题均按纯文本显示，不暴露 Markdown 转义或注入 HTML', async () => {
+      const { publicationFindingTitle } = await server.ssrLoadModule('/src/utils/reportPresentation.ts');
+      const { default: Publication } = await server.ssrLoadModule('/src/components/review/GitHubPublicationPanel.vue');
+      const raw = '修复 config[0] 的校验问题';
+      const encoded = '修复 config\\[0\\] 的校验问题';
+      for (const legacy of [false, true]) {
+        const plan = structuredClone(fixtures.findings.plan);
+        const finding = [...plan.inline_drafts, ...plan.summary_findings][0];
+        finding.title = legacy ? encoded : raw;
+        if (legacy) delete finding.raw_title;
+        else finding.raw_title = raw;
+        const before = JSON.stringify(plan);
+        for (const component of [Readable, Publication]) {
+          const html = await renderToString(createSSRApp(component, { plan, reviewId: plan.review_id }));
+          assert.ok(html.includes(raw));
+          assert.ok(!html.includes(encoded));
+        }
+        assert.equal(JSON.stringify(plan), before);
+        finding.title = '&lt;img src=x&gt; &amp;lt; &#64;all &quot;x&quot; &#x27;y&#x27; C:\\\\config\\\\\\[0\\]';
+        delete finding.raw_title;
+        assert.equal(publicationFindingTitle(finding), '<img src=x> &lt; @all "x" \'y\' C:\\config\\[0]');
+        const html = await renderToString(createSSRApp(Readable, { plan }));
+        assert.ok(html.includes('&lt;img src=x&gt;'));
+        assert.ok(!html.includes('<img src=x>'));
+        finding.raw_title = String.raw`原始 \[0] &lt; <img src=x>`;
+        assert.equal(publicationFindingTitle(finding), finding.raw_title);
+      }
+    });
     await t.test('旧目标包装只影响展示，来源、输入缺口与代码观察仍保留', async () => {
       const plan = structuredClone(fixtures.findings.plan);
       plan.digest.change_understanding.author_goal = '作者声明（未经独立验证）：修复缓存读取。';

@@ -114,6 +114,11 @@ def render_finding(finding: PublicationFinding) -> str:
     return finding.body_markdown
 
 
+def finding_markdown_title(finding: PublicationFinding) -> str:
+    """仅在输出边界转义；旧冻结计划的 title 已转义，不再重复处理。"""
+    return markdown_text(finding.raw_title, 200) if finding.raw_title is not None else finding.title
+
+
 def finding_body(text: dict, severity: str, *, category: str | None = None,
                  evidence_summary: str | None = None) -> str:
     """单条问题的完整正文；免责声明与 Commit 只在交付文档末尾出现一次。"""
@@ -302,7 +307,7 @@ def _human_lines(view):
 
 
 def _report_finding_lines(plan, finding, view):
-    lines = ["", "---", "", f"### {markdown_text(finding.title)}", "", finding_location(plan, finding), "",
+    lines = ["", "---", "", f"### {finding_markdown_title(finding)}", "", finding_location(plan, finding), "",
              render_finding(finding)]
     lines += _human_lines(view) if view else []
     return lines
@@ -468,7 +473,7 @@ def _comment_finding_lines(plan, finding, index, view, *, full):
     severity = finding.severity.title()
     category = f" · {markdown_text(finding.category.title(), 100)}" if finding.category else ""
     # 等级与标题同一行，与对外评论示例一致；位置紧随其后。
-    lines = [f"**[{severity}{category}] {markdown_text(finding.title, 200)}**", "",
+    lines = [f"**[{severity}{category}] {finding_markdown_title(finding)}**", "",
              _comment_location(plan, finding), ""]
     impact = _sentence(finding.affected_behavior)
     if impact:
@@ -737,7 +742,7 @@ def render_summary(plan, *, discussion_urls: dict[str, str] | None = None) -> st
             if anchor.start_line:
                 location += f":{anchor.start_line}（{anchor.side}）"
             discussion = (discussion_urls or {}).get(finding.finding_key) if finding.placement == "inline" else None
-            lines.append(f"{index}. [{finding.severity.title()}] {finding.title} — {location}"
+            lines.append(f"{index}. [{finding.severity.title()}] {finding_markdown_title(finding)} — {location}"
                          + ("（Summary）" if finding.placement == "summary" else "")
                          + (f" · [查看 Inline 讨论]({discussion})" if discussion else ""))
         for finding in plan.summary_findings:
