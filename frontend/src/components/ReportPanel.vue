@@ -47,8 +47,8 @@ const visibleFindingCount = computed(() => customSelection.value ? selection.val
   : props.plan ? props.plan.inline_drafts.length + props.plan.summary_findings.length : null);
 const currentMarkdown = computed(() => reportView.value === "comment" ? (customSelection.value ? selection.value?.review_comment_markdown : props.reviewMarkdown)
   : reportView.value === "user" ? props.userMarkdown : props.markdown);
-const currentLabel = computed(() => reportView.value === "comment" ? "PR 交付摘要"
-  : reportView.value === "user" ? "详细审查报告" : "技术审计记录");
+const currentLabel = computed(() => reportView.value === "comment" ? "PR 评论草稿"
+  : reportView.value === "user" ? "详细审查报告" : "技术记录");
 const { copied, feedback, checking, pendingCopy, headCheck, checkHead, cancelPending, resetCopy, writeClipboard, copyCheckedComment, copyAcknowledged, checkedComment } = useReviewCommentCopy({
   reviewId: () => props.reviewId, reviewedHeadSha: () => props.reviewedHeadSha, markdown: () => currentMarkdown.value,
   options: () => ({ detail: detail.value, exclude_resolved: excludeResolved.value }),
@@ -122,14 +122,14 @@ function exportComments() {
     <section class="rd-shell" aria-label="审查报告工作台">
       <ReportModeTabs v-model="reportView" :panel-id="panelId" />
       <div class="rd-layout"><section :id="panelId" class="rd-main" role="tabpanel" :aria-label="currentLabel" tabindex="0">
-        <div class="rd-view-title"><div><h2>{{ currentLabel }}</h2><p>{{ reportView === 'comment' ? '面向 PR 作者和 Reviewer 的短报告；适合复制为 GitHub 评论或导出 Markdown。' : reportView === 'user' ? '面向开发者的分析报告：先读结论，再追踪代码观察、证据、局限与建议。' : '供排障、复核与历史追溯使用。先读结构化摘要，原始字段按需展开。' }}</p></div><span class="badge" :class="reportView === 'comment' ? 'blue' : reportView === 'user' ? 'success' : 'neutral'">{{ reportView === 'comment' ? '默认交付' : reportView === 'user' ? '证据导向' : '高级内容' }}</span></div>
+        <div class="rd-view-title"><div><h2>{{ currentLabel }}</h2><p>{{ reportView === 'comment' ? '供 PR 作者和 Reviewer 阅读，可复制为 GitHub Markdown 评论，也可导出。' : reportView === 'user' ? '面向开发者的分析报告：先读结论，再追踪代码观察、证据、局限与建议。' : '供排障、复核与历史追溯使用。先读结构化摘要，原始字段按需展开。' }}</p></div><span class="badge" :class="reportView === 'comment' ? 'blue' : reportView === 'user' ? 'success' : 'neutral'">{{ reportView === 'comment' ? '默认交付' : reportView === 'user' ? '证据导向' : '高级内容' }}</span></div>
         <p v-if="feedback" class="rd-notice rd-feedback" role="status">{{ feedback }}</p>
         <div v-if="previewLoading && reportView === 'comment'" class="rd-notice" role="status">正在生成所选内容预览…</div>
         <ReportReadableView v-else-if="reportView === 'user' && plan" :plan="plan" :pr-url="task?.pr_url" @file="emit('file', $event)" @finding="emit('finding', $event)" />
         <AuditSummaryView v-else-if="reportView === 'audit' && plan" :task="task" :plan="plan" :markdown="markdown" @file="emit('file', $event)" />
         <div v-else-if="!currentMarkdown"><EmptyState icon="report" title="当前报告尚不可用" description="请结合任务状态判断，或切换到其他报告查看历史记录。" /><button v-if="reportView === 'comment' && customSelection && reviewId" type="button" class="btn secondary" @click="previewRevision += 1">重试加载所选预览</button></div>
         <div v-else class="rd-doc">
-          <div v-if="reportView === 'comment'" class="rd-notice"><AppIcon name="info" :size="17" /><div><strong>这是一份审查摘要，不是合并批准。</strong> 复制或导出前将核对 PR 当前 Head；过期或未知时需要明确确认限制。</div></div>
+          <div v-if="reportView === 'comment'" class="rd-notice"><AppIcon name="info" :size="17" /><div><strong>评论草稿不代表合并批准。</strong> 复制或导出前将核对 PR 当前 Head；过期或未知时需要明确确认限制。</div></div>
           <p v-if="selection && reportView === 'comment'" class="rd-context-tip" role="status">包含 {{ selection.included_finding_keys.length }} 项，明确省略 {{ selection.omitted_finding_keys.length }} 项；保留 {{ selection.retained_blocking_keys.length }} 项已处理阻断问题。</p>
           <div :class="{ 'rd-comment': reportView === 'comment' }">
             <header v-if="reportView === 'comment'" class="rd-comment-header"><div><strong>评论正文预览</strong><small>以下是 GitHub PR 评论将呈现的核心内容</small></div><span class="badge neutral">Markdown</span></header>

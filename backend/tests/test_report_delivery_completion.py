@@ -74,7 +74,7 @@ async def test_structured_intent_survives_pages_and_checkpoint_with_same_budget(
     assert [item.status for item in plan.digest.intent_assessments] == ["observed", "not_checked"]
     assert len(plan.digest.intent_assessments[0].observations) == 2
     assert "异常路径未核验" in plan.review_comment_markdown and "尚未核验" in plan.user_report_markdown
-    # 未逐项核验的作者声明是辅助信息，不再单独把结论改为“需要补充检查”。
+    # 未逐项核验的作者声明是辅助信息，不再单独把结论降为证据缺口情景。
     expected = "conditional_merge" if truncated is False else "resolve_unknowns"
     assert plan.digest.merge_decision.status == expected
     assert plan.digest.author_context_status == ("unknown" if truncated is None else "truncated" if truncated else "complete")

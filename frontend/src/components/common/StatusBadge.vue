@@ -16,7 +16,7 @@ const labels: Record<string, string> = {
   verifying_issues: "验证问题",
   generating_patches: "生成补丁",
   validating: "验证中",
-  waiting_for_human: "历史审查未完成",
+  waiting_for_human: "历史审查已中止",
   needs_human: "未确认",
   unresolved: "未确认",
   completed: "已完成",

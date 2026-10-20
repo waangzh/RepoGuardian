@@ -31,7 +31,7 @@ export function parseCommentPreview(markdown: string) {
       pendingNote += token.raw;
       continue;
     }
-    if (token.type === 'hr' && /^\s*本结论基于/.test(tokens.slice(index + 1).map(item => item.raw).join(''))) {
+    if (token.type === 'hr' && /^\s*本(?:结论|记录)基于/.test(tokens.slice(index + 1).map(item => item.raw).join(''))) {
       inSnapshot = true;
       continue;
     }

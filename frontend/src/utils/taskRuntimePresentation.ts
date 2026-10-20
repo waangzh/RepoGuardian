@@ -132,7 +132,7 @@ export function runtimeWarnings(report: TaskRuntimeReport): string[] {
 
 export function reviewCompletionMessage(task: ReviewTask): string {
   const report = runtimeReport(task);
-  if (!report) return task.issues.length ? `发现 ${task.issues.length} 个需关注的问题，报告已生成。` : "未发现达到报告门槛的问题，报告已生成。";
+  if (!report) return task.issues.length ? `发现 ${task.issues.length} 个需关注的问题，报告已生成。` : "已检查范围内未发现达到报告门槛的问题，报告已生成。";
   const summary = taskRuntimeSummary(report);
   return `${summary.findings.confirmed} 项已确认问题，${summary.findings.unresolved} 项待确认候选。`
     + (runtimeWarnings(report).join(" ") || "约定范围已检查，报告已生成。");

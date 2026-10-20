@@ -105,7 +105,7 @@ const NEXT_STEPS: Record<SituationKey, NextSteps> = {
   },
   clean: {
     title: "可以准备审查交付",
-    description: "本轮未发现达到报告门槛的问题，交付前仍需核对快照与 CI。",
+    description: "已检查范围内未发现达到报告门槛的问题，交付前仍需核对快照与 CI。",
     steps: [["核对版本与 CI", "确认 PR 当前 Head 和项目验证结果"], ["阅读交付摘要", "核对结论措辞与覆盖边界"], ["由人工决定是否合并", "静态结论不代替项目审批"]],
   },
   nonblocking: {

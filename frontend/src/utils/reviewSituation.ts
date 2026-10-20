@@ -125,7 +125,7 @@ export function reviewSituation(
           : "没有可用的约定目标记录，无法判断检查范围；请先补齐范围或重新审查。",
         tone: "warning", icon: "clock", actions: actions("view_gaps", "rereview"), copy: COPY_RECORD };
     }
-    return { ...counts, key: "evidence_gaps", title: "部分内容尚未核实，暂不能给出完整建议",
+    return { ...counts, key: "evidence_gaps", title: "部分问题尚未核实，暂不能给出完整建议",
       description: "仍有问题或调用路径未完成核验；请先核对缺口，再决定是否补查或交付本轮记录。", tone: "warning", icon: "help",
       actions: actions("view_gaps", "rereview"), copy: COPY_RECORD };
   }

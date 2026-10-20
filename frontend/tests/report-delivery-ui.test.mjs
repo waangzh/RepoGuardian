@@ -13,7 +13,24 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
     const { default: Audit } = await server.ssrLoadModule('/src/components/report/AuditSummaryView.vue');
     const { default: Context } = await server.ssrLoadModule('/src/components/report/ReportContext.vue');
     const { default: Workspace } = await server.ssrLoadModule('/src/components/review/ReviewWorkspace.vue');
+    const { default: Modes } = await server.ssrLoadModule('/src/components/report/ReportModeTabs.vue');
+    const { default: Sidebar } = await server.ssrLoadModule('/src/components/report/ReportDeliverySidebar.vue');
     const { reportSourceLink, reportValidationLabel, coverageLabel, reportLimitations } = await server.ssrLoadModule('/src/utils/reportPresentation.ts');
+    await t.test('报告名称与密度说明匹配实际输出，技术记录保持高级入口', async () => {
+      const { task, plan } = fixtures.clean;
+      const html = await renderToString(createSSRApp(Modes, { modelValue: 'comment', panelId: 'report' }))
+        + await renderToString(createSSRApp(Sidebar, {
+          task, plan, mode: 'comment', detail: 'compact', excludeResolved: false, available: true,
+          busy: false, copied: false, headLabel: '尚未检查', headTone: 'neutral', headNote: '',
+          canCheck: true, canPublish: true,
+        }));
+      for (const text of ['PR 评论草稿', '详细审查报告', '技术记录',
+        '简洁评论 · 包含所有可交付问题及处理建议', '详细评论 · 增加证据、触发场景与审查范围']) assert.ok(html.includes(text));
+      for (const text of ['PR 交付摘要', '保留全部问题正文', '附加完整范围信息', '>PR Summary<']) assert.ok(!html.includes(text));
+      const audit = await renderToString(createSSRApp(Audit, { task, plan }));
+      assert.ok(!audit.includes('<details open'));
+      assert.ok(!audit.includes('<pre>'));
+    });
     for (const name of ['clean', 'findings', 'inconclusive', 'failed', 'cancelled', 'withheld']) {
       await t.test(name, async () => {
         const { task, plan } = fixtures[name];
