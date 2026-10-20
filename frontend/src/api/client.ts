@@ -21,7 +21,7 @@ import type { PublicationSelection, PublicationPreflightResult, PublicationAccep
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
 export function getPrDiscussions(taskId: string, query: {
-  page?: number; discussion_id?: string; comment_offset?: number;
+  page?: number; page_size?: number; discussion_id?: string; comment_offset?: number; comment_limit?: number;
 } = {}, signal?: AbortSignal): Promise<import("../types/prDiscussion").DiscussionPage> {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) if (value !== undefined) params.set(key, String(value));
