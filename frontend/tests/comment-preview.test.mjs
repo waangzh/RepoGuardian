@@ -25,6 +25,25 @@ test('评论分节保留真实问题、选择说明、快照限制和历史正�
         }
       });
     }
+    await t.test('历史讨论前言保留原文且不导致评论退回普通 Markdown', () => {
+      const preamble = '当前结论针对本轮变更范围；已参考 2 项历史讨论，另有 2 项历史事项未核验。';
+      const overview = '**PR 目标：** 保留原有目标描述。\n\n**代码观察：** 保留 `lo = min(lo, point)` 与 `hi = max(hi, point)`。';
+      const reminder = '- 限制：未运行测试，仅静态核对\n- 限制：未实际执行 pytest，结合 CI、业务预期和人工评审决定是否合并。';
+      const snapshot = '本结论基于提交 `4d9d79bda4b1` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。';
+      const markdown = `RepoGuardian · PR Code Review\n\n✅ 结论：已检查范围内未发现需处理的问题\n\n${preamble}\n\n## 变更概述\n\n${overview}\n\n## 合并前提醒\n\n${reminder}\n\n---\n\n${snapshot}`;
+      const document = parseCommentPreview(markdown);
+      assert.ok(document);
+      assert.equal(document.conclusion, '结论：已检查范围内未发现需处理的问题');
+      assert.equal(document.preamble, preamble);
+      assert.deepEqual(document.sections.map(item => item.title), ['变更概述', '合并前提醒']);
+      assert.equal(document.sections[0].markdown.trim(), overview);
+      assert.equal(document.sections[1].markdown.trim(), reminder);
+      assert.equal(document.snapshot, snapshot);
+      const note = '> 以下为执行失败前已保留的部分审查记录，不是完整审查结论。';
+      const partial = parseCommentPreview(markdown.replace(preamble, `${note}\n\n${preamble}`));
+      assert.equal(partial.preamble, `${note}\n\n${preamble}`);
+      assert.ok(!partial.sections[0].markdown.includes('部分审查记录'));
+    });
     await t.test('失败与取消的部分审查记录保留提示且不冒充正常章节', () => {
       for (const [verdict, note] of [
         ['❌ 结论：审查因执行错误中断（部分审查记录）', '以下为执行失败前已保留的部分审查记录'],

@@ -15,6 +15,7 @@ const document = computed(() => parseCommentPreview(props.content));
       <AppIcon :name="document.positive ? 'check-circle' : 'alert'" :size="19" />
       <strong>{{ document.conclusion }}</strong>
     </div>
+    <ReportMarkdown v-if="document.preamble" class="rd-comment-intro" :content="document.preamble" />
     <section v-for="(section, index) in document.sections" :key="index" class="rd-comment-section">
       <header>
         <h3>{{ section.title }}</h3>

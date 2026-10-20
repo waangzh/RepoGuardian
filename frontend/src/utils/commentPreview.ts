@@ -20,10 +20,11 @@ export function parseCommentPreview(markdown: string) {
 
   const sections: CommentPreviewSection[] = [];
   let section: CommentPreviewSection | null = null;
+  let preamble = '';
   let snapshot = '';
   let inSnapshot = false;
   // 失败/取消的复制内容在结论后自带“部分审查记录”说明；它不是章节，
-  // 但必须保留，因此并入紧随其后的首个章节正文。
+  // 有前言时按原顺序保留在前言中，否则并入首个章节正文。
   let pendingNote = '';
   const start = tokens.indexOf(verdict!) + 1;
   for (let index = start; index < tokens.length; index += 1) {
@@ -48,7 +49,11 @@ export function parseCommentPreview(markdown: string) {
         ? token.raw.replace(/^\*\*实际变更[：:]\*\*/, '**代码观察：**') : token.raw;
       section.markdown += raw;
     } else if (token.type !== 'space') {
-      return null; // Never silently drop an unfamiliar preamble.
+      preamble += pendingNote + token.raw;
+      pendingNote = '';
+    } else if (!section) {
+      if (pendingNote) pendingNote += token.raw;
+      else preamble += token.raw;
     }
   }
   if (!sections.length) return null;
@@ -61,5 +66,5 @@ export function parseCommentPreview(markdown: string) {
       section.findingCount = count;
     }
   }
-  return { title, conclusion: match[2]!, positive: match[1] === '✅', sections, snapshot: snapshot.trim() };
+  return { title, conclusion: match[2]!, positive: match[1] === '✅', preamble: preamble.trim(), sections, snapshot: snapshot.trim() };
 }
