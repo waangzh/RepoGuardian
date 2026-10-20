@@ -74,6 +74,34 @@ def thread_path(thread, readable, renames=None):
     return matches[0] if len(matches) == 1 else None
 
 
+def _record_completed_rechecks(store, snapshot, steps):
+    """把已接受的核验结果写入日志；未完成项保持 not_checked，不投影为成功。"""
+    for thread in snapshot.threads:
+        step = steps.get("history-" + stable_hash(thread.id)[:32])
+        if step is None:
+            continue
+        result = step.executor.projection.investigation
+        if result:
+            store.data["rechecks"][thread.id] = DiscussionRecheck(discussion_id=thread.id,
+                status=getattr(result, "resolution", "insufficient_evidence"), reason=result.reason,
+                evidence_ids=result.evidence_ids, limitations=result.limitations).model_dump(mode="json")
+
+
+def _mark_incomplete_rechecks(store, snapshot, steps):
+    """外层超时/取消时，未产生结论的复核显式标记为未核验，不维持旧快照。"""
+    for thread in snapshot.threads:
+        step = steps.get("history-" + stable_hash(thread.id)[:32])
+        if step is None or step.executor.projection.investigation is not None:
+            continue
+        current = store.data["rechecks"].get(thread.id) or {}
+        if current.get("status") != "not_checked":
+            continue
+        limitations = list(dict.fromkeys([*(current.get("limitations") or []), "recheck_incomplete"]))[:20]
+        store.data["rechecks"][thread.id] = DiscussionRecheck(discussion_id=thread.id,
+            status="not_checked", reason="历史问题代码核验未完成；超时或取消后结果未知。",
+            limitations=limitations).model_dump(mode="json")
+
+
 async def recheck_discussions_node(state, runtime=None, config=None):
     configuration = state.get("task_runtime_configuration") or {}
     if configuration.get("discussion_contract") != CONTRACT:
@@ -152,16 +180,20 @@ async def recheck_discussions_node(state, runtime=None, config=None):
         if remaining <= 0:
             termination = "deadline"
         else:
-            termination = await queue.run(steps, deadline_seconds=remaining)
-        for thread in snapshot.threads:
-            step = steps.get("history-" + stable_hash(thread.id)[:32])
-            if step is None:
-                continue
-            result = step.executor.projection.investigation
-            if result:
-                store.data["rechecks"][thread.id] = DiscussionRecheck(discussion_id=thread.id,
-                    status=getattr(result, "resolution", "insufficient_evidence"), reason=result.reason,
-                    evidence_ids=result.evidence_ids, limitations=result.limitations).model_dump(mode="json")
+            try:
+                termination = await queue.run(steps, deadline_seconds=remaining)
+            except BaseException:
+                # 外层期限/取消可能在模型响应在途时打断本节点；已接受的核验结果
+                # 仍需落盘，未完成项标记未核验。清理失败不能掩盖原始异常。
+                _record_completed_rechecks(store, snapshot, steps)
+                _mark_incomplete_rechecks(store, snapshot, steps)
+                store.data.setdefault("limitations", []).append("history_recheck:cancelled")
+                try:
+                    await store.save()
+                except BaseException:
+                    pass
+                raise
+        _record_completed_rechecks(store, snapshot, steps)
         # Persist the evidence bodies behind task-scoped references, never in task responses.
         store.data["history_evidence"] = await store.put("history-evidence",
             {key: value for step in steps.values() for key, value in step.executor.evidence_catalog.items()})

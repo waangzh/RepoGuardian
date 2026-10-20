@@ -1,4 +1,5 @@
 import asyncio
+import json
 from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -7,9 +8,10 @@ import httpx
 import pytest
 
 from app.models.pr_discussion import (
-    DiscussionComment, DiscussionThread, DiscussionSnapshot, DiscussionPolicy, DiscussionSummary,
+    CONTRACT, DiscussionComment, DiscussionThread, DiscussionSnapshot, DiscussionPolicy, DiscussionSummary,
     DiscussionReadArguments, DiscussionMatch,
 )
+from app.models.review_runtime import Candidate, ReviewGoal, ReviewWorkItem, RuntimeReadArguments
 from app.services.artifact_store import LocalArtifactStore
 from app.services.pr_discussion_store import DiscussionStore
 from app.services.pr_discussions import (
@@ -17,8 +19,79 @@ from app.services.pr_discussions import (
 )
 from app.services.pr_discussion_matching import valid_matches, safe_discussion_url
 from app.services.review_run_budget import activate_run_budget
+from app.services.review_task_executor import ReviewTaskExecutor
+from app.services.task_runtime_checkpoint import TaskRuntimeCheckpoint
 from app.tools.github_discussions import GitHubDiscussionReader
+from runtime_v1_fixtures import evidence_catalog
 from test_task_review_sdk_slice import make_slice
+from test_task_runtime_p4 import production_input as production_input  # noqa: E402, F401
+
+
+def recheck_executor(*, base_visible):
+    """历史复核执行器：只能读取冻结 Head；可选地加入已归档的 Base 证据。"""
+    from app.models.review_runtime import ReviewRunSpec
+    import hashlib
+    spec = ReviewRunSpec(run_id="run", snapshot_head_sha="a" * 40, snapshot_base_sha="b" * 40,
+        diff_manifest_hash="manifest", model_provider="openai-compatible", model_name="fixture",
+        policy_version="p1", max_tokens=100_000, max_calls=5, discussion_manifest_hash="frozen",
+        discussion_profile={"context_window": 20_000}, discussion_recheck=True,
+        readable_scope_files=("src/a.py",))
+    goal = ReviewGoal(goal_id="history-1", unit_id="history-1", kind="investigate",
+                      target_ref="src/a.py", origin="derived")
+    goals, related = [goal], []
+    if base_visible:
+        # 冻结的删除目标才会开放 Base 侧可读范围；这里模拟该路径实际可用。
+        base_goal = ReviewGoal(goal_id="history-1-base", unit_id="history-1", kind="investigate",
+            target_ref="src/a.py", target_kind="base_source_range", origin="derived")
+        goals.append(base_goal)
+        related.append(base_goal.goal_id)
+    work = ReviewWorkItem(work_item_id="history-1", kind="investigate", goal_ids=["history-1"],
+        related_goal_ids=related,
+        unit_id="history-1", scope_files=["src/a.py"], readable_scope_hash=spec.readable_scope_hash,
+        scheduling_class="investigation",
+        proposition="核验历史讨论中的原始问题在当前固定代码中是否仍成立。",
+        evidence_requests=[RuntimeReadArguments(file_path="src/a.py", start_line=1, end_line=1)])
+    def evidence(identity, side, content, start=1):
+        return {"file_path": "src/a.py", "side": side, "start_line": start, "end_line": start,
+                "content": content, "content_hash": hashlib.sha256(content.encode()).hexdigest(),
+                "head_sha": "a" * 40, "base_sha": "b" * 40, "source": "file_read"}
+    catalog = {"head-1": evidence("head-1", "head", "return value\n")}
+    active = {"head-1"}
+    if base_visible:
+        catalog["base-1"] = evidence("base-1", "base", "return None\n")
+        active.add("base-1")
+    return ReviewTaskExecutor(spec, work, goals, active_evidence_ids=active,
+        evidence_catalog=catalog, request_id="history-request")
+
+
+def discussion_submission(resolution, evidence_ids):
+    return {"kind": "submit", "investigation": {"answer": "refuted", "resolution": resolution,
+        "evidence_ids": evidence_ids, "limitations": [], "reason": "核对历史问题的当前实现"}}
+
+
+@pytest.mark.parametrize("limitations", [[], ["模型限制"] * 20])
+def test_fixed_without_base_evidence_is_insufficient_not_not_present(limitations):
+    executor = recheck_executor(base_visible=False)
+    submission = discussion_submission("fixed", ["head-1"])
+    submission["investigation"]["limitations"] = limitations
+    parsed = executor.parse_and_apply(submission)
+    assert not parsed.errors
+    result = executor.projection.investigation
+    # Base 不可读时不能伪造 fixed；也不能把“已修复”改写为“主张不成立”。
+    assert result.resolution == "insufficient_evidence"
+    assert result.answer.value == "insufficient_evidence"
+    assert "fixed_requires_base_and_head_evidence" in result.limitations
+    assert len(result.limitations) <= 20
+
+
+def test_fixed_holds_only_when_base_and_head_evidence_are_both_accepted():
+    executor = recheck_executor(base_visible=True)
+    parsed = executor.parse_and_apply(discussion_submission("fixed", ["base-1", "head-1"]))
+    assert not parsed.errors
+    result = executor.projection.investigation
+    assert result.resolution == "fixed" and result.answer.value == "refuted"
+    assert set(result.evidence_ids) == {"base-1", "head-1"}
+
 
 
 def snapshot(task_id="run", body="The retry branch may return null.", path="src/a.py"):
@@ -87,6 +160,139 @@ async def test_graphql_replies_are_paginated_and_resolution_is_only_platform_sta
     assert len(reader.threads["inline:1"].comments) == 2
     assert reader.threads["inline:1"].resolved is True and reader.threads["inline:1"].complete
     assert calls[1] == {"id": "node", "cursor": "reply"}
+
+
+async def test_null_body_review_is_skipped_without_aborting_the_source():
+    class GitHub:
+        _token = None
+        async def _get(self, url, headers, *, params):
+            if "/issues/" in url:
+                return response([])
+            if url.endswith("/reviews"):
+                return response([{"id": 3, "body": None, "state": "APPROVED"},
+                                 {"id": 4, "body": "Review body", "commit_id": "a" * 40}])
+            return response([])
+    result = await GitHubDiscussionReader(GitHub()).collect(task_id="run",
+        pr_url=snapshot().pr_url, head_sha="a" * 40, base_sha="b" * 40, owner="o", repo="r", number=1)
+    assert result.sources["review"] == "complete"
+    assert [t.id for t in result.threads if t.source == "review"] == ["review:4"]
+
+
+async def test_memory_mode_graph_nodes_share_one_frozen_discussion_store(tmp_path, monkeypatch, production_input):
+    from app.core.config import settings
+    from app.graph.nodes.pr_discussions import discussion_prepare_node
+    from app.graph.nodes.task_review_runtime import task_review_runtime_node
+    from app.graph.state import ReviewState, ReviewRunContext
+    from langgraph.graph import END, StateGraph
+    from app.services.review_run_budget import ReviewRunBudget, activate_run_budget
+    monkeypatch.setattr(settings, "repoguardian_artifact_dir", tmp_path / "artifacts")
+    state, provider, calls = production_input
+    class EmptyGitHub:
+        _token = None
+        async def _get(self, url, headers, *, params):
+            return response([])
+    state = {**state, "_provider": provider, "_github_tool": EmptyGitHub()}
+    state["task_runtime_configuration"] = {**state["task_runtime_configuration"],
+        "discussion_contract": CONTRACT, "prompt_version": "task-review-prompt-v7"}
+    graph = StateGraph(ReviewState, context_schema=ReviewRunContext)
+    graph.add_node("discussion_prepare", discussion_prepare_node)
+    graph.add_node("task_review_runtime", task_review_runtime_node)
+    graph.set_entry_point("discussion_prepare")
+    graph.add_edge("discussion_prepare", "task_review_runtime")
+    graph.add_edge("task_review_runtime", END)
+    budget = ReviewRunBudget("run", max_tokens=100_000, max_calls=5)
+    with activate_run_budget(budget):
+        result = await graph.compile().ainvoke(state)
+    # 无仓储时 save() 不落库；运行时节点必须复用 prepare 写入的同一份冻结讨论数据，
+    # 否则 data["input"] 缺失会在运行时节点失败。
+    assert result["pr_discussion"]["manifest_hash"]
+    assert result["task_runtime_report"]["scope_complete"]
+    assert result["_discussion_store"].data["input"]
+    assert calls[0]["discussion_manifest_hash"] == result["pr_discussion"]["manifest_hash"]
+
+
+async def test_memory_mode_missing_frozen_input_is_a_domain_error(tmp_path, production_input):
+    from app.graph.nodes.task_review_runtime import task_review_runtime_node
+    state, provider, _ = production_input
+    value = snapshot(task_id="run", path="a.py").model_copy(update={
+        "pr_url": state["pr_url"], "head_sha": state["head_sha"], "base_sha": state["base_sha"]})
+    store = DiscussionStore("run", {"pr_url": value.pr_url, "head_sha": value.head_sha,
+        "base_sha": value.base_sha}, artifacts=LocalArtifactStore(tmp_path / "artifacts"))
+    state = {**state, "_provider": provider, "_discussion_store": store}
+    state["task_runtime_configuration"] = {**state["task_runtime_configuration"],
+        "discussion_contract": CONTRACT}
+    with pytest.raises(ValueError, match="discussion frozen input missing"):
+        await task_review_runtime_node(state)
+
+
+async def test_checkpoint_restore_replays_visible_discussions_for_duplicate_matching(tmp_path, persistence):
+    from langchain_core.messages import AIMessage
+    from app.agents.providers import OpenAICompatibleProvider
+    from app.models.review import ReviewTask, ReviewToolScope
+    from app.models.review_runtime import ReviewRunSpec
+    from app.services.review_run_budget import ReviewRepositoryRunBudgetStore, ReviewRunBudget
+    from app.services.review_runtime import TaskReviewRuntime
+    from app.services.review_task_protocol import TaskReviewV1Protocol
+    from app.services.review_task_step import InspectTaskStep
+    repository = persistence[0]
+    repository.create_task(ReviewTask(id="run", pr_url=snapshot().pr_url, engine="task_review_v1"))
+    entry = thread_input(snapshot().threads[0])
+    response = json.dumps({"kind": "submit", "verification": {"candidate_id": "c1",
+        "decision": "supported", "evidence_ids": ["e1"], "reason": "复核",
+        "discussion_matches": [{"discussion_id": "inline:1", "comment_id": "comment:1",
+            "quote": "retry branch may return null", "same_subject": True, "same_trigger": True,
+            "same_impact": True, "new_information": False, "reason": "同一重试入口"}]}})
+    async def configure(folder):
+        folder.mkdir()
+        (folder / "src").mkdir()
+        (folder / "src/a.py").write_text("return value\n", encoding="utf-8")
+        spec = ReviewRunSpec(run_id="run", snapshot_head_sha="a" * 40, snapshot_base_sha="b" * 40,
+            diff_manifest_hash="manifest", model_provider="openai-compatible", model_name="fixture",
+            policy_version="p1", max_tokens=100_000, max_calls=5, prompt_version="task-review-prompt-v7",
+            discussion_manifest_hash="frozen", discussion_context=[entry],
+            discussion_profile={"context_window": 20_000})
+        goal = ReviewGoal(goal_id="t1", unit_id="u1", kind="verify", target_ref="src/a.py")
+        work = ReviewWorkItem(work_item_id="w1", kind="verify", goal_ids=["t1"], scope_files=["src/a.py"],
+            verification_candidate=Candidate(candidate_id="c1", claim="候选", primary_anchor="t1",
+                supporting_evidence=["e1"], source_result_ids=["inspect-1"]))
+        executor = ReviewTaskExecutor(spec, work, [goal], active_evidence_ids={"e1"},
+            evidence_catalog=evidence_catalog("e1"), request_id="inspect-1")
+        provider = OpenAICompatibleProvider("stub-key", "https://example.test/v1", "fixture",
+            provider_name="openai-compatible", request_attempts=1)
+        class SDK:
+            async def ainvoke(self, payload):
+                return AIMessage(content=response, usage_metadata={"input_tokens": 10,
+                    "output_tokens": 5, "total_tokens": 15})
+        provider._build_chat_model = lambda *args: SDK()
+        class SnapshotGit:
+            _git = "git"
+            def _run(self, argv):
+                return "a" * 40
+        scope = ReviewToolScope(review_unit_id="w1", commentable_files={"src/a.py"},
+            readable_files={"src/a.py"}, repository_root=str(folder),
+            max_lines_per_read=240, max_search_results=12)
+        budget = await ReviewRunBudget.load_or_create("run", max_tokens=100_000, max_calls=5,
+            store=ReviewRepositoryRunBudgetStore(repository), recover_running=False)
+        step = InspectTaskStep(executor, provider, budget, scope, git_tool=SnapshotGit())
+        step.protocol = TaskReviewV1Protocol(spec)
+        runtime = TaskReviewRuntime([executor.work_item])
+        checkpoint = TaskRuntimeCheckpoint(runtime, {"w1": step}, repository)
+        await checkpoint.restore()
+        return runtime, checkpoint, step
+    runtime, checkpoint, step = await configure(tmp_path / "first")
+    def crash(*args):
+        raise asyncio.CancelledError()
+    step.apply_response = crash
+    with pytest.raises(asyncio.CancelledError):
+        await runtime.advance_one({"w1": step})
+    assert step.executor.projection.verification is None
+    restored, _, restored_step = await configure(tmp_path / "second")
+    # 崩溃后重放已保存响应：可见讨论集合必须与首次执行一致，否则重复匹配会被静默丢弃。
+    assert restored_step.executor.projection.verification is not None
+    assert [match.discussion_id for match in
+        restored_step.executor.projection.verification.discussion_matches] == ["inline:1"]
+    assert restored_step.executor.visible_discussions == [entry]
+    assert not restored_step.pending_read
 
 
 async def test_limits_partial_failure_timeout_and_cancellation():
@@ -230,6 +436,54 @@ async def test_supplemental_queue_checks_files_outside_diff_and_preserves_main_t
         "termination": store.data.get("termination_reason"), "queue": store.data.get("history_checkpoint", {}).get("items")}
     assert result["pr_discussion"]["stats"]["checked"] == 1 and len(messages) == 1
     assert repeated["pr_discussion"]["stats"]["checked"] == 1
+
+
+async def test_outer_deadline_during_recheck_keeps_completed_part_and_marks_rest_unchecked(tmp_path, monkeypatch):
+    from app.services import pr_discussion_recheck as module
+    import asyncio
+
+    value = snapshot()
+    value.threads.append(DiscussionThread(id="inline:2", source="inline", path="src/a.py",
+        resolved=False, comments=[DiscussionComment(id="comment:2", body="Second historical issue",
+            url="https://github.com/o/r/pull/1#discussion_r2")]))
+    store = await store_for(tmp_path, value=value)
+    async def open_frozen(*args, **kwargs):
+        return store
+    monkeypatch.setattr(module, "open_store", open_frozen)
+    monkeypatch.setattr(module, "list_git_tracked_files", lambda root: ["src/a.py"])
+    step, _ = make_slice(tmp_path, [])
+    from app.models.review_runtime import DiscussionInvestigationResult
+
+    async def run_until_outer_deadline(queue, steps, *, deadline_seconds):
+        # 第一个复核已产生结论；第二次模型调用在途时外层 asyncio.timeout 取消本节点。
+        identities = list(steps)
+        steps[identities[0]].executor.projection.investigation = DiscussionInvestigationResult(
+            answer="supported", resolution="still_present", evidence_ids=[], limitations=[],
+            reason="当前实现仍存在原问题", work_item_id=identities[0],
+            proposition="历史问题", request_id="r1", attempt_id="a1",
+            snapshot_head_sha="a" * 40)
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(module.TaskReviewRuntime, "run", run_until_outer_deadline)
+    configuration = {"discussion_contract": "pr-discussion-context-v1", "provider": "openai-compatible",
+        "model": "fixture", "endpoint": "https://example.test/v1", "policy_version": "p1",
+        "prompt_version": "task-review-prompt-v7", "request_attempts": 1, "request_timeout_seconds": 60,
+        "request_profile": {"context_window": 20_000}, "max_lines_per_read": 240, "max_search_results": 12,
+        "deadline_seconds": 60}
+    state = {"task_id": "run", "pr_url": snapshot().pr_url, "head_sha": "a" * 40, "base_sha": "b" * 40,
+        "repo_path": str(tmp_path), "pr_discussion": await metadata(store), "task_runtime_configuration": configuration,
+        "changed_files": [], "review_plan": {}, "created_at": datetime.now(timezone.utc).isoformat(),
+        "task_runtime_report": {"execution_status": "completed", "termination_reason": "plan_exhausted",
+                                "usage_integrity": "complete", "initial_scope_coverage": []},
+        "_provider": step.provider, "_git_tool": step.git}
+    with activate_run_budget(step.budget), pytest.raises(asyncio.CancelledError):
+        await module.recheck_discussions_node(state)
+    statuses = {key: item["status"] for key, item in store.data["rechecks"].items()}
+    # 已完成复核保留结论；被期限打断的项显式未核验，不能维持旧快照或伪造成功。
+    assert statuses["inline:1"] == "still_present"
+    assert statuses["inline:2"] == "not_checked"
+    assert "recheck_incomplete" in store.data["rechecks"]["inline:2"]["limitations"]
+    assert "history_recheck:cancelled" in store.data["limitations"]
 
 
 async def test_summary_cap_rejects_before_sending(tmp_path):
