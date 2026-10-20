@@ -51,7 +51,7 @@ def fit_context_pages(executor, step, configuration):
         catalog = deepcopy(original)
         try:
             pages = build_context_pages(executor.work_item, list(executor.goals.values()), catalog,
-                capacity_chars=capacity, chunk_evidence=executor.spec.prompt_version in {"task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6"})
+                capacity_chars=capacity, chunk_evidence=executor.spec.prompt_version in {"task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7"})
             for page in pages:
                 goals = [executor.goals[value["goal_id"]].model_copy(update={
                     "start_line": value["start_line"], "end_line": value["end_line"]}) for value in page.ranges]
@@ -72,7 +72,8 @@ def task_runtime_configuration(model=None, *, provider=None):
     resolver = getattr(provider, "resolve_request_profile", None)
     profile = resolver(selected_model) if callable(resolver) else settings.resolve_model_profile(selected_model)
     return {"provider": provider_name, "model": selected_model,
-        "prompt_version": "task-review-prompt-v6",
+        "prompt_version": "task-review-prompt-v7",
+        "discussion_contract": "pr-discussion-context-v1" if settings.repoguardian_pr_discussions_enabled else None,
         "publication_contract": "claim-publication-v1",
         "pr_intent_contract": "pr-intent-assessment-v4",
         # 新任务冻结具体关系规划；历史手工配置缺省为 legacy，恢复时不能静默换规划器。
@@ -152,6 +153,20 @@ def frozen_runtime_spec(state, configuration, budget, *, readable_files=()):
             if contract in {"pr-intent-assessment-v2", "pr-intent-assessment-v3", "pr-intent-assessment-v4"}:
                 intent_truncated = len(statement) > 4_000
             intent_context = statement[:3_999] + "…" if len(statement) > 4_000 else statement
+    discussion_fields = {}
+    if configuration.get("discussion_contract") == "pr-discussion-context-v1":
+        from app.services.pr_discussions import select_discussions
+        from app.services.model_request_budgeter import PreparedModelRequest
+        metadata = state.get("pr_discussion") or {}
+        if not metadata.get("manifest_hash"):
+            raise ValueError("discussion frozen manifest missing")
+        context_request = PreparedModelRequest(model=configuration["model"], operation="task_review_v1",
+            system="", prompt="", output_tokens=4096)
+        profile = ModelRequestProfile.model_validate(configuration["request_profile"])
+        selected = select_discussions(state.get("_discussion_items") or [],
+            set(readable_files), configuration["model"], profile, context_request)
+        discussion_fields = {"discussion_manifest_hash": metadata["manifest_hash"], "discussion_context": selected,
+                             "discussion_profile": configuration["request_profile"]}
     return ReviewRunSpec(run_id=state["task_id"], snapshot_head_sha=state["head_sha"],
         snapshot_base_sha=review_diff_base(state), diff_manifest_hash=stable_hash({
             "changed_files": state.get("changed_files") or [], "plan": state.get("review_plan") or {}}),
@@ -160,7 +175,7 @@ def frozen_runtime_spec(state, configuration, budget, *, readable_files=()):
         prompt_version=configuration.get("prompt_version", "task-review-prompt-v1"),
         publication_contract=configuration.get("publication_contract", "legacy"),
         readable_scope_files=tuple(sorted(readable_files)),
-        pr_intent_context=intent_context,
+        **discussion_fields, pr_intent_context=intent_context,
         pr_intent_context_truncated=intent_truncated,
         # v3 允许“局部观察证据”只覆盖目标内的一段；v4 进一步把对照改为可选辅助分析。
         intent_assessment_contract=(("structured-intent-v3" if contract == "pr-intent-assessment-v4"
@@ -217,7 +232,7 @@ async def source_catalog(goals, spec, root, git, changed_files=None):
                     "new_start": hunk.new_start, "new_length": hunk.new_length,
                     "lines": [line.model_dump(mode="json") for line in hunk.lines]}
                 break
-        if spec.prompt_version in {"task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6"}:
+        if spec.prompt_version in {"task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7"}:
             chunks, _ = build_context_evidence([{**value, "file": goal.target_ref}],
                                               spec.snapshot_head_sha, spec.snapshot_base_sha)
             for chunk in chunks:
@@ -262,6 +277,12 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
         # 已创建的 P4 任务继续使用原权限，不在恢复时静默扩权。
         readable = set(sorted({value["path"] for value in state.get("file_index") or []
             if value.get("path") and not is_sensitive_repository_path(value["path"])})[:40])
+    discussion_store = None
+    if configuration.get("discussion_contract") == "pr-discussion-context-v1":
+        from app.services.pr_discussions import open_store
+        discussion_store = await open_store(state, runtime, config)
+        frozen_discussions = await discussion_store.read(discussion_store.data["input"])
+        state = {**state, "_discussion_items": frozen_discussions["items"]}
     spec = frozen_runtime_spec(state, configuration, budget, readable_files=readable)
     if not expanded_scope:
         spec = spec.model_copy(update={"readable_scope_files": ()})
@@ -329,6 +350,7 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
             steps[identity] = InspectTaskStep(executor, provider, budget, scope, git_tool=git,
                 changed_files=changed, file_index=state.get("file_index"), symbol_index=state.get("symbol_index"),
                 repository_graph=state.get("repository_graph"))
+            steps[identity].discussion_store = discussion_store
             # 无原文的目标继续显示缺口；不能用空 catalog 假装 examined。
             if all(executor._covers(goal, list(initial)) for goal in selected):
                 fit_context_pages(executor, steps[identity], configuration)
@@ -413,7 +435,8 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
     return ReviewState(task_runtime_report=report.model_dump(mode="json"),
         task_runtime_configuration=configuration, task_runtime_retry_unit_id=None,
         review_issues=task_runtime_issues(report), review_unit_results=[],
-        status=report.execution_status, review_coverage=task_runtime_coverage(report, changed),
+        status=("reviewing" if discussion_store is not None and report.execution_status == "completed"
+                else report.execution_status), review_coverage=task_runtime_coverage(report, changed),
         run_budget=budget.snapshot(),
         model_usages=[usage.model_dump(mode="json") for step in steps.values() for usage in step.usages],
         step_progress=append_step(state, "task_review_runtime", "completed", "新引擎运行结束：" + termination))

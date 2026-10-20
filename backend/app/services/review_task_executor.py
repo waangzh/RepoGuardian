@@ -26,6 +26,8 @@ from app.models.review_runtime import (
     ReviewRunSpec,
     ReviewWorkItem,
     RuntimeReadResponse,
+    DiscussionRuntimeReadResponse,
+    DiscussionInvestigationSubmitResponse, DiscussionInvestigationSubmission, DiscussionInvestigationResult,
     RuntimeSubmitResponse,
     VerificationSubmission, VerificationResult, VerificationSubmitResponse,
     PublicationVerificationSubmission, PublicationVerificationSubmitResponse,
@@ -65,7 +67,8 @@ class RuntimeResponseParser:
 
     _read_adapter = TypeAdapter(RuntimeReadResponse)
 
-    def parse(self, raw: Any, *, task_kind: str = "inspect", publication_contract: str = "legacy") -> ParsedRuntimeResponse:
+    def parse(self, raw: Any, *, task_kind: str = "inspect", publication_contract: str = "legacy",
+              discussions_enabled: bool = False, discussion_recheck: bool = False) -> ParsedRuntimeResponse:
         if isinstance(raw, str):
             def unique_object(pairs):
                 obj = {}
@@ -83,15 +86,20 @@ class RuntimeResponseParser:
             return ParsedRuntimeResponse(None, [RuntimeParseError("top_level", None, "invalid_response_kind")])
         if raw["kind"] == "read":
             try:
+                if raw.get("tool") == "discussion_read" and discussions_enabled:
+                    return ParsedRuntimeResponse(DiscussionRuntimeReadResponse.model_validate(raw))
                 return ParsedRuntimeResponse(self._read_adapter.validate_python(raw))
             except ValidationError as exc:
                 return ParsedRuntimeResponse(None, [RuntimeParseError("read", None, str(exc))])
-        return self._parse_submit(raw, task_kind, publication_contract)
+        return self._parse_submit(raw, task_kind, publication_contract, discussion_recheck)
 
-    def _parse_submit(self, raw: dict[str, Any], task_kind: str, publication_contract: str) -> ParsedRuntimeResponse:
+    def _parse_submit(self, raw: dict[str, Any], task_kind: str, publication_contract: str,
+                      discussion_recheck: bool = False) -> ParsedRuntimeResponse:
         schemas = {"inspect": RuntimeSubmitResponse, "investigate": InvestigationSubmitResponse,
                    "verify": VerificationSubmitResponse}
         response_schema = schemas[task_kind]
+        if task_kind == "investigate" and discussion_recheck:
+            response_schema = DiscussionInvestigationSubmitResponse
         if task_kind == "verify" and publication_contract == "claim-publication-v1":
             response_schema = PublicationVerificationSubmitResponse
         if set(raw) - set(response_schema.model_fields):
@@ -129,6 +137,8 @@ class RuntimeResponseParser:
             if key not in response_schema.model_fields:
                 continue
             try:
+                if key == "investigation" and discussion_recheck:
+                    schema = DiscussionInvestigationSubmission
                 if key == "verification" and publication_contract == "claim-publication-v1":
                     schema = PublicationVerificationSubmission
                 values[key] = schema.model_validate(raw.get(key))
@@ -254,8 +264,12 @@ class ReviewTaskExecutor:
 
     def parse_and_apply(self, raw: Any) -> ParsedRuntimeResponse:
         parsed = self.parser.parse(raw, task_kind=self.work_item.kind.value,
-                                   publication_contract=self.spec.publication_contract)
+                                   publication_contract=self.spec.publication_contract,
+                                   discussions_enabled=self.spec.discussion_manifest_hash is not None,
+                                   discussion_recheck=bool(self.spec.discussion_recheck))
         if parsed.response is None:
+            return parsed
+        if isinstance(parsed.response, DiscussionRuntimeReadResponse):
             return parsed
         if isinstance(parsed.response, RuntimeReadResponse):
             path = getattr(parsed.response.arguments, "file_path", None)
@@ -316,7 +330,19 @@ class ReviewTaskExecutor:
             errors.append(RuntimeParseError("investigation", None, error))
             return
         if self.projection.investigation is None:
-            self.projection.investigation = InvestigationResult(**item.model_dump(),
+            result_type = InvestigationResult
+            if isinstance(item, DiscussionInvestigationSubmission):
+                result_type = DiscussionInvestigationResult
+                expected = {"still_present": "supported", "not_present": "refuted", "fixed": "refuted",
+                            "insufficient_evidence": "insufficient_evidence", "background": "insufficient_evidence"}
+                if item.answer.value != expected[item.resolution]:
+                    errors.append(RuntimeParseError("investigation", None, "discussion_resolution_mismatch"))
+                    return
+                if item.resolution == "fixed":
+                    sides = {self.evidence_catalog[e].get("side", "head") for e in item.evidence_ids}
+                    if sides != {"base", "head"}:
+                        item = item.model_copy(update={"resolution": "not_present"})
+            self.projection.investigation = result_type(**item.model_dump(),
                 work_item_id=self.work_item.work_item_id, proposition=self.work_item.proposition,
                 request_id=self.request_id, attempt_id=self.attempt_id,
                 snapshot_head_sha=self.spec.snapshot_head_sha)
@@ -344,9 +370,17 @@ class ReviewTaskExecutor:
             errors.append(RuntimeParseError("verification", None, error))
             return
         if self.projection.verification is None:
+            if item.discussion_matches:
+                from app.services.pr_discussion_matching import valid_matches
+                visible = getattr(self, "visible_discussions", [])
+                matches = valid_matches(item.discussion_matches, visible,
+                    self.goals[self.work_item.verification_candidate.primary_anchor].target_ref)
+                item = item.model_copy(update={"discussion_matches": matches})
             self.projection.verification = VerificationResult(**item.model_dump(),
                 work_item_id=self.work_item.work_item_id, request_id=self.request_id,
                 attempt_id=self.attempt_id, snapshot_head_sha=self.spec.snapshot_head_sha)
+            if self.spec.discussion_manifest_hash:
+                self.projection.verification.discussion_manifest_hash = self.spec.discussion_manifest_hash
         self.projection.pending_target_ids.clear()
 
     def _apply_submit(self, response: RuntimeSubmitResponse,

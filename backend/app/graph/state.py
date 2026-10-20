@@ -23,6 +23,7 @@ class ReviewState(TypedDict, total=False):
     engine: str
     task_runtime_configuration: dict[str, Any] | None
     task_runtime_report: dict[str, Any] | None
+    pr_discussion: dict[str, Any] | None
     task_runtime_retry_unit_id: str | None
     mode: str
     status: str

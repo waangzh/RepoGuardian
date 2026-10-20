@@ -56,6 +56,7 @@ def rebuild_task_from_state(state: ReviewState) -> ReviewTask:
         engine=(state.get("engine") or "legacy_units"),
         task_runtime_configuration=state.get("task_runtime_configuration"),
         task_runtime_report=state.get("task_runtime_report"),
+        pr_discussion=state.get("pr_discussion"),
         task_runtime_retry_unit_id=state.get("task_runtime_retry_unit_id"),
         mode=rebuild_review_mode(state.get("mode")),
         generate_patches=bool(state.get("generate_patches", False)),

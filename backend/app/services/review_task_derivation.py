@@ -122,7 +122,7 @@ class TaskReviewDerivation:
         goals = {**self.initial_goals, **derived_goals}
         catalog = deepcopy(self._all_evidence())
         active = {identity for identity, value in catalog.items() if value["file_path"] in item.scope_files}
-        if item.kind.value == "verify" and root.executor.spec.prompt_version in {"task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6"}:
+        if item.kind.value == "verify" and root.executor.spec.prompt_version in {"task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7"}:
             active = {*item.required_evidence_ids, *item.counter_evidence_ids}
         if item.kind.value == "investigate" and self.risk_planner_version in {"risk-planner-v2", "risk-planner-v3", "risk-planner-v4", "risk-planner-v5", "risk-planner-v6"}:
             active = set(item.required_evidence_ids)
@@ -135,6 +135,7 @@ class TaskReviewDerivation:
                                git_tool=root.git, context_tool=root.tools, search_tool=root.search_tool,
                                changed_files=root.changed_files, file_index=root.file_index,
                                symbol_index=root.symbol_index, repository_graph=root.repository_graph)
+        step.discussion_store = root.discussion_store
         self.steps[item.work_item_id] = step
         self.runtime.enqueue(item)
         if self.runtime.checkpoint is not None:

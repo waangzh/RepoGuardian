@@ -2580,6 +2580,7 @@ class ReviewTask(BaseModel):
     engine: Literal["legacy_units", "task_review_v1"] = Field(default="legacy_units", frozen=True)
     task_runtime_configuration: dict | None = None
     task_runtime_report: dict | None = None
+    pr_discussion: dict | None = None
     task_runtime_retry_unit_id: str | None = None
     mode: ReviewMode = ReviewMode.review
     generate_patches: bool = False

@@ -15,6 +15,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator, model_serializer
 from app.models.review import (FileReadRequest, FileFindRequest, CodeSearchRequest,
                               FileReadDiffRequest, IssueCategory, Severity)
+from app.models.pr_discussion import DiscussionReadArguments, DiscussionMatch
 
 
 Revision = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$", min_length=40, max_length=40)]
@@ -94,7 +95,7 @@ class ReviewRunSpec(BaseModel):
     model_name: str = Field(min_length=1, max_length=200)
     policy_version: str = Field(min_length=1, max_length=100)
     protocol_version: Literal["task-review-protocol-v1"] = "task-review-protocol-v1"
-    prompt_version: Literal["task-review-prompt-v1", "task-review-prompt-v2", "task-review-prompt-v3", "task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6"] = "task-review-prompt-v1"
+    prompt_version: Literal["task-review-prompt-v1", "task-review-prompt-v2", "task-review-prompt-v3", "task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7"] = "task-review-prompt-v1"
     publication_contract: Literal["legacy", "claim-publication-v1"] = "legacy"
     max_tokens: int = Field(ge=0)
     max_calls: int = Field(ge=0)
@@ -103,6 +104,10 @@ class ReviewRunSpec(BaseModel):
     pr_intent_context: str | None = Field(default=None, min_length=1, max_length=4_000)
     pr_intent_context_truncated: bool | None = Field(default=None, strict=True)
     intent_assessment_contract: Literal["structured-intent-v1", "structured-intent-v2", "structured-intent-v3"] | None = None
+    discussion_manifest_hash: str | None = None
+    discussion_context: list[dict] | None = None
+    discussion_profile: dict | None = None
+    discussion_recheck: bool | None = None
 
     @model_serializer(mode="wrap")
     def serialize_strategy(self, handler):
@@ -115,6 +120,9 @@ class ReviewRunSpec(BaseModel):
             value.pop("pr_intent_context_truncated", None)
         if self.intent_assessment_contract is None:
             value.pop("intent_assessment_contract", None)
+        for key in ("discussion_manifest_hash", "discussion_context", "discussion_profile", "discussion_recheck"):
+            if getattr(self, key) is None:
+                value.pop(key, None)
         return value
 
     @property
@@ -222,6 +230,14 @@ class RuntimeReadResponse(BaseModel):
         return self
 
 
+class DiscussionRuntimeReadResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["read"] = "read"
+    tool: Literal["discussion_read"]
+    arguments: DiscussionReadArguments
+    purpose: str = Field(min_length=1, max_length=1_000)
+
+
 class IntentAssessment(BaseModel):
     model_config = ConfigDict(extra="forbid")
     author_quote: str = Field(min_length=1, max_length=4_000)
@@ -276,12 +292,24 @@ class InvestigationSubmission(BaseModel):
     reason: str = Field(min_length=1, max_length=2_000)
 
 
+class DiscussionInvestigationSubmission(InvestigationSubmission):
+    resolution: Literal["still_present", "not_present", "fixed", "insufficient_evidence", "background"]
+
+
 class VerificationSubmission(BaseModel):
     model_config = ConfigDict(extra="forbid")
     candidate_id: str = Field(min_length=1, max_length=160)
     decision: VerificationDecision
     evidence_ids: list[str] = Field(default_factory=list, max_length=20)
     reason: str = Field(min_length=1, max_length=2_000)
+    discussion_matches: list[DiscussionMatch] = Field(default_factory=list, max_length=10)
+
+    @model_serializer(mode="wrap")
+    def serialize_discussions(self, handler):
+        value = handler(self)
+        if not self.discussion_matches:
+            value.pop("discussion_matches", None)
+        return value
 
 
 class PublicationTextNarrowing(BaseModel):
@@ -330,6 +358,10 @@ class InvestigationSubmitResponse(BaseModel):
     investigation: InvestigationSubmission
     candidates: list[CandidateSubmission] = Field(default_factory=list, max_length=20)
     leads: list[LeadSubmission] = Field(default_factory=list, max_length=20)
+
+
+class DiscussionInvestigationSubmitResponse(InvestigationSubmitResponse):
+    investigation: DiscussionInvestigationSubmission
 
 
 class VerificationSubmitResponse(BaseModel):
@@ -398,6 +430,10 @@ class InvestigationResult(InvestigationSubmission):
     snapshot_head_sha: Revision
 
 
+class DiscussionInvestigationResult(InvestigationResult):
+    resolution: Literal["still_present", "not_present", "fixed", "insufficient_evidence", "background"]
+
+
 class VerificationResult(VerificationSubmission):
     work_item_id: str
     request_id: str
@@ -406,6 +442,16 @@ class VerificationResult(VerificationSubmission):
     subject_hash: str | None = None
     publication_action: Literal["retain", "narrow", "none"] | None = None
     narrowing: PublicationTextNarrowing | None = None
+    discussion_manifest_hash: str | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_discussion_result(self, handler):
+        value = handler(self)
+        if not self.discussion_matches:
+            value.pop("discussion_matches", None)
+        if self.discussion_manifest_hash is None:
+            value.pop("discussion_manifest_hash", None)
+        return value
 
 
 ReviewWorkItem.model_rebuild()

@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     # 每个运行的独立上限，涵盖所有 Unit、Verifier 和协调传输尝试。
     repoguardian_run_max_tokens: int = Field(default=1_000_000, ge=0)
     repoguardian_run_max_calls: int = Field(default=200, ge=0)
+    repoguardian_pr_discussions_enabled: bool = True
     repoguardian_run_max_cost_microusd: int | None = Field(default=None, ge=0)
 
     def run_budget_limits(self) -> dict[str, int | None]:

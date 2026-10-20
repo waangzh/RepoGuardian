@@ -4,6 +4,7 @@ import type { PublicationPlan } from '../../types/publication';
 import { reviewSituation } from '../../utils/reviewSituation';
 import { reportAuthorGoal, reportLimitations, reportValidationLabel, reportSourceLink, publicationFindingTitle } from '../../utils/reportPresentation';
 import AppIcon from '../common/AppIcon.vue';
+import PrDiscussionContext from '../review/PrDiscussionContext.vue';
 const props = defineProps<{ plan: PublicationPlan; prUrl?: string }>();
 const emit = defineEmits<{ file: [path: string]; finding: [key: string] }>();
 const situation = computed(() => reviewSituation(props.plan));
@@ -18,6 +19,7 @@ const sourceLink = (path: string, side: 'head' | 'base' | null, line: number | n
 </script>
 <template>
   <div class="rd-doc">
+    <PrDiscussionContext :review-id="plan.review_id" :stats="digest.discussion_stats" />
     <section id="rd-detail-conclusion" class="rd-detail-intro" :class="situation?.tone"><h3><AppIcon :name="situation?.icon || 'help'" :size="20" />{{ situation?.title || '审查结论未知' }}</h3><p>{{ situation?.description }} 覆盖情况、证据可靠性和动态验证属于不同维度。</p></section>
     <div class="rd-metric-strip"><div><strong>{{ plan.outcome.confirmed_count ?? '未知' }}</strong><small>已确认问题</small></div><div><strong>{{ plan.outcome.examined_goals ?? '?' }} / {{ plan.outcome.total_goals ?? '?' }}</strong><small>约定目标检查情况</small></div><div><strong class="rd-validation-value">{{ reportValidationLabel(plan.outcome.dynamic_validation) }}</strong><small>目标仓库动态验证</small></div></div>
     <section id="rd-detail-changes" class="rd-doc-section"><h3><span class="rd-num">01</span>这次 PR 想解决什么？</h3><div class="rd-two-col"><div class="rd-info-panel"><h4>PR 目标</h4><p>{{ reportAuthorGoal(plan) }}</p></div><div class="rd-info-panel"><h4>代码变化 · 局部静态观察</h4><p v-if="understanding?.actual_changes">{{ understanding.actual_changes }}</p><ul v-else-if="digest.actual_changes?.length"><li v-for="(change, index) in digest.actual_changes" :key="index">{{ change }}</li></ul><p v-else>尚无归纳后的代码变化记录。</p></div></div><div v-if="understanding?.alignment" class="rd-notice warn rd-space"><AppIcon name="info" :size="17" /><div>{{ understanding.alignment }}</div></div></section>

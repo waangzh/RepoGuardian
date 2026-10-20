@@ -37,7 +37,8 @@ def runtime_report(**updates):
 def test_task_runtime_graph_has_single_runtime_node_and_no_legacy_coordination():
     nodes = set(build_review_graph().compile().get_graph().nodes)
     assert nodes == {"__start__", "intake", "repo_prepare", "diff_parse", "repo_index",
-                     "project_detection", "review_plan", "task_review_runtime", "report", "complete", "__end__"}
+                     "project_detection", "review_plan", "discussion_prepare", "task_review_runtime",
+                     "discussion_recheck", "report", "complete", "__end__"}
     assert "cross_unit_coordination" not in nodes and "issue_verifier" not in nodes
 
 

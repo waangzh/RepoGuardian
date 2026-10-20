@@ -96,6 +96,12 @@ class GitHubTool:
         except (ValueError, KeyError, TypeError):
             raise GitHubToolError() from None
 
+    async def fetch_discussions(self, pr_url: str, *, task_id: str, head_sha: str, base_sha: str):
+        from app.tools.github_discussions import GitHubDiscussionReader
+        owner, repo, number = parse_pr_url(pr_url)
+        return await GitHubDiscussionReader(self).collect(task_id=task_id, pr_url=pr_url,
+            head_sha=head_sha, base_sha=base_sha, owner=owner, repo=repo, number=number)
+
     def _parse_pr(self, payload, owner, repo, number):
         base_repo = payload["base"]["repo"]
         head_repo = payload["head"]["repo"]

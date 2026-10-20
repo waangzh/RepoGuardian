@@ -16,6 +16,9 @@ from app.services.review_merge_decision import merge_decision
 def build_review_digest(task, report):
     digest = ReviewDigest(excluded_files=[DigestExcludedFile(path=item.file_path, reason=item.reason)
         for item in sorted(task.excluded_files, key=lambda item: (item.file_path, item.reason))])
+    if task.pr_discussion:
+        digest.discussion_stats = task.pr_discussion.get("stats")
+        digest.discussion_rechecks = task.pr_discussion.get("rechecks") or []
     if report is None:
         return digest
     digest.validation_state = "not_executed"
@@ -46,6 +49,7 @@ def summary_projection(plan: PublicationPlan) -> ReviewSummary:
     digest = plan.digest
     return ReviewSummary(review_id=plan.review_id, snapshot=plan.snapshot, outcome=plan.outcome,
         digest=ReviewSummaryDigest(author_goal=digest.author_goal,
+            discussion_stats=digest.discussion_stats,
             author_context_status=digest.author_context_status,
             author_context_limitation=digest.author_context_limitation,
             change_understanding=digest.change_understanding, actual_changes=digest.actual_changes,
@@ -102,6 +106,14 @@ class PublicationPlanner:
                 recommendation=text["recommendation"],
                 body_markdown=finding_body(text, issue.severity.value,
                     category=category, evidence_summary=evidence_summary))
+            if task.pr_discussion and (record.get("verification") or {}).get("discussion_manifest_hash") == task.pr_discussion.get("manifest_hash"):
+                from app.services.pr_discussion_matching import finding_discussions
+                matches, duplicate = finding_discussions(record)
+                finding.discussion_matches = matches
+                finding.discussion_urls = sorted({url for match in matches
+                    if (url := (task.pr_discussion.get("links") or {}).get(match["discussion_id"]))})
+                finding.default_selected = not duplicate
+                finding.default_selection_reason = "historical_duplicate" if duplicate else None
             (plan.inline_drafts if finding.placement == "inline" else plan.summary_findings).append(finding)
         rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
         def sort_key(finding):

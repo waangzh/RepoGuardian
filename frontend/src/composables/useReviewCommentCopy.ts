@@ -25,7 +25,8 @@ export function useReviewCommentCopy(source: CommentSource, load = checkReviewCo
     checking.value = false; pendingCopy.value = null; pendingAction = null; headCheck.value = null; copied.value = false; feedback.value = "";
   }
   watch([source.reviewId, source.reviewedHeadSha, source.markdown, () => source.options().detail,
-    () => source.options().exclude_resolved, () => source.options().finding_key], resetCopy, { flush: "sync" });
+    () => source.options().exclude_resolved, () => source.options().include_discussed,
+    () => source.options().finding_key], resetCopy, { flush: "sync" });
   onScopeDispose(resetCopy);
 
   async function writeClipboard(content: string) {

@@ -384,8 +384,31 @@ def render_user_report(task, plan: PublicationPlan) -> str:
                 lines.append("以上为候选或排除记录，不能作为已核验的发布评论。")
     lines += _risk_section(plan)
     lines += _next_steps(plan)
+    lines += discussion_report_lines(plan, task)
     lines += _appendix_lines(plan, task)
     return "\n".join(lines)
+
+
+def discussion_report_lines(plan, task=None):
+    stats = plan.digest.discussion_stats
+    if stats is None:
+        return ["", "## 历史讨论复核", "", "未记录历史讨论，不能推断该 PR 没有讨论。"]
+    lines = ["", "## 历史讨论复核", "",
+        f"已参考 {stats['referenced']} 项相关讨论／包含 {stats['referenced_comments']} 条评论；"
+        f"已采集 {stats['collected']} 项，已核验 {stats['checked']} 项，未核验 {stats['unchecked']} 项。",
+        "本节独立于当前 Diff 的审查结论与覆盖率；平台已解决和作者修复声明不是代码证据。"]
+    labels = {"still_present": "问题仍存在", "not_present": "当前快照中该主张不成立", "fixed": "已核验修复",
+              "insufficient_evidence": "证据不足", "not_checked": "未核验", "background": "背景说明"}
+    for item in plan.digest.discussion_rechecks:
+        lines += ["", f"- {markdown_text(item['discussion_id'])}：{labels.get(item['status'], '未知')}。",
+                  "  " + markdown_text(item["reason"])]
+        if item.get("evidence_ids"):
+            lines.append("  代码证据：" + "、".join(markdown_text(e) for e in item["evidence_ids"]))
+        url = ((getattr(task, "pr_discussion", None) or {}).get("links") or {}).get(item["discussion_id"])
+        if url:
+            lines.append(f"  [查看已有讨论]({url})")
+    lines += [f"- 限制：{markdown_text(value)}" for value in stats["limitations"]]
+    return lines
 
 
 def _risk_section(plan):
@@ -549,12 +572,13 @@ def _validation_sentence(plan) -> str:
     }[state]
 
 
-def comment_selection(plan, *, exclude_resolved=False):
+def comment_selection(plan, *, exclude_resolved=False, include_discussed=False):
     findings = _ordered_findings(plan)
     resolved = {item.id for item in plan.digest.findings if item.disposition and item.disposition.status == "resolved"}
     blockers = set(plan.digest.merge_decision.blocking_finding_keys)
-    omitted = [item for item in findings if exclude_resolved and item.finding_key in resolved
-               and item.severity in {"medium", "low"} and item.finding_key not in blockers]
+    omitted = [item for item in findings if (not include_discussed and not item.default_selected)
+               or (exclude_resolved and item.finding_key in resolved
+                   and item.severity in {"medium", "low"} and item.finding_key not in blockers)]
     omitted_keys = {item.finding_key for item in omitted}
     included = [item for item in findings if item.finding_key not in omitted_keys]
     retained = [item.finding_key for item in included if exclude_resolved and item.finding_key in resolved
@@ -585,12 +609,19 @@ def _comment_next_steps(plan, *, has_findings: bool):
     return [" ".join(steps)]
 
 
-def render_review_comment(plan, *, detail="compact", exclude_resolved=False):
+def render_review_comment(plan, *, detail="compact", exclude_resolved=False, include_discussed=False):
     """按实际风险展开评论；阻断问题始终保留证据和触发条件。"""
-    included, omitted, retained = comment_selection(plan, exclude_resolved=exclude_resolved)
+    included, omitted, retained = comment_selection(plan, exclude_resolved=exclude_resolved,
+                                                     include_discussed=include_discussed)
     full = detail == "full"
     withheld = max(0, plan.outcome.confirmed_count - plan.outcome.publishable_count)
     lines = ["RepoGuardian · PR Code Review", "", merge_verdict_line(plan), ""]
+    if plan.digest.discussion_stats:
+        stats = plan.digest.discussion_stats
+        lines += [f"当前结论针对本轮变更范围；已参考 {stats['referenced']} 项历史讨论，"
+                  f"另有 {stats['unchecked']} 项历史事项未核验。", ""]
+    if any(not item.default_selected for item in omitted):
+        lines += ["部分已确认风险已有历史讨论，本次默认不重复列出；风险统计与合并建议仍保留。", ""]
     note = partial_review_note(plan)
     if note:
         lines += [note, ""]
@@ -708,6 +739,10 @@ def render_summary(plan, *, discussion_urls: dict[str, str] | None = None) -> st
     digest = plan.digest
     label, advice = merge_heading(plan)
     lines = ["## RepoGuardian · PR Review", "", merge_verdict_line(plan), ""]
+    if digest.discussion_stats:
+        stats = digest.discussion_stats
+        lines += [f"已参考 {stats['referenced']} 项相关讨论；历史复核独立于当前变更结论，"
+                  f"{stats['unchecked']} 项尚未核验。", ""]
     note = partial_review_note(plan)
     if note:
         lines += [note, ""]
