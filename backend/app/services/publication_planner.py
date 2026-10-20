@@ -6,7 +6,7 @@ from app.models.publication import (DigestExcludedFile, DigestGoal, ReviewDigest
     PublicationAnchor, PublicationFinding, PublicationPlan, PublicationSnapshot, WithheldFinding)
 from app.models.review import ReviewTask
 from app.models.review_runtime import TaskRuntimeReport
-from app.services.publication_renderer import finding_body, markdown_text, render_summary, render_user_report, render_review_comment
+from app.services.publication_renderer import finding_body, render_summary, render_user_report, render_review_comment
 from app.services.review_digest import enrich_review_digest
 from app.services.review_outcome import derive_review_outcome, snapshot_valid
 from app.services.review_publication import select_publication_findings
@@ -95,7 +95,7 @@ class PublicationPlanner:
             category = record["candidate"].get("category", "correctness")
             finding = PublicationFinding(finding_key=key, candidate_id=record["candidate"]["candidate_id"],
                 severity=issue.severity.value, placement=issue.placement.value, anchor=anchor,
-                title=markdown_text(text["claim"], 200),
+                title=text["claim"], raw_title=text["claim"],
                 category=category, evidence_summary=evidence_summary,
                 evidence_ids=record["publication"]["evidence_ids"],
                 affected_behavior=text["affected_behavior"], failure_scenario=text["failure_scenario"],

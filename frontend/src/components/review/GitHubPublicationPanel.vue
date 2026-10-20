@@ -4,6 +4,7 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import type { PublicationPlan, PublicationPreflightResult, PublicationAttempt } from "../../types/publication";
 import { preflightPublication, createPublication, getPublications, getPublication, retryPublication } from "../../api/client";
+import { publicationFindingTitle } from "../../utils/reportPresentation";
 
 const props = defineProps<{ reviewId: string; plan: PublicationPlan }>();
 const token = ref("");
@@ -95,7 +96,7 @@ function safeLink(value: string | null) {
     <div class="github-publication__body">
       <p>由独立发布身份更新 PR 主摘要，并创建所选行级评论。需要先完成预检，再确认写入；审查结论保持不变。</p>
       <label class="github-publication__credential">本地发布操作口令<input v-model="token" type="password" autocomplete="off" placeholder="独立操作口令，不是 GitHub Token" :disabled="busy" /></label>
-      <fieldset :disabled="busy"><legend>选择已核验问题（Summary 始终发布）</legend><p v-if="!findings.length">没有合格问题草稿；预检将校验能否发布当前审查结论。</p><label v-for="finding in findings" :key="finding.finding_key"><input v-model="selected" type="checkbox" :value="finding.finding_key" />{{ finding.title }} · {{ finding.placement }}</label></fieldset>
+      <fieldset :disabled="busy"><legend>选择已核验问题（Summary 始终发布）</legend><p v-if="!findings.length">没有合格问题草稿；预检将校验能否发布当前审查结论。</p><label v-for="finding in findings" :key="finding.finding_key"><input v-model="selected" type="checkbox" :value="finding.finding_key" />{{ publicationFindingTitle(finding) }} · {{ finding.placement }}</label></fieldset>
       <div class="github-publication__actions"><button type="button" class="button button--secondary button--compact" :disabled="busy || !token" @click="preflight">预检并预览</button><button type="button" class="button button--ghost button--compact" :disabled="busy || !token" @click="loadHistory">加载发布历史</button></div>
       <p v-if="busy" role="status">正在处理发布请求…</p><p v-if="error" role="alert">{{ error }}</p>
       <section v-if="preview" aria-label="发布预检结果">

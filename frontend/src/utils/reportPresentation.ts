@@ -1,4 +1,12 @@
-import type { PublicationPlan, ReviewOutcome } from '../types/publication';
+import type { PublicationFinding, PublicationPlan, ReviewOutcome } from '../types/publication';
+
+export function publicationFindingTitle(finding: PublicationFinding): string {
+  if (finding.raw_title != null) return finding.raw_title;
+  // Undo only the old markdown_text encoding, not arbitrary Markdown or HTML.
+  const entities: Record<string, string> = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#x27;': "'", '&#64;': '@' };
+  return finding.title.replace(/\\([\\`*_{}\[\]()#+.!|~>\-])/g, '$1')
+    .replace(/&(?:amp|lt|gt|quot|#x27|#64);/g, value => entities[value]!);
+}
 
 export const coverageLabel = (value?: string | null): string =>
   ({ complete: '完整', partial: '不完整', unknown: '未知' })[value || 'unknown'] || '未知';

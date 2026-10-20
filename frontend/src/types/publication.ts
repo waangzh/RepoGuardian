@@ -124,6 +124,8 @@ export interface PublicationFinding {
   placement: "inline" | "summary";
   anchor: PublicationAnchor;
   title: string;
+  /** Plain text in new plans; missing on legacy plans whose title was Markdown-escaped. */
+  raw_title?: string | null;
   body_markdown: string;
   affected_behavior: string;
   failure_scenario: string;
