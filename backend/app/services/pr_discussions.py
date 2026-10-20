@@ -47,9 +47,15 @@ def frozen_provider(configuration, supplied=None):
     if (supplied is not None and getattr(supplied, "_provider_name", None) == configuration["provider"]
             and getattr(supplied, "_base_url", "").rstrip("/") == configuration["endpoint"].rstrip("/")):
         provider = copy(supplied)
-        provider._request_attempts = configuration["request_attempts"]
-        provider._profile_override = ModelRequestProfile.model_validate(configuration["request_profile"])
-        provider._request_timeout_seconds = configuration["request_timeout_seconds"]
+        target = provider
+        # 评测观察器只是代理，冻结配置必须落在真正发送请求的 Provider 上。
+        wrapped = vars(provider).get("provider")
+        if isinstance(wrapped, OpenAICompatibleProvider):
+            provider.provider = copy(wrapped)
+            target = provider.provider
+        target._request_attempts = configuration["request_attempts"]
+        target._request_timeout_seconds = configuration["request_timeout_seconds"]
+        target._profile_override = ModelRequestProfile.model_validate(configuration["request_profile"])
         return provider
     return OpenAICompatibleProvider(settings.openai_api_key, configuration["endpoint"], configuration["model"],
         provider_name=configuration["provider"], disable_thinking=configuration["provider"] == "deepseek",
@@ -77,28 +83,76 @@ def thread_input(thread, *, body_limit=4_000):
 
 def select_discussions(items, paths, model, profile, base_request):
     """Fit against the actual request; never trim source evidence to admit a comment."""
-    selected = []
+    selected, serialized = [], []
     capacity = ModelContextBudget(base_request, profile)
     tokens = max(0, capacity.input_limit // 10)
+
+    def serialize(value):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+    def escaped(text):
+        # 与 envelope 中 prompt 的 JSON 转义一致；字节计数口径下可逐项相加。
+        return json.dumps(text, ensure_ascii=False)[1:-1]
+
+    def fallback(item):
+        from copy import deepcopy
+        item = deepcopy(item)
+        item["summary_omitted"] = item.get("summary") is not None
+        item["summary"] = None
+        for comment in item["comments"]:
+            comment["body"] = comment["body"][:128]
+            comment["omitted_chars"] = comment["total_chars"] - len(comment["body"])
+        item["omitted_comment_count"] = len(item.get("omitted_comment_ids", []))
+        item["omitted_comment_ids"] = []
+        return item
+
+    # 每项只序列化/分词一次，累计 token 由增量相加得出；不做整表重复编码。
+    # 初始 1 与每项 +1 分别计入 "[" 与逗号，使字节计数口径下与整表编码一致。
+    # 分词器会合并相邻文本的 token 边界，累加值可能有几个 token 的偏差；
+    # 只有落在阈值附近时才整表复核，超限较多时直接按累加值处理，保持线性。
+    limit = capacity.input_limit
+    fixed_tokens = estimate_tokens(base_request.envelope(), model)[0]
+    wrapper_tokens = estimate_tokens(escaped('\n{"pr_discussions": []}'), model)[0]
+    selected_tokens = 1
+    envelope_tokens = 0
+    slack = 8
     for item in sorted(items, key=lambda value: (value.get("path") not in paths, value["id"])):
         if item.get("path") and item["path"] not in paths:
             continue
-        value = json.dumps(selected + [item], ensure_ascii=False, separators=(",", ":"))
-        if estimate_tokens(value, model)[0] > tokens:
-            from copy import deepcopy
-            item = deepcopy(item)
-            item["summary_omitted"] = item.get("summary") is not None
-            item["summary"] = None
-            for comment in item["comments"]:
-                comment["body"] = comment["body"][:128]
-                comment["omitted_chars"] = comment["total_chars"] - len(comment["body"])
-            item["omitted_comment_count"] = len(item.get("omitted_comment_ids", []))
-            item["omitted_comment_ids"] = []
-            value = json.dumps(selected + [item], ensure_ascii=False, separators=(",", ":"))
-            if estimate_tokens(value, model)[0] > tokens:
+        text = serialize(item)
+        item_tokens = selected_tokens + estimate_tokens(text, model)[0] + 1
+        if item_tokens > tokens:
+            if item_tokens <= tokens + slack:
+                item_tokens = estimate_tokens(json.dumps([*selected, item], ensure_ascii=False,
+                                                         separators=(",", ":")), model)[0]
+            if item_tokens > tokens:
+                item = fallback(item)
+                text = serialize(item)
+                item_tokens = selected_tokens + estimate_tokens(text, model)[0] + 1
+                if item_tokens <= tokens + slack:
+                    item_tokens = estimate_tokens(json.dumps([*selected, item], ensure_ascii=False,
+                                                             separators=(",", ":")), model)[0]
+                if item_tokens > tokens:
+                    continue
+        # 与 capacity.fits 相同的请求容量判断；只在超限时跳过，不改变降级语义。
+        item_envelope = fixed_tokens + wrapper_tokens + envelope_tokens + \
+            estimate_tokens(escaped(text), model)[0] + (2 if selected else 0)
+        if item_envelope > limit:
+            serialized_input = "\n" + json.dumps({"pr_discussions": [*selected, item]}, ensure_ascii=False)
+            if not capacity.fits(serialized_input):
                 continue
-        if capacity.fits("\n" + json.dumps({"pr_discussions": selected + [item]}, ensure_ascii=False)):
-            selected.append(item)
+            item_envelope = estimate_tokens(escaped(serialized_input), model)[0]
+        selected.append(item)
+        serialized.append(text)
+        selected_tokens = item_tokens
+        envelope_tokens = item_envelope - fixed_tokens - wrapper_tokens
+    # 最终仍以真实请求 envelope 兜底；分词边界导致估算偏差时从末尾回退。
+    while selected:
+        serialized_input = "\n" + json.dumps({"pr_discussions": selected}, ensure_ascii=False)
+        if capacity.fits(serialized_input):
+            break
+        selected.pop()
+        serialized.pop()
     return selected
 
 
@@ -150,6 +204,22 @@ def fit_discussion_observations(request, observations, spec):
             continue
         # Source/schema capacity remains the ordinary runtime's responsibility.
         return trial, values
+
+
+def add_limitation(store, value):
+    """按值去重且保持首次出现顺序；节点重入不能重复记录同一原因。"""
+    limitations = store.data.setdefault("limitations", [])
+    if value not in limitations:
+        limitations.append(value)
+
+
+def add_summary_limitation(store, value):
+    """摘要故障结论互斥：结果未知优先于不可用，恢复后不会同时保留两种结论。"""
+    limitations = store.data.setdefault("limitations", [])
+    if value == "summary_response_unknown" and "summary_unavailable" in limitations:
+        limitations.remove("summary_unavailable")
+    if value not in limitations:
+        limitations.append(value)
 
 
 async def prepare_discussions_node(state, runtime=None, config=None):
@@ -214,11 +284,15 @@ async def prepare_discussions_node(state, runtime=None, config=None):
         try:
             result = await store.call(key, request, provider, budget, token_cap=token_cap, call_cap=calls)
         except LLMProviderError:
-            store.data.setdefault("limitations", []).append("summary_unavailable")
+            # 与 store.call 恢复语义一致：尝试已发送则结果未知，未发送才是不可用；
+            # 同一次故障在重入后只能保留一个结论（未知优先于不可用）。
+            attempts = store.data["calls"].get(key, {}).get("attempts", [])
+            sent = any(getattr(budget.attempts.get(attempt_id), "sent", False) for attempt_id in attempts)
+            add_summary_limitation(store, "summary_response_unknown" if sent else "summary_unavailable")
             await store.save()
             continue
         if result is None:
-            store.data.setdefault("limitations", []).append("summary_response_unknown")
+            add_summary_limitation(store, "summary_response_unknown")
             continue
         try:
             summary = DiscussionSummary.model_validate_json(result["value"])
@@ -232,7 +306,7 @@ async def prepare_discussions_node(state, runtime=None, config=None):
                                or sum(len(v["body"]) for v in originals) < sum(len(c.body) for c in thread.comments))
             thread.summary, thread.summary_key = summary, key
         except (ValidationError, ValueError):
-            store.data.setdefault("limitations", []).append("summary_invalid")
+            add_limitation(store, "summary_invalid")
     items = [thread_input(thread) for thread in snapshot.threads]
     renames = {c["old_file_path"]: c["file_path"] for c in state.get("changed_files") or []
                if c.get("old_file_path")}
@@ -245,19 +319,25 @@ async def prepare_discussions_node(state, runtime=None, config=None):
     return {"pr_discussion": await metadata(store), "run_budget": budget.snapshot(), **store_state(store)}
 
 
-async def metadata(store):
-    snapshot = DiscussionSnapshot.model_validate(await store.read(store.data["snapshot"]))
+def stats_for(store, snapshot):
+    """基于已读取并校验的 snapshot 计算统计；调用方不得为 stats 再读一次 artifact。"""
     used = store.data["used"]
     checks = store.data["rechecks"]
     checked = sum(v["status"] in {"still_present", "not_present", "fixed", "background"} for v in checks.values())
     values = set(snapshot.sources.values())
     status = "complete" if values == {"complete"} else "unavailable" if values == {"unavailable"} else "partial"
     comment_ids = {c.id for t in snapshot.threads for c in t.comments}
-    stats = DiscussionStats(status=status, collected=len(snapshot.threads), comments=len(comment_ids),
+    return DiscussionStats(status=status, collected=len(snapshot.threads), comments=len(comment_ids),
         referenced=len(used), referenced_comments=len({c for ids in used.values() for c in ids}),
         checked=checked, unchecked=len(snapshot.threads) - checked,
         limitations=[*snapshot.limitations, *store.data.get("limitations", [])],
         termination_reason=store.data.get("termination_reason"))
+
+
+async def metadata(store):
+    snapshot = DiscussionSnapshot.model_validate(await store.read(store.data["snapshot"]))
+    checks = store.data["rechecks"]
+    stats = stats_for(store, snapshot)
     from app.services.pr_discussion_matching import safe_discussion_url
     return {"contract": CONTRACT, "identity": store.data["identity"],
             "snapshot_ref": store.data["snapshot"], "input_ref": store.data.get("input"),
@@ -329,6 +409,6 @@ async def discussion_page(task, repository, *, page=1, page_size=20, discussion_
             "summary": summaries.get(thread.id) if discussion_id else None,
             "recheck": check,
             "evidence": [evidence[e] for e in check.get("evidence_ids", []) if e in evidence]})
-    return {"stats": (await metadata(store))["stats"], "items": items, "total": len(threads),
-            "page": page, "page_size": page_size,
+    return {"stats": stats_for(store, snapshot).model_dump(mode="json"), "items": items,
+            "total": len(threads), "page": page, "page_size": page_size,
             "comment_offset": comment_offset, "comment_limit": comment_limit}
