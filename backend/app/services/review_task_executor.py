@@ -18,6 +18,7 @@ from app.models.review_runtime import (
     CandidateSubmission,
     ExaminationResult,
     ExaminationSubmission,
+    InvestigationAnswer,
     InvestigationSubmission,
     InvestigationResult, InvestigationSubmitResponse,
     LeadSubmission,
@@ -341,7 +342,20 @@ class ReviewTaskExecutor:
                 if item.resolution == "fixed":
                     sides = {self.evidence_catalog[e].get("side", "head") for e in item.evidence_ids}
                     if sides != {"base", "head"}:
-                        item = item.model_copy(update={"resolution": "not_present"})
+                        # “已修复”必须由 Base 与 Head 两侧原文共同支撑。缺任一侧时
+                        # 只能保留证据不足，不能静默改写为“主张不成立”——后者意味着
+                        # 该问题从未存在，与“历史问题已被修复”是不同结论。
+                        limitation = "fixed_requires_base_and_head_evidence"
+                        limitations = list(item.limitations)
+                        if limitation not in limitations:
+                            # limitations 上限 20；服务端限制优先于模型已给条目。
+                            limitations = [*limitations[:19], limitation] if len(limitations) >= 20 \
+                                else [*limitations, limitation]
+                        item = item.model_copy(update={
+                            "resolution": "insufficient_evidence",
+                            "answer": InvestigationAnswer.insufficient_evidence,
+                            "limitations": limitations,
+                        })
             self.projection.investigation = result_type(**item.model_dump(),
                 work_item_id=self.work_item.work_item_id, proposition=self.work_item.proposition,
                 request_id=self.request_id, attempt_id=self.attempt_id,

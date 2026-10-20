@@ -28,8 +28,19 @@ async def open_store(state, runtime=None, config=None):
     repository = context.get("coordination_repository") or state.get("_coordination_repository")
     if state.get("_persistence_enabled") and repository is None:
         raise ValueError("discussion persistence unavailable")
+    existing = state.get("_discussion_store")
+    # 无仓储时 save() 不落库，图节点必须复用同一进程内日志，不能重新打开空 data。
+    if (repository is None and existing is not None and existing.repository is None
+            and existing.data.get("task_id") == state["task_id"]
+            and existing.data.get("identity") == identity(state)):
+        return existing
     lease = (config or {}).get("configurable", {}).get("review_job_lease")
     return await DiscussionStore(state["task_id"], identity(state), repository=repository, lease=lease).load()
+
+
+def store_state(store):
+    """无仓储日志只进入进程内 graph state；有仓储路径保持原状。"""
+    return {"_discussion_store": store} if store.repository is None else {}
 
 
 def frozen_provider(configuration, supplied=None):
@@ -147,7 +158,7 @@ async def prepare_discussions_node(state, runtime=None, config=None):
         return {}
     store = await open_store(state, runtime, config)
     if store.data.get("input"):
-        return {"pr_discussion": await metadata(store)}
+        return {"pr_discussion": await metadata(store), **store_state(store)}
     if not store.data.get("snapshot"):
         owner, repo, number = parse_pr_url(state["pr_url"])
         github = state.get("_github_tool") or GitHubTool(settings.github_token)
@@ -231,7 +242,7 @@ async def prepare_discussions_node(state, runtime=None, config=None):
     store.data["input"] = await store.put("input", {"items": items,
         "summaries": {t.id: t.summary.model_dump(mode="json") for t in snapshot.threads if t.summary}})
     await store.save()
-    return {"pr_discussion": await metadata(store), "run_budget": budget.snapshot()}
+    return {"pr_discussion": await metadata(store), "run_budget": budget.snapshot(), **store_state(store)}
 
 
 async def metadata(store):

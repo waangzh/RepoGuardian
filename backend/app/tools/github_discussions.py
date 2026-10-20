@@ -99,7 +99,12 @@ class GitHubDiscussionReader:
             if not isinstance(values, list):
                 raise ValueError("invalid_comments")
             for item in values:
-                if not isinstance(item, dict) or not isinstance(item.get("body"), str):
+                if not isinstance(item, dict):
+                    raise ValueError("invalid_comment")
+                if item.get("body") is None:
+                    # 仅 Approve 等无正文 Review 的 body 为 null；按空内容跳过，不中止整个来源。
+                    continue
+                if not isinstance(item.get("body"), str):
                     raise ValueError("invalid_comment")
                 yield item
             if len(values) < self.policy.page_size and "next" not in response.links:

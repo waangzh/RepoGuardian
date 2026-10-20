@@ -281,6 +281,8 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
     if configuration.get("discussion_contract") == "pr-discussion-context-v1":
         from app.services.pr_discussions import open_store
         discussion_store = await open_store(state, runtime, config)
+        if not discussion_store.data.get("input"):
+            raise ValueError("discussion frozen input missing")
         frozen_discussions = await discussion_store.read(discussion_store.data["input"])
         state = {**state, "_discussion_items": frozen_discussions["items"]}
     spec = frozen_runtime_spec(state, configuration, budget, readable_files=readable)

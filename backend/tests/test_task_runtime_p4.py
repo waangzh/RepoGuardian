@@ -533,6 +533,102 @@ async def test_runtime_retry_does_not_reset_saved_deadline(production_input, per
     assert repeated["run_budget"]["settled_actual"] == 15
 
 
+async def test_outer_deadline_during_discussion_recheck_marks_usage_unknown(persistence, monkeypatch):
+    """主审查完成后，外层期限落在历史复核中；未结算调用不能报告为用量完整。"""
+    import asyncio
+    from types import SimpleNamespace
+    from app.models.pr_discussion import DiscussionSnapshot
+    from app.services import review_service as service_module
+    from app.services.pr_discussion_store import DiscussionStore
+    from app.services.review_service import ReviewService
+
+    repository = persistence[0]
+    configuration = {"provider": "openai-compatible", "model": "fixture",
+        "endpoint": "https://example.test/v1", "effective_plan": {"depth": "standard"},
+        "limits": {"max_tokens": 100_000, "max_calls": 5}, "policy_version": "p1",
+        "prompt_version": "task-review-prompt-v7", "deadline_seconds": 60,
+        "discussion_contract": "pr-discussion-context-v1"}
+    task = ReviewTask(id="run", pr_url="https://github.com/o/r/pull/1", engine="task_review_v1",
+        task_runtime_configuration=configuration)
+    task.task_runtime_report = runtime_report().model_dump(mode="json")
+    task.task_runtime_report["execution_status"] = "completed"
+    task.task_runtime_report["termination_reason"] = "plan_exhausted"
+    task.task_runtime_report["usage_integrity"] = "complete"
+    repository.create_task(task)
+    store = DiscussionStore("run", {"pr_url": task.pr_url, "head_sha": "a" * 40, "base_sha": "b" * 40},
+        repository=repository)
+    async def seed():
+        snapshot = DiscussionSnapshot(task_id="run", pr_url=task.pr_url, head_sha="a" * 40,
+            base_sha="b" * 40, started_at="start", finished_at="end",
+            sources={s: "complete" for s in ("conversation", "review", "inline")}, threads=[])
+        store.data["snapshot"] = await store.put("snapshot", snapshot.model_dump(mode="json"))
+        store.data["input"] = await store.put("input", {"items": []})
+        # 复核阶段已完成并落盘的一项结果：期限中断后必须仍能读到。
+        store.data["rechecks"]["inline:1"] = {"discussion_id": "inline:1",
+            "status": "still_present", "reason": "当前实现仍存在原问题",
+            "evidence_ids": ["e1"], "limitations": []}
+        await store.save()
+    await seed()
+    current = repository.get_task("run")
+    current.pr_discussion = {"identity": store.data["identity"], "manifest_hash": "frozen",
+        "stats": {"status": "complete", "collected": 0, "comments": 0, "referenced": 0,
+                  "referenced_comments": 0, "checked": 0, "unchecked": 0, "limitations": [],
+                  "termination_reason": "plan_exhausted"},
+        "rechecks": [], "links": {}}
+    repository.save_task(current)
+
+    from app.services.review_run_budget import ReviewRunBudget
+    from app.services.review_run_budget import ReviewRepositoryRunBudgetStore
+    # 模拟历史复核已发出一次模型请求，但响应仍在途、尚未结算。
+    pinned = await ReviewRunBudget.load_or_create("run", max_tokens=100_000, max_calls=5,
+        store=ReviewRepositoryRunBudgetStore(repository))
+    attempt = await pinned.reserve(request_id="discussion:history",
+        operation="task_review_v1", estimated_tokens=10, output_tokens=5,
+        task_id="discussion:history", request_hash="history-request")
+    await pinned.mark_dispatching(attempt.attempt_id)
+
+    class Graph:
+        def compile(self, checkpointer=None):
+            return self
+        async def aget_state(self, config):
+            return SimpleNamespace(values={}, next=())
+        async def astream(self, *args, **kwargs):
+            # 外层期限在历史复核模型调用等待期间到期。
+            await asyncio.sleep(10)
+            yield  # pragma: no cover
+
+    monkeypatch.setattr(service_module, "build_review_graph", lambda: Graph())
+    monkeypatch.setattr(service_module, "get_checkpointer", _async_none)
+    from app.services import review_plan
+    monkeypatch.setattr(review_plan, "remaining_review_seconds",
+        lambda configuration, created_at: 0.05)
+    async def no_cleanup(*args):
+        return True
+    monkeypatch.setattr(service_module, "_cleanup_repo", no_cleanup)
+    provider = OpenAICompatibleProvider("test-key", configuration["endpoint"], "fixture")
+    service = ReviewService(None, None, None, provider, ReportService(), repository=repository)
+    service._tasks[task.id] = task
+    await service._run_graph("run")
+
+    saved = repository.get_task("run")
+    assert saved.status == TaskStatus.completed_with_warnings
+    assert saved.task_runtime_report["termination_reason"] == "deadline"
+    assert saved.task_runtime_report["usage_integrity"] != "complete"
+    assert saved.task_runtime_report["unknown_attempts"] >= 1
+    assert saved.task_runtime_report["total_tokens"] is None
+    assert saved.task_runtime_report["scope_complete"] is True  # 主审查范围没有被降级
+    assert saved.pr_discussion and saved.pr_discussion["stats"]["termination_reason"] != "journal_unavailable_after_deadline"
+    # 已完成的复核结果从日志恢复，不能因期限中断丢失。
+    assert [item["status"] for item in saved.pr_discussion["rechecks"]] == ["still_present"]
+    # 技术记录中的运行计量必须反映 unknown，不能沿用主审查的 complete。
+    assert '"usage_integrity": "unknown"' in saved.report_markdown
+    assert '"termination_reason": "deadline"' in saved.report_markdown
+
+
+async def _async_none():
+    return None
+
+
 async def test_evaluation_observer_uses_frozen_profile_in_actual_provider(production_input):
     from app.evaluation.runner import ObservedProvider
     from app.services.model_request_budgeter import ModelRequestProfile

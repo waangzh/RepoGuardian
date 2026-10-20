@@ -104,6 +104,9 @@ class TaskRuntimeCheckpoint:
         }
         if executor.spec.prompt_version in {"task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7"}:
             session["rejected_items"] = step.rejected_items
+        if executor.spec.discussion_manifest_hash:
+            # 重放 _apply_verification 时必须以首次请求相同的可见讨论集合校验。
+            session["visible_discussions"] = getattr(executor, "visible_discussions", [])
         return session
 
     @staticmethod
@@ -123,6 +126,8 @@ class TaskRuntimeCheckpoint:
         executor.evidence_catalog = payload["evidence"]
         executor.active_evidence_ids = set(payload["active"])
         executor.request_id, executor.attempt_id = payload["request_id"], payload["attempt_id"]
+        # 重放校验必须使用与首次请求相同的可见讨论集合；旧检查点没有该字段时保持原行为。
+        executor.visible_discussions = payload.get("visible_discussions", [])
         read = payload["pending_read"]
         schema = DiscussionRuntimeReadResponse if read and read.get("tool") == "discussion_read" else RuntimeReadResponse
         step.pending_read = schema.model_validate(read) if read else None

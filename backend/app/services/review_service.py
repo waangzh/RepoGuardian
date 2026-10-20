@@ -610,6 +610,7 @@ class ReviewService:
 
         result = None
         interrupted = False
+        deadline_budget = None
         try:
             graph = build_review_graph()
             checkpointer = await get_checkpointer() if self._repository else None
@@ -650,6 +651,7 @@ class ReviewService:
                 store=run_budget_store,
                 recover_running=task.engine != "task_review_v1",
             )
+            deadline_budget = run_budget
             with activate_run_budget(run_budget):
                 with tracing:
                     graph_input: Any = initial_state
@@ -733,11 +735,11 @@ class ReviewService:
             task.review.status = task.status
             task.review.completed = False
             task.warnings.append("review_deadline: 已达到冻结方案期限，未完成范围仍未检查，用量可能未知。")
-            if task.task_runtime_report and not (
-                    task.task_runtime_report.get("execution_status") == "completed"
-                    and task.task_runtime_report.get("termination_reason") == "plan_exhausted"):
-                task.task_runtime_report.update(execution_status="completed", termination_reason="deadline",
-                                                scope_complete=False, usage_integrity="unknown")
+            # 外层期限也可能落在主审查完成后的 discussion_recheck 中。此时运行预算
+            # 或讨论日志可能已有未结算的模型调用；不能因为主报告已是 plan_exhausted
+            # 就保留 usage_integrity=complete 或静默丢弃复核元数据。
+            _apply_deadline_accounting(task.task_runtime_report, deadline_budget)
+            task.pr_discussion = await self._discussion_metadata_after_deadline(task)
             task.report_markdown = self._report_service.generate(task)
             self._touch(task)
             self._persist(task)
@@ -1087,6 +1089,27 @@ class ReviewService:
         self._touch(task)
         self._persist(task)
 
+    async def _discussion_metadata_after_deadline(self, task: ReviewTask) -> dict | None:
+        """期限中断后从已落盘日志恢复复核结果；无法读取时保留旧元数据并标记日志缺失。"""
+        if not self._repository or not task.pr_discussion:
+            return task.pr_discussion
+        identity = task.pr_discussion.get("identity")
+        if not isinstance(identity, dict):
+            return task.pr_discussion
+        from app.services.pr_discussion_store import DiscussionStore
+        from app.services.pr_discussions import metadata
+        try:
+            store = await DiscussionStore(task.id, identity, repository=self._repository).load()
+            if not store.data.get("snapshot"):
+                raise ValueError("discussion journal missing")
+            return await metadata(store)
+        except Exception:
+            # 日志不可读时保留旧元数据，但显式标记其不可用，不伪装为完整。
+            logger.warning("任务 %s 的讨论日志在期限中断后不可读", task.id[:8], exc_info=True)
+            stats = dict(task.pr_discussion.get("stats") or {})
+            stats["termination_reason"] = "journal_unavailable_after_deadline"
+            return {**task.pr_discussion, "stats": stats}
+
     def _touch(self, task: ReviewTask) -> None:
         task.updated_at = datetime.now(timezone.utc)
 
@@ -1095,6 +1118,36 @@ class ReviewService:
             self._repository.save_task(task)
         else:
             self._tasks[task.id] = task
+
+
+def _unknown_usage_attempts(budget) -> list:
+    """已发送但用量不可用的调用；deadline 期间在途响应都按未知结算。"""
+    if budget is None:
+        return []
+    return [attempt for attempt in budget.attempts.values()
+            if attempt.sent and not attempt.usage_available]
+
+
+def _apply_deadline_accounting(report: dict | None, budget) -> None:
+    """外层期限终止运行：保留已结算量，但绝不报告 usage_integrity=complete。
+
+    主审查已完成时只中断了补充性的历史复核；此时保留主审查的 scope_complete，
+    不能把已完成 Diff 范围降级为未完成。期限与用量状态则如实改写。
+    """
+    if report is None:
+        return
+    unknown = _unknown_usage_attempts(budget)
+    main_completed = (
+        report.get("execution_status") == "completed"
+        and report.get("termination_reason") == "plan_exhausted"
+    )
+    report.update(execution_status="completed", termination_reason="deadline",
+                  usage_integrity="unknown", unknown_attempts=len(unknown), total_tokens=None)
+    if not main_completed:
+        report["scope_complete"] = False
+    if budget is not None:
+        report["sent_calls"] = sum(attempt.sent for attempt in budget.attempts.values())
+        report["settled_tokens"] = budget.settled_actual
 
 
 async def _cleanup_repo(repo_path: Path) -> bool:

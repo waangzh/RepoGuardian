@@ -127,5 +127,6 @@ class ReviewState(TypedDict, total=False):
     _project_registry: Any
     _review_planner: Any
     _coordination_repository: Any
+    _discussion_store: Any  # 无仓储内存模式复用同一冻结讨论日志
     _validation_backend_selector: Any
     _repo_prepared_callback: Any
