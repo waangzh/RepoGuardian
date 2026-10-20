@@ -27,7 +27,7 @@ const emit = defineEmits<{
   navigate: [section: ReviewSection];
   finding: [key: string];
   file: [path: string];
-  create: [];
+  rereview: [];
 }>();
 // 只采用显式快照检查的结果，页面加载不访问 GitHub 或假定 Head 仍是最新。
 const stale = ref(false);
@@ -40,7 +40,7 @@ function runAction(key: SituationActionKey) {
   else if (key === "view_gaps") emit("navigate", "scope");
   else if (["view_validation", "view_activity", "view_error"].includes(key)) emit("navigate", "activity");
   else if (key === "view_report") emit("navigate", "report");
-  else if (key === "rereview") emit("create");
+  else if (key === "rereview") emit("rereview");
 }
 </script>
 
