@@ -4,7 +4,7 @@ export const coverageLabel = (value?: string | null): string =>
   ({ complete: '完整', partial: '部分完成', unknown: '未知' })[value || 'unknown'] || '未知';
 
 export function reportValidationLabel(value?: ReviewOutcome['dynamic_validation']): string {
-  return ({ not_executed: '未执行', passed: '当前 Head 已通过', failed: '当前 Head 未通过',
+  return ({ not_executed: '未执行', passed: '当前 Head 验证通过', failed: '当前版本已有验证失败记录',
     independent_results: '独立结果 · Head 未知', unknown: '未知' })[value || 'unknown'];
 }
 

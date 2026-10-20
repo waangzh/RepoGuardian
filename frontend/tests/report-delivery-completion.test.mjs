@@ -34,7 +34,7 @@ test("概览使用统一合并建议并区分补丁结果与 Head 验证", async
       "不代表当前 Head 已通过", "调用方尚未核验"]) assert.ok(html.includes(value));
     // 只展示当前情景结论；不出现其他情景或旧合并标签。
     assert.equal(html.match(/class="(?:success|info|warning|danger) outcome-verdict"/g)?.length, 1);
-    for (const text of ["建议修改后再合并", "需要补充检查", "未发现阻断性问题，但有改进建议", "部分内容尚未核实"]) assert.ok(!html.includes(text));
+    for (const text of ["建议修改后再合并", "需要补充检查", "未发现阻断性问题，但有改进建议", "部分问题尚未核实"]) assert.ok(!html.includes(text));
   } finally { await server.close(); }
 });
 

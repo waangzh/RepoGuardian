@@ -10,7 +10,7 @@ const props = withDefaults(defineProps<{
   reviewedHeadSha: string | null;
   markdown: string;
   detail?: "compact" | "full";
-  // 标签由情景矩阵给出：失败/取消时必须是“复制部分审查记录”，避免暗示已完成审查。
+  // 标签由情景矩阵给出：失败/用户停止时必须是“复制部分审查记录”，避免暗示已完成审查。
   label?: string;
   primary?: boolean;
   // 复制内容是否只代表部分记录；预览头与状态说明保持一致。

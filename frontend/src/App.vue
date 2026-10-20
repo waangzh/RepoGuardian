@@ -138,7 +138,7 @@ const statusText = computed(() => {
   const labels: Record<string, string> = {
     pending: "等待审查", queued: "等待审查", planning: "正在准备", reviewing: "正在审查",
     resolving_evidence: "解析证据", verifying_issues: "核验问题", generating_patches: "生成补丁",
-    validating: "验证补丁", waiting_for_human: "历史审查未完成", completed: "审查已完成",
+    validating: "验证补丁", waiting_for_human: "历史审查已中止", completed: "审查已完成",
     completed_with_warnings: "已完成，有警告", failed: "任务失败", cancelled: "任务已取消",
   };
   return labels[task.value.status] ?? `未知状态：${task.value.status}`;

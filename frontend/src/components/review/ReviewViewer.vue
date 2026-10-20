@@ -583,7 +583,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
             <p v-if="selectedIssue.related_tests.length" class="related-tests"><span>相关测试</span><code>{{ selectedIssue.related_tests.join(' · ') }}</code></p>
           </template>
           <template v-else-if="task.human_request">
-            <header><div><h2>历史未决问题</h2><p>旧审查未完成；可新建审查获取当前结果</p></div><StatusBadge status="unresolved" /></header>
+            <header><div><h2>历史未决问题</h2><p>历史审查未完成后续验证；可新建审查获取当前结果</p></div><StatusBadge status="unresolved" /></header>
             <h3>{{ task.human_request.questions[0] }}</h3>
             <dl class="evidence-facts"><div><dt>缺失信息</dt><dd>{{ task.human_request.missing_information.join('；') }}</dd></div><div><dt>已知证据</dt><dd>{{ task.human_request.known_evidence.join('；') }}</dd></div></dl>
           </template>

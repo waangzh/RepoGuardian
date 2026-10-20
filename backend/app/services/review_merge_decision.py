@@ -54,12 +54,14 @@ def merge_decision(plan):
                            if code_gaps else
                            "当前审查的代码结论没有新增阻断项，但执行范围或验证记录仍有限制；补齐后再决定是否合并。")
     elif suggestions:
-        # 图片与业内常用做法只保留三态；已确认的 Medium/Low 属于非阻断建议，并入“未发现阻断性问题”。
+        # 只有非阻断建议时不能与“无问题”共用同一句结论，否则读者无法区分是否还有事项要处理。
         decision.status = "conditional_merge"
         decision.advice = ("在已检查范围内，本次静态审查没有发现需要阻止合并的问题；请结合 CI、审批和人工判断决定是否合并。"
                            f"另有 {len(suggestions)} 项已确认的非阻断问题，建议评估影响后处理。")
     elif plan.outcome.kind == "clean":
         decision.status = "conditional_merge"
         decision.advice = "在已检查范围内，本次静态审查没有发现需要阻止合并的问题；请结合 CI、审批和人工判断决定是否合并。"
-    decision.label = MERGE_LABELS[decision.status]
+    decision.label = (MERGE_LABELS["conditional_merge_with_suggestions"]
+                      if decision.status == "conditional_merge" and suggestions
+                      else MERGE_LABELS[decision.status])
     return decision

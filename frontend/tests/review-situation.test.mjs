@@ -23,7 +23,7 @@ test("结果概览情景矩阵与主要操作", async () => {
         "发现高优先级问题，建议修复后再合并", ["view_blockers"], "复制审查意见", "secondary"],
       ["evidence_gaps", { outcome: { ...clean.outcome, kind: "inconclusive", reason_codes: ["investigation_incomplete"] },
         digest: { merge_decision: { status: "resolve_unknowns", blocking_finding_keys: [], nonblocking_finding_keys: [] } } },
-        "部分内容尚未核实，暂不能给出完整建议", ["view_gaps", "rereview"], "复制审查记录", "secondary"],
+        "部分问题尚未核实，暂不能给出完整建议", ["view_gaps", "rereview"], "复制审查记录", "secondary"],
       ["scope_incomplete", { outcome: { ...clean.outcome, kind: "inconclusive", examined_goals: 8, reason_codes: ["scope_incomplete"] },
         digest: { merge_decision: { status: "resolve_unknowns", blocking_finding_keys: [], nonblocking_finding_keys: [] } } },
         "部分检查尚未完成", ["view_gaps", "rereview"], "复制审查记录", "secondary"],

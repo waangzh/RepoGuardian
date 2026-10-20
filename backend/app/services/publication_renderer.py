@@ -31,9 +31,10 @@ REASON_LABELS = {
 }
 # 对外只保留三种合并建议；review_suggestions 仅为旧冻结计划兼容。
 MERGE_LABELS = {
-    "fix_blockers": "建议修改后再合并",
-    "resolve_unknowns": "需要补充检查",
-    "conditional_merge": "已检查范围内未发现阻断性问题",
+    "fix_blockers": "发现高优先级问题，建议修复后再合并",
+    "resolve_unknowns": "部分问题尚未核实，暂不能给出完整建议",
+    "conditional_merge": "已检查范围内未发现需处理的问题",
+    "conditional_merge_with_suggestions": "未发现阻断性问题，但有改进建议",
     "unavailable": "暂不能给出合并建议",
 }
 MERGE_SYMBOLS = {
@@ -156,7 +157,7 @@ def merge_heading(plan):
 def merge_verdict_line(plan) -> str:
     """评论与概览共用的单行结论：符号 + 结论 + 合并建议。
 
-    失败/用户停止时不能再输出通用的“需要补充检查”，否则复制内容会被误读为
+    失败/用户停止时不能再输出通用的证据缺口结论，否则复制内容会被误读为
     一次完成的 PR Review；这里显式标注为部分审查记录。
     """
     kind = plan.outcome.kind
@@ -285,7 +286,7 @@ def _appendix_lines(plan, task):
         lines += ["", "未进入发布正文的记录：", *[
             f"- {markdown_text(item.candidate_id, 160)}：{markdown_text(item.reason_code)}"
             for item in plan.withheld_findings]]
-    lines += ["", "运行过程与证据追踪请查看技术审计记录；此 Markdown 不代表全部原始事件。"]
+    lines += ["", "运行过程与证据追踪请查看技术记录；此 Markdown 不代表全部原始事件。"]
     return lines
 
 
@@ -352,7 +353,7 @@ def _risk_section(plan):
     else:
         lines += items
     if plan.digest.investigations_known and len(pending) > 5:
-        lines.append(f"- 另有 {len(pending) - 5} 项未决调查，完整记录见技术审计。")
+        lines.append(f"- 另有 {len(pending) - 5} 项未决调查，完整记录见技术记录。")
     answered = [item for item in plan.digest.investigations if item.answer != "unresolved"]
     if answered:
         lines += ["", "### 关键调查摘要", ""]
@@ -362,7 +363,7 @@ def _risk_section(plan):
                          + (f"；{markdown_text(item.reason)}" if item.reason else "")
                          + "".join(f"；限制：{markdown_text(value)}" for value in item.limitations))
         if len(answered) > 5:
-            lines.append(f"- 另有 {len(answered) - 5} 项已回答调查，完整记录见技术审计。")
+            lines.append(f"- 另有 {len(answered) - 5} 项已回答调查，完整记录见技术记录。")
     return lines
 
 
@@ -405,11 +406,9 @@ def _comment_risks(plan):
     pending = [item for item in plan.digest.investigations if item.answer == "unresolved"]
     if pending:
         risks.append(f"{len(pending)} 项调查未得到充分答案，相关调用链结论仍需补充证据。")
-    if plan.digest.validation_state == "failed":
-        risks.append("已有与当前 Head 绑定的验证失败记录，需核对失败原因。")
-    elif plan.digest.validation_state == "unknown":
-        risks.append("动态验证状态未知，不能据此宣称目标仓库测试或构建已通过。")
-    return [f"- {value}" for value in dict.fromkeys(risks)][:6]
+    if plan.digest.validation_state in {"failed", "unknown"}:
+        risks.append(_validation_sentence(plan))
+    return [f"- {value}" for value in dict.fromkeys(risks)]
 
 
 def _comment_finding_lines(plan, finding, index, view, *, full):
@@ -448,17 +447,17 @@ def _comment_change_overview(plan):
     actual = understanding.actual_changes if understanding else ""
     lines = ["## 变更概述", ""]
     if author and author != "未记录明确的作者目标。":
-        lines += [f"**PR 目标：** {markdown_text(author, 400)}", ""]
+        lines += [f"**PR 目标：** {markdown_text(author, 400)}（作者声明，不代表目标已实现）", ""]
     lines += [f"**代码观察：** {markdown_text(actual or '未保存可归纳的实际变更。', 800)}"]
     return lines
 
 
-def _comment_other_results(plan, *, omitted, retained, withheld):
-    """审查局限：未决风险、验证边界与未纳入正文的记录。"""
-    lines = ["", "## 审查局限", ""]
+def _comment_other_results(plan, *, omitted, retained, withheld, full):
+    """只展开实际缺口；通用验证边界统一放在文末。"""
     entries = list(_comment_risks(plan))
     if plan.digest.incomplete_goals:
         entries.append(f"- 约定目标仍有 {len(plan.digest.incomplete_goals)} 项未完成检查。")
+        entries += _goal_lines(plan.digest.incomplete_goals, "待补查目标", limit=3)
     if plan.outcome.unresolved_count:
         entries.append(f"- 另有 {plan.outcome.unresolved_count} 项候选问题尚未确认，不作为已核验缺陷。")
     if omitted:
@@ -470,20 +469,15 @@ def _comment_other_results(plan, *, omitted, retained, withheld):
     if withheld:
         entries.append(f"- 另有 {withheld} 项机器确认记录未通过发布准入，详见完整报告；"
                        "当前评论未将其描述为已核验问题。")
-    entries += ["", "### 来源与验证边界", "", *_author_source_lines(plan)]
-    if plan.digest.validation_state == "not_executed":
-        entries += ["- 本轮主要为只读静态检查，未执行目标仓库代码。",
-                    "- 没有本轮独立运行的测试或构建结果，不能将静态检查视作 CI 通过。"]
-    else:
-        validation = "- " + _validation_sentence(plan)
-        if validation not in entries:
-            entries.append(validation)
-    if plan.digest.author_goal and (not plan.digest.intent_assessments or any(
-        item.status in {"insufficient", "not_checked"} for item in plan.digest.intent_assessments
-    )):
-        entries.append("- 作者的全部目标声明并未逐项独立核验，存在尚未验证的业务预期。")
-    lines += entries
-    return lines
+    if full:
+        source = _author_source_lines(plan)
+        if source:
+            entries += ["", "### 来源与验证边界", "", *source]
+    elif plan.digest.author_context_limitation:
+        limitation = markdown_text(plan.digest.author_context_limitation)
+        if not any(limitation in entry for entry in entries):
+            entries.append("- 作者目标输入限制：" + limitation)
+    return ["", "## 审查局限", "", *entries] if entries else []
 
 
 def _validation_sentence(plan) -> str:
@@ -534,7 +528,7 @@ def _comment_next_steps(plan, *, has_findings: bool):
 
 
 def render_review_comment(plan, *, detail="compact", exclude_resolved=False):
-    """默认评论是可直接发布的审查意见；full 只增加证据与范围明细。"""
+    """按实际风险展开评论；阻断问题始终保留证据和触发条件。"""
     included, omitted, retained = comment_selection(plan, exclude_resolved=exclude_resolved)
     full = detail == "full"
     withheld = max(0, plan.outcome.confirmed_count - plan.outcome.publishable_count)
@@ -542,17 +536,31 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False):
     note = partial_review_note(plan)
     if note:
         lines += [note, ""]
-    lines += _comment_change_overview(plan)
-    lines += ["", "## 已确认问题", ""]
+    other_results = _comment_other_results(
+        plan, omitted=omitted, retained=retained, withheld=withheld, full=full)
+    gaps_first = (plan.outcome.kind in {"failed", "cancelled", "inconclusive"}
+        or plan.outcome.review_completeness != "complete"
+        or plan.outcome.runtime_reliability != "reliable"
+        or plan.digest.merge_decision.status == "resolve_unknowns")
+    if gaps_first:
+        lines += other_results
+        lines += ["", "## 建议", ""] + _comment_next_steps(plan, has_findings=bool(included))
+    lines += ["", *_comment_change_overview(plan)]
+    if included or omitted or withheld or full:
+        lines += ["", "## 已确认问题", ""]
     if included:
         views = {item.id: item for item in plan.digest.findings}
         for index, finding in enumerate(included, 1):
-            lines += _comment_finding_lines(plan, finding, index, views.get(finding.finding_key), full=full)
-    else:
+            needs_evidence = (full or finding.severity in {"high", "critical"}
+                or finding.finding_key in plan.digest.merge_decision.blocking_finding_keys)
+            lines += _comment_finding_lines(plan, finding, index, views.get(finding.finding_key), full=needs_evidence)
+    elif omitted or withheld or full:
         lines += ["本轮没有达到发布证据门槛的已确认缺陷。" if not omitted and not withheld
                   else "本次没有通过发布准入的已核验问题；已处理或未通过准入的记录见审查局限。", ""]
-    lines += _comment_other_results(plan, omitted=omitted, retained=retained, withheld=withheld)
-    lines += ["", "## 建议", ""] + _comment_next_steps(plan, has_findings=bool(included))
+    if not gaps_first:
+        lines += other_results
+        if included or omitted or withheld:
+            lines += ["", "## 建议", ""] + _comment_next_steps(plan, has_findings=bool(included))
     if full:
         lines += ["", "## 审查范围", "",
             f"约定目标已检查 {plan.outcome.examined_goals} / {plan.outcome.total_goals}；"
@@ -560,9 +568,12 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False):
         lines += _goal_lines(plan.digest.examined_goals, "已检查目标", limit=None)
         lines += _goal_lines(plan.digest.incomplete_goals, "未完成目标", limit=None)
         lines += [f"- 排除文件：{markdown_text(item.path)}；{markdown_text(item.reason)}" for item in plan.digest.excluded_files]
+    validation = _validation_sentence(plan)
+    boundary = "" if any(validation in line for line in lines) else validation
+    subject = "本记录" if note else "本结论"
     lines += ["", "---", "",
-        f"本结论基于提交 `{markdown_text(plan.snapshot.head_sha or '未记录', 64)}` 的只读审查；"
-        "不替代 CI 与人工审批。未发现的问题不代表其他路径已经安全。"]
+        f"{subject}基于提交 `{markdown_text(plan.snapshot.head_sha or '未记录', 64)}` 的只读审查；"
+        + boundary + "不替代 CI 与人工审批。"]
     # 各段落自行收尾空行；合并后收敛多余空行，保持可发布排版。
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines))
 
@@ -582,7 +593,7 @@ def render_finding_comment(plan, finding):
 def render_technical_audit(plan, execution_record=None):
     import json
 
-    lines = ["# RepoGuardian 技术审计记录", "", "格式化的执行与证据索引，不代表全部原始事件或模型完整输入输出。", "",
+    lines = ["# RepoGuardian 技术记录", "", "格式化的执行与证据索引，不代表全部原始事件或模型完整输入输出。", "",
         "## 快照与结论身份", "", f"- 审查记录：{markdown_text(plan.review_id)}",
         f"- Head：{markdown_text(plan.snapshot.head_sha or '未知')}",
         f"- Effective Base：{markdown_text(plan.snapshot.effective_base_sha or '未知')}",

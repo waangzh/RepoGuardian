@@ -6,9 +6,9 @@ defineProps<{ modelValue: ReportMode; panelId: string }>();
 const emit = defineEmits<{ 'update:modelValue': [value: ReportMode] }>();
 const id = useId();
 const modes = [
-  { id: 'comment' as const, label: 'PR 交付摘要', icon: 'copy' },
+  { id: 'comment' as const, label: 'PR 评论草稿', icon: 'copy' },
   { id: 'user' as const, label: '详细审查报告', icon: 'report' },
-  { id: 'audit' as const, label: '技术审计', icon: 'code' },
+  { id: 'audit' as const, label: '技术记录', icon: 'code' },
 ];
 function move(event: KeyboardEvent, index: number) {
   if (event.altKey || event.ctrlKey || event.metaKey) return;
