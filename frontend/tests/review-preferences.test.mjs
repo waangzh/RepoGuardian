@@ -74,16 +74,28 @@ test('默认深度偏好持久化、恢复并生成真实 Preview 方案', async
     assert.doesNotMatch(reviewHtml, /跟随服务端默认/);
     assert.doesNotMatch(reviewHtml, /费用|USD/);
     assert.equal((reviewHtml.match(/ disabled/g) || []).length, 3);
+    preferences.defaultReviewDepth.value = 'server';
+    assert.equal(preferences.initialReviewPlan(capabilities), undefined);
+    preferences.defaultPrDiscussions.value = 'disabled';
+    await nextTick();
+    assert.equal(values.get('rg-default-pr-discussions'), 'disabled');
+    const historyPlan = preferences.initialReviewPlan(capabilities);
+    assert.equal(historyPlan.include_pr_discussions, false);
+    assert.equal(historyPlan.depth, 'standard');
+    const { preferences: historyRestored } = await loadPreferences();
+    assert.equal(historyRestored.defaultPrDiscussions.value, 'disabled');
+    preferences.defaultPrDiscussions.value = 'server';
+    assert.equal(preferences.initialReviewPlan(capabilities), undefined);
     Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: {
       getItem() { throw new Error('storage disabled'); }, setItem() { throw new Error('storage disabled'); },
     } });
     const { preferences: blocked } = await loadPreferences();
     assert.equal(blocked.defaultReviewDepth.value, 'server');
     blocked.defaultReviewDepth.value = 'quick';
+    blocked.defaultPrDiscussions.value = 'disabled';
     await nextTick();
     assert.equal(blocked.initialReviewPlan(capabilities).depth, 'quick');
-    preferences.defaultReviewDepth.value = 'server';
-    assert.equal(preferences.initialReviewPlan(capabilities), undefined);
+    assert.equal(blocked.initialReviewPlan(capabilities).include_pr_discussions, false);
   } finally {
     await Promise.all(servers.map(server => server.close()));
     if (previousStorage) Object.defineProperty(globalThis, 'localStorage', previousStorage);

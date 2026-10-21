@@ -35,11 +35,18 @@ def capabilities():
     return ReviewCapabilities(policy_version=settings.repoguardian_review_policy_version,
         depth_presets=[{"id": key, "label": data[0], "limits": default_limits(key)} for key, data in DEPTHS.items()],
         focus_categories=["correctness", "security", "performance", "compatibility"],
+        pr_discussions_available=settings.repoguardian_pr_discussions_enabled,
+        pr_discussions_default=settings.repoguardian_pr_discussions_enabled,
         limits={"defaults": default_limits("standard"), "maxima": maxima()})
 
 
 def normalize_plan(options, model):
     options = options or ReviewPlanOptions()
+    include = options.include_pr_discussions
+    if include is True and not settings.repoguardian_pr_discussions_enabled:
+        raise ValueError("PR discussion review is disabled by server policy")
+    if include is None:
+        include = settings.repoguardian_pr_discussions_enabled
     values = default_limits(options.depth)
     for key, value in options.limits.model_dump().items():
         if value is not None:
@@ -51,7 +58,7 @@ def normalize_plan(options, model):
             settings.repoguardian_model_pricing_json, provider=settings.repoguardian_provider,
             model=model, input_tokens=1, output_tokens=1) is None:
         raise ValueError("cost limit requires configured model pricing; price is unknown")
-    return options.model_copy(update={"limits": ReviewLimits(**values)})
+    return options.model_copy(update={"limits": ReviewLimits(**values), "include_pr_discussions": include})
 
 
 def apply_scope(plan, options):
@@ -91,6 +98,8 @@ def apply_scope(plan, options):
 
 def configure_runtime(configuration, options, snapshot, plan_hash):
     config = dict(configuration)
+    if options.include_pr_discussions is False:
+        config["discussion_contract"] = None
     config.update(effective_plan=options.model_dump(mode="json"), snapshot=snapshot,
                   plan_hash=plan_hash, deadline_seconds=options.limits.timeout_seconds,
                   limits={"max_calls": options.limits.max_model_calls,

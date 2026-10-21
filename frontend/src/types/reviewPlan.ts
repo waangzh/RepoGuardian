@@ -10,6 +10,7 @@ export interface ReviewPlanOptions {
   focus: ('correctness' | 'security' | 'performance' | 'compatibility')[];
   scope: { mode: 'all' | 'selected'; primary_files: string[] };
   limits: ReviewLimits;
+  include_pr_discussions?: boolean;
 }
 export interface PlanSnapshot { head_sha: string; effective_base_sha: string; declared_base_sha: string }
 export interface ReviewCapabilities {
@@ -17,6 +18,8 @@ export interface ReviewCapabilities {
   depth_presets: { id: ReviewPlanOptions['depth']; label: string; limits: ReviewLimits }[];
   focus_categories: ReviewPlanOptions['focus'];
   scope_selection_supported: boolean;
+  pr_discussions_available?: boolean;
+  pr_discussions_default?: boolean;
   limits: { defaults: ReviewLimits; maxima: ReviewLimits };
 }
 export interface FindingDisposition { status: 'open' | 'confirmed' | 'ignored' | 'resolved'; reason: string }

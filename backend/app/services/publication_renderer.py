@@ -450,6 +450,8 @@ def render_user_report(task, plan: PublicationPlan) -> str:
 
 
 def discussion_report_lines(plan, task=None):
+    if plan.digest.discussion_review_enabled is False:
+        return ["", "## 历史讨论复核", "", "本次未纳入历史讨论；未采集、未提供给模型，也未执行历史问题复核。"]
     stats = plan.digest.discussion_stats
     if stats is None:
         return ["", "## 历史讨论复核", "", "未记录历史讨论，不能推断该 PR 没有讨论。"]
@@ -828,6 +830,8 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False, inc
     full = detail == "full"
     withheld = max(0, plan.outcome.confirmed_count - plan.outcome.publishable_count)
     lines = ["RepoGuardian · PR Code Review", "", merge_verdict_line(plan), ""]
+    if plan.digest.discussion_review_enabled is False:
+        lines += ["本次未纳入历史讨论；以下结论不包含历史讨论复核。", ""]
     if plan.digest.discussion_stats:
         stats = plan.digest.discussion_stats
         lines += [f"当前结论针对本轮变更范围；已参考 {stats['referenced']} 项历史讨论，"

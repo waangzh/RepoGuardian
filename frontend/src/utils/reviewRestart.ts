@@ -10,6 +10,7 @@ export function rereviewInput(task: ReviewTask) {
   const plan: ReviewPlanOptions | undefined = saved?.version === "review-plan-v1" ? {
     version: saved.version,
     depth: saved.depth,
+    ...(saved.include_pr_discussions === undefined ? {} : { include_pr_discussions: saved.include_pr_discussions }),
     focus: [...saved.focus],
     scope: { mode: "all", primary_files: [] },
     limits: { ...saved.limits },

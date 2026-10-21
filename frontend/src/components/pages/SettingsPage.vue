@@ -15,7 +15,7 @@ import { usePreferences } from "../../composables/usePreferences";
 import ReviewDepthSelector from "../review/ReviewDepthSelector.vue";
 import type { ReviewCapabilities } from "../../types/reviewPlan";
 const props = defineProps<{ capabilities: ReviewCapabilities | null }>();
-const { theme, density, defaultReviewDepth } = usePreferences();
+const { theme, density, defaultReviewDepth, defaultPrDiscussions } = usePreferences();
 const currentDepthLabel = computed(() => defaultReviewDepth.value === "server"
   ? "跟随服务端默认"
   : props.capabilities?.depth_presets.find(preset => preset.id === defaultReviewDepth.value)?.label ?? "等待加载深度选项");
@@ -140,6 +140,17 @@ onMounted(load);
         </summary>
         <ReviewDepthSelector v-if="capabilities" v-model="defaultReviewDepth" class="space-top" :presets="capabilities.depth_presets" allow-server-default label="默认审查深度" />
         <p v-else>深度能力尚未加载，请刷新页面重试。</p>
+      </details>
+      <details class="rg-preference-row rg-depth-preference">
+        <summary><div><strong>审查时参考 PR 历史讨论</strong><p>仅用于新建方案，可在单次审查中覆盖；已有任务继续使用保存的选择。</p></div><span>{{ { server: '跟随服务端默认', enabled: '开启', disabled: '关闭' }[defaultPrDiscussions] }}</span></summary>
+        <label class="check-row">默认选择
+          <select v-model="defaultPrDiscussions" class="input" aria-label="历史讨论审查默认选择">
+            <option value="server">跟随服务端默认</option>
+            <option value="enabled" :disabled="!capabilities?.pr_discussions_available">开启</option>
+            <option value="disabled">关闭</option>
+          </select>
+        </label>
+        <p class="field-hint">开启后采集、参考并复核历史讨论，可能增加耗时与模型用量；关闭后不执行这些步骤。服务端策略仍约束可用能力。</p>
       </details>
     </section>
     <p v-if="error" class="workspace-error" role="alert">{{ error }}</p>

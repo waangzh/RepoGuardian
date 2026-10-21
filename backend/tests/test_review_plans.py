@@ -41,6 +41,7 @@ def test_deadline_handles_sqlite_naive_utc_and_never_resets():
     {"scope": {"mode": "selected", "primary_files": ["../secret"]}},
     {"scope": {"mode": "selected", "primary_files": []}},
     {"scope": {"mode": "all", "primary_files": ["a.py"]}},
+    {"include_pr_discussions": "false"}, {"include_pr_discussions": 1},
 ])
 def test_invalid_plan_rejected(payload):
     with pytest.raises(ValidationError):
@@ -53,6 +54,41 @@ def test_server_maximum_and_unknown_price_rejected(monkeypatch):
         normalize_plan(ReviewPlanOptions(limits=ReviewLimits(max_tokens=settings.repoguardian_run_max_tokens + 1)), "fixture")
     with pytest.raises(ValueError, match="pricing"):
         normalize_plan(ReviewPlanOptions(limits=ReviewLimits(max_cost_microusd=1)), "fixture")
+
+
+def test_discussion_policy_and_legacy_serialization(monkeypatch):
+    from app.services.review_plan import configure_runtime
+    assert "include_pr_discussions" not in ReviewPlanOptions().model_dump(mode="json")
+    monkeypatch.setattr(settings, "repoguardian_pr_discussions_enabled", True)
+    assert normalize_plan(None, "fixture").include_pr_discussions is True
+    options = normalize_plan(ReviewPlanOptions(include_pr_discussions=False), "fixture")
+    frozen = configure_runtime({"discussion_contract": "pr-discussion-context-v1"}, options, {}, "hash")
+    assert frozen["discussion_contract"] is None
+    assert frozen["effective_plan"]["include_pr_discussions"] is False
+    monkeypatch.setattr(settings, "repoguardian_pr_discussions_enabled", False)
+    assert normalize_plan(None, "fixture").include_pr_discussions is False
+    with pytest.raises(ValueError, match="disabled by server policy"):
+        normalize_plan(ReviewPlanOptions(include_pr_discussions=True), "fixture")
+
+
+async def test_disabled_history_is_frozen_and_never_opens_discussion_store(plan_service, monkeypatch):
+    from app.services.pr_discussions import prepare_discussions_node
+    from app.services.pr_discussion_recheck import recheck_discussions_node
+    service, _, _, calls, _ = plan_service
+    preview = await service.preview(ReviewPreviewRequest(pr_url="https://github.com/o/r/pull/1",
+        plan=ReviewPlanOptions(include_pr_discussions=False)))
+    task = await service.create_confirmed_task(confirmation(preview))
+    restored = service._repository.get_task(task.id)
+    assert restored.confirmed_plan.include_pr_discussions is False
+    assert restored.task_runtime_configuration["discussion_contract"] is None
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("disabled history must not open store or access GitHub/model")
+    monkeypatch.setattr("app.services.pr_discussions.open_store", forbidden)
+    monkeypatch.setattr("app.services.pr_discussion_recheck.open_store", forbidden)
+    state = {"task_runtime_configuration": restored.task_runtime_configuration}
+    assert await prepare_discussions_node(state) == {}
+    assert await recheck_discussions_node(state) == {}
+    assert calls == []
 
 
 @pytest.fixture
