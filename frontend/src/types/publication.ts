@@ -70,6 +70,9 @@ export interface ChangeUnderstanding {
   author_goal: string;
   actual_changes: string;
   alignment: string;
+  author_goal_source?: "summary" | "description" | "title" | "unknown" | null;
+  implementation_changes?: string | null;
+  test_observations?: string | null;
 }
 export interface ReviewDigest {
   discussion_review_enabled?: boolean | null;
@@ -104,6 +107,7 @@ export interface DigestIntent {
   author_target: string;
   status: "observed" | "contradicted" | "insufficient" | "not_applicable" | "not_checked";
   observations: { goal_id: string; path: string; start_line: number | null; side: "head" | "base";
+    author_goal_summary?: string;
     actual_behavior: string; alignment: "supported" | "contradicted" | "insufficient" | "not_applicable";
     evidence_ids: string[]; limitations: string[] }[];
 }

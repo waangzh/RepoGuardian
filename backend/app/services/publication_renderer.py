@@ -135,11 +135,8 @@ def markdown_text(value: str, limit: int = 2000) -> str:
 
 def _sentence(value: str | None, limit: int = 240) -> str:
     """取一段可读文本的首句，避免评论被整段模型输出淹没。"""
-    text = " ".join((value or "").split())
-    if not text:
-        return ""
-    match = re.match(r".+?[。！？!?](?=\s|$)|.+", text)
-    return match.group(0)[:limit] if match else text[:limit]
+    from app.services.review_prose import concise_text
+    return concise_text(value, limit)
 
 
 def render_finding(finding: PublicationFinding) -> str:
@@ -665,12 +662,12 @@ def _comment_history_risk_lines(plan, risks):
     """已核验的既有风险按正式问题格式呈现，并明确不计入本轮 Diff 新增问题。"""
     lines = []
     for finding in risks:
-        title = finding.affected_behavior or finding.reason
+        title = _sentence(finding.affected_behavior or finding.reason, 180)
         lines += [f"**[{finding.severity.title()} · 历史复核] {markdown_text(title, 200)}**", "",
                   f"**代码位置：** {markdown_text(finding.path, 500) if finding.path else '未记录文件'}", ""]
-        lines += [f"**复核结论：** {_history_priority(finding)}；{markdown_text(finding.reason)}", ""]
+        lines += [f"**复核结论：** {_history_priority(finding)}；{markdown_text(_sentence(finding.reason, 180))}", ""]
         if finding.recommendation:
-            lines += [f"**建议：** {markdown_text(finding.recommendation)}", ""]
+            lines += [f"**建议：** {markdown_text(_sentence(finding.recommendation, 180))}", ""]
         if finding.evidence_ids:
             lines += [f"**代码证据：** {'、'.join(markdown_text(item) for item in finding.evidence_ids)}", ""]
         url = finding.discussion_url or _history_url(plan, finding.discussion_id)
@@ -738,8 +735,16 @@ def _comment_change_overview(plan, *, title="变更理解"):
     actual = understanding.actual_changes if understanding else ""
     lines = [f"## {title}", ""]
     if author and author != "未记录明确的作者目标。":
-        lines += [f"**PR 目标：** {markdown_text(author, 400)}（作者声明，不代表目标已实现）", ""]
-    lines += [f"**代码观察：** {markdown_text(actual or '未保存可归纳的实际变更。', 800)}"]
+        source = understanding.author_goal_source if understanding else None
+        label = {"title": "作者标题，未生成目标归纳", "description": "作者描述摘录",
+                 "summary": "基于作者原文的目标归纳"}.get(source, "作者声明")
+        lines += [f"**PR 目标：** {markdown_text(_sentence(author, 360))}（{label}，不代表目标已实现）", ""]
+    if understanding and understanding.implementation_changes is not None:
+        lines += [f"**实现变化：** {markdown_text(understanding.implementation_changes, 800)}", "",
+                  f"**测试核对：** {markdown_text(understanding.test_observations or '尚未形成测试断言核对记录。', 800)}"
+                  "（仅指测试代码静态核对，实际执行情况见文末。）"]
+    else:
+        lines += [f"**代码观察：** {markdown_text(_sentence(actual or '未保存可归纳的实际变更。', 600))}"]
     return lines
 
 
@@ -829,7 +834,7 @@ def _comment_next_steps(plan, *, has_findings: bool):
     elif has_findings:
         steps.append("请评估上述非高优先级问题的业务影响，结合 CI 与必要审批后再决定合并。")
     else:
-        steps.append("结合 CI、业务预期和人工评审决定是否合并。已检查范围内未发现需在合并前处理的问题，不等于代码无缺陷。")
+        steps.append("结合 CI、业务预期和人工评审决定是否合并。")
     if plan.digest.merge_decision.nonblocking_finding_keys and decision.status == "fix_blockers":
         steps.append("非高优先级建议可在同一轮修改中一并评估。")
     if plan.digest.incomplete_goals:
@@ -954,7 +959,7 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False, inc
     subject = "本记录" if note else "本结论"
     lines += ["", "---", "",
         f"{subject}基于提交 `{markdown_text(plan.snapshot.head_sha or '未记录', 64)}` 的只读审查；"
-        + boundary + "不替代 CI 与人工审批。"]
+        + boundary + "未发现问题不等于代码无缺陷；不替代 CI 与人工审批。"]
     # 各段落自行收尾空行；合并后收敛多余空行，保持可发布排版。
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines))
 

@@ -547,6 +547,8 @@ class ReviewTaskExecutor:
         from app.services.review_intent import matches_author_target
         if not self.spec.intent_assessment_contract:
             return "intent_contract_not_enabled"
+        if assessment.author_goal_summary and self.spec.intent_assessment_contract != "structured-intent-v4":
+            return "intent_summary_contract_not_enabled"
         if not matches_author_target(assessment.author_quote, targets):
             return "unknown_author_target"
         if not set(assessment.evidence_ids).issubset(item.evidence_ids):
@@ -568,7 +570,7 @@ class ReviewTaskExecutor:
         误判为非法；v2 只要求 supported/contradicted 引用的证据位于本目标范围内、
         同文件同侧，不要求覆盖整段。未知路径仍应为 insufficient。
         """
-        if self.spec.intent_assessment_contract not in {"structured-intent-v2", "structured-intent-v3"}:
+        if self.spec.intent_assessment_contract not in {"structured-intent-v2", "structured-intent-v3", "structured-intent-v4"}:
             return self._covers(goal, assessment.evidence_ids)
         side = self.goal_side(goal)
         for identity in assessment.evidence_ids:
