@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from app.models.publication import ChangeUnderstanding, DigestGoal, DigestInvestigation, DigestIntent
 from app.models.review_runtime import IntentAssessment
-from app.services.review_intent import author_targets
+from app.services.review_intent import author_targets, matched_author_targets
 from app.services.review_validation_digest import validation_digest
 from app.services.review_findings import finding_views
 from app.services.fingerprints import stable_hash
@@ -177,28 +177,39 @@ def enrich_review_digest(digest, task, report, dispositions):
             digest.author_goal = report.pr_intent_context
             digest.intent_alignment = ("本轮静态检查已提供冻结的作者声明，具体目标对照及证据缺口见已检查行为的理由。"
                 "这些局部检查不构成作者全部目标已实现的独立验收结论。")
-            for target in author_targets(report.pr_intent_context):
+            targets = author_targets(report.pr_intent_context)
+            # 先按目标解析一次引用，避免对每个目标重复计算；歧义引用同时归入多个目标。
+            matched_by_target: dict[str, list[tuple[dict, IntentAssessment, bool]]] = {
+                target: [] for target in targets}
+            for goal in report.initial_scope_coverage:
+                for raw in goal.get("intent_assessments") or []:
+                    try:
+                        assessment = IntentAssessment.model_validate(raw)
+                    except ValidationError:
+                        continue
+                    # 与执行准入共用同一目标解析规则；执行器接受的引用必须能在此归属。
+                    matched = matched_author_targets(assessment.author_quote, targets)
+                    ambiguous = len(matched) > 1
+                    for matched_target in matched:
+                        matched_by_target[matched_target].append((goal, assessment, ambiguous))
+            for target in targets:
                 entry = DigestIntent(author_target=target)
-                for goal in report.initial_scope_coverage:
-                    for raw in goal.get("intent_assessments") or []:
-                        try:
-                            assessment = IntentAssessment.model_validate(raw)
-                        except ValidationError:
-                            continue
-                        if assessment.author_quote != target:
-                            continue
-                        needs_source = assessment.alignment in {"supported", "contradicted"}
-                        bound = bool(task.run_manifest and goal.get("snapshot_head_sha") == task.run_manifest.head_sha
-                            and goal.get("snapshot_base_sha") == task.run_manifest.effective_base_sha
-                            and goal.get("result_id")
-                            and (not needs_source or (goal.get("status") == "examined" and assessment.evidence_ids))
-                            and set(assessment.evidence_ids).issubset(goal.get("evidence_ids") or []))
-                        entry.observations.append({"goal_id": goal.get("goal_id"), "path": goal.get("target_ref"),
-                            "start_line": goal.get("start_line"), "side": "base" if goal.get("target_kind") == "base_source_range" else "head",
-                            "actual_behavior": assessment.actual_behavior,
-                            "alignment": assessment.alignment if bound else "insufficient",
-                            "evidence_ids": assessment.evidence_ids if bound else [],
-                            "limitations": assessment.limitations + ([] if bound else ["缺少有效快照或已接受证据绑定，结论不可采信。"])})
+                for goal, assessment, ambiguous in matched_by_target[target]:
+                    needs_source = assessment.alignment in {"supported", "contradicted"}
+                    bound = bool(not ambiguous and task.run_manifest
+                        and goal.get("snapshot_head_sha") == task.run_manifest.head_sha
+                        and goal.get("snapshot_base_sha") == task.run_manifest.effective_base_sha
+                        and goal.get("result_id")
+                        and (not needs_source or (goal.get("status") == "examined" and assessment.evidence_ids))
+                        and set(assessment.evidence_ids).issubset(goal.get("evidence_ids") or []))
+                    entry.observations.append({"goal_id": goal.get("goal_id"), "path": goal.get("target_ref"),
+                        "start_line": goal.get("start_line"), "side": "base" if goal.get("target_kind") == "base_source_range" else "head",
+                        "actual_behavior": assessment.actual_behavior,
+                        "alignment": assessment.alignment if bound else "insufficient",
+                        "evidence_ids": assessment.evidence_ids if bound else [],
+                        "limitations": assessment.limitations + ([] if bound else [
+                            "引用同时匹配多个作者目标，归属存在歧义，结论不可采信。" if ambiguous
+                            else "缺少有效快照或已接受证据绑定，结论不可采信。"])})
                 statuses = {value["alignment"] for value in entry.observations}
                 entry.status = ("contradicted" if "contradicted" in statuses else "insufficient" if "insufficient" in statuses
                     else "observed" if "supported" in statuses else "not_applicable" if statuses else "not_checked")

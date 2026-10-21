@@ -96,31 +96,56 @@ def normalized_target(value: str) -> str:
     return _WHITESPACE.sub(" ", value).strip()
 
 
-def matches_author_target(quote: str | None, targets: list[str]) -> bool:
-    """模型可引用完整目标或其中的完整句子。
+def matched_author_targets(quote: str | None, targets: list[str]) -> list[str]:
+    """确定性解析引用可归属的目标；执行准入与报告投影必须共用这一规则。
 
-    英文 PR 描述按段落切分时，模型常引用段落内的一个完整句子；空白归一后
-    允许引用是目标的子串，但不接受目标之外的改写或拼接。
+    优先级：规范化后精确相等，其次是长度达标的完整子串，最后是相邻目标的
+    连续拼接。返回全部匹配的原始目标（按 targets 顺序、按规范化文本去重）；
+    多个结果表示引用存在歧义，调用方不能自行挑选其中一个。
     """
     candidate = normalized_target(quote or "")
     if not candidate:
-        return False
+        return []
     normalized = [normalized_target(target) for target in targets]
-    for target in normalized:
-        if candidate == target:
-            return True
-        if len(candidate) >= 24 and candidate in target:
-            return True
+    exact = [index for index, target in enumerate(normalized) if candidate == target]
+    if exact:
+        return _distinct_targets(targets, normalized, exact)
+    contained = [index for index, target in enumerate(normalized)
+                 if len(candidate) >= 24 and candidate in target]
+    if contained:
+        return _distinct_targets(targets, normalized, contained)
     # 模型也可能原样引用相邻的完整句子（例如连续两句）；只接受连续拼接。
+    joined: list[int] = []
     for start in range(len(normalized)):
-        joined = normalized[start]
+        parts = [normalized[start]]
         for end in range(start + 1, len(normalized)):
-            joined = normalized_target(joined + " " + normalized[end])
-            if len(joined) > len(candidate):
+            parts.append(normalized[end])
+            # 中文句子之间通常没有空格，英文需要；两种拼接都视为连续原文。
+            spaced = normalized_target(" ".join(parts))
+            concatenated = "".join(parts)
+            if spaced == candidate or concatenated == candidate:
+                joined.extend(range(start, end + 1))
                 break
-            if joined == candidate:
-                return True
-    return False
+            # 后续拼接只会更长；用无分隔长度判断下界，避免误丢中文短句组合。
+            if len(concatenated) > len(candidate):
+                break
+    return _distinct_targets(targets, normalized, joined)
+
+
+def _distinct_targets(targets: list[str], normalized: list[str], indices: list[int]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for index in sorted(set(indices)):
+        if normalized[index] in seen:
+            continue
+        seen.add(normalized[index])
+        result.append(targets[index])
+    return result
+
+
+def matches_author_target(quote: str | None, targets: list[str]) -> bool:
+    """模型可引用完整目标或其中的完整句子；歧义引用仍算合法引用。"""
+    return bool(matched_author_targets(quote, targets))
 
 
 def author_targets(context: str | None) -> list[str]:
@@ -128,4 +153,12 @@ def author_targets(context: str | None) -> list[str]:
         return []
     # 保留原文，最多 24 项；长描述尾部合并，不能静默丢失目标。
     parts = [part for block in _blocks(context) for part in _split_block(block)]
-    return list(dict.fromkeys(parts[:23] + (["\n".join(parts[23:])] if len(parts) > 23 else [])))
+    # 空白差异不产生重复目标，避免报告条目与引用解析的身份不一致。
+    unique: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        key = normalized_target(part)
+        if key not in seen:
+            seen.add(key)
+            unique.append(part)
+    return unique[:23] + (["\n".join(unique[23:])] if len(unique) > 23 else [])
