@@ -2,6 +2,8 @@
 import { createApp, h, ref } from "vue";
 import ReviewWorkspace from "../src/components/review/ReviewWorkspace.vue";
 import AppSidebar from '../src/components/layout/AppSidebar.vue';
+import NewReviewPage from "../src/components/pages/NewReviewPage.vue";
+import ReviewHistoryPage from "../src/components/pages/ReviewHistoryPage.vue";
 import type { ReviewSection } from "../src/types/workspace";
 import type { ReviewTask } from "../src/types/review";
 import type { PublicationPlan } from "../src/types/publication";
@@ -46,6 +48,11 @@ const mobileOpen = ref(false);
 Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { copiedText.value = text; } } });
 const originalFetch = window.fetch.bind(window);
 window.fetch = async (input, init) => {
+  if (typeof input === "string" && input.startsWith("/api/reviews?")) {
+    const items = Object.values(fixtures).map(({ task, plan }) => ({ ...task,
+      history_result: { outcome: plan.outcome, merge_decision: plan.digest.merge_decision } }));
+    return new Response(JSON.stringify({ items, total: items.length, page: 1, page_size: 12 }));
+  }
   if (typeof input === 'string' && input.endsWith('/publications')) {
     return new Response(JSON.stringify(init?.method && init.method !== 'GET' ? { detail: '合成验收禁止真实发布' } : []),
       { status: init?.method && init.method !== 'GET' ? 403 : 200, headers: { 'Content-Type': 'application/json' } });
@@ -73,6 +80,7 @@ window.fetch = async (input, init) => {
     return new Response(JSON.stringify({ ...fixture!.summary, review_id: task.value.id }), { headers: { "Content-Type": "application/json" } });
   }
   if (typeof input === "string" && input.endsWith("/publication-plan")) {
+    await new Promise(resolve => setTimeout(resolve, 120));
     if (choice.value === "error") return new Response("加载失败", { status: 503 });
     const fixture = fixtures[choice.value];
     return new Response(JSON.stringify(fixture!.plan), { headers: { "Content-Type": "application/json" } });
@@ -86,6 +94,14 @@ function workspace() {
     duration: "1 秒", cancelling: false, retryingUnitId: null });
 }
 createApp({ setup: () => () => h("div", [
+  params.get("page") === "history" ? h("div", { class: "rg-app" }, [h(ReviewHistoryPage)])
+    : params.get("page") === "new" ? h("div", { class: "rg-app" }, [h(NewReviewPage, { prUrl: "", loading: false, busy: false })]) : null,
+  h("button", { "aria-label": "刷新同任务报告", onClick: () => {
+    const fixture = fixtures[choice.value]!;
+    fixture.plan.user_report_markdown += "\n\n报告更新验收";
+    fixture.plan.review_comment_markdown += "\n\n报告更新验收";
+    task.value = { ...task.value, task_runtime_report: { ...task.value.task_runtime_report! } };
+  } }, "刷新同任务报告"),
   h("div", { style: "padding:16px;background:#fff3dd;display:flex;gap:16px" }, [
     h("strong", "合成快照 · 后端发布计划验收"),
     h("select", { "aria-label": "验收场景", value: choice.value, onChange: (event: Event) => {
@@ -99,7 +115,7 @@ createApp({ setup: () => () => h("div", [
   h('select', { 'aria-label': '快照场景', value: snapshotState.value, onChange: (event: Event) => { snapshotState.value = (event.target as HTMLSelectElement).value; copiedText.value = ''; } }, ['current', 'stale', 'unknown'].map(value => h('option', {value}, value))),
   h('output', { 'aria-label': '已复制内容', style: 'display:block;max-height:120px;overflow:auto' }, copiedText.value),
   createRequested.value ? h('output', { 'aria-label': '重新审查入口' }, '已请求重新分析 PR（合成验收，不创建真实任务）') : null,
-  shell ? h('div', { class: 'rg-app app' }, [
+  params.has("page") ? null : shell ? h('div', { class: 'rg-app app' }, [
     h(AppSidebar, { modelValue: 'dashboard', section: section.value, hasReview: true, taskActive: false, mobileOpen: mobileOpen.value, busy: false,
       onSection: (value: ReviewSection) => { section.value = value; mobileOpen.value = false; }, onClose: () => { mobileOpen.value = false; } }),
     h('main', { class: 'main' }, [h('button', { class: 'btn secondary', type: 'button', 'aria-label': '打开导航', onClick: () => { mobileOpen.value = true; } }, '导航'), h('div', { class: 'workspace-main' }, [workspace()])]),

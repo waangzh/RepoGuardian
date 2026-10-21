@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { getReviewCapabilities, cancelReview, createReview, getAvailableModels, getReport, getReview, retryReviewUnit, subscribeToEvents } from "./api/client";
+import { getReviewCapabilities, cancelReview, createReview, deleteReview, getAvailableModels, getReport, getReview, retryReviewUnit, subscribeToEvents } from "./api/client";
 import { hasSavedPreview, usePreviewJob } from './composables/usePreviewJob';
 import PreviewPage from './components/pages/PreviewPage.vue';
 import QuickPreviewPage from './components/pages/QuickPreviewPage.vue';
@@ -513,6 +513,24 @@ function startNewReview() {
   mobileOpen.value = false;
 }
 
+async function deleteHistoricalReview(taskId: string, signal?: AbortSignal) {
+  await deleteReview(taskId, signal);
+  onReviewDeleted(taskId);
+}
+
+function onReviewDeleted(taskId: string) {
+  if (task.value?.id !== taskId) return;
+  reviewInputGeneration++;
+  clearAll(false);
+  dismissNotice();
+  task.value = null;
+  report.value = null;
+  createdTaskId.value = null;
+  error.value = null;
+  reviewSection.value = "overview";
+  activePage.value = "history";
+}
+
 async function rereviewCurrentPr() {
   if (!task.value || taskActive.value || submitting.value || opening.value) return;
   const input = rereviewInput(task.value);
@@ -587,7 +605,7 @@ onBeforeUnmount(() => {
         <PreviewPage v-else-if="previewStage" :job="previewJob" :tracking="previewing" :connection-error="previewConnectionError" :pr-url="prUrl" :model="model" :default-model="defaultModel" @resume="restorePreview" @cancel="cancelPreviewJob" @retry="loadPreview" @back="backToInput" />
         <NewReviewPage v-else v-model:pr-url="prUrl" :loading="quickLoading" :busy="submitting || opening" @preview="loadQuickPreview" @open="openHistoricalReview" @history="activePage = 'history'" />
       </main>
-      <ReviewHistoryPage v-else-if="activePage === 'history'" :busy="submitting || opening || taskActive" @open="openHistoricalReview" @create="startNewReview" />
+      <ReviewHistoryPage v-else-if="activePage === 'history'" :busy="submitting || opening || taskActive" :delete-task="deleteHistoricalReview" @open="openHistoricalReview" @create="startNewReview" />
       <SettingsPage v-else :capabilities="capabilities" />
     </div>
     <dialog ref="errorDialog" class="rg-dialog rg-error-dialog" role="alertdialog" aria-labelledby="rg-error-title" @close="error = null" @click.self="dismissError">

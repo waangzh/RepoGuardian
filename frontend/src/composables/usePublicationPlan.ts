@@ -24,7 +24,6 @@ export function usePublicationPlan(task: () => ReviewTask,
       const controller = new AbortController();
       onCleanup(() => controller.abort());
       summary.value = null;
-      plan.value = null;
       error.value = "";
       loading.value = false;
       if (!terminal()) return;
@@ -47,7 +46,12 @@ export function usePublicationPlan(task: () => ReviewTask,
     async (_, __, onCleanup) => {
       const controller = new AbortController();
       onCleanup(() => controller.abort());
-      plan.value = null;
+      const snapshot = task().run_manifest;
+      const sameSnapshot = plan.value?.review_id === task().id
+        && plan.value?.snapshot?.head_sha === snapshot?.head_sha
+        && plan.value?.snapshot?.effective_base_sha === snapshot?.effective_base_sha;
+      if (!terminal() || !sameSnapshot) plan.value = null;
+      detailLoading.value = false;
       if (!terminal() || (!options.autoPlan && !planRequested.value)) return;
       const id = task().id;
       detailLoading.value = true;

@@ -1,0 +1,47 @@
+{
+  "protocol_version": "aacr-review-v2",
+  "dataset_lock_sha256": "cfd94dc241f0dea5aecad5facbea62c0e3ae2fd199a7842336f662b56310cd3d",
+  "reference_file_sha256": "7a4a0e7046ffd1b8f41f951480bbb618d23d38d9f67364f38aabcda121a50be3",
+  "samples": [
+    {
+      "instance_id": "comfyanonymous__ComfyUI@b55c224",
+      "reference_count": 2,
+      "aligned_count": 2,
+      "failures": [],
+      "declared_changed_lines": 15,
+      "actual_changed_lines": 15
+    },
+    {
+      "instance_id": "bluewave-labs__Checkmate@29e03a6",
+      "reference_count": 9,
+      "aligned_count": 9,
+      "failures": [],
+      "declared_changed_lines": 224,
+      "actual_changed_lines": 225
+    },
+    {
+      "instance_id": "google-gemini__gemini-cli@77ea28a",
+      "reference_count": 24,
+      "aligned_count": 24,
+      "failures": [],
+      "declared_changed_lines": 861,
+      "actual_changed_lines": 463
+    },
+    {
+      "instance_id": "infiniflow__ragflow@7051234",
+      "reference_count": 6,
+      "aligned_count": 6,
+      "failures": [],
+      "declared_changed_lines": 37,
+      "actual_changed_lines": 37
+    },
+    {
+      "instance_id": "ollama__ollama@c2d08dd",
+      "reference_count": 2,
+      "aligned_count": 2,
+      "failures": [],
+      "declared_changed_lines": 24,
+      "actual_changed_lines": 74
+    }
+  ]
+}

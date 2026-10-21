@@ -220,6 +220,18 @@ class ReviewService:
             return self._repository.get_task(task_id)
         return self._tasks.get(task_id)
 
+    def delete_task(self, task_id: str) -> bool:
+        if self._repository is None:
+            raise ValueError("review_delete_persistence_required")
+        running = self._run_tasks.get(task_id)
+        if running is not None and not running.done():
+            raise ValueError("review_job_active")
+        deleted = self._repository.delete_task(task_id)
+        if deleted:
+            self._tasks.pop(task_id, None)
+            self._dispositions.pop(task_id, None)
+        return deleted
+
     def list_tasks(self, *, status: str | None, page: int, page_size: int,
                    q=None, repository=None, pr_number=None, head_sha=None):
         if not self._repository:

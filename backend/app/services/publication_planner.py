@@ -66,7 +66,8 @@ def summary_projection(plan: PublicationPlan) -> ReviewSummary:
 
 
 class PublicationPlanner:
-    def build(self, task: ReviewTask, *, dispositions: dict | None = None) -> PublicationPlan:
+    def build(self, task: ReviewTask, *, dispositions: dict | None = None,
+              include_markdown: bool = True) -> PublicationPlan:
         records = []
         report = None
         if task.engine == "task_review_v1" and task.task_runtime_report is not None:
@@ -125,7 +126,8 @@ class PublicationPlanner:
         plan.inline_drafts.sort(key=sort_key)
         plan.summary_findings.sort(key=sort_key)
         plan.digest.merge_decision = merge_decision(plan)
-        plan.summary_markdown = render_summary(plan)
-        plan.user_report_markdown = render_user_report(task, plan)
-        plan.review_comment_markdown = render_review_comment(plan)
+        if include_markdown:
+            plan.summary_markdown = render_summary(plan)
+            plan.user_report_markdown = render_user_report(task, plan)
+            plan.review_comment_markdown = render_review_comment(plan)
         return plan

@@ -1,19 +1,22 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { listReviews } from "../../api/client";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from "vue";
+import { deleteReview, listReviews } from "../../api/client";
 import type { ReviewTask } from "../../types/review";
+import type { ReviewHistoryTask } from "../../types/operations";
+import { historyConclusion, historyValidation } from "../../utils/reviewHistoryPresentation";
 import AppSelect from "../common/AppSelect.vue";
 import EmptyState from "../common/EmptyState.vue";
 import StatusBadge from "../common/StatusBadge.vue";
 import { runtimeReport, taskRuntimeSummary } from "../../utils/taskRuntimePresentation";
-defineProps<{ busy?: boolean }>();
+const props = defineProps<{ busy?: boolean; deleteTask?: typeof deleteReview }>();
 
 const emit = defineEmits<{
   open: [taskId: string];
   create: [];
+  deleted: [taskId: string];
 }>();
 
-const tasks = ref<ReviewTask[]>([]);
+const tasks = ref<ReviewHistoryTask[]>([]);
 const total = ref(0);
 const page = ref(1);
 const pageSize = 12;
@@ -23,7 +26,71 @@ const error = ref<string | null>(null);
 const search = ref("");
 const visibleTasks = computed(() => tasks.value);
 let controller: AbortController | null = null;
-onBeforeUnmount(() => controller?.abort());
+let disposed = false;
+onBeforeUnmount(() => { disposed = true; controller?.abort(); });
+const deleteTarget = ref<ReviewHistoryTask | null>(null);
+const deleting = ref(false);
+const deleteError = ref("");
+const feedback = ref("");
+const deleteDialog = ref<HTMLDialogElement | null>(null);
+const cancelButton = ref<HTMLButtonElement | null>(null);
+const refreshButton = ref<HTMLButtonElement | null>(null);
+const dialogTitleId = useId();
+let deleteTrigger: HTMLElement | null = null;
+const canDelete = (task: ReviewTask) => ["completed", "completed_with_warnings", "failed", "cancelled"].includes(task.status);
+
+async function requestDelete(task: ReviewHistoryTask, event: Event) {
+  if (props.busy || deleting.value || !canDelete(task)) return;
+  deleteTrigger = event.currentTarget as HTMLElement;
+  deleteTarget.value = task;
+  deleteError.value = "";
+  feedback.value = "";
+  await nextTick();
+  if (disposed || !deleteTarget.value) return;
+  deleteDialog.value?.showModal();
+  cancelButton.value?.focus();
+}
+
+function finishDeleteDialog() {
+  deleteDialog.value?.close();
+  deleteTarget.value = null;
+  (deleteTrigger?.isConnected ? deleteTrigger : refreshButton.value)?.focus();
+}
+
+function cancelDelete() {
+  if (!deleting.value) finishDeleteDialog();
+}
+
+async function confirmDelete() {
+  const target = deleteTarget.value;
+  if (!target || deleting.value || props.busy) return;
+  deleting.value = true;
+  deleteError.value = "";
+  const request = new AbortController();
+  const timeout = window.setTimeout(() => request.abort(), 20_000);
+  try {
+    // 生产入口由 App 持有删除请求；页面卸载后仍能清理匹配的当前任务。
+    await (props.deleteTask ?? deleteReview)(target.id, request.signal);
+    if (disposed) return;
+    emit("deleted", target.id);
+    tasks.value = tasks.value.filter(item => item.id !== target.id);
+    feedback.value = "已删除本地审查记录。";
+    finishDeleteDialog();
+    await load();
+  } catch (err) {
+    if (disposed) return;
+    deleteError.value = request.signal.aborted || err instanceof TypeError
+      ? "未能确认删除结果，请重试；重复请求不会重复删除。"
+      : err instanceof Error ? err.message : "删除失败，请稍后重试。";
+  } finally {
+    window.clearTimeout(timeout);
+    deleting.value = false;
+    if (!disposed) {
+      await nextTick();
+      (deleteTarget.value ? cancelButton.value : refreshButton.value)?.focus();
+    }
+  }
+}
 
 const statusOptions = [
   { value: "", label: "全部状态" },
@@ -52,6 +119,8 @@ async function load() {
     if (pending.signal.aborted) return;
     tasks.value = result.items;
     total.value = result.total;
+    const lastPage = Math.max(1, Math.ceil(result.total / pageSize));
+    if (page.value > lastPage) { page.value = lastPage; await load(); }
   } catch (err) {
     if (pending.signal.aborted) return;
     error.value = err instanceof Error ? err.message : "读取审查历史失败";
@@ -97,14 +166,6 @@ function unresolvedCount(task: ReviewTask) {
   return task.issues.filter((issue) => ["candidate", "unresolved", "needs_human"].includes(issue.status)).length;
 }
 
-function validationStatus(task: ReviewTask) {
-  const latest = task.validation.at(-1);
-  if (latest) return latest.status;
-  return task.validation_backend === "project_ci" && !["completed", "completed_with_warnings", "failed", "cancelled"].includes(task.status)
-    ? "running"
-    : "—";
-}
-
 watch([status, search], () => {
   page.value = 1;
   void load();
@@ -119,22 +180,23 @@ onMounted(load);
       <div>
         <p class="eyebrow">AUDIT TRAIL</p>
         <h1>审查历史</h1>
-        <p>按任务回看审查状态、问题与验证结果。所有记录均来自后端持久化存储。</p>
+        <p>回看每个 PR 的本轮结论、执行状态与验证范围。结论仅适用于已保存的审查快照，不代表最新提交或合并批准。</p>
       </div>
       <button type="button" class="button button--primary" :disabled="busy" @click="emit('create')">发起新审查</button>
     </header>
 
     <section class="workspace-toolbar" aria-label="审查历史筛选">
       <div class="workspace-stat"><strong>{{ total }}</strong><span>累计任务</span></div>
-      <label class="rg-history-search"><span>搜索全部历史</span><input v-model="search" class="input" type="search" placeholder="PR 链接、仓库、标题或任务 ID" /></label>
+      <label class="rg-history-search"><span>搜索全部历史</span><input v-model="search" class="input" type="search" :disabled="deleting" placeholder="PR 链接、仓库、标题或任务 ID" /></label>
       <div class="compact-field">
         <span>任务状态</span>
-        <AppSelect v-model="status" :options="statusOptions" compact aria-label="任务状态" />
+        <AppSelect v-model="status" :options="statusOptions" :disabled="deleting" compact aria-label="任务状态" />
       </div>
-      <button type="button" class="button button--secondary button--compact" :disabled="loading" @click="load">刷新</button>
+      <button ref="refreshButton" type="button" class="button button--secondary button--compact" :disabled="loading || deleting" @click="load">刷新</button>
     </section>
 
     <p v-if="error" class="workspace-error" role="alert">{{ error }}</p>
+    <p v-if="feedback" role="status">{{ feedback }}</p>
     <section class="history-panel panel" :aria-busy="loading">
       <div v-if="loading && tasks.length === 0" class="workspace-loading">正在读取审查记录…</div>
       <EmptyState
@@ -147,7 +209,11 @@ onMounted(load);
       />
       <div v-else class="history-list">
         <article v-for="task in visibleTasks" :key="task.id" class="history-row">
-          <div class="history-row__state"><StatusBadge :status="task.status" /></div>
+          <div class="history-row__state">
+            <span class="history-conclusion-label">本轮结论</span>
+            <strong class="history-conclusion" :class="`history-conclusion--${historyConclusion(task).tone}`" :title="historyConclusion(task).description">{{ historyConclusion(task).title }}</strong>
+            <span class="history-execution">执行：<StatusBadge :status="task.status" /></span>
+          </div>
           <div class="history-row__identity">
             <span>{{ taskRepo(task) }}</span>
             <strong>{{ taskTitle(task) }}</strong>
@@ -157,19 +223,48 @@ onMounted(load);
             <div><dt>覆盖</dt><dd>{{ taskCoverage(task) }}</dd></div>
             <div><dt>发现记录</dt><dd>{{ task.engine === 'task_review_v1' ? runtimeReport(task)?.findings.length ?? '未知' : task.issues.length }}</dd></div>
             <div><dt>未确认</dt><dd>{{ unresolvedCount(task) }}</dd></div>
-            <div><dt>验证</dt><dd class="history-validation">{{ validationStatus(task) }}</dd></div>
+            <div><dt>动态验证</dt><dd class="history-validation">{{ historyValidation(task) }}</dd></div>
           </dl>
           <div class="history-row__time"><span>{{ formatDate(task.updated_at) }}</span><small>最近更新</small></div>
-          <button type="button" class="button button--secondary button--compact" :disabled="busy" @click="emit('open', task.id)">查看详情</button>
+          <div class="history-row__actions">
+            <button type="button" class="button button--secondary button--compact" :disabled="busy || deleting" @click="emit('open', task.id)">查看详情</button>
+            <button type="button" class="button button--ghost button--compact history-delete" :disabled="busy || deleting || !canDelete(task)" :aria-label="`删除审查记录 ${taskTitle(task)}`" :title="canDelete(task) ? '删除这条本地审查记录' : '请先停止审查，等待后台作业结束后再删除'" @click="requestDelete(task, $event)">删除</button>
+          </div>
         </article>
       </div>
     </section>
 
     <nav v-if="total > pageSize" class="pagination" aria-label="审查历史分页">
-      <button type="button" class="button button--secondary button--compact" :disabled="page <= 1 || loading" @click="page--; load()">上一页</button>
+      <button type="button" class="button button--secondary button--compact" :disabled="page <= 1 || loading || deleting" @click="page--; load()">上一页</button>
       <span>第 {{ page }} / {{ pageCount }} 页</span>
-      <button type="button" class="button button--secondary button--compact" :disabled="page >= pageCount || loading" @click="page++; load()">下一页</button>
+      <button type="button" class="button button--secondary button--compact" :disabled="page >= pageCount || loading || deleting" @click="page++; load()">下一页</button>
     </nav>
-    <footer class="app-footer"><span>审查记录只读展示 · 不触发仓库写操作</span><span><i /> RepoGuardian Audit</span></footer>
+    <dialog ref="deleteDialog" class="history-delete-dialog" :aria-labelledby="dialogTitleId" :aria-busy="deleting" @cancel.prevent="cancelDelete" @click.self="cancelDelete">
+      <h2 :id="dialogTitleId">删除这条审查记录？</h2>
+      <template v-if="deleteTarget">
+        <p class="history-delete-dialog__identity">{{ taskRepo(deleteTarget) }} · {{ taskTitle(deleteTarget) }}</p>
+        <p class="history-delete-dialog__meta">审查时间：{{ formatDate(deleteTarget.created_at) }}<br />任务 ID：<code>{{ deleteTarget.id }}</code></p>
+        <p>删除后将无法在 RepoGuardian 中查看本次审查报告。已发布到 GitHub 的评论不会删除。</p>
+      </template>
+      <p v-if="deleteError" class="workspace-error" role="alert">{{ deleteError }}</p>
+      <footer>
+        <button ref="cancelButton" type="button" class="button button--secondary" :disabled="deleting" @click="cancelDelete">取消</button>
+        <button type="button" class="button button--danger" :disabled="deleting || busy" @click="confirmDelete">{{ deleting ? "正在删除…" : "确认删除" }}</button>
+      </footer>
+    </dialog>
+    <footer class="app-footer"><span>本地审查记录管理 · 不修改 GitHub 评论或目标仓库</span><span><i /> RepoGuardian Audit</span></footer>
   </main>
 </template>
+
+<style scoped>
+.history-row__actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.history-delete { color: var(--danger); }
+.history-delete-dialog { width: min(500px, calc(100vw - 32px)); box-sizing: border-box; padding: 24px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text); box-shadow: 0 18px 60px rgb(0 0 0 / .2); }
+.history-delete-dialog::backdrop { background: rgb(0 0 0 / .4); }
+.history-delete-dialog h2 { margin: 0 0 16px; font-size: 1.25rem; }
+.history-delete-dialog p { line-height: 1.7; overflow-wrap: anywhere; }
+.history-delete-dialog__identity { font-weight: 700; }
+.history-delete-dialog__meta { color: var(--text-muted); font-size: .8125rem; }
+.history-delete-dialog footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+@media (max-width: 540px) { .history-row__actions { justify-content: flex-start; } }
+</style>

@@ -55,6 +55,7 @@ from app.models.review import (
 from app.services.artifact_store import LocalArtifactStore
 from app.services.fingerprints import patch_fingerprint, stable_hash, validation_fingerprint
 from app.services.review_planner import PLANNER_VERSION
+from app.services.review_task_access import lock_live_review
 from app.review.unit_completion import is_reusable_review_unit_result
 
 TERMINAL_TASK_STATUSES = {
@@ -174,17 +175,21 @@ class ReviewRepository:
 
     def save_finding_disposition(self, task_id, finding_id, value):
         with self._session_factory.begin() as session:
+            if not lock_live_review(session, task_id):
+                raise KeyError(task_id)
             session.merge(FindingDispositionOrm(task_id=task_id, finding_id=finding_id,
                                                 payload=value, updated_at=utcnow()))
 
     def save_task(self, task: ReviewTask, *, checkpoint_id: str | None = None,
                   lease: dict | None = None) -> None:
-        snapshot, snapshot_uri = self._serialize_task_snapshot(task)
         now = utcnow()
         with self._session_factory.begin() as session:
+            live = lock_live_review(session, task.id)
             row = session.get(ReviewTaskOrm, task.id)
             if row is None:
                 raise KeyError(task.id)
+            if not live:
+                return
             if lease:
                 job = session.get(WorkerJobOrm, lease["job_id"])
                 if (job is None or job.task_id != task.id or job.status != "leased"
@@ -200,6 +205,7 @@ class ReviewRepository:
                 raise ValueError("task runtime configuration is frozen for the lifetime of a task")
             if row.status == TaskStatus.cancelled.value and task.status != TaskStatus.cancelled:
                 return  # 迟到的进度/worker 结果不能覆盖用户取消。
+            snapshot, snapshot_uri = self._serialize_task_snapshot(task)
             row.status = task.status.value
             row.current_phase = task.phase.value
             row.mode = task.mode.value
@@ -294,7 +300,9 @@ class ReviewRepository:
     def get_unit(self, task_id: str, unit_id: str) -> ReviewUnitDetail | None:
         with self._session_factory() as session:
             row = session.scalar(select(ReviewUnitOrm).where(
-                ReviewUnitOrm.task_id == task_id, ReviewUnitOrm.unit_id == unit_id
+                ReviewUnitOrm.task_id == task_id, ReviewUnitOrm.unit_id == unit_id,
+            ).join(ReviewTaskOrm, ReviewTaskOrm.id == ReviewUnitOrm.task_id).where(
+                ReviewTaskOrm.deleted_at.is_(None)
             ))
             if row is None:
                 return None
@@ -336,7 +344,9 @@ class ReviewRepository:
     def get_patch(self, task_id: str, patch_id: str) -> PatchDetail | None:
         with self._session_factory() as session:
             row = session.scalar(select(PatchOrm).where(
-                PatchOrm.task_id == task_id, PatchOrm.patch_id == patch_id
+                PatchOrm.task_id == task_id, PatchOrm.patch_id == patch_id,
+            ).join(ReviewTaskOrm, ReviewTaskOrm.id == PatchOrm.task_id).where(
+                ReviewTaskOrm.deleted_at.is_(None)
             ))
             if row is None:
                 return None
@@ -356,6 +366,8 @@ class ReviewRepository:
             row = session.scalar(select(ValidationOrm).where(
                 ValidationOrm.task_id == task_id,
                 ValidationOrm.validation_id == validation_id,
+            ).join(ReviewTaskOrm, ReviewTaskOrm.id == ValidationOrm.task_id).where(
+                ReviewTaskOrm.deleted_at.is_(None)
             ))
             if row is None:
                 return None
@@ -424,6 +436,8 @@ class ReviewRepository:
             raise ValueError("followup results must use the isolated coordination runtime")
         now = utcnow()
         with self._session_factory.begin() as session:
+            if not lock_live_review(session, task_id):
+                raise ValueError("deleted or missing task cannot accept Unit results")
             task = session.get(ReviewTaskOrm, task_id)
             if task is None or task.status == TaskStatus.cancelled.value:
                 raise ValueError("cancelled or missing task cannot accept Unit results")
@@ -499,6 +513,8 @@ class ReviewRepository:
             str(item.get("id")): item for item in state.get("review_issues") or []
         }
         with self._session_factory.begin() as session:
+            if not lock_live_review(session, task_id):
+                return
             rows = session.scalars(
                 select(ReviewIssueOrm).where(ReviewIssueOrm.task_id == task_id)
             ).all()
@@ -637,8 +653,16 @@ class ReviewRepository:
     def delete_task_if_retention_elapsed(
         self, task_id: str, *, now: datetime | None = None
     ) -> bool:
+        return self._delete_task(task_id, require_retention=True, now=now)
+
+    def delete_task(self, task_id: str) -> bool:
+        return self._delete_task(task_id, require_retention=False)
+
+    def _delete_task(self, task_id: str, *, require_retention: bool,
+                     now: datetime | None = None) -> bool:
         now = now or utcnow()
         with self._session_factory.begin() as session:
+            lock_live_review(session, task_id)
             task = session.get(ReviewTaskOrm, task_id)
             if task is None:
                 return False
@@ -646,14 +670,21 @@ class ReviewRepository:
                 return True
             if task.status not in TERMINAL_TASK_STATUSES:
                 raise ValueError("only terminal tasks can be deleted")
-            if _as_utc(task.retention_until) > now:
+            if require_retention and _as_utc(task.retention_until) > now:
                 raise ValueError("task retention period has not elapsed")
             if session.scalar(select(PublicationAttemptOrm.id).where(
                     PublicationAttemptOrm.review_id == task_id,
                     or_(PublicationAttemptOrm.state.in_(["queued", "preparing", "publishing", "uncertain"]),
                         PublicationAttemptOrm.id.in_(select(GitHubSummarySlotOrm.pending_publication_id))))):
-                return False  # 未确认的外部副作用需要保留任务与对账证据。
+                if require_retention:
+                    return False
+                raise ValueError("review_publication_pending")
+            if not require_retention and session.scalar(select(WorkerJobOrm.id).where(
+                    WorkerJobOrm.task_id == task_id,
+                    WorkerJobOrm.status.in_(["queued", "retry", "leased"]))):
+                raise ValueError("review_job_active")
             task.deleted_at = now
+            task.updated_at = now
             task.status = "deleted"
             task.task_snapshot = {"id": task.id, "deleted": True}
             task.task_snapshot_artifact_uri = None

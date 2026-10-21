@@ -1,0 +1,94 @@
+{
+  "cases": [
+    {
+      "case_id": "comfy-operator-branch-diagnostic",
+      "split": "diagnostic",
+      "snapshot": {
+        "repository": "comfyanonymous/ComfyUI",
+        "base_sha": "fca304debf5a4e6c71f8def10ac41cf69519fde3",
+        "head_sha": "b55c2247654476fbc744e572ba7a834fd9378745"
+      },
+      "question": "比较变更相关分支中的值来源与下游行为。说明触发条件、操作的保证与假设、仍未知的必要前提，并判断是否存在具体缺陷。",
+      "evidence": [
+        {
+          "path": "comfy/clip_model.py",
+          "side": "head",
+          "snapshot_sha": "b55c2247654476fbc744e572ba7a834fd9378745",
+          "start_line": 100,
+          "end_line": 117,
+          "content": "    def forward(self, input_tokens, attention_mask=None, intermediate_output=None, final_layer_norm_intermediate=True, dtype=torch.float32):\n        x = self.embeddings(input_tokens, dtype=dtype)\n        mask = None\n        if attention_mask is not None:\n            mask = 1.0 - attention_mask.to(x.dtype).reshape((attention_mask.shape[0], 1, -1, attention_mask.shape[-1])).expand(attention_mask.shape[0], 1, attention_mask.shape[-1], attention_mask.shape[-1])\n            mask = mask.masked_fill(mask.to(torch.bool), -torch.finfo(x.dtype).max)\n\n        if comfy.model_management.is_directml_enabled():\n            causal_mask = torch.empty(x.shape[1], x.shape[1], dtype=x.dtype, device=x.device).triu_(1)\n        else:\n            causal_mask = torch.empty(x.shape[1], x.shape[1], dtype=x.dtype, device=x.device).fill_(float(\"-inf\")).triu_(1)\n\n        if mask is not None:\n            mask += causal_mask\n        else:\n            mask = causal_mask\n\n        x, i = self.encoder(x, mask=mask, intermediate_output=intermediate_output)"
+        },
+        {
+          "path": "comfy/clip_model.py",
+          "side": "head",
+          "snapshot_sha": "b55c2247654476fbc744e572ba7a834fd9378745",
+          "start_line": 16,
+          "end_line": 22,
+          "content": "    def forward(self, x, mask=None, optimized_attention=None):\n        q = self.q_proj(x)\n        k = self.k_proj(x)\n        v = self.v_proj(x)\n\n        out = optimized_attention(q, k, v, self.heads, mask)\n        return self.out_proj(out)"
+        },
+        {
+          "path": "comfy/ldm/modules/attention.py",
+          "side": "head",
+          "snapshot_sha": "b55c2247654476fbc744e572ba7a834fd9378745",
+          "start_line": 131,
+          "end_line": 150,
+          "content": "    del q, k\n\n    if exists(mask):\n        if mask.dtype == torch.bool:\n            mask = rearrange(mask, 'b ... -> b (...)') #TODO: check if this bool part matches pytorch attention\n            max_neg_value = -torch.finfo(sim.dtype).max\n            mask = repeat(mask, 'b j -> (b h) () j', h=h)\n            sim.masked_fill_(~mask, max_neg_value)\n        else:\n            if len(mask.shape) == 2:\n                bs = 1\n            else:\n                bs = mask.shape[0]\n            mask = mask.reshape(bs, -1, mask.shape[-2], mask.shape[-1]).expand(b, heads, -1, -1).reshape(-1, mask.shape[-2], mask.shape[-1])\n            sim.add_(mask)\n\n    # attention, what we cannot get enough of\n    sim = sim.softmax(dim=-1)\n\n    out = einsum('b i j, b j d -> b i d', sim.to(v.dtype), v)"
+        },
+        {
+          "path": "comfy/ldm/modules/attention.py",
+          "side": "head",
+          "snapshot_sha": "b55c2247654476fbc744e572ba7a834fd9378745",
+          "start_line": 534,
+          "end_line": 540,
+          "content": "def optimized_attention_for_device(device, mask=False, small_input=False):\n    if small_input:\n        if model_management.pytorch_attention_enabled():\n            return attention_pytorch #TODO: need to confirm but this is probably slightly faster for small inputs in all cases\n        else:\n            return attention_basic\n"
+        },
+        {
+          "path": "comfy/ldm/modules/attention.py",
+          "side": "head",
+          "snapshot_sha": "b55c2247654476fbc744e572ba7a834fd9378745",
+          "start_line": 446,
+          "end_line": 455,
+          "content": "    if mask is not None:\n        # add a batch dimension if there isn't already one\n        if mask.ndim == 2:\n            mask = mask.unsqueeze(0)\n        # add a heads dimension if there isn't already one\n        if mask.ndim == 3:\n            mask = mask.unsqueeze(1)\n\n    if SDP_BATCH_LIMIT >= b:\n        out = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=0.0, is_causal=False)"
+        },
+        {
+          "path": "comfy/clip_model.py",
+          "side": "base",
+          "snapshot_sha": "fca304debf5a4e6c71f8def10ac41cf69519fde3",
+          "start_line": 100,
+          "end_line": 113,
+          "content": "    def forward(self, input_tokens, attention_mask=None, intermediate_output=None, final_layer_norm_intermediate=True, dtype=torch.float32):\n        x = self.embeddings(input_tokens, dtype=dtype)\n        mask = None\n        if attention_mask is not None:\n            mask = 1.0 - attention_mask.to(x.dtype).reshape((attention_mask.shape[0], 1, -1, attention_mask.shape[-1])).expand(attention_mask.shape[0], 1, attention_mask.shape[-1], attention_mask.shape[-1])\n            mask = mask.masked_fill(mask.to(torch.bool), -torch.finfo(x.dtype).max)\n\n        causal_mask = torch.empty(x.shape[1], x.shape[1], dtype=x.dtype, device=x.device).fill_(-torch.finfo(x.dtype).max).triu_(1)\n        if mask is not None:\n            mask += causal_mask\n        else:\n            mask = causal_mask\n\n        x, i = self.encoder(x, mask=mask, intermediate_output=intermediate_output)"
+        }
+      ]
+    }
+  ],
+  "baseline": {
+    "model": "deepseek-flash",
+    "reasoning": "disabled-by-current-provider",
+    "dependency_docs": [],
+    "task_expression": "behavior-change-trigger-unknown",
+    "context": []
+  },
+  "variants": {
+    "reasoning-only": {
+      "model": "deepseek-flash",
+      "reasoning": "enabled-experimental",
+      "dependency_docs": [],
+      "task_expression": "behavior-change-trigger-unknown",
+      "context": []
+    },
+    "expression-only": {
+      "model": "deepseek-flash",
+      "reasoning": "disabled-by-current-provider",
+      "dependency_docs": [],
+      "task_expression": "trace-value-source-through-selected-branch",
+      "context": []
+    }
+  },
+  "development_snapshots": [
+    [
+      "comfyanonymous/ComfyUI",
+      "fca304debf5a4e6c71f8def10ac41cf69519fde3",
+      "b55c2247654476fbc744e572ba7a834fd9378745"
+    ]
+  ]
+}
