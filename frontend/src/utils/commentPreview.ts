@@ -39,15 +39,19 @@ export function parseCommentPreview(markdown: string) {
     }
     if (inSnapshot) { snapshot += token.raw; continue; }
     if (token.type === 'heading' && token.depth === 2) {
-      // 旧评论使用“阻断问题/已确认问题”等标题；新评论改为“高优先级问题/代码证据已确认的问题”，两者都要正确识别。
+      // 历史评论使用“阻断问题/建议项”等标题；统一结构后按“需要处理的问题/其他建议”等章节识别。
       const label = ({ '发现的问题': '已确认问题', '其他审查结果': '审查局限',
-        '阻断问题': '高优先级问题', '代码证据已确认的问题': '已确认问题' } as Record<string, string>)[token.text] || token.text;
+        '阻断问题': '需要处理的问题', '高优先级问题': '需要处理的问题', '代码证据已确认的问题': '已确认问题',
+        '建议项': '其他建议', '建议': '其他建议', '变更概述': '变更理解',
+        '其他局限': '仍需确认的事项', '未检查/未核实事项': '仍需确认的事项', '合并前提醒': '仍需确认的事项',
+        '已保留记录': '变更理解', '未覆盖范围': '仍需确认的事项', '重新审查': '下一步',
+      } as Record<string, string>)[token.text] || token.text;
       section = { title: label, markdown: pendingNote, findings: label === '已确认问题' };
       pendingNote = '';
       sections.push(section);
     } else if (section) {
       // Older comments used this label for the same source-bound observation.
-      const raw = section.title === '变更概述' && token.type === 'paragraph'
+      const raw = section.title === '变更理解' && token.type === 'paragraph'
         ? token.raw.replace(/^\*\*实际变更[：:]\*\*/, '**代码观察：**') : token.raw;
       section.markdown += raw;
     } else if (token.type !== 'space') {
@@ -60,10 +64,11 @@ export function parseCommentPreview(markdown: string) {
   }
   if (!sections.length) return null;
   for (const section of sections) {
-    if (!["高优先级问题", "建议项", "建议"].includes(section.title)) continue;
+    if (!["需要处理的问题", "其他建议"].includes(section.title)) continue;
     const count = marked.lexer(section.markdown).filter(token => token.type === "paragraph"
       && /^\*\*\[(Critical|High|Medium|Low)(?:\s|·|\])/.test(token.text)).length;
-    if (count || section.title !== "建议") {
+    // 历史“建议”章节可能只有行动文案；没有条目时不显示计数徽标。
+    if (count || section.title !== "其他建议") {
       section.findings = true;
       section.findingCount = count;
     }
