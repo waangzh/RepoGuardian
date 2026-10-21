@@ -45,8 +45,8 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
         assert.ok(audit.includes('查看原始结构化记录'));
         assert.ok(audit.includes(plan.snapshot.head_sha));
         const context = await renderToString(createSSRApp(Context, { task, plan }));
-        if (name === 'failed') assert.ok(context.includes('审查因执行错误中断'));
-        if (name === 'cancelled') assert.ok(context.includes('审查已停止，已保留停止前的记录'));
+        if (name === 'failed') assert.ok(context.includes('审查中断，尚无完整结论'));
+        if (name === 'cancelled') assert.ok(context.includes('审查已停止，已保留部分结果'));
         assert.equal(JSON.stringify(plan), before);
       });
     }
@@ -121,7 +121,7 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
       plan.digest.incomplete_goals.push({ path: 'src/gap.ts', reason: '证据尚未核验' });
       assert.ok(reportLimitations(plan).some(item => item.includes('证据尚未核验')));
       const context = await renderToString(createSSRApp(Context, { task: fixtures.clean.task, plan, stale: true }));
-      assert.ok(context.includes('PR 已更新，本轮结论不适用于最新提交'));
+      assert.ok(context.includes('PR 已更新，当前审查结果已过期'));
     });
     await t.test('新旧问题标题均按纯文本显示，不暴露 Markdown 转义或注入 HTML', async () => {
       const { publicationFindingTitle } = await server.ssrLoadModule('/src/utils/reportPresentation.ts');

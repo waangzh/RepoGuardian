@@ -21,9 +21,9 @@ def test_comment_contains_inline_finding_position_and_immutable_base_link():
     assert finding.recommendation in plan.review_comment_markdown
     # 评论中的行内定位仍链接到不可变的 Effective Base 快照（URL 路径不做 Markdown 转义）。
     assert f"/blob/{task.run_manifest.effective_base_sha}/src/a.py#L7" in plan.review_comment_markdown
-    assert "发现 1 项高优先级问题，建议修复后再合并" in plan.review_comment_markdown and "CI" in plan.review_comment_markdown
+    assert "发现 1 项高优先级问题，建议修复后复审" in plan.review_comment_markdown and "CI" in plan.review_comment_markdown
     assert plan.review_comment_markdown.count("本结论基于提交") == 1
-    assert plan.user_report_markdown.index("## 已确认问题") < plan.user_report_markdown.index("## 附录：审查范围与限制")
+    assert plan.user_report_markdown.index("## 代码证据已确认的问题") < plan.user_report_markdown.index("## 附录：审查范围与限制")
 
 
 def test_detailed_and_audit_share_facts_and_human_state_does_not_change_admission():

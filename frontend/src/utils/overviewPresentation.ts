@@ -89,20 +89,22 @@ export function overviewFacts(plan: ReviewSummary | null, runtime: TaskRuntimeSu
 
 export function overviewConclusionDescription(situation: ReviewSituation | null): string {
   if (!situation) return "";
-  const descriptions: Record<SituationKey, string> = {
-    stale: "记录仅适用于原 Head，最新提交需要重新审查。",
-    failed: "执行错误导致中断，现有结果仅代表部分审查。",
-    cancelled: "用户主动停止审查，剩余范围尚未完成。",
-    validation_failed: "当前 Head 绑定的受控检查存在失败记录，不代表全部 CI 失败。",
-    blockers: "问题可能影响关键行为，需要核对证据并优先处理。",
-    evidence_gaps: "历史复核确认的既有风险与本轮未决事项分别记录，均会限制合并判断。",
-    scope_incomplete: "检查范围完整性尚待核对，未完成目标需单独确认。",
-    runtime_limits: "执行、计量或可靠性信息尚待核对，不据此判断代码存在缺陷。",
-    nonblocking: "是否在合并前处理，取决于项目要求和实际影响。",
-    clean: "这是已检查范围内的静态结论，不等同于项目 CI 通过。",
-  };
-  return descriptions[situation.key];
+  // 事实边界优先使用情景给出的 description，避免各页面各写一套措辞。
+  return situation.description || SITUATION_DESCRIPTIONS[situation.key];
 }
+
+const SITUATION_DESCRIPTIONS: Record<SituationKey, string> = {
+  stale: "记录仅适用于原 Head，最新提交需要重新审查。",
+  failed: "执行错误导致中断，现有结果仅代表部分审查。",
+  cancelled: "用户主动停止审查，剩余范围尚未完成。",
+  validation_failed: "当前 Head 绑定的受控检查存在失败记录，不代表全部 CI 失败。",
+  blockers: "问题已有代码证据支持，按审查策略建议在合并前处理；该建议不是 GitHub Mergeability 结论。",
+  evidence_gaps: "历史复核确认的既有风险与本轮未确认事项分别记录，均会限制合并判断。",
+  scope_incomplete: "检查范围完整性尚待核对，未完成目标需单独确认。",
+  runtime_limits: "执行、计量或可靠性信息尚待核对，不据此判断代码存在缺陷。",
+  nonblocking: "是否在合并前处理，取决于项目要求和实际影响。",
+  clean: "这是已检查范围内的静态结论，不等同于项目 CI 通过。",
+};
 
 interface NextSteps {
   title: string;
@@ -113,8 +115,8 @@ interface NextSteps {
 const NEXT_STEPS: Record<SituationKey, NextSteps> = {
   evidence_gaps: {
     title: "建议先核对证据缺口",
-    description: "定位历史已核验风险或未决事项，再决定补查或交付记录。",
-    steps: [["查看未核验线索", "核对缺口与当前 PR 风险的关系"], ["补充运行级证据", "结合项目 CI 或受控外部验证"], ["复核后再形成决定", "结合业务约定与人工审批"]],
+    description: "定位历史已核验风险或未确认事项，再决定补查或交付记录。",
+    steps: [["查看未确认事项", "核对缺口与当前 PR 风险的关系"], ["补充运行级证据", "结合项目 CI 或受控外部验证"], ["复核后再形成决定", "结合业务约定与人工审批"]],
   },
   scope_incomplete: {
     title: "补齐未完成的检查范围",
@@ -139,7 +141,7 @@ const NEXT_STEPS: Record<SituationKey, NextSteps> = {
   nonblocking: {
     title: "复核本轮改进建议",
     description: "核对建议的实际影响与处理优先级。",
-    steps: [["核对发现与依据", "区分已确认问题和待确认候选"], ["结合项目要求处理", "评估影响并完成必要验证"], ["核对交付内容", "确认快照、摘要与已知限制"]],
+    steps: [["核对发现与依据", "区分代码证据已确认的问题和待确认候选"], ["结合项目要求处理", "评估影响并完成必要验证"], ["核对交付内容", "确认快照、摘要与已知限制"]],
   },
   stale: {
     title: "先为新代码创建审查",

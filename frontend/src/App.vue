@@ -142,7 +142,7 @@ const statusText = computed(() => {
     pending: "等待审查", queued: "等待审查", planning: "正在准备", reviewing: "正在审查",
     resolving_evidence: "解析证据", verifying_issues: "核验问题", generating_patches: "生成补丁",
     validating: "验证补丁", waiting_for_human: "历史审查已中止", completed: "审查执行已完成",
-    completed_with_warnings: "执行已结束，有运行提示", failed: "任务失败", cancelled: "任务已取消",
+    completed_with_warnings: "已结束 · 有限制", failed: "任务失败", cancelled: "任务已取消",
   };
   return labels[task.value.status] ?? `未知状态：${task.value.status}`;
 });

@@ -57,6 +57,9 @@
 .ov-verdict[data-tone="info"] .ov-verdict__kicker { color: var(--ov-blue); }
 .rg-overview .ov-verdict h2 { margin-bottom: 10px; color: var(--ov-ink); font-size: 23px; letter-spacing: -.5px; line-height: 1.35; }
 .rg-overview .ov-verdict__description { max-width: 680px; color: var(--ov-muted); font-size: 13.3px; line-height: 1.8; }
+/* 事实与下一步分两层：说明结论覆盖范围，再给出用户现在该做什么。 */
+.rg-overview .ov-verdict__next { max-width: 680px; margin: 6px 0 0; color: var(--ov-text); font-size: 13.3px; line-height: 1.8; }
+.rg-overview .ov-verdict__next strong { color: var(--ov-muted); font-weight: 600; }
 .ov-verdict__bottom { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 10px; margin-top: 21px; padding-top: 13px; border-top: 1px solid var(--ov-line); }
 .ov-verdict__meta { display: flex; align-items: center; flex-wrap: wrap; gap: 9px 15px; color: var(--ov-faint); }
 .ov-verdict__meta span { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; line-height: 1.6; }

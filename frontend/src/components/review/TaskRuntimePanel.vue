@@ -30,8 +30,8 @@ function investigationTitle(value: Record<string, unknown>, index: number): stri
       <header><div><h2>审查结论</h2><p>{{ runtimeLabel(report.execution_status) }} · 结论仅适用于本次审查快照</p></div><StatusBadge :status="warnings.length ? 'warning' : 'info'" :label="warnings.length ? '存在检查限制' : '查看本轮结果'" /></header>
       <div class="runtime-panel__body">
         <div class="result-counts runtime-stats">
-          <div><span>已确认问题</span><strong>{{ summary.findings.confirmed }}</strong><small>有证据支持的缺陷</small></div>
-          <div><span>待确认候选</span><strong>{{ summary.findings.unresolved }}</strong><small>仍需补充依据</small></div>
+          <div><span>代码证据已确认的问题</span><strong>{{ summary.findings.confirmed }}</strong><small>有代码证据支持，不代表审查通过</small></div>
+          <div><span>待确认疑点</span><strong>{{ summary.findings.unresolved }}</strong><small>尚未确认缺陷，仍需补充依据</small></div>
           <div><span>约定目标已检查</span><strong>{{ summary.scope.examined }}<small> / {{ summary.scope.total }}</small></strong><small>{{ summary.scope.incomplete ? `${summary.scope.incomplete} 项尚未完成` : '不代表所有业务路径均已验证' }}</small></div>
         </div>
         <section v-if="warnings.length" class="runtime-warning-block" aria-label="审查限制与未决事项">

@@ -20,7 +20,7 @@ const labels: Record<string, string> = {
   needs_human: "未确认",
   unresolved: "未确认",
   completed: "执行已完成",
-  completed_with_warnings: "存在警告",
+  completed_with_warnings: "已结束 · 有限制",
   failed: "失败",
   timed_out: "已超时",
   cancelled: "已取消",
@@ -29,7 +29,8 @@ const labels: Record<string, string> = {
   warning: "警告",
   candidate: "候选",
   evidence_resolved: "证据已定位",
-  confirmed: "已确认",
+  // 只说明“有代码证据支持”，不表示审查通过或 PR 可合并。
+  confirmed: "代码证据已确认",
   dismissed: "已过滤",
   published: "已发布",
   suggested: "建议稿",
@@ -88,8 +89,17 @@ const tone = computed(() => EXECUTION_TONES[props.status] ?? EVIDENCE_TONES[prop
   ?? SEVERITY_TONES[props.status] ?? (PASSTHROUGH_TONES.has(props.status) ? props.status : "neutral"));
 
 const text = computed(() => props.label || labels[props.status] || props.status);
+
+// 三类状态各自说明边界：执行结束只描述任务，证据确认只描述代码，检查通过只描述该记录。
+const badgeTitle = computed(() => ({
+  completed: "仅表示任务或步骤执行结束，不代表 PR 安全或可以合并",
+  completed_with_warnings: "任务已结束，但仍有检查限制；具体限制见审查结论与运行记录",
+  passed: "仅表示该记录覆盖的检查通过，不代表整个项目 CI 全部通过",
+  confirmed: "表示该问题已有代码证据支持，不代表审查通过或 PR 可以合并",
+  verified: "表示该依赖或检查已核验，不代表整个审查结论成立",
+})[props.status] || props.status);
 </script>
 
 <template>
-  <span class="status-badge" :data-tone="tone" :title="status === 'completed' ? '仅表示任务或步骤执行结束，不代表 PR 安全或可以合并' : status === 'passed' ? '仅表示该记录覆盖的检查通过，不代表整个项目 CI 全部通过' : status">{{ text }}</span>
+  <span class="status-badge" :data-tone="tone" :title="badgeTitle">{{ text }}</span>
 </template>

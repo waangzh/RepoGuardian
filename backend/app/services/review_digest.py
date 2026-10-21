@@ -127,7 +127,7 @@ def _change_understanding(digest, task, report) -> ChangeUnderstanding:
         if contradicted:
             parts.append(f"{contradicted} 项与代码存在静态证据矛盾")
         if unresolved:
-            parts.append(f"{unresolved} 项未逐项核验（辅助信息，不作为合并阻断）")
+            parts.append(f"{unresolved} 项未逐项核验（辅助信息，不构成合并前必须处理的事项）")
         if not_applicable:
             parts.append(f"{not_applicable} 项当前检查不适用")
         alignment = "，".join(parts) + "。局部观察不构成作者全部目标已实现的验收结论。"

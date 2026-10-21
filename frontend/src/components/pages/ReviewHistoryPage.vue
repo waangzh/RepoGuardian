@@ -7,7 +7,7 @@ import { historyConclusion, historyValidation } from "../../utils/reviewHistoryP
 import AppSelect from "../common/AppSelect.vue";
 import EmptyState from "../common/EmptyState.vue";
 import StatusBadge from "../common/StatusBadge.vue";
-import { runtimeReport, taskRuntimeSummary } from "../../utils/taskRuntimePresentation";
+import { runtimeLabel, runtimeReport, taskRuntimeSummary } from "../../utils/taskRuntimePresentation";
 const props = defineProps<{ busy?: boolean; deleteTask?: typeof deleteReview }>();
 
 const emit = defineEmits<{
@@ -95,7 +95,7 @@ async function confirmDelete() {
 const statusOptions = [
   { value: "", label: "全部状态" },
   { value: "completed", label: "已完成" },
-  { value: "completed_with_warnings", label: "存在警告" },
+  { value: "completed_with_warnings", label: "已结束 · 有限制" },
   { value: "failed", label: "失败" },
   { value: "pending", label: "等待中" },
   { value: "queued", label: "已入队" },
@@ -158,6 +158,25 @@ function taskCoverage(task: ReviewTask) {
   return coverage?.eligible_files ? `${coverage.reviewed_files} / ${coverage.eligible_files}` : "—";
 }
 
+// 执行状态只描述任务；“有限制”必须给出具体类型，避免把计量异常读成代码风险。
+function executionLabel(task: ReviewTask) {
+  return task.status === "completed_with_warnings" ? "已结束 · 有限制" : undefined;
+}
+function executionLimit(task: ReviewTask) {
+  if (task.status !== "completed_with_warnings") return "";
+  const report = runtimeReport(task);
+  if (!report) return "限制类型未知";
+  const summary = taskRuntimeSummary(report);
+  const parts: string[] = [];
+  if (summary.scope.incomplete) parts.push(`${summary.scope.incomplete} 项检查未完成`);
+  if (summary.investigations.insufficient_evidence) parts.push(`${summary.investigations.insufficient_evidence} 项调查证据不足`);
+  if (summary.investigations.not_executed) parts.push(`${summary.investigations.not_executed} 项调查未执行`);
+  if (summary.findings.unknown) parts.push(`${summary.findings.unknown} 项发现状态未知`);
+  if (summary.usage.integrity !== "complete") parts.push("模型用量记录不完整");
+  if (["budget_exhausted", "deadline", "no_progress"].includes(report.termination_reason)) parts.push(runtimeLabel(report.termination_reason));
+  return parts.join(" · ") || "限制类型未知";
+}
+
 function unresolvedCount(task: ReviewTask) {
   if (task.engine === "task_review_v1") {
     const report = runtimeReport(task);
@@ -212,7 +231,8 @@ onMounted(load);
           <div class="history-row__state">
             <span class="history-conclusion-label">本轮结论</span>
             <strong class="history-conclusion" :class="`history-conclusion--${historyConclusion(task).tone}`" :title="historyConclusion(task).description">{{ historyConclusion(task).title }}</strong>
-            <span class="history-execution">执行：<StatusBadge :status="task.status" /></span>
+            <span class="history-execution">执行：<StatusBadge :status="task.status" :label="executionLabel(task)" /></span>
+            <small v-if="executionLimit(task)" class="history-limit">{{ executionLimit(task) }}</small>
           </div>
           <div class="history-row__identity">
             <span>{{ taskRepo(task) }}</span>
@@ -259,6 +279,7 @@ onMounted(load);
 <style scoped>
 .history-row__actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 .history-delete { color: var(--danger); }
+.history-limit { display: block; margin-top: 2px; color: var(--warning); font-size: .72rem; overflow-wrap: anywhere; }
 .history-delete-dialog { width: min(500px, calc(100vw - 32px)); box-sizing: border-box; padding: 24px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text); box-shadow: 0 18px 60px rgb(0 0 0 / .2); }
 .history-delete-dialog::backdrop { background: rgb(0 0 0 / .4); }
 .history-delete-dialog h2 { margin: 0 0 16px; font-size: 1.25rem; }

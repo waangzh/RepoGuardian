@@ -28,7 +28,7 @@ def test_historical_duplicates_remain_visible_at_every_severity(severity, detail
     assert "evil.test" not in comment
     assert "已处理的非阻断建议已按本次选择省略" not in comment
     if severity in {"critical", "high"}:
-        assert "## 阻断问题" in comment
+        assert "## 高优先级问题" in comment
     assert plan.model_dump(mode="json") == before
     expanded = render_review_comment(plan, detail=detail, include_discussed=True)
     assert finding.evidence_summary in expanded

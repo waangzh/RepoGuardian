@@ -7,12 +7,12 @@ from test_publication_planner import publishable_task
 from test_review_outcome import completed_task
 
 
-@pytest.mark.parametrize("task,label", [(completed_task(), "已检查范围内未发现需处理的问题"),
-    (completed_task(scope_complete=False), "检查范围完整性尚待核对"), (publishable_task(), "发现 1 项改进建议，未发现阻断性问题")])
+@pytest.mark.parametrize("task,label", [(completed_task(), "本次检查未发现需在合并前处理的问题"),
+    (completed_task(scope_complete=False), "检查范围完整性尚待核对"), (publishable_task(), "发现 1 项改进建议，暂无高优先级问题")])
 def test_rendered_counts_and_repeatability(task, label):
     plan = PublicationPlanner().build(task)
     assert label in plan.summary_markdown
-    assert f"本轮 Diff 新增已确认问题：{plan.outcome.confirmed_count}" in plan.summary_markdown
+    assert f"本轮 Diff 新增代码证据已确认的问题：{plan.outcome.confirmed_count}" in plan.summary_markdown
     assert plan.summary_markdown == render_summary(plan)
     assert plan.user_report_markdown == render_user_report(task, plan)
     if plan.inline_drafts:
@@ -96,7 +96,7 @@ def test_complete_scope_with_unknown_usage_explains_reliability_separately():
     assert plan.outcome.runtime_reliability == "unreliable"
     assert "计量不完整" in plan.summary_markdown and "部分目标未完成检查" not in plan.summary_markdown
     assert plan.digest.merge_decision.status == "resolve_unknowns"
-    assert plan.digest.merge_decision.label == "审查运行记录存在限制，需核对结果完整性"
+    assert plan.digest.merge_decision.label == "审查已结束，但结果可靠性仍需核对"
     for markdown in (plan.summary_markdown, plan.user_report_markdown, plan.review_comment_markdown):
         assert "部分问题尚未核实" not in markdown
         assert "先补齐“审查局限”中的证据缺口" not in markdown
@@ -106,13 +106,13 @@ def test_complete_scope_with_unknown_usage_explains_reliability_separately():
 @pytest.mark.parametrize("updates,label", [
     ({"scope_complete": False}, "检查范围完整性尚待核对"),
     ({"initial_scope_coverage": []}, "检查范围尚不明确"),
-    ({"findings": [{"status": "unresolved"}]}, "1 项问题尚未核实，暂不能给出完整建议"),
-    ({"admitted_investigations": [{"status": "not_executed"}]}, "1 项关联调查尚未核实，暂不能给出完整建议"),
-    ({"unscheduled_leads": [{"status": "not_scheduled"}]}, "存在未核实事项，暂不能给出完整建议"),
-    ({"termination_reason": "budget_exhausted"}, "审查运行记录存在限制，需核对结果完整性"),
+    ({"findings": [{"status": "unresolved"}]}, "有 1 项疑点需要进一步确认"),
+    ({"admitted_investigations": [{"status": "not_executed"}]}, "有 1 项关联调查尚未完成"),
+    ({"unscheduled_leads": [{"status": "not_scheduled"}]}, "存在未确认事项，需进一步核实"),
+    ({"termination_reason": "budget_exhausted"}, "审查已结束，但结果可靠性仍需核对"),
     ({"scope_complete": False, "usage_integrity": "unknown"}, "检查范围完整性尚待核对"),
     ({"usage_integrity": "unknown", "admitted_investigations": [{"status": "not_executed"}]},
-     "1 项关联调查尚未核实，暂不能给出完整建议"),
+     "有 1 项关联调查尚未完成"),
 ])
 def test_incomplete_labels_follow_saved_cause_without_changing_outcome(updates, label):
     plan = PublicationPlanner().build(completed_task(**updates))
@@ -126,7 +126,7 @@ def test_unresolved_candidates_and_investigations_do_not_inflate_issue_count():
     plan = PublicationPlanner().build(completed_task(
         findings=[{"status": "unresolved"}, {"status": "candidate"}],
         admitted_investigations=[{"status": "not_executed"}] * 3))
-    assert plan.digest.merge_decision.label == "2 项问题尚未核实，暂不能给出完整建议"
+    assert plan.digest.merge_decision.label == "有 2 项疑点需要进一步确认"
     assert plan.outcome.incomplete_investigations == 3
 
 
@@ -148,9 +148,9 @@ def test_historical_verified_defect_never_reads_as_no_confirmed_problem():
     for markdown in (plan.summary_markdown, plan.user_report_markdown, plan.review_comment_markdown):
         assert "目前没有可确认的问题" not in markdown
         assert "历史讨论复核确认 1 项既有问题在当前代码中仍存在" in markdown
-    assert "本轮变更范围内未新增已确认问题" in plan.user_report_markdown
-    assert "本轮 Diff 新增已确认问题 0 项" in plan.user_report_markdown
-    assert "本轮 Diff 新增已确认问题：0" in plan.summary_markdown
+    assert "本轮变更范围内未新增代码证据已确认的问题" in plan.user_report_markdown
+    assert "本轮 Diff 新增代码证据已确认的问题 0 项" in plan.user_report_markdown
+    assert "本轮 Diff 新增代码证据已确认的问题：0" in plan.summary_markdown
 
 
 def test_new_findings_and_verified_history_are_both_disclosed():
@@ -164,8 +164,8 @@ def test_new_findings_and_verified_history_are_both_disclosed():
     assert plan.outcome.kind == "findings" and plan.outcome.coverage == "complete"
     assert plan.outcome.reason_codes == []
     assert plan.digest.merge_decision.status == "resolve_unknowns"
-    assert "本轮变更范围内发现 1 项已确认问题" in plan.user_report_markdown
-    assert "本轮变更范围内未新增已确认问题" not in plan.user_report_markdown
+    assert "本轮变更范围内发现 1 项代码证据已确认的问题" in plan.user_report_markdown
+    assert "本轮变更范围内未新增代码证据已确认的问题" not in plan.user_report_markdown
     for markdown in (plan.summary_markdown, plan.user_report_markdown, plan.review_comment_markdown):
         assert "已有调用仍缺少权限检查" in markdown
         assert "空返回值破坏调用方契约" in markdown

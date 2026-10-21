@@ -8,13 +8,13 @@ from urllib.parse import quote
 from app.models.publication import PublicationFinding, PublicationPlan
 
 
-OUTCOME_LABELS = {"clean": "已检查范围内未发现需处理的问题", "findings": "发现已确认问题",
-                  "inconclusive": "未得出完整结论", "failed": "审查因执行错误中断",
-                  "cancelled": "审查已由用户停止"}
+OUTCOME_LABELS = {"clean": "本次检查未发现需在合并前处理的问题", "findings": "发现代码证据已确认的问题",
+                  "inconclusive": "未得出完整结论", "failed": "审查中断，尚无完整结论",
+                  "cancelled": "审查已停止，已保留部分结果"}
 OUTCOME_DESCRIPTIONS = {
     "clean": "已完成本次约定范围的静态审查，在已检查范围内未发现具有充分代码证据、需要 PR 作者处理的问题。未发现问题不等于证明代码正确。",
-    "findings": "请逐项核对下列已确认问题及建议；仍需关注的限制见下方说明。",
-    "inconclusive": "本轮变更范围内未新增已确认问题，但审查仍存在缺口或可靠性限制，不能据此认定本次变更没有问题。",
+    "findings": "请逐项核对下列代码证据已确认的问题及建议；仍需关注的限制见下方说明。",
+    "inconclusive": "本轮变更范围内未新增代码证据已确认的问题，但审查仍存在缺口或可靠性限制，不能据此认定本次变更没有问题。",
     "failed": "审查因执行错误中断，请处理运行故障并重新审查；已有记录不能视为完整结论。",
     "cancelled": "审查已由用户停止，请补查剩余范围后再判断本次变更。",
 }
@@ -32,10 +32,10 @@ REASON_LABELS = {
 }
 # 对外只保留三种合并建议；review_suggestions 仅为旧冻结计划兼容。
 MERGE_LABELS = {
-    "fix_blockers": "发现高优先级问题，建议修复后再合并",
-    "resolve_unknowns": "部分问题尚未核实，暂不能给出完整建议",
-    "conditional_merge": "已检查范围内未发现需处理的问题",
-    "conditional_merge_with_suggestions": "未发现阻断性问题，但有改进建议",
+    "fix_blockers": "发现高优先级问题，建议修复后复审",
+    "resolve_unknowns": "存在未确认事项，需进一步核实",
+    "conditional_merge": "本次检查未发现需在合并前处理的问题",
+    "conditional_merge_with_suggestions": "有改进建议，暂无高优先级问题",
     "unavailable": "暂不能给出合并建议",
 }
 MERGE_SYMBOLS = {
@@ -45,9 +45,9 @@ MERGE_SYMBOLS = {
     "unavailable": "❓",
 }
 INCOMPLETE_LABELS = {
-    "scope_incomplete": "部分检查尚未完成",
+    "scope_incomplete": "还有约定检查未完成",
     "evidence_gaps": MERGE_LABELS["resolve_unknowns"],
-    "runtime_limits": "审查运行记录存在限制，需核对结果完整性",
+    "runtime_limits": "审查已结束，但结果可靠性仍需核对",
 }
 _EVIDENCE_REASONS = {
     "verification_unresolved", "finding_status_unknown", "investigation_incomplete",
@@ -81,17 +81,17 @@ def review_limitation_label(outcome, reasons=()):
         if not outcome.total_goals:
             return "检查范围尚不明确"
         remaining = outcome.total_goals - outcome.examined_goals
-        return f"仍有 {remaining} 项检查目标未完成" if remaining > 0 else "检查范围完整性尚待核对"
+        return f"还有 {remaining} 项约定检查未完成" if remaining > 0 else "检查范围完整性尚待核对"
     if kind == "evidence_gaps":
         if outcome.unresolved_count:
-            return f"{outcome.unresolved_count} 项问题尚未核实，暂不能给出完整建议"
+            return f"有 {outcome.unresolved_count} 项疑点需要进一步确认"
         if outcome.incomplete_investigations:
-            return f"{outcome.incomplete_investigations} 项关联调查尚未核实，暂不能给出完整建议"
+            return f"有 {outcome.incomplete_investigations} 项关联调查尚未完成"
         if reasons & {"author_context_truncated", "author_context_unknown"}:
-            return "作者声明范围尚待核对，暂不能给出完整建议"
+            return "作者声明范围尚待核对"
         if "confirmed_findings_withheld" in reasons:
-            return "部分已确认记录未通过交付准入，需核对证据"
-        return "存在未核实事项，暂不能给出完整建议"
+            return "部分代码证据已确认的记录未通过交付准入，需核对证据"
+        return "存在未确认事项，需进一步核实"
     return INCOMPLETE_LABELS.get(kind, "审查结论暂不完整")
 
 
@@ -100,8 +100,8 @@ def outcome_description(plan) -> str:
     outcome = plan.outcome
     if outcome.kind != "failed" and outcome.kind != "cancelled" \
             and outcome.historical_discussion.affects_risk:
-        current = (f"本轮变更范围内发现 {outcome.confirmed_count} 项已确认问题" if outcome.confirmed_count
-                   else "本轮变更范围内未新增已确认问题")
+        current = (f"本轮变更范围内发现 {outcome.confirmed_count} 项代码证据已确认的问题" if outcome.confirmed_count
+                   else "本轮变更范围内未新增代码证据已确认的问题")
         return (current + "；历史讨论复核确认的既有问题在当前代码中仍然存在，"
                 "属于已核验风险，不能据此认定本次变更没有问题。")
     return OUTCOME_DESCRIPTIONS[outcome.kind]
@@ -239,9 +239,9 @@ def merge_verdict_line(plan) -> str:
     """
     kind = plan.outcome.kind
     if kind == "failed":
-        return "❌ 结论：审查因执行错误中断，已保留部分记录（部分审查记录）"
+        return "❌ 结论：审查中断，尚无完整结论（部分审查记录）"
     if kind == "cancelled":
-        return "⏹ 结论：审查已停止，已保留停止前的记录（部分审查记录）"
+        return "⏹ 结论：审查已停止，已保留部分结果（部分审查记录）"
     label, _ = merge_heading(plan)
     symbol = MERGE_SYMBOLS.get(plan.digest.merge_decision.status, "❓")
     return f"{symbol} 结论：{label}"
@@ -262,8 +262,9 @@ def merge_advice(plan):
     lines = [f"**{label}**", "", advice]
     if decision.status != "unavailable" or decision.blocking_finding_keys or decision.nonblocking_finding_keys:
         lines.append(
-            f"阻断问题 {len(decision.blocking_finding_keys)} 项；非阻断建议 {len(decision.nonblocking_finding_keys)} 项。"
-            "严重度映射不替代对部署条件和业务影响的判断，仍需满足项目要求的 CI 与必要审批。")
+            f"高优先级问题 {len(decision.blocking_finding_keys)} 项；非高优先级建议 {len(decision.nonblocking_finding_keys)} 项。"
+            "严重度映射不替代对部署条件和业务影响的判断，仍需满足项目要求的 CI 与必要审批。"
+            "上述数量与建议由 RepoGuardian 审查策略生成，不代表 GitHub Mergeability 或分支保护结论。")
     if decision.limits:
         lines += ["", "仍需解决：", *[f"- {value}" for value in decision.limits]]
     return "\n\n".join(lines)
@@ -338,7 +339,7 @@ def _appendix_lines(plan, task):
     outcome = plan.outcome
     lines = ["", "## 附录：审查范围与限制", "",
         f"- 审查目标完成：{outcome.examined_goals} / {outcome.total_goals}",
-        f"- 本轮 Diff 新增已确认问题：{outcome.confirmed_count}；未决候选：{outcome.unresolved_count}",
+        f"- 本轮 Diff 新增代码证据已确认的问题：{outcome.confirmed_count}；未确认候选：{outcome.unresolved_count}",
         f"- 审查完整性：{ {'complete': '完整', 'partial': '不完整', 'unknown': '未知'}[outcome.review_completeness] }；"
         f"运行可靠性：{ {'reliable': '可靠', 'unreliable': '存在限制', 'unknown': '未知'}[outcome.runtime_reliability] }",
         f"- 审查 Commit：{markdown_text(plan.snapshot.head_sha or '未记录', 64)}",
@@ -373,19 +374,19 @@ def render_user_report(task, plan: PublicationPlan) -> str:
     label, advice = merge_heading(plan)
     lines = ["# RepoGuardian 详细审查报告", "", "## 审查结论", "", f"**{label}**", "", advice, "",
              outcome_description(plan), "",
-             f"本轮 Diff 新增已确认问题 {outcome.confirmed_count} 项（其中 {outcome.publishable_count} 项形成可发布意见）；"
-             f"未决候选 {outcome.unresolved_count} 项。"]
+             f"本轮 Diff 新增代码证据已确认的问题 {outcome.confirmed_count} 项（其中 {outcome.publishable_count} 项形成可发布意见）；"
+             f"未确认候选 {outcome.unresolved_count} 项。"]
     history = historical_risk_line(plan)
     if history:
         lines += ["", history]
     if plan.digest.merge_decision.limits:
         lines += ["", "需要补充或确认：", *[f"- {value}" for value in plan.digest.merge_decision.limits]]
     lines += _change_understanding(plan, full=True)
-    lines += ["", "## 已确认问题", ""]
+    lines += ["", "## 代码证据已确认的问题", ""]
     findings = _ordered_findings(plan)
     views = {item.id: item for item in plan.digest.findings}
     if not findings:
-        lines.append("当前没有通过发布准入的已核验问题。未决候选和证据缺口见下方“未决风险”。")
+        lines.append("当前没有通过发布准入、具备代码证据的问题。未确认候选和证据缺口见下方“未决风险”。")
     for finding in findings:
         lines += _report_finding_lines(plan, finding, views.get(finding.finding_key))
     published_keys = {item.finding_key for item in findings}
@@ -490,9 +491,9 @@ def _next_steps(plan):
     lines = ["", "## 下一步建议", ""]
     steps = []
     if plan.digest.merge_decision.blocking_finding_keys:
-        steps.append("- 修复上方阻断问题并在新快照重新核验；人工标记已处理不能代替机器复核。")
+        steps.append("- 修复上方高优先级问题并在新快照重新核验；人工标记已处理不能代替机器复核。")
     if plan.digest.merge_decision.nonblocking_finding_keys:
-        steps.append("- 逐项评估非阻断建议的影响与处理方式。")
+        steps.append("- 逐项评估非高优先级建议的影响与处理方式。")
     if plan.digest.incomplete_goals:
         steps.append("- 补查未完成目标，再判断整轮审查是否完整。")
     if outcome.incomplete_investigations:
@@ -601,9 +602,9 @@ def _comment_other_results(plan, *, omitted, retained, withheld, full, title="�
         entries += [f"- [{item.severity}] {markdown_text(item.title)}；{_finding_location_text(item)}"
                     for item in omitted]
     if retained:
-        entries.append(f"- {len(retained)} 项已标记处理的阻断问题仍保留正文，需在新快照重新核验。")
+        entries.append(f"- {len(retained)} 项已标记处理的高优先级问题仍保留正文，需在新快照重新核验。")
     if withheld:
-        entries.append(f"- 另有 {withheld} 项机器确认记录未通过发布准入，详见完整报告；"
+        entries.append(f"- 另有 {withheld} 项代码证据已确认的记录未通过发布准入，详见完整报告；"
                        "当前评论未将其描述为已核验问题。")
     entries += _comment_history_lines(plan)
     if full:
@@ -652,15 +653,15 @@ def _comment_next_steps(plan, *, has_findings: bool):
     if plan.outcome.kind == "cancelled":
         return ["审查已由用户停止，以下建议仅基于停止前保留的记录；请补查剩余范围后重新审查。"]
     if decision.status == "fix_blockers":
-        steps.append("先修复上述阻断问题，并在新快照重新核验后再考虑合并。")
+        steps.append("先修复上述高优先级问题，并在新快照重新核验后再考虑合并。")
     elif decision.status == "resolve_unknowns":
         steps.append(decision.advice or "先核对限制说明中的事项及原因，再判断是否可以合并。")
     elif has_findings:
-        steps.append("请评估上述非阻断问题的业务影响，结合 CI 与必要审批后再决定合并。")
+        steps.append("请评估上述非高优先级问题的业务影响，结合 CI 与必要审批后再决定合并。")
     else:
-        steps.append("结合 CI、业务预期和人工评审决定是否合并。已检查范围内未发现需处理的问题，不等于代码无缺陷。")
+        steps.append("结合 CI、业务预期和人工评审决定是否合并。已检查范围内未发现需在合并前处理的问题，不等于代码无缺陷。")
     if plan.digest.merge_decision.nonblocking_finding_keys and decision.status == "fix_blockers":
-        steps.append("非阻断建议可在同一轮修改中一并评估。")
+        steps.append("非高优先级建议可在同一轮修改中一并评估。")
     if plan.digest.incomplete_goals:
         steps.append("未完成的约定目标需要补查后才能判断整轮审查是否完整。")
     return [" ".join(steps)]
@@ -736,7 +737,7 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False, inc
         lines += limitations("未覆盖范围")
         lines += ["", "## 重新审查", "", *next_steps]
     elif blocking_findings:
-        lines += finding_section(blocking_findings, "阻断问题")
+        lines += finding_section(blocking_findings, "高优先级问题")
         lines += ["", *_comment_change_overview(plan, title="变更理解")]
         lines += limitations("其他局限")
         lines += finding_section(suggestions, "建议") + next_steps
@@ -744,7 +745,7 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False, inc
         lines += ["", *_comment_change_overview(plan, title="变更理解")]
         lines += finding_section(suggestions, "建议项")
         if not suggestions:
-            lines += ["人工标记已处理的非阻断建议已按本次选择省略；这不代表机器重新核验通过，明细见下方局限。", ""]
+            lines += ["人工标记已处理的非高优先级建议已按本次选择省略；这不代表机器重新核验通过，明细见下方局限。", ""]
         lines += next_steps
         lines += limitations("局限")
     elif incomplete:
@@ -819,7 +820,7 @@ def render_summary(plan, *, discussion_urls: dict[str, str] | None = None) -> st
     note = partial_review_note(plan)
     if note:
         lines += [note, ""]
-    lines += [f"本轮 Diff 新增已确认问题：{outcome.confirmed_count}；"
+    lines += [f"本轮 Diff 新增代码证据已确认的问题：{outcome.confirmed_count}；"
               f"约定目标已检查 {outcome.examined_goals} / {outcome.total_goals} 项。"]
     findings = _ordered_findings(plan)
     if findings:
@@ -842,7 +843,7 @@ def render_summary(plan, *, discussion_urls: dict[str, str] | None = None) -> st
         risks.append(f"- {outcome.unresolved_count} 项候选问题尚未确认，不作为已核验缺陷。")
     withheld_count = max(0, outcome.confirmed_count - outcome.publishable_count)
     if withheld_count > 0:
-        risks.append(f"- {withheld_count} 项已确认记录未进入发布草稿；请在 RepoGuardian 中核对证据与原因。")
+        risks.append(f"- {withheld_count} 项代码证据已确认的记录未进入发布草稿；请在 RepoGuardian 中核对证据与原因。")
     risks += _comment_history_lines(plan)
     if risks:
         lines += ["", "### 仍需关注", "", *dict.fromkeys(risks)]
