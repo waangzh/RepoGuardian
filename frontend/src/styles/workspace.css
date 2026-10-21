@@ -291,12 +291,16 @@ dialog::backdrop { background: rgba(12,22,45,.45); backdrop-filter: blur(3px); }
 .rg-preference-select .app-select { min-width: 180px; }
 .rg-preference-select .app-select__trigger { width: 100%; }
 .rg-discussion-preference { align-items: flex-start; }
-.settings-form { display: grid; gap: 12px; margin-top: 16px; }
-.settings-form label { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 1.4fr); align-items: center; gap: 12px; color: var(--muted); font-size: .8125rem; }
-.settings-form input { width: 100%; min-height: var(--control-height); padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); }
+.settings-form { display: grid; gap: 14px; padding: 18px 20px 20px; }
+.settings-form label { display: grid; grid-template-columns: minmax(132px, .8fr) minmax(0, 1.4fr); align-items: center; gap: 16px; color: var(--text-secondary); font-size: .875rem; line-height: 1.45; }
+.settings-form input { width: 100%; min-height: 42px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--ink); line-height: 1.35; }
 .settings-form input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(7, 134, 111, .1); outline: none; }
-.settings-actions { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
-.settings-actions p { margin: 5px 0 0; }
+.settings-form .field-hint { margin: 0; padding-top: 2px; line-height: 1.6; }
+.settings-actions { display: flex; align-items: center; justify-content: space-between; gap: 24px; min-height: 76px; padding: 16px 20px; }
+.settings-actions > div { min-width: 0; }
+.settings-actions strong { display: block; font-size: .9375rem; line-height: 1.4; }
+.settings-actions p { margin: 5px 0 0; line-height: 1.55; }
+.settings-actions .button { flex: 0 0 auto; min-width: 112px; }
 .rg-history-search { flex: 1; display: flex; align-items: center; gap: 10px; font-size: .8125rem; color: var(--muted); }
 .rg-history-search span { white-space: nowrap; }
 .rg-history-search input { min-width: 160px; max-width: 340px; }
@@ -360,8 +364,10 @@ dialog::backdrop { background: rgba(12,22,45,.45); backdrop-filter: blur(3px); }
   .rg-app .report-actions { flex-wrap: wrap; }
   .rg-app .report-mode-switch { flex-wrap: wrap; }
   .rg-preference-row { align-items: start; flex-direction: column; gap: 12px; }
+  .settings-form { padding: 16px; }
   .settings-form label { grid-template-columns: minmax(0, 1fr); gap: 6px; }
-  .settings-actions { align-items: stretch; flex-direction: column; }
+  .settings-actions { align-items: stretch; flex-direction: column; gap: 12px; padding: 16px; }
+  .settings-actions .button { width: 100%; }
   .rg-app .panel-header { flex-wrap: wrap; gap: 14px; }
 }
 @media (prefers-reduced-motion: reduce) { .rg-indeterminate > span { animation: none; } }
