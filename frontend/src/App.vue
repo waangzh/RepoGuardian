@@ -606,7 +606,7 @@ onBeforeUnmount(() => {
         <NewReviewPage v-else v-model:pr-url="prUrl" :loading="quickLoading" :busy="submitting || opening" @preview="loadQuickPreview" @open="openHistoricalReview" @history="activePage = 'history'" />
       </main>
       <ReviewHistoryPage v-else-if="activePage === 'history'" :busy="submitting || opening || taskActive" :delete-task="deleteHistoricalReview" @open="openHistoricalReview" @create="startNewReview" />
-      <SettingsPage v-else :capabilities="capabilities" />
+      <SettingsPage v-else :capabilities="capabilities" @settings-saved="loadAvailableModels" />
     </div>
     <dialog ref="errorDialog" class="rg-dialog rg-error-dialog" role="alertdialog" aria-labelledby="rg-error-title" @close="error = null" @click.self="dismissError">
       <div class="rg-error-dialog__head">

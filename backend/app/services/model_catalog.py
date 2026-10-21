@@ -35,7 +35,7 @@ async def fetch_model_catalog(
 
     url = f"{base_url.rstrip('/')}/models"
     try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=False, trust_env=False) as client:
             response = await client.get(
                 url,
                 headers={
