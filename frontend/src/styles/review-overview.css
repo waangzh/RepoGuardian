@@ -65,14 +65,21 @@
 .ov-verdict__meta span { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; line-height: 1.6; }
 .ov-results { min-width: 0; }
 .ov-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: hidden; }
-.ov-metric { min-width: 0; padding: 19px 21px; border: 0; border-right: 1px solid var(--ov-line); background: transparent; color: var(--ov-ink); cursor: pointer; text-align: left; }
+.ov-metric { display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--ov-line); }
 .ov-metric:last-child { border-right: 0; }
-.ov-metric:hover { background: var(--ov-subtle); }
+.ov-metric__head { min-width: 0; padding: 19px 21px 12px; border: 0; background: transparent; color: var(--ov-ink); cursor: pointer; text-align: left; }
+.ov-metric__head:hover { background: var(--ov-subtle); }
 .ov-metric__title { display: flex; align-items: center; gap: 7px; color: var(--ov-muted); font-size: 14px; font-weight: 600; }
-.ov-metric > strong { display: block; margin-top: 8px; font-size: 30px; font-weight: 750; font-variant-numeric: tabular-nums; line-height: 1.35; letter-spacing: -.7px; }
-.ov-metric > strong.ov-count-danger { color: var(--ov-red); }
-.ov-metric > strong small { color: var(--ov-faint); font-size: 14px; font-weight: 500; }
-.ov-metric > small { display: block; margin-top: 3px; color: var(--ov-faint); font-size: 12px; line-height: 1.7; }
+.ov-metric__head > strong { display: block; margin-top: 8px; font-size: 30px; font-weight: 750; font-variant-numeric: tabular-nums; line-height: 1.35; letter-spacing: -.7px; }
+.ov-metric__head > strong.ov-count-danger { color: var(--ov-red); }
+.ov-metric__head > strong small { color: var(--ov-faint); font-size: 14px; font-weight: 500; }
+.ov-metric__head > small { display: block; margin-top: 3px; color: var(--ov-faint); font-size: 12px; line-height: 1.7; }
+/* 来源构成：每个来源数量都能直接筛出对应条目，避免总数与列表不一致。 */
+.ov-metric__sources { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 21px 16px; }
+.ov-source { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border: 1px solid var(--ov-line); border-radius: 999px; background: var(--ov-subtle); color: var(--ov-muted); font-size: 12px; line-height: 1.6; cursor: pointer; }
+.ov-source:hover { border-color: var(--ov-blue); color: var(--ov-blue); }
+.ov-source strong { font-variant-numeric: tabular-nums; }
+.ov-source .app-icon { color: var(--ov-faint); }
 .rg-overview .ov-note { display: flex; align-items: flex-start; gap: 8px; margin-top: 11px; padding: 10px 13px; border: 1px solid color-mix(in srgb, var(--ov-blue) 10%, var(--ov-line)); border-radius: 10px; background: color-mix(in srgb, var(--ov-blue-wash) 38%, var(--ov-surface)); color: var(--ov-faint); font-size: 12px; line-height: 1.8; }
 .ov-note .app-icon { margin-top: 2px; color: var(--ov-blue); }
 .ov-boundary, .ov-understanding { padding: 22px 24px; }
@@ -166,7 +173,8 @@
 .ov-dialog__footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; padding: 18px 28px; border-top: 1px solid var(--ov-line); }
 @media (max-width: 1100px) {
   .rg-overview { grid-template-columns: minmax(0, 1fr); }
-  .ov-metric { padding: 18px 14px; }
+  .ov-metric__head { padding: 18px 14px 10px; }
+  .ov-metric__sources { padding: 0 14px 14px; }
   .ov-change__rows > div { grid-template-columns: 148px minmax(0, 1fr); }
 }
 @media (max-width: 960px) {
@@ -181,11 +189,12 @@
   .rg-overview .ov-verdict h2 { font-size: 21px; }
   .ov-verdict__bottom { gap: 8px; }
   .ov-boundary, .ov-understanding, .ov-next, .ov-snapshot { padding: 18px; }
-  .ov-metric { padding: 13px 10px; }
+  .ov-metric__head { padding: 13px 10px 9px; }
+  .ov-metric__sources { gap: 4px; padding: 0 10px 12px; }
   .ov-metric__title { gap: 4px; font-size: 14px; }
   .ov-metric__title .app-icon { width: 13px; height: 13px; }
-  .ov-metric > strong { font-size: 26px; }
-  .ov-metric > strong small { font-size: 12px; }
+  .ov-metric__head > strong { font-size: 26px; }
+  .ov-metric__head > strong small { font-size: 12px; }
   .ov-change__rows > div { grid-template-columns: minmax(0, 1fr); gap: 5px; padding: 12px 0; }
   .rg-overview .ov-section-head { align-items: flex-start; gap: 8px; }
   .ov-dialog__header, .ov-dialog__body { padding: 20px; }

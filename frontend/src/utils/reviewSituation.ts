@@ -1,5 +1,6 @@
 import type { MergeDecision, ReviewOutcome } from "../types/publication";
 import type { ReviewSection } from "../types/workspace";
+import { independentFindingCount } from "./findingWorkbench";
 
 /** 展示层情景：由后端内部状态组合成用户可理解的单一结论，不新增后端顶层状态。 */
 export type SituationKey =
@@ -144,15 +145,15 @@ export function reviewSituation(
   const status = decision?.status;
   const historyBlocking = decision?.blocking_historical_keys?.length ?? 0;
   const historySuggestions = decision?.nonblocking_historical_keys?.length ?? 0;
-  const currentBlocking = decision?.blocking_finding_keys?.length ?? 0;
-  const currentSuggestions = decision?.nonblocking_finding_keys?.length ?? 0;
-  // 标题按独立缺陷计数：后端已按严格重复关联去重时使用该数量，
-  // 旧冻结计划没有该字段时才回退为两份证据来源相加。
+  // 标题按独立缺陷计数：后端已按严格重复关联去重时使用该数量；
+  // 旧冻结计划缺少该字段时，若仍带有合并标注则按标注去重，否则回退为来源相加。
   const blockingCount = decision?.blocking_finding_keys
-    ? decision.blocking_independent_count ?? currentBlocking + historyBlocking
+    ? independentFindingCount(decision.blocking_finding_keys, decision.blocking_historical_keys,
+      decision.blocking_independent_count, decision.deduplicated_historical_keys)
     : historyBlocking || null;
   const nonblockingCount = decision?.nonblocking_finding_keys
-    ? decision.nonblocking_independent_count ?? currentSuggestions + historySuggestions
+    ? independentFindingCount(decision.nonblocking_finding_keys, decision.nonblocking_historical_keys,
+      decision.nonblocking_independent_count, decision.deduplicated_historical_keys) ?? 0
     : historySuggestions;
   const unresolvedCount = outcome.unresolved_count ?? 0;
   const examinedGoals = outcome.examined_goals ?? 0;
@@ -202,7 +203,8 @@ export function reviewSituation(
         + (outcome.dynamic_validation === "failed" ? "当前 Head 另有动态检查未通过，需一并核对。" : ""),
       nextStep: "查看高优先级问题的证据并修复，然后基于新提交重新审查。",
       tone: "danger", icon: "alert",
-      actions: actions(historyBlocking ? "view_report" : "view_blockers", ...extra), copy: COPY_REVIEW };
+      // 历史风险已进入问题工作台，可直接按来源核对，不再降级为只看报告。
+      actions: actions("view_blockers", ...extra), copy: COPY_REVIEW };
   }
   if (outcome.dynamic_validation === "failed") {
     return { ...counts, key: "validation_failed", title: titleOf("本次记录的动态检查未通过"),
@@ -228,7 +230,8 @@ export function reviewSituation(
     if (limitation === "evidence_gaps") {
       const reasons = [...(outcome.reason_codes ?? []), ...(decision?.unresolved_reasons ?? [])];
       const historical = reasons.includes("historical_discussion_unresolved");
-      const action = unresolvedCount > 0 ? "view_unresolved"
+      // 历史风险已进入问题工作台，可按来源核对，不必只跳转到报告正文。
+      const action = historical ? "view_blockers" : unresolvedCount > 0 ? "view_unresolved"
         : outcome.incomplete_investigations > 0 || reasons.some(reason => ["investigation_incomplete", "unscheduled_investigation"].includes(reason))
           ? "view_investigations" : "view_report";
       return { ...counts, key: "evidence_gaps", title: titleOf(evidenceTitle(outcome, reasons)),
@@ -236,7 +239,7 @@ export function reviewSituation(
           ? "历史复核已用当前固定代码确认部分既有问题仍然存在；它们不计入本轮 Diff 的新增问题，但会影响合并判断。"
           : "未确认事项不等于代码证据已确认的缺陷，但会限制合并判断。",
         nextStep: historical
-          ? "查看完整报告，核对历史问题的证据、影响范围与修复状态。"
+          ? "查看高优先级问题中的历史复核来源，核对证据、影响范围与修复状态。"
           : action === "view_unresolved" ? "查看未确认事项，补齐代码或目标依据后再判断。"
             : action === "view_investigations" ? "查看未完成调查，补齐关联证据后再判断。"
               : "查看完整报告，核对证据缺口后再判断。",
@@ -256,7 +259,7 @@ export function reviewSituation(
     return { ...counts, key: "nonblocking", title: titleOf(`发现 ${nonblockingCount} 项改进建议，暂无高优先级问题`),
       description: "这些建议已确认具备代码证据，但未达到高优先级；是否在合并前处理取决于项目要求和实际影响。",
       nextStep: "查看建议并评估影响，或复制 PR 评论与作者讨论。",
-      tone: "info", icon: "info", actions: actions(historySuggestions ? "view_report" : "view_findings"), copy: COPY_PR };
+      tone: "info", icon: "info", actions: actions("view_findings"), copy: COPY_PR };
   }
   return { ...counts, key: "clean", title: titleOf("本次检查未发现需在合并前处理的问题"),
     description: "本结论仅覆盖已检查范围，不代表 PR 安全或项目 CI 全部通过；合并仍需结合项目验证和人工审批。"

@@ -207,13 +207,14 @@ test("计量附注和历史分级采用后端事实并引导到可见证据", as
     assert.equal(overviewFacts(history, null).blockers, 1);
     assert.equal(reviewSituation(history).blockingCount, 1);
     assert.equal(reviewSituation(history).key, "blockers");
-    assert.equal(reviewSituation(history).actions[0].key, "view_report");
+    // 历史风险已进入问题工作台，可直接按来源核对，不再降级为只看报告。
+    assert.equal(reviewSituation(history).actions[0].key, "view_blockers");
     history.digest.merge_decision.status = "conditional_merge";
     history.digest.merge_decision.blocking_historical_keys = [];
     history.digest.merge_decision.nonblocking_historical_keys = ["inline:1"];
     assert.equal(reviewSituation(history).nonblockingCount, 1);
     assert.equal(reviewSituation(history).key, "nonblocking");
-    assert.equal(reviewSituation(history).actions[0].key, "view_report");
+    assert.equal(reviewSituation(history).actions[0].key, "view_findings");
     // 同一缺陷同时出现在本轮与历史复核时，标题与概览只计一次；旧计划缺少去重字段才相加。
     const duplicate = structuredClone(history);
     duplicate.digest.merge_decision.blocking_finding_keys = ["key-a"];
@@ -225,7 +226,11 @@ test("计量附注和历史分级采用后端事实并引导到可见证据", as
     assert.equal(reviewSituation(duplicate).blockingCount, 1);
     assert.equal(overviewFacts(duplicate, null).blockers, 1);
     duplicate.digest.merge_decision.blocking_independent_count = null;
-    assert.equal(reviewSituation(duplicate).blockingCount, 2, "旧冻结计划保留来源相加");
+    // 旧计划仍有去重标注时按标注合并，否则数量会大于列表中可核对的条目。
+    assert.equal(reviewSituation(duplicate).blockingCount, 1, "旧计划按去重标注合并");
+    assert.equal(overviewFacts(duplicate, null).blockers, 1);
+    duplicate.digest.merge_decision.deduplicated_historical_keys = [];
+    assert.equal(reviewSituation(duplicate).blockingCount, 2, "无去重标注的旧冻结计划保留来源相加");
     assert.equal(overviewFacts(duplicate, null).blockers, 2);
     const suggestions = structuredClone(history);
     suggestions.digest.merge_decision = { status: "conditional_merge", label: "", blocking_finding_keys: [],
