@@ -67,6 +67,48 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
       assert.ok(!findingsHtml.includes('id="rd-detail-retained"'));
       assert.ok(findingsHtml.includes('id="rd-detail-appendix"'));
     });
+    await t.test('快照过期时详细报告、审计导出与评论草稿统一标注历史结论', async () => {
+      const { task, plan } = fixtures.clean;
+      const cleanLabel = plan.digest.merge_decision.label;
+      // 详细报告保留冻结结论原文，但必须标注历史快照并去掉成功色，避免与顶部旧快照提示冲突。
+      const staleReadable = await renderToString(createSSRApp(Readable, { plan, stale: true }));
+      assert.ok(staleReadable.includes('历史快照结论'));
+      assert.ok(staleReadable.includes('以上数量来自旧快照，不适用于最新 Head'));
+      assert.ok(staleReadable.includes('以上建议基于旧快照'));
+      // 冻结结论原文保留，但整块改用警告语气并给出旧快照说明，不出现绿色成功结论。
+      assert.ok(staleReadable.includes('冻结结论，不适用于最新提交'));
+      assert.ok(staleReadable.includes(cleanLabel));
+      assert.match(staleReadable, /class="[^"]*\bwarning\b[^"]*\brd-detail-intro\b/);
+      assert.match(staleReadable, /class="[^"]*\brd-intro-stale\b/);
+      assert.ok(!staleReadable.includes('success rd-detail-intro') && !staleReadable.includes('rd-detail-intro success'));
+      const currentReadable = await renderToString(createSSRApp(Readable, { plan }));
+      assert.ok(currentReadable.includes(cleanLabel));
+      assert.ok(!currentReadable.includes('历史快照结论'));
+      assert.match(currentReadable, /class="success rd-detail-intro"/);
+      assert.ok(!currentReadable.includes('rd-intro-stale'));
+      assert.ok(!currentReadable.includes('冻结结论，不适用于最新提交'));
+      // 审计导出与评论草稿同样需要保留旧快照事实。
+      const staleAudit = await renderToString(createSSRApp(Audit, { task, plan, stale: true }));
+      assert.ok(staleAudit.includes('历史快照记录'));
+      assert.ok(staleAudit.includes('以上数量来自旧快照，不适用于最新 Head'));
+      assert.ok(!(await renderToString(createSSRApp(Audit, { task, plan }))).includes('历史快照记录'));
+      // 侧栏在详细报告/审计模式下提示旧快照，复制或导出前先重新审查。
+      const staleSidebar = await renderToString(createSSRApp(Sidebar, {
+        task, plan, mode: 'user', detail: 'compact', excludeResolved: false, available: true, busy: false, copied: false,
+        headLabel: 'PR 已更新', headTone: 'warning', headNote: '', canCheck: true, canPublish: true, stale: true,
+      }));
+      assert.ok(staleSidebar.includes('本页内容来自旧快照'));
+      const currentSidebar = await renderToString(createSSRApp(Sidebar, {
+        task, plan, mode: 'user', detail: 'compact', excludeResolved: false, available: true, busy: false, copied: false,
+        headLabel: '尚未检查', headTone: 'neutral', headNote: '', canCheck: true, canPublish: true,
+      }));
+      assert.ok(!currentSidebar.includes('本页内容来自旧快照'));
+      // ReportPanel 内含 DOMPurify，Node SSR 无法渲染；按源码断言 stale 已传到三种报告视图。
+      const panelSource = await readFile(new URL('../src/components/ReportPanel.vue', import.meta.url), 'utf8');
+      assert.match(panelSource, /<ReportReadableView[^>]*:stale="snapshotStale"/);
+      assert.match(panelSource, /<AuditSummaryView[^>]*:stale="snapshotStale"/);
+      assert.match(panelSource, /reportView === 'comment' && snapshotStale[\s\S]*历史快照评论草稿/);
+    });
     await t.test('旧字段与缺失验证保留未知，文本按 Vue 转义', async () => {
       assert.equal(coverageLabel(undefined), '未知');
       assert.equal(reportValidationLabel(undefined), '未知');

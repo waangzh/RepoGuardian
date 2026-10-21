@@ -143,22 +143,24 @@ function rereview() { cancelPending(); emit("rereview"); }
         <p v-if="feedback" class="rd-notice rd-feedback" role="status">{{ feedback }}</p>
         <p class="rd-context-tip" role="status">{{ refreshing ? '正在更新报告，阅读位置将保留；更新后可继续交付。' : reportUpdated ? '报告已更新，已保留当前阅读位置与选择。' : '' }}</p>
         <div v-if="previewLoading && reportView === 'comment'" class="rd-notice" role="status">正在生成所选内容预览…</div>
-        <ReportReadableView v-else-if="reportView === 'user' && plan" :plan="plan" :pr-url="task?.pr_url" @file="emit('file', $event)" @finding="emit('finding', $event)" />
-        <AuditSummaryView v-else-if="reportView === 'audit' && plan" :task="task" :plan="plan" :markdown="markdown" @file="emit('file', $event)" />
+        <ReportReadableView v-else-if="reportView === 'user' && plan" :plan="plan" :pr-url="task?.pr_url" :stale="snapshotStale" @file="emit('file', $event)" @finding="emit('finding', $event)" />
+        <AuditSummaryView v-else-if="reportView === 'audit' && plan" :task="task" :plan="plan" :markdown="markdown" :stale="snapshotStale" @file="emit('file', $event)" />
         <div v-else-if="!currentMarkdown"><EmptyState icon="report" title="当前报告尚不可用" description="请结合任务状态判断，或切换到其他报告查看历史记录。" /><button v-if="reportView === 'comment' && customSelection && reviewId" type="button" class="btn secondary" @click="previewRevision += 1">重试加载所选预览</button></div>
         <div v-else class="rd-doc">
+          <p v-if="snapshotStale && reportView !== 'comment'" class="rd-notice warn"><AppIcon name="history" :size="17" /><span><strong>历史快照内容。</strong>以下正文来自旧 Head，不适用于最新提交；请重新审查后再引用。</span></p>
           <div v-if="reportView === 'comment'" class="rd-notice"><AppIcon name="info" :size="17" /><div><strong>评论草稿不代表合并批准。</strong> 复制或导出前将核对 PR 当前 Head；过期或未知时需要明确确认限制。</div></div>
           <p v-if="selection && reportView === 'comment'" class="rd-context-tip" role="status">包含 {{ selection.included_finding_keys.length }} 项，明确省略 {{ selection.omitted_finding_keys.length }} 项；保留 {{ selection.retained_blocking_keys.length }} 项已处理阻断问题。</p>
           <div :class="{ 'rd-comment': reportView === 'comment' }">
             <header v-if="reportView === 'comment'" class="rd-comment-header"><div><strong>评论正文预览</strong><small>以下是 GitHub PR 评论将呈现的核心内容</small></div><span class="badge neutral">Markdown</span></header>
+            <p v-if="reportView === 'comment' && snapshotStale" class="rd-notice warn rd-stale-notice"><AppIcon name="history" :size="17" /><span><strong>历史快照评论草稿。</strong>草稿结论来自旧 Head，不适用于最新提交；交付时会再次核对并要求明确确认。</span></p>
             <PrCommentPreview v-if="reportView === 'comment'" :content="currentMarkdown" :finding-count="visibleFindingCount" />
             <ReportMarkdown v-else :content="currentMarkdown" />
           </div>
         </div>
         <button v-if="commentsMarkdown && reportView === 'audit'" type="button" class="rd-text-button" @click="exportComments">导出逐条评论草稿（技术用途，不检查 Head）</button>
-      </section><ReportDeliverySidebar :task="task" :plan="plan" v-model:detail="detail" v-model:exclude-resolved="excludeResolved" :mode="reportView" :available="Boolean(currentMarkdown) && !previewLoading" :busy="busy" :copied="copied" :head-label="headCheck || checking || snapshotStale ? headLabel : '尚未检查'" :head-tone="snapshotStale ? 'warning' : headCheck?.status === 'current' ? 'success' : headCheck ? 'warning' : 'neutral'" :head-note="headNote" :retry-check="headCheck?.status === 'unknown'" :can-check="Boolean(reviewId && reviewMarkdown)" :can-publish="Boolean(task)" @copy="copyMarkdown" @download="exportMarkdown" @check="checkHead" @publish="emit('publish')" @full="reportDialog?.showModal()" /></div>
+      </section><ReportDeliverySidebar :task="task" :plan="plan" v-model:detail="detail" v-model:exclude-resolved="excludeResolved" :mode="reportView" :available="Boolean(currentMarkdown) && !previewLoading" :busy="busy" :copied="copied" :head-label="headCheck || checking || snapshotStale ? headLabel : '尚未检查'" :head-tone="snapshotStale ? 'warning' : headCheck?.status === 'current' ? 'success' : headCheck ? 'warning' : 'neutral'" :head-note="headNote" :retry-check="headCheck?.status === 'unknown'" :can-check="Boolean(reviewId && reviewMarkdown)" :can-publish="Boolean(task)" :stale="snapshotStale" @copy="copyMarkdown" @download="exportMarkdown" @check="checkHead" @publish="emit('publish')" @full="reportDialog?.showModal()" /></div>
     </section>
-    <dialog ref="reportDialog" class="rd-dialog" aria-label="完整 Markdown 报告" @click.self="reportDialog?.close()"><header><strong>{{ currentLabel }} · 完整正文</strong><button type="button" class="icon-button" aria-label="关闭报告" @click="reportDialog?.close()"><AppIcon name="x" :size="16" /></button></header><ReportMarkdown :content="currentMarkdown || ''" /></dialog>
+    <dialog ref="reportDialog" class="rd-dialog" aria-label="完整 Markdown 报告" @click.self="reportDialog?.close()"><header><strong>{{ currentLabel }} · 完整正文</strong><span v-if="snapshotStale" class="badge warn">历史快照</span><button type="button" class="icon-button" aria-label="关闭报告" @click="reportDialog?.close()"><AppIcon name="x" :size="16" /></button></header><ReportMarkdown :content="currentMarkdown || ''" /></dialog>
     <dialog ref="confirmationDialog" class="rd-dialog rd-confirm-dialog" aria-label="确认历史记录交付" @cancel="cancelPending" @click.self="cancelPending"><ReviewCommentConfirmation v-if="pendingCopy" :pending="pendingCopy" :action="deliveryAction" :feedback="feedback" @cancel="cancelPending" @acknowledge="copyAcknowledged" @rereview="rereview" @retry="retryPending" /></dialog>
   </section>
 </template>

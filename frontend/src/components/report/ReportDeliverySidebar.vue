@@ -7,7 +7,7 @@ import { reportChapters } from '../../utils/reportPresentation';
 import AppIcon from '../common/AppIcon.vue';
 const props = defineProps<{ mode: ReportMode; detail: 'compact' | 'full'; excludeResolved: boolean; available: boolean;
   busy: boolean; copied: boolean; headLabel: string; headTone: string; headNote: string; canCheck: boolean; canPublish: boolean;
-  task?: ReviewTask; plan?: PublicationPlan | null; retryCheck?: boolean }>();
+  task?: ReviewTask; plan?: PublicationPlan | null; retryCheck?: boolean; stale?: boolean }>();
 const emit = defineEmits<{ 'update:detail': [value: 'compact' | 'full']; 'update:excludeResolved': [value: boolean];
   copy: []; download: []; check: []; publish: []; full: [] }>();
 const chapters = computed(() => props.plan ? reportChapters(props.plan) : [{ id: 'conclusion', label: '审查结论' }]);
@@ -25,6 +25,7 @@ const chapters = computed(() => props.plan ? reportChapters(props.plan) : [{ id:
     <section class="rd-aside-card">
       <template v-if="mode === 'comment'"><h3>交付前检查<AppIcon name="info" :size="16" /></h3><div class="rd-delivery-step"><span>PR Head 状态</span><span class="badge" :class="headTone" role="status">{{ headLabel }}</span></div><button type="button" class="btn secondary rd-full" :disabled="busy || !canCheck || !available" @click="emit('check')"><AppIcon name="search" :size="15" />{{ busy ? '正在检查…' : retryCheck ? '重试检查' : '检查 PR Head' }}</button><p class="rd-head-note">{{ headNote }}</p><div class="rd-separator" /></template>
       <template v-else><h3>{{ mode === 'user' ? '这份报告适用于' : '技术审计导出' }}</h3><p>{{ mode === 'user' ? '开发者排查、Review 讨论与审查结果留档。与 PR 直接发布内容保持不同粒度。' : '用于追溯检查行为与证据。复制和导出保留后端原始技术记录 Markdown；运行步骤与计量请看主导航“技术记录”。' }}</p></template>
+      <p v-if="stale && mode !== 'comment'" class="rd-stale-note" role="status"><AppIcon name="history" :size="14" />本页内容来自旧快照，不适用于最新 Head；复制或导出前请先重新审查。</p>
       <button type="button" class="btn primary rd-full" :disabled="busy || !available" @click="emit('copy')"><AppIcon name="copy" :size="15" />{{ copied ? '已复制' : mode === 'comment' ? '复制 PR 评论' : mode === 'user' ? '复制详细报告' : '复制技术审计导出' }}</button>
       <button type="button" class="btn secondary rd-full rd-space" :disabled="busy || !available" @click="emit('download')"><AppIcon name="download" :size="15" />{{ mode === 'comment' ? '导出 Markdown' : mode === 'user' ? '导出详细报告' : '导出技术审计记录' }}</button>
       <button type="button" class="rd-text-button rd-space" :disabled="!available" @click="emit('full')">查看完整 Markdown</button>
