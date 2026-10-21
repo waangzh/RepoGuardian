@@ -22,6 +22,7 @@ def request_fingerprint(request):
 
 
 def policy_fingerprint():
+    from app.languages.isolation import parser_fingerprint
     from app.services.review_planner import PLANNER_VERSION
     from app.services.preview_input_cache import INDEX_CACHE_VERSION
     from app.tools.git_tool import DIFF_POLICY_VERSION, DIFF_CONTEXT_LINES
@@ -30,7 +31,7 @@ def policy_fingerprint():
         "repoguardian_review_unit_large_min_changed_lines", "repoguardian_review_unit_max_lines_per_read",
         "repoguardian_review_unit_max_search_results", "repoguardian_model_pricing_json")
     return stable_hash({"settings": {key: getattr(settings, key) for key in names},
-        "planner": PLANNER_VERSION, "index": INDEX_CACHE_VERSION,
+        "planner": PLANNER_VERSION, "index": INDEX_CACHE_VERSION, "parser": parser_fingerprint(),
         "diff": DIFF_POLICY_VERSION, "context": DIFF_CONTEXT_LINES, "depths": DEPTHS, "maxima": maxima()})
 
 
