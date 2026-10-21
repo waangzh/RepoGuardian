@@ -916,6 +916,9 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False, inc
         lines += next_steps_section()
     elif incomplete:
         lines += history_section
+        lines += understanding_section()
+        lines += ["", "> 以上变更理解仅基于已保存的局部观察或变更元数据，"
+                  "不代表所有目标已完成核验。"]
         lines += limitations() or [
             "", "## 仍需确认的事项", "", "缺口或运行记录尚不明确，请先核对详细报告。"]
         lines += next_steps_section()
