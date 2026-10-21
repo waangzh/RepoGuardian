@@ -4,6 +4,7 @@ import { reviewLimitationKind } from "./reviewSituation";
 import type { TaskRuntimeSummary } from "./taskRuntimePresentation";
 import type { ReviewSection } from "../types/workspace";
 import { reportValidationLabel } from "./reportPresentation";
+import { independentFindingCount, mergedHistoricalKeys } from "./findingWorkbench";
 
 export interface OverviewBoundary {
   title: string;
@@ -12,6 +13,38 @@ export interface OverviewBoundary {
   tone: "success" | "warning" | "danger" | "neutral";
   icon: string;
   target: ReviewSection;
+}
+
+/**
+ * 一个指标的证据来源构成：total 为去重后的独立缺陷数，
+ * current / historical 是可逐条核对的来源数量，merged 为指向同一缺陷的历史记录。
+ */
+export interface FindingMetric {
+  total: number | null;
+  current: number | null;
+  historical: number | null;
+  merged: number;
+  /** 来源数量之和与总数一致时才可拆分展示，避免给出无法对账的构成。 */
+  verifiable: boolean;
+}
+
+export const UNKNOWN_METRIC: FindingMetric = { total: null, current: null, historical: null, merged: 0, verifiable: false };
+
+function findingMetric(keys: string[] | undefined, historical: string[] | undefined,
+  independent: number | null | undefined, deduplicated: string[] | undefined): FindingMetric {
+  if (!keys) return UNKNOWN_METRIC;
+  const history = historical ?? [];
+  const merged = mergedHistoricalKeys(history, deduplicated).length;
+  const total = independentFindingCount(keys, history, independent, deduplicated);
+  return {
+    // 总数沿用后端的独立缺陷数，保证概览与结论标签一致；来源构成用于逐条核对。
+    total,
+    current: keys.length,
+    historical: history.length - merged,
+    merged,
+    // 无法识别被合并的历史记录时，来源数量之和会大于总数，此时不展示拆分。
+    verifiable: total !== null && total === keys.length + history.length - merged,
+  };
 }
 
 export function overviewFacts(plan: ReviewSummary | null, runtime: TaskRuntimeSummary | null) {
@@ -35,6 +68,10 @@ export function overviewFacts(plan: ReviewSummary | null, runtime: TaskRuntimeSu
   ])];
   const investigationCount = outcome?.incomplete_investigations ?? null;
   const limitation = outcome ? reviewLimitationKind(outcome, decision?.unresolved_reasons) : null;
+  const blockerMetric = findingMetric(decision?.blocking_finding_keys, decision?.blocking_historical_keys,
+    decision?.blocking_independent_count, decision?.deduplicated_historical_keys);
+  const suggestionMetric = findingMetric(decision?.nonblocking_finding_keys, decision?.nonblocking_historical_keys,
+    decision?.nonblocking_independent_count, decision?.deduplicated_historical_keys);
   const evidenceGap = limitation === "evidence_gaps" || Boolean(investigationCount)
     || Boolean(outcome?.unresolved_count);
   // 完成计数不是结论：范围完整性未知时不能由 n/n 推导为已完整检查。
@@ -80,11 +117,11 @@ export function overviewFacts(plan: ReviewSummary | null, runtime: TaskRuntimeSu
   ];
   return {
     examined, total, validation,
-    // 情景矩阵可使用保守阻断标记；指标展示按缺陷身份去重后的独立数量，
-    // 旧冻结计划缺少该字段时才回退为来源相加。
-    blockers: decision?.blocking_finding_keys
-      ? decision.blocking_independent_count
-        ?? decision.blocking_finding_keys.length + (decision.blocking_historical_keys?.length ?? 0) : null,
+    // 指标展示按缺陷身份去重后的独立数量；旧冻结计划缺少该字段时才回退为来源相加。
+    // 同时给出可逐条核对的来源构成，避免总数无法在发现列表中找到全部条目。
+    blockers: blockerMetric.total,
+    blockerMetric,
+    suggestionMetric,
     unresolved: outcome?.unresolved_count ?? null,
     limitations, boundaries,
   };

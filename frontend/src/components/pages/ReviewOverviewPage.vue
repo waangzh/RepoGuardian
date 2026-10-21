@@ -4,7 +4,8 @@ import type { ReviewTask } from "../../types/review";
 import type { ReviewSummary } from "../../types/publication";
 import type { RuntimeFindingRow, TaskRuntimeSummary } from "../../utils/taskRuntimePresentation";
 import type { ReviewSection } from "../../types/workspace";
-import type { SituationActionKey } from "../../utils/reviewSituation";
+import type { FindingEntryFilter, SituationActionKey } from "../../utils/reviewSituation";
+import type { FindingSource } from "../../utils/findingWorkbench";
 import { reviewSituation } from "../../utils/reviewSituation";
 import { runtimeLabel } from "../../utils/taskRuntimePresentation";
 import OverviewVerdict from "../review/OverviewVerdict.vue";
@@ -34,6 +35,7 @@ const emit = defineEmits<{
   rereview: [];
   snapshot: [status: "current" | "stale" | "unknown"];
   action: [key: Exclude<SituationActionKey, "rereview">];
+  filter: [filter: FindingEntryFilter, source: FindingSource];
   reload: [];
 }>();
 // 只采用显式快照检查的结果，页面加载不访问 GitHub 或假定 Head 仍是最新。
@@ -43,6 +45,9 @@ const execution = computed(() => runtimeLabel(props.summary?.execution.status ||
 function runAction(key: SituationActionKey) {
   if (key === "rereview") emit("rereview");
   else emit("action", key);
+}
+function openFindingFilter(filter: FindingEntryFilter, source: FindingSource) {
+  emit("filter", filter, source);
 }
 </script>
 
@@ -59,7 +64,7 @@ function runAction(key: SituationActionKey) {
         </header>
         <PrChangeSummary compact :task="task" :report="report" :understanding="summaryPlan?.digest.change_understanding" :author-limitation="summaryPlan?.digest.author_context_limitation" @file="emit('file', $event)" @evidence="emit('navigate', 'report')" />
       </section>
-      <OverviewResults :plan="summaryPlan" :runtime="summary" :findings="findings" :stale="stale" @navigate="emit('navigate', $event)" @finding="emit('finding', $event)" />
+      <OverviewResults :plan="summaryPlan" :runtime="summary" :findings="findings" :stale="stale" @navigate="emit('navigate', $event)" @finding="emit('finding', $event)" @filter="openFindingFilter" />
     </div>
     <OverviewDetails :plan="summaryPlan" :runtime="summary" :warnings="warnings" :task="task" :situation="situation" :execution="execution" @navigate="emit('navigate', $event)" />
   </div>
