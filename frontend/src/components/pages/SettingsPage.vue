@@ -198,7 +198,32 @@ onMounted(load);
     </section>
     <p v-if="error" class="workspace-error" role="alert">{{ error }}</p>
     <section v-if="diagnostics" class="diagnostics-layout" :aria-busy="loading || settingsSaving">
-      <article class="diagnostic-panel panel">
+      <div class="diagnostic-settings-grid">
+        <article class="diagnostic-panel panel">
+          <header><span aria-hidden="true">◆</span><div><h2>安全策略</h2><p>候选补丁与记录保留边界</p></div></header>
+          <div class="settings-form">
+            <label><span>单补丁文件上限</span><input v-model.number="patchMaxFiles" type="number" min="1" max="10" /></label>
+            <label><span>单补丁变更行上限</span><input v-model.number="patchMaxChangedLines" type="number" min="1" max="1000" /></label>
+            <label><span>记录保留天数</span><input v-model.number="retentionDays" type="number" min="1" max="3650" /></label>
+          </div>
+        </article>
+
+        <article class="diagnostic-panel panel">
+          <header><span aria-hidden="true">◈</span><div><h2>模型配置</h2><p>使用 OpenAI-compatible 接口；API Key 仍由后端环境配置管理</p></div></header>
+          <div class="settings-form">
+            <label><span>模型服务 URL</span><input v-model="modelBaseUrl" type="url" inputmode="url" placeholder="https://api.openai.com/v1" /></label>
+            <label><span>默认模型名称</span><input v-model="modelName" type="text" placeholder="gpt-4.1-mini" /></label>
+            <p class="field-hint">修改后会更新模型目录和新建审查；已有任务不切换模型。</p>
+          </div>
+        </article>
+      </div>
+
+      <article class="diagnostic-panel diagnostic-panel--wide settings-actions panel">
+        <div><strong>保存设置</strong><p>安全策略和模型配置会写入本地后端配置；不会返回或保存 API Key。</p><p v-if="settingsMessage" class="workspace-maintenance__message" role="status">{{ settingsMessage }}</p></div>
+        <button type="button" class="button button--primary" :disabled="settingsSaving" @click="saveSettings">{{ settingsSaving ? "保存中…" : "保存设置" }}</button>
+      </article>
+
+      <article class="diagnostic-panel diagnostic-panel--wide">
         <header><span aria-hidden="true">◎</span><div><h2>运行状态</h2><p>服务、数据库与产物目录</p></div></header>
         <dl class="diagnostic-list">
           <div><dt>后台 Worker</dt><dd><StatusBadge :status="diagnostics.worker_status === 'running' ? 'running' : 'pending'" :label="diagnostics.worker_status === 'running' ? '运行中' : '空闲'" /></dd></div>
@@ -206,29 +231,6 @@ onMounted(load);
           <div><dt>产物目录</dt><dd><StatusBadge :status="diagnostics.artifact_directory_writable ? 'passed' : 'failed'" :label="diagnostics.artifact_directory_writable ? '可写' : '不可写'" /></dd></div>
           <div><dt>LangSmith</dt><dd>{{ diagnostics.langsmith_enabled ? "已启用" : "未启用" }}</dd></div>
         </dl>
-      </article>
-
-      <article class="diagnostic-panel panel">
-        <header><span aria-hidden="true">◆</span><div><h2>安全策略</h2><p>候选补丁与记录保留边界</p></div></header>
-        <div class="settings-form">
-          <label><span>单补丁文件上限</span><input v-model.number="patchMaxFiles" type="number" min="1" max="10" /></label>
-          <label><span>单补丁变更行上限</span><input v-model.number="patchMaxChangedLines" type="number" min="1" max="1000" /></label>
-          <label><span>记录保留天数</span><input v-model.number="retentionDays" type="number" min="1" max="3650" /></label>
-        </div>
-      </article>
-
-      <article class="diagnostic-panel panel">
-        <header><span aria-hidden="true">◈</span><div><h2>模型配置</h2><p>使用 OpenAI-compatible 接口；API Key 仍由后端环境配置管理</p></div></header>
-        <div class="settings-form">
-          <label><span>模型服务 URL</span><input v-model="modelBaseUrl" type="url" inputmode="url" placeholder="https://api.openai.com/v1" /></label>
-          <label><span>默认模型名称</span><input v-model="modelName" type="text" placeholder="gpt-4.1-mini" /></label>
-          <p class="field-hint">修改后会更新模型目录和新建审查；已有任务不切换模型。</p>
-        </div>
-      </article>
-
-      <article class="diagnostic-panel diagnostic-panel--wide settings-actions panel">
-        <div><strong>保存设置</strong><p>安全策略和模型配置会写入本地后端配置；不会返回或保存 API Key。</p><p v-if="settingsMessage" class="workspace-maintenance__message" role="status">{{ settingsMessage }}</p></div>
-        <button type="button" class="button button--primary" :disabled="settingsSaving" @click="saveSettings">{{ settingsSaving ? "保存中…" : "保存设置" }}</button>
       </article>
 
       <article class="diagnostic-panel diagnostic-panel--wide workspace-maintenance panel">
