@@ -7,7 +7,7 @@ import pytest
 from app.models.review_runtime import IntentAssessment
 from app.services.publication_planner import PublicationPlanner, summary_projection
 from app.services.publication_renderer import render_review_comment, render_user_report
-from app.services.review_intent import author_targets
+from app.services.review_intent import author_targets, matched_author_targets, matches_author_target
 from test_publication_planner import publishable_task
 from test_review_outcome import completed_task
 
@@ -20,6 +20,69 @@ def test_author_targets_skip_markdown_scaffolding_and_non_goal_sections():
     assert author_targets(context) == ["拒绝过期令牌。", "补充刷新路径。"]
     # 普通段落仍按句末标点切分，保留原文。
     assert author_targets("保留返回值。拒绝空值。") == ["保留返回值。", "拒绝空值。"]
+
+
+def test_author_target_resolution_is_shared_by_admission_and_report_projection():
+    long_target = ("The loader must return a defensive copy when the cache is empty "
+                   "and the caller requests isolation.")
+    other = "The loader must reject stale tokens."
+    # 空白归一后相等、以及长度达标的完整子串都属于执行器接受的引用。
+    assert matched_author_targets("The loader  must return a defensive copy when the cache is empty\n"
+                                  "and the caller requests isolation.", [long_target, other]) == [long_target]
+    quote = "The loader must return a defensive copy when the cache is empty"
+    assert matches_author_target(quote, [long_target, other])
+    assert matched_author_targets(quote, [long_target, other]) == [long_target]
+    # 引用同时匹配多个目标时保留全部归属，不随意归入其中一项。
+    sibling = ("The loader must return a defensive copy when the cache is empty "
+               "and the caller requests diagnostics.")
+    assert matched_author_targets(quote, [long_target, sibling]) == [long_target, sibling]
+    # 相邻目标的连续拼接仍是合法引用，且归属覆盖拼接涉及的全部目标。
+    assert matched_author_targets("拒绝空值。补充测试。", ["拒绝空值。", "补充测试。"]) == ["拒绝空值。", "补充测试。"]
+    assert matched_author_targets("未声明的改写", [long_target, other]) == []
+
+
+def test_report_projection_accepts_quotes_that_admission_already_approved():
+    long_target = ("The loader must return a defensive copy when the cache is empty "
+                   "and the caller requests isolation.")
+    task = publishable_task()
+    goal = task.task_runtime_report["initial_scope_coverage"][0]
+    goal.update(target_ref="src/a.py", target_kind="source_range", status="examined", result_id="result-1",
+        snapshot_head_sha=task.run_manifest.head_sha, snapshot_base_sha=task.run_manifest.effective_base_sha,
+        evidence_ids=["e1"], intent_assessments=[IntentAssessment(
+            author_quote="The loader must return a defensive copy when the cache is empty",
+            actual_behavior="缓存为空时返回防御性副本", alignment="supported",
+            evidence_ids=["e1"]).model_dump(mode="json")])
+    task.task_runtime_report["pr_intent_context"] = long_target
+    task.task_runtime_report["pr_intent_context_truncated"] = False
+    plan = PublicationPlanner().build(task)
+    entry = plan.digest.intent_assessments[0]
+    # 执行器接受的引用必须能落到目标上，而不是显示“尚未核验”。
+    assert entry.author_target == long_target
+    assert entry.status == "observed"
+    assert entry.observations[0]["alignment"] == "supported"
+
+
+def test_ambiguous_quote_stays_ambiguous_instead_of_being_assigned_to_one_target():
+    first = ("The loader must return a defensive copy when the cache is empty "
+             "and the caller requests isolation.")
+    second = ("The loader must return a defensive copy when the cache is empty "
+              "and the caller requests diagnostics.")
+    task = publishable_task()
+    goal = task.task_runtime_report["initial_scope_coverage"][0]
+    goal.update(target_ref="src/a.py", target_kind="source_range", status="examined", result_id="result-1",
+        snapshot_head_sha=task.run_manifest.head_sha, snapshot_base_sha=task.run_manifest.effective_base_sha,
+        evidence_ids=["e1"], intent_assessments=[IntentAssessment(
+            author_quote="The loader must return a defensive copy when the cache is empty",
+            actual_behavior="缓存为空时返回防御性副本", alignment="supported",
+            evidence_ids=["e1"]).model_dump(mode="json")])
+    task.task_runtime_report["pr_intent_context"] = first + "\n" + second
+    task.task_runtime_report["pr_intent_context_truncated"] = False
+    entries = PublicationPlanner().build(task).digest.intent_assessments
+    assert [item.author_target for item in entries] == [first, second]
+    for entry in entries:
+        assert entry.status == "insufficient"
+        assert "归属存在歧义" in entry.observations[0]["limitations"][0]
+        assert entry.observations[0]["alignment"] == "insufficient"
 
 
 def test_change_understanding_uses_bound_observations_and_does_not_claim_fulfillment():
