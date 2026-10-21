@@ -16,9 +16,9 @@ import ReviewDepthSelector from "../review/ReviewDepthSelector.vue";
 import type { ReviewCapabilities } from "../../types/reviewPlan";
 const props = defineProps<{ capabilities: ReviewCapabilities | null }>();
 const { theme, density, defaultReviewDepth, defaultPrDiscussions } = usePreferences();
-const currentDepthLabel = computed(() => defaultReviewDepth.value === "server"
-  ? "跟随服务端默认"
-  : props.capabilities?.depth_presets.find(preset => preset.id === defaultReviewDepth.value)?.label ?? "等待加载深度选项");
+const currentDepthLabel = computed(() => ({ quick: "快速初筛", standard: "标准审查", deep: "深度核验" })[defaultReviewDepth.value]);
+const discussionsEnabled = computed(() => defaultPrDiscussions.value === "enabled"
+  && props.capabilities?.pr_discussions_available === true);
 
 const diagnostics = ref<SystemDiagnostics | null>(null);
 const loading = ref(false);
@@ -138,20 +138,16 @@ onMounted(load);
           <div><strong>默认审查深度</strong><p>自动保存于此浏览器，仅用于新建方案；可在单次审查中调整，不影响已有方案或任务，不跨设备同步。</p></div>
           <span class="rg-depth-current">{{ currentDepthLabel }}<span class="rg-depth-chevron" aria-hidden="true">⌄</span></span>
         </summary>
-        <ReviewDepthSelector v-if="capabilities" v-model="defaultReviewDepth" class="space-top" :presets="capabilities.depth_presets" allow-server-default label="默认审查深度" />
+        <ReviewDepthSelector v-if="capabilities" v-model="defaultReviewDepth" class="space-top" :presets="capabilities.depth_presets" label="默认审查深度" />
         <p v-else>深度能力尚未加载，请刷新页面重试。</p>
       </details>
-      <details class="rg-preference-row rg-depth-preference">
-        <summary><div><strong>审查时参考 PR 历史讨论</strong><p>仅用于新建方案，可在单次审查中覆盖；已有任务继续使用保存的选择。</p></div><span>{{ { server: '跟随服务端默认', enabled: '开启', disabled: '关闭' }[defaultPrDiscussions] }}</span></summary>
-        <label class="check-row">默认选择
-          <select v-model="defaultPrDiscussions" class="input" aria-label="历史讨论审查默认选择">
-            <option value="server">跟随服务端默认</option>
-            <option value="enabled" :disabled="!capabilities?.pr_discussions_available">开启</option>
-            <option value="disabled">关闭</option>
-          </select>
-        </label>
-        <p class="field-hint">开启后采集、参考并复核历史讨论，可能增加耗时与模型用量；关闭后不执行这些步骤。服务端策略仍约束可用能力。</p>
-      </details>
+      <div class="rg-preference-row rg-discussion-preference">
+        <div><strong>审查时参考 PR 历史讨论</strong><p>仅用于新建方案，可在单次审查中覆盖；已有任务继续使用保存的选择。</p><p>开启后采集、参考并复核历史讨论，可能增加耗时与模型用量；关闭后不执行这些步骤。</p><p v-if="!capabilities">正在读取历史讨论审查能力…</p><p v-else-if="!capabilities.pr_discussions_available">服务端未开放历史讨论审查，当前为关闭。</p></div>
+        <div class="segmented" role="group" aria-label="历史讨论审查默认选择">
+          <button type="button" :class="{ active: discussionsEnabled }" :aria-pressed="discussionsEnabled" :disabled="!capabilities?.pr_discussions_available" @click="defaultPrDiscussions = 'enabled'">开启</button>
+          <button type="button" :class="{ active: !discussionsEnabled }" :aria-pressed="!discussionsEnabled" :disabled="!capabilities" @click="defaultPrDiscussions = 'disabled'">关闭</button>
+        </div>
+      </div>
     </section>
     <p v-if="error" class="workspace-error" role="alert">{{ error }}</p>
     <section v-if="diagnostics" class="diagnostics-layout" :aria-busy="loading">
