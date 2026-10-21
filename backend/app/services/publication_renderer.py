@@ -454,7 +454,8 @@ def discussion_report_lines(plan, task=None):
         return ["", "## 历史讨论复核", "", "本次未纳入历史讨论；未采集、未提供给模型，也未执行历史问题复核。"]
     stats = plan.digest.discussion_stats
     if stats is None:
-        return ["", "## 历史讨论复核", "", "未记录历史讨论，不能推断该 PR 没有讨论。"]
+        return ["", "## 历史讨论复核", "", "未记录历史讨论采集统计，不能推断该 PR 没有讨论。",
+                *_discussion_recheck_lines(plan)]
     history = plan.outcome.historical_discussion
     status_labels = {"completed": "复核完成", "partial": "复核未完整完成", "timed_out": "复核超时中断",
                      "unavailable": "复核记录不可用", "not_recorded": "未记录"}
@@ -487,6 +488,13 @@ def discussion_report_lines(plan, task=None):
             location = markdown_text(item.get("path") or "未记录文件", 500)
             lines.append(f"- {markdown_text(str(item.get('discussion_id')), 200)}（{location}）："
                          + markdown_text(item.get("reason") or "未记录原因"))
+    lines += _discussion_recheck_lines(plan)
+    lines += [f"- 限制：{markdown_text(value)}" for value in stats["limitations"]]
+    return lines
+
+
+def _discussion_recheck_lines(plan):
+    lines = []
     labels = {"still_present": "问题仍存在", "not_present": "当前快照中该主张不成立", "fixed": "已核验修复",
               "insufficient_evidence": "证据不足", "not_checked": "未核验", "background": "背景说明"}
     for item in plan.digest.discussion_rechecks:
@@ -494,10 +502,9 @@ def discussion_report_lines(plan, task=None):
                   "  " + markdown_text(item["reason"])]
         if item.get("evidence_ids"):
             lines.append("  代码证据：" + "、".join(markdown_text(e) for e in item["evidence_ids"]))
-        url = ((getattr(task, "pr_discussion", None) or {}).get("links") or {}).get(item["discussion_id"])
+        url = plan.digest.discussion_links.get(item["discussion_id"])
         if url:
             lines.append(f"  [查看已有讨论]({url})")
-    lines += [f"- 限制：{markdown_text(value)}" for value in stats["limitations"]]
     return lines
 
 
@@ -681,13 +688,23 @@ def _comment_history_risk_section(plan, risks):
             *_comment_history_risk_lines(plan, risks)]
 
 
-def _comment_history_pending_lines(plan, pending):
-    """尚未完成或缺少证据的历史调查仍进入待确认章节，并说明不能据此判断修复。"""
+def _comment_history_pending_lines(plan, pending, *, include_discussed=False):
+    """默认只保留具有当前风险线索的提醒，普通历史调查按用户选择简短展示。"""
     lines = []
     for identity, label, item in pending:
+        material = item.get("status") == "still_present" or (
+            item.get("severity") in {"critical", "high"} and item.get("affected_behavior")
+            and item.get("recommendation"))
+        if not include_discussed and not material:
+            continue
         url = _history_url(plan, identity)
-        source = f"[历史讨论]({url})" if url else f"历史讨论 {markdown_text(identity)}"
-        lines.append(f"- {source}：{label}；{markdown_text(item.get('reason') or '缺少充分代码证据', 240)}。")
+        claim = item.get("affected_behavior") or item.get("reason") or "历史讨论所指的问题"
+        action = item.get("recommendation") or "核对原讨论对应的当前实现及相关测试断言，补齐证据后判断是否需要修复"
+        lines += [f"- **历史主张：** {markdown_text(_sentence(claim, 160))}",
+                  f"  **当前判断：** {label}。",
+                  f"  **建议动作：** {markdown_text(_sentence(action, 160))}"]
+        if url:
+            lines.append(f"  [查看原始讨论]({url})")
     return lines
 
 
@@ -726,7 +743,8 @@ def _comment_change_overview(plan, *, title="变更理解"):
     return lines
 
 
-def _comment_other_results(plan, *, omitted, retained, withheld, full, title=None, extra_lines=()):
+def _comment_other_results(plan, *, omitted, retained, withheld, full, title=None, extra_lines=(),
+                          include_discussed=False):
     """只展开实际缺口；通用验证边界统一放在文末。
 
     章节标题按内容决定：确实存在未确认事项时使用“仍需确认的事项”；
@@ -752,7 +770,7 @@ def _comment_other_results(plan, *, omitted, retained, withheld, full, title=Non
     if withheld:
         entries.append(f"- 另有 {withheld} 项代码证据已确认的记录未通过发布准入，详见完整报告；"
                        "当前评论未将其描述为已核验问题。")
-    entries += _comment_history_pending_lines(plan, pending)
+    entries += _comment_history_pending_lines(plan, pending, include_discussed=include_discussed)
     has_pending = bool(entries)
     if full:
         source = _author_source_lines(plan)
@@ -887,7 +905,7 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False, inc
 
     def limitations():
         return _comment_other_results(plan, omitted=omitted, retained=retained, withheld=withheld,
-            full=full, extra_lines=scope_lines)
+            full=full, extra_lines=scope_lines, include_discussed=include_discussed)
 
     def next_steps_section():
         return ["", "## 下一步", "", *_comment_next_steps(plan, has_findings=bool(included))]

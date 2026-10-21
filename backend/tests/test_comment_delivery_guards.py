@@ -42,9 +42,13 @@ def test_unverified_history_never_becomes_resolved(status):
                           "links": {"old": task.pr_url + "#issuecomment-1", "unsafe": "https://evil.test"}}
     plan = PublicationPlanner().build(task)
     assert plan.digest.discussion_links == {"old": task.pr_url + "#issuecomment-1"}
-    assert "待核实，不能判断已修复" in plan.review_comment_markdown
-    assert task.pr_url + "#issuecomment-1" in plan.review_comment_markdown
-    assert "调用方尚未核验" in plan.review_comment_markdown
+    assert "调用方尚未核验" not in plan.review_comment_markdown
+    assert "调用方尚未核验" in plan.user_report_markdown
+    expanded = render_review_comment(plan, include_discussed=True)
+    assert "待核实，不能判断已修复" in expanded
+    assert task.pr_url + "#issuecomment-1" in expanded
+    assert "调用方尚未核验" in expanded
+    assert "建议动作" in expanded
 
 
 @pytest.mark.parametrize("status", ["fixed", "not_present", "background", "still_present"])
@@ -65,9 +69,21 @@ def test_related_history_is_not_hidden_by_a_different_current_finding(same_issue
     plan = PublicationPlanner().build(task)
     plan.inline_drafts[0].discussion_matches = [{"discussion_id": "old", "same_subject": same_issue,
         "same_trigger": True, "same_impact": True, "new_information": False}]
-    comment = render_review_comment(plan)
+    comment = render_review_comment(plan, include_discussed=True)
     assert ("历史调用路径尚未核验" in comment) is (not same_issue)
     assert plan.inline_drafts[0].title in comment
+
+
+def test_material_unverified_history_retains_warning_without_becoming_confirmed():
+    task = publishable_task()
+    task.pr_discussion = {"rechecks": [{"discussion_id": "old", "status": "insufficient_evidence",
+        "severity": "high", "affected_behavior": "旧权限入口可能仍可绕过校验",
+        "recommendation": "核查当前入口是否拒绝未授权访问", "reason": "尚缺入口代码证据"}]}
+    comment = PublicationPlanner().build(task).review_comment_markdown
+    assert "旧权限入口可能仍可绕过校验" in comment
+    assert "待核实，不能判断已修复" in comment
+    assert "核查当前入口" in comment
+    assert "## 已核验的既有风险" not in comment
 
 
 def test_human_resolution_is_explicit_and_never_hides_blockers():

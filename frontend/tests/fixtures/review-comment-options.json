@@ -79,28 +79,28 @@
   "inconclusive": {
     "compact:false": {
       "detail": "compact",
-      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n❓ 结论：检查范围完整性尚待核对\n\n## 仍需确认的事项\n\n- 部分目标未完成检查\n\n## 下一步\n\n约定目标已检查 1/1 项；请先核对并补查未完成范围，再决定是否合并。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
+      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n❓ 结论：尚无法确认检查范围是否完整\n\n## 变更理解\n\n**代码观察：** 根据已绑定证据的局部检查，代码行为表现为：src/a\\.py：固定源码检查。\n\n> 以上变更理解仅基于已保存的局部观察或变更元数据，不代表所有目标已完成核验。\n\n## 仍需确认的事项\n\n- 部分目标未完成检查\n\n## 下一步\n\n约定目标已检查 1/1 项；请先核对并补查未完成范围，再决定是否合并。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
       "included_finding_keys": [],
       "omitted_finding_keys": [],
       "retained_blocking_keys": []
     },
     "compact:true": {
       "detail": "compact",
-      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n❓ 结论：检查范围完整性尚待核对\n\n## 仍需确认的事项\n\n- 部分目标未完成检查\n\n## 下一步\n\n约定目标已检查 1/1 项；请先核对并补查未完成范围，再决定是否合并。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
+      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n❓ 结论：尚无法确认检查范围是否完整\n\n## 变更理解\n\n**代码观察：** 根据已绑定证据的局部检查，代码行为表现为：src/a\\.py：固定源码检查。\n\n> 以上变更理解仅基于已保存的局部观察或变更元数据，不代表所有目标已完成核验。\n\n## 仍需确认的事项\n\n- 部分目标未完成检查\n\n## 下一步\n\n约定目标已检查 1/1 项；请先核对并补查未完成范围，再决定是否合并。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
       "included_finding_keys": [],
       "omitted_finding_keys": [],
       "retained_blocking_keys": []
     },
     "full:false": {
       "detail": "full",
-      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n❓ 结论：检查范围完整性尚待核对\n\n## 仍需确认的事项\n\n- 部分目标未完成检查\n\n### 审查范围\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步\n\n约定目标已检查 1/1 项；请先核对并补查未完成范围，再决定是否合并。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
+      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n❓ 结论：尚无法确认检查范围是否完整\n\n## 变更理解\n\n**代码观察：** 根据已绑定证据的局部检查，代码行为表现为：src/a\\.py：固定源码检查。\n\n> 以上变更理解仅基于已保存的局部观察或变更元数据，不代表所有目标已完成核验。\n\n## 仍需确认的事项\n\n- 部分目标未完成检查\n\n### 审查范围\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步\n\n约定目标已检查 1/1 项；请先核对并补查未完成范围，再决定是否合并。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
       "included_finding_keys": [],
       "omitted_finding_keys": [],
       "retained_blocking_keys": []
     },
     "full:true": {
       "detail": "full",
-      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n❓ 结论：检查范围完整性尚待核对\n\n## 仍需确认的事项\n\n- 部分目标未完成检查\n\n### 审查范围\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步\n\n约定目标已检查 1/1 项；请先核对并补查未完成范围，再决定是否合并。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
+      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n❓ 结论：尚无法确认检查范围是否完整\n\n## 变更理解\n\n**代码观察：** 根据已绑定证据的局部检查，代码行为表现为：src/a\\.py：固定源码检查。\n\n> 以上变更理解仅基于已保存的局部观察或变更元数据，不代表所有目标已完成核验。\n\n## 仍需确认的事项\n\n- 部分目标未完成检查\n\n### 审查范围\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步\n\n约定目标已检查 1/1 项；请先核对并补查未完成范围，再决定是否合并。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
       "included_finding_keys": [],
       "omitted_finding_keys": [],
       "retained_blocking_keys": []
@@ -169,28 +169,28 @@
   "withheld": {
     "compact:false": {
       "detail": "compact",
-      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n❓ 结论：部分代码证据已确认的记录未通过交付准入，需核对证据\n\n## 仍需确认的事项\n\n- 仍有代码证据已确认但未通过发布准入的记录\n- 另有 1 项代码证据已确认的记录未通过发布准入，详见完整报告；当前评论未将其描述为已核验问题。\n\n## 下一步\n\n仍有候选、关联调查或发布证据需要核对；请先核对限制说明并补齐代码或目标依据。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
+      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n❓ 结论：部分代码证据已确认的记录未通过交付准入，需核对证据\n\n## 变更理解\n\n**代码观察：** 根据已绑定证据的局部检查，代码行为表现为：src/a\\.py：固定源码检查。\n\n> 以上变更理解仅基于已保存的局部观察或变更元数据，不代表所有目标已完成核验。\n\n## 仍需确认的事项\n\n- 仍有代码证据已确认但未通过发布准入的记录\n- 另有 1 项代码证据已确认的记录未通过发布准入，详见完整报告；当前评论未将其描述为已核验问题。\n\n## 下一步\n\n仍有候选、关联调查或发布证据需要核对；请先核对限制说明并补齐代码或目标依据。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
       "included_finding_keys": [],
       "omitted_finding_keys": [],
       "retained_blocking_keys": []
     },
     "compact:true": {
       "detail": "compact",
-      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n❓ 结论：部分代码证据已确认的记录未通过交付准入，需核对证据\n\n## 仍需确认的事项\n\n- 仍有代码证据已确认但未通过发布准入的记录\n- 另有 1 项代码证据已确认的记录未通过发布准入，详见完整报告；当前评论未将其描述为已核验问题。\n\n## 下一步\n\n仍有候选、关联调查或发布证据需要核对；请先核对限制说明并补齐代码或目标依据。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
+      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n❓ 结论：部分代码证据已确认的记录未通过交付准入，需核对证据\n\n## 变更理解\n\n**代码观察：** 根据已绑定证据的局部检查，代码行为表现为：src/a\\.py：固定源码检查。\n\n> 以上变更理解仅基于已保存的局部观察或变更元数据，不代表所有目标已完成核验。\n\n## 仍需确认的事项\n\n- 仍有代码证据已确认但未通过发布准入的记录\n- 另有 1 项代码证据已确认的记录未通过发布准入，详见完整报告；当前评论未将其描述为已核验问题。\n\n## 下一步\n\n仍有候选、关联调查或发布证据需要核对；请先核对限制说明并补齐代码或目标依据。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
       "included_finding_keys": [],
       "omitted_finding_keys": [],
       "retained_blocking_keys": []
     },
     "full:false": {
       "detail": "full",
-      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n❓ 结论：部分代码证据已确认的记录未通过交付准入，需核对证据\n\n## 仍需确认的事项\n\n- 仍有代码证据已确认但未通过发布准入的记录\n- 另有 1 项代码证据已确认的记录未通过发布准入，详见完整报告；当前评论未将其描述为已核验问题。\n\n### 审查范围\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步\n\n仍有候选、关联调查或发布证据需要核对；请先核对限制说明并补齐代码或目标依据。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
+      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n❓ 结论：部分代码证据已确认的记录未通过交付准入，需核对证据\n\n## 变更理解\n\n**代码观察：** 根据已绑定证据的局部检查，代码行为表现为：src/a\\.py：固定源码检查。\n\n> 以上变更理解仅基于已保存的局部观察或变更元数据，不代表所有目标已完成核验。\n\n## 仍需确认的事项\n\n- 仍有代码证据已确认但未通过发布准入的记录\n- 另有 1 项代码证据已确认的记录未通过发布准入，详见完整报告；当前评论未将其描述为已核验问题。\n\n### 审查范围\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步\n\n仍有候选、关联调查或发布证据需要核对；请先核对限制说明并补齐代码或目标依据。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
       "included_finding_keys": [],
       "omitted_finding_keys": [],
       "retained_blocking_keys": []
     },
     "full:true": {
       "detail": "full",
-      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n❓ 结论：部分代码证据已确认的记录未通过交付准入，需核对证据\n\n## 仍需确认的事项\n\n- 仍有代码证据已确认但未通过发布准入的记录\n- 另有 1 项代码证据已确认的记录未通过发布准入，详见完整报告；当前评论未将其描述为已核验问题。\n\n### 审查范围\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步\n\n仍有候选、关联调查或发布证据需要核对；请先核对限制说明并补齐代码或目标依据。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
+      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n❓ 结论：部分代码证据已确认的记录未通过交付准入，需核对证据\n\n## 变更理解\n\n**代码观察：** 根据已绑定证据的局部检查，代码行为表现为：src/a\\.py：固定源码检查。\n\n> 以上变更理解仅基于已保存的局部观察或变更元数据，不代表所有目标已完成核验。\n\n## 仍需确认的事项\n\n- 仍有代码证据已确认但未通过发布准入的记录\n- 另有 1 项代码证据已确认的记录未通过发布准入，详见完整报告；当前评论未将其描述为已核验问题。\n\n### 审查范围\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步\n\n仍有候选、关联调查或发布证据需要核对；请先核对限制说明并补齐代码或目标依据。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
       "included_finding_keys": [],
       "omitted_finding_keys": [],
       "retained_blocking_keys": []
@@ -199,28 +199,28 @@
   "runtime_limits": {
     "compact:false": {
       "detail": "compact",
-      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n✅ 结论：已检查范围内未发现已确认问题\n\n## 仍需确认的事项\n\n- 运行计量记录不完整：模型请求计量不完整或不一致；未知用量不能当作完整统计。运行或计量异常本身不代表发现代码缺陷。\n\n## 下一步\n\n结合 CI、业务预期和人工评审决定是否合并。已检查范围内未发现需在合并前处理的问题，不等于代码无缺陷。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
+      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n✅ 结论：已检查范围内未发现已确认问题\n\n## 变更理解\n\n**代码观察：** 根据已绑定证据的局部检查，代码行为表现为：src/a\\.py：固定源码检查。\n\n> 以上变更理解仅基于已保存的局部观察或变更元数据，不代表所有目标已完成核验。\n\n## 仍需确认的事项\n\n- 运行计量记录不完整：模型请求计量不完整或不一致；未知用量不能当作完整统计。运行或计量异常本身不代表发现代码缺陷。\n\n## 下一步\n\n结合 CI、业务预期和人工评审决定是否合并。已检查范围内未发现需在合并前处理的问题，不等于代码无缺陷。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
       "included_finding_keys": [],
       "omitted_finding_keys": [],
       "retained_blocking_keys": []
     },
     "compact:true": {
       "detail": "compact",
-      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n✅ 结论：已检查范围内未发现已确认问题\n\n## 仍需确认的事项\n\n- 运行计量记录不完整：模型请求计量不完整或不一致；未知用量不能当作完整统计。运行或计量异常本身不代表发现代码缺陷。\n\n## 下一步\n\n结合 CI、业务预期和人工评审决定是否合并。已检查范围内未发现需在合并前处理的问题，不等于代码无缺陷。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
+      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n✅ 结论：已检查范围内未发现已确认问题\n\n## 变更理解\n\n**代码观察：** 根据已绑定证据的局部检查，代码行为表现为：src/a\\.py：固定源码检查。\n\n> 以上变更理解仅基于已保存的局部观察或变更元数据，不代表所有目标已完成核验。\n\n## 仍需确认的事项\n\n- 运行计量记录不完整：模型请求计量不完整或不一致；未知用量不能当作完整统计。运行或计量异常本身不代表发现代码缺陷。\n\n## 下一步\n\n结合 CI、业务预期和人工评审决定是否合并。已检查范围内未发现需在合并前处理的问题，不等于代码无缺陷。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
       "included_finding_keys": [],
       "omitted_finding_keys": [],
       "retained_blocking_keys": []
     },
     "full:false": {
       "detail": "full",
-      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n✅ 结论：已检查范围内未发现已确认问题\n\n## 仍需确认的事项\n\n- 运行计量记录不完整：模型请求计量不完整或不一致；未知用量不能当作完整统计。运行或计量异常本身不代表发现代码缺陷。\n\n### 审查范围\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步\n\n结合 CI、业务预期和人工评审决定是否合并。已检查范围内未发现需在合并前处理的问题，不等于代码无缺陷。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
+      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n✅ 结论：已检查范围内未发现已确认问题\n\n## 变更理解\n\n**代码观察：** 根据已绑定证据的局部检查，代码行为表现为：src/a\\.py：固定源码检查。\n\n> 以上变更理解仅基于已保存的局部观察或变更元数据，不代表所有目标已完成核验。\n\n## 仍需确认的事项\n\n- 运行计量记录不完整：模型请求计量不完整或不一致；未知用量不能当作完整统计。运行或计量异常本身不代表发现代码缺陷。\n\n### 审查范围\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步\n\n结合 CI、业务预期和人工评审决定是否合并。已检查范围内未发现需在合并前处理的问题，不等于代码无缺陷。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
       "included_finding_keys": [],
       "omitted_finding_keys": [],
       "retained_blocking_keys": []
     },
     "full:true": {
       "detail": "full",
-      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n✅ 结论：已检查范围内未发现已确认问题\n\n## 仍需确认的事项\n\n- 运行计量记录不完整：模型请求计量不完整或不一致；未知用量不能当作完整统计。运行或计量异常本身不代表发现代码缺陷。\n\n### 审查范围\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步\n\n结合 CI、业务预期和人工评审决定是否合并。已检查范围内未发现需在合并前处理的问题，不等于代码无缺陷。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
+      "review_comment_markdown": "RepoGuardian · PR Code Review\n\n✅ 结论：已检查范围内未发现已确认问题\n\n## 变更理解\n\n**代码观察：** 根据已绑定证据的局部检查，代码行为表现为：src/a\\.py：固定源码检查。\n\n> 以上变更理解仅基于已保存的局部观察或变更元数据，不代表所有目标已完成核验。\n\n## 仍需确认的事项\n\n- 运行计量记录不完整：模型请求计量不完整或不一致；未知用量不能当作完整统计。运行或计量异常本身不代表发现代码缺陷。\n\n### 审查范围\n\n约定目标已检查 1 / 1；未决候选 0 项；未完成调查 0 项。\n\n已检查目标：\n- src/a\\.py:7–7（head）：已检查；固定源码检查\n\n## 下一步\n\n结合 CI、业务预期和人工评审决定是否合并。已检查范围内未发现需在合并前处理的问题，不等于代码无缺陷。\n\n---\n\n本结论基于提交 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` 的只读审查；未执行目标仓库代码、测试或构建。不替代 CI 与人工审批。",
       "included_finding_keys": [],
       "omitted_finding_keys": [],
       "retained_blocking_keys": []
