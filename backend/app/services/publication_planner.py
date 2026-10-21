@@ -53,6 +53,7 @@ def summary_projection(plan: PublicationPlan) -> ReviewSummary:
     digest = plan.digest
     return ReviewSummary(review_id=plan.review_id, snapshot=plan.snapshot, outcome=plan.outcome,
         digest=ReviewSummaryDigest(author_goal=digest.author_goal,
+            discussion_review_enabled=digest.discussion_review_enabled,
             discussion_stats=digest.discussion_stats,
             author_context_status=digest.author_context_status,
             author_context_limitation=digest.author_context_limitation,

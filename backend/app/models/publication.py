@@ -186,6 +186,7 @@ class ChangeUnderstanding(BaseModel):
 
 
 class ReviewDigest(BaseModel):
+    discussion_review_enabled: bool | None = None
     discussion_stats: dict | None = None
     discussion_rechecks: list[dict] = Field(default_factory=list)
     discussion_links: dict[str, str] = Field(default_factory=dict)
@@ -211,6 +212,13 @@ class ReviewDigest(BaseModel):
     merge_decision: MergeDecision = Field(default_factory=MergeDecision)
     checked_areas: list[Literal["head_source_ranges", "base_source_ranges", "file_changes"]] = Field(default_factory=list)
     termination_reason: str | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_discussion_choice(self, handler):
+        value = handler(self)
+        if self.discussion_review_enabled is None:
+            value.pop("discussion_review_enabled", None)
+        return value
 
 
 class PublicationSnapshot(BaseModel):
@@ -256,6 +264,7 @@ class WithheldFinding(BaseModel):
 class ReviewSummaryDigest(BaseModel):
     """结果概览所需的轻量投影；不含逐条问题正文、目标明细或执行追踪。"""
 
+    discussion_review_enabled: bool | None = None
     author_goal: str | None = None
     discussion_stats: dict | None = None
     author_context_status: Literal["complete", "truncated", "unknown", "not_recorded"] = "not_recorded"
@@ -269,6 +278,13 @@ class ReviewSummaryDigest(BaseModel):
     validations: list[DigestValidation] = Field(default_factory=list)
     checked_areas: list[Literal["head_source_ranges", "base_source_ranges", "file_changes"]] = Field(default_factory=list)
     termination_reason: str | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_discussion_choice(self, handler):
+        value = handler(self)
+        if self.discussion_review_enabled is None:
+            value.pop("discussion_review_enabled", None)
+        return value
 
 
 class ReviewSummary(BaseModel):

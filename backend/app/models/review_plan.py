@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
 
 class PlanModel(BaseModel):
@@ -40,6 +40,14 @@ class ReviewPlanOptions(PlanModel):
         default_factory=lambda: ["correctness", "security", "performance", "compatibility"], min_length=1, max_length=4)
     scope: ReviewScope = Field(default_factory=ReviewScope)
     limits: ReviewLimits = Field(default_factory=ReviewLimits)
+    include_pr_discussions: bool | None = Field(default=None, strict=True)
+
+    @model_serializer(mode="wrap")
+    def serialize_discussion_choice(self, handler):
+        value = handler(self)
+        if self.include_pr_discussions is None:
+            value.pop("include_pr_discussions", None)
+        return value
 
     @field_validator("focus")
     @classmethod
@@ -64,6 +72,8 @@ class ReviewCapabilities(PlanModel):
     context_boundary: str = "repository-tracked-v1; sensitive paths and symlink escapes denied"
     limits: dict
     preferences_sync_supported: bool = False
+    pr_discussions_available: bool = False
+    pr_discussions_default: bool = False
 
 
 class FindingDisposition(PlanModel):

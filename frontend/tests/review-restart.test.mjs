@@ -9,6 +9,7 @@ test("重新审查只带入可编辑选择，范围与快照授权必须重新�
     const original = {
       pr_url: " https://github.com/o/r/pull/3 ", model: " saved-model ",
       confirmed_plan: { version: "review-plan-v1", depth: "deep", focus: ["security", "compatibility"],
+        include_pr_discussions: false,
         scope: { mode: "selected", primary_files: ["old.py"] },
         limits: { max_model_calls: 31, max_tokens: 90000, max_cost_microusd: 2000, timeout_seconds: 600 } },
       snapshot: { head_sha: "old-head" }, plan_hash: "old-hash", preview_id: "old-preview",
@@ -19,6 +20,7 @@ test("重新审查只带入可编辑选择，范围与快照授权必须重新�
     assert.equal(input.prUrl, original.pr_url.trim());
     assert.equal(input.model, "saved-model");
     assert.equal(input.plan.depth, "deep");
+    assert.equal(input.plan.include_pr_discussions, false);
     assert.deepEqual(input.plan.focus, original.confirmed_plan.focus);
     assert.deepEqual(input.plan.limits, original.confirmed_plan.limits);
     assert.deepEqual(input.plan.scope, { mode: "all", primary_files: [] });

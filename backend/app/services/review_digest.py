@@ -141,6 +141,9 @@ def _change_understanding(digest, task, report) -> ChangeUnderstanding:
 
 def enrich_review_digest(digest, task, report, dispositions):
     digest.pr_url = task.pr_url
+    choice = (task.task_runtime_configuration or {}).get("effective_plan", {}).get("include_pr_discussions")
+    if isinstance(choice, bool):
+        digest.discussion_review_enabled = choice
     if task.pr:
         body = re.sub(r"<!--.*?-->", "", task.pr.body or "", flags=re.DOTALL).strip()
         digest.author_goal = body or task.pr.title or None
