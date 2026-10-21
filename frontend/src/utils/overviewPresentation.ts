@@ -81,7 +81,8 @@ export function overviewFacts(plan: ReviewSummary | null, runtime: TaskRuntimeSu
   return {
     examined, total, validation,
     // 情景矩阵可使用保守阻断标记；指标只展示后端提供的实际数量。
-    blockers: decision?.blocking_finding_keys?.length ?? null,
+    blockers: decision?.blocking_finding_keys
+      ? decision.blocking_finding_keys.length + (decision.blocking_historical_keys?.length ?? 0) : null,
     unresolved: outcome?.unresolved_count ?? null,
     limitations, boundaries,
   };

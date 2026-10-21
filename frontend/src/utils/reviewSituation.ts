@@ -142,8 +142,11 @@ export function reviewSituation(
   const outcome = plan.outcome;
   const decision = plan.digest?.merge_decision;
   const status = decision?.status;
-  const blockingCount = decision?.blocking_finding_keys?.length ?? null;
-  const nonblockingCount = decision?.nonblocking_finding_keys?.length ?? 0;
+  const historyBlocking = decision?.blocking_historical_keys?.length ?? 0;
+  const historySuggestions = decision?.nonblocking_historical_keys?.length ?? 0;
+  const blockingCount = decision?.blocking_finding_keys
+    ? decision.blocking_finding_keys.length + historyBlocking : historyBlocking || null;
+  const nonblockingCount = (decision?.nonblocking_finding_keys?.length ?? 0) + historySuggestions;
   const unresolvedCount = outcome.unresolved_count ?? 0;
   const examinedGoals = outcome.examined_goals ?? 0;
   const totalGoals = outcome.total_goals ?? 0;
@@ -152,6 +155,11 @@ export function reviewSituation(
   const backendTitle = decision?.label?.trim() && decision.label.trim() !== "暂不能给出合并建议"
     ? decision.label.trim() : null;
   const titleOf = (fallback: string) => backendTitle || fallback;
+  const meteringOnly = status === "conditional_merge" && outcome.review_completeness === "complete"
+    && outcome.unresolved_count === 0 && outcome.incomplete_investigations === 0
+    && outcome.total_goals > 0 && outcome.examined_goals === outcome.total_goals
+    && outcome.reason_codes?.length === 1 && outcome.reason_codes[0] === "usage_integrity_unknown"
+    && !decision?.unresolved_reasons?.length;
 
   // 保留历史记录入口，避免切换情景时卸载尚待确认的复制组件。
   if (options.stale) {
@@ -185,7 +193,8 @@ export function reviewSituation(
       description: "这些问题已有代码证据支持，按 RepoGuardian 审查策略建议在合并前处理；该建议不是 GitHub Mergeability 状态或分支保护结论。"
         + (outcome.dynamic_validation === "failed" ? "当前 Head 另有动态检查未通过，需一并核对。" : ""),
       nextStep: "查看高优先级问题的证据并修复，然后基于新提交重新审查。",
-      tone: "danger", icon: "alert", actions: actions("view_blockers", ...extra), copy: COPY_REVIEW };
+      tone: "danger", icon: "alert",
+      actions: actions(historyBlocking ? "view_report" : "view_blockers", ...extra), copy: COPY_REVIEW };
   }
   if (outcome.dynamic_validation === "failed") {
     return { ...counts, key: "validation_failed", title: titleOf("本次记录的动态检查未通过"),
@@ -193,7 +202,8 @@ export function reviewSituation(
       nextStep: "查看失败记录，核对检查范围、来源与失败原因。", tone: "danger", icon: "flask",
       actions: actions("view_validation", "rereview"), copy: COPY_RECORD };
   }
-  if (status === "resolve_unknowns" || status === "unavailable" || outcome.kind === "inconclusive") {
+  if (status === "resolve_unknowns" || status === "unavailable"
+      || (outcome.kind === "inconclusive" && !meteringOnly)) {
     const limitation = reviewLimitationKind(outcome, decision?.unresolved_reasons);
     if (limitation === "scope_incomplete") {
       return { ...counts, key: "scope_incomplete",
@@ -238,10 +248,11 @@ export function reviewSituation(
     return { ...counts, key: "nonblocking", title: titleOf(`发现 ${nonblockingCount} 项改进建议，暂无高优先级问题`),
       description: "这些建议已确认具备代码证据，但未达到高优先级；是否在合并前处理取决于项目要求和实际影响。",
       nextStep: "查看建议并评估影响，或复制 PR 评论与作者讨论。",
-      tone: "info", icon: "info", actions: actions("view_findings"), copy: COPY_PR };
+      tone: "info", icon: "info", actions: actions(historySuggestions ? "view_report" : "view_findings"), copy: COPY_PR };
   }
   return { ...counts, key: "clean", title: titleOf("本次检查未发现需在合并前处理的问题"),
-    description: "本结论仅覆盖已检查范围，不代表 PR 安全或项目 CI 全部通过；合并仍需结合项目验证和人工审批。",
+    description: "本结论仅覆盖已检查范围，不代表 PR 安全或项目 CI 全部通过；合并仍需结合项目验证和人工审批。"
+      + (outcome.reason_codes?.includes("usage_integrity_unknown") ? "运行计量记录不完整，未知用量不能当作完整统计。" : ""),
     nextStep: "预览并复制 PR 评论，结合项目验证和人工审批决定是否合并。",
     tone: "success", icon: "check-circle", actions: actions("view_report"), copy: COPY_PR };
 }

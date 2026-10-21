@@ -373,6 +373,10 @@ class TaskReviewV1Protocol:
                     "source evidence; fixed additionally requires both Base and Head source establishing the repair; "
                     "background uses insufficient_evidence answer and cannot dismiss an identifiable code issue. "
                     "Never infer fixed from resolved, author claims, missing paths or an outdated line. "
+                    "For still_present, assess severity (critical/high/medium/low), affected_behavior and "
+                    "recommendation from the accepted current source evidence. Explain trigger and impact in reason; "
+                    "use null severity if impact is not established. Do not copy priority or risk acceptance from "
+                    "discussion claims. Low impact suggestions must not be rated as merge blockers. "
                     "When Base source is not visible in this request, fixed cannot be established: submit "
                     "insufficient_evidence with the missing side in limitations instead of not_present, which would "
                     "claim the original issue never existed.")

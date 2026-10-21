@@ -104,6 +104,9 @@ def outcome_description(plan) -> str:
                    else "本轮变更范围内未新增代码证据已确认的问题")
         return (current + "；历史讨论复核确认的既有问题在当前代码中仍然存在，"
                 "属于已核验风险，不能据此认定本次变更没有问题。")
+    if outcome.kind == "inconclusive" and set(outcome.reason_codes) == {"usage_integrity_unknown"} \
+            and outcome.review_completeness == "complete":
+        return "已检查范围内未发现已确认问题；运行计量记录不完整，未知用量不能当作完整统计。"
     return OUTCOME_DESCRIPTIONS[outcome.kind]
 
 
@@ -157,7 +160,7 @@ def _validation_lines(plan):
     reliability = {"reliable": "可靠", "unreliable": "存在限制", "unknown": "未知"}
     lines = [f"审查完整性：{completeness[plan.outcome.review_completeness]}；"
             f"运行可靠性：{reliability[plan.outcome.runtime_reliability]}。",
-        "仅完成只读静态审查；未执行目标仓库代码、测试或构建。未发现问题不等于证明代码正确。"
+        "当前 Head 未执行受控动态验证；Base 参考、独立补丁和历史记录仅适用于各自对象。未发现问题不等于证明代码正确。"
         if plan.digest.validation_state == "not_executed" else
         {"passed": "已有与当前 Head 绑定的受控验证通过记录；仅适用于记录的检查，不代替完整 CI 或审批。",
          "failed": "已有与当前 Head 绑定的验证失败记录，需核对失败原因。",
@@ -262,7 +265,8 @@ def merge_advice(plan):
     lines = [f"**{label}**", "", advice]
     if decision.status != "unavailable" or decision.blocking_finding_keys or decision.nonblocking_finding_keys:
         lines.append(
-            f"高优先级问题 {len(decision.blocking_finding_keys)} 项；非高优先级建议 {len(decision.nonblocking_finding_keys)} 项。"
+            f"高优先级问题 {len(decision.blocking_finding_keys) + len(decision.blocking_historical_keys)} 项；"
+            f"非高优先级建议 {len(decision.nonblocking_finding_keys) + len(decision.nonblocking_historical_keys)} 项。"
             "严重度映射不替代对部署条件和业务影响的判断，仍需满足项目要求的 CI 与必要审批。"
             "上述数量与建议由 RepoGuardian 审查策略生成，不代表 GitHub Mergeability 或分支保护结论。")
     if decision.limits:
@@ -431,7 +435,18 @@ def discussion_report_lines(plan, task=None):
     if usage.get("sent_calls"):
         lines.append(f"复核调用：{usage.get('sent_calls')} 次；已结算 {usage.get('settled_tokens', 0)} tokens；"
                      f"未知用量 {usage.get('unknown_attempts', 0)} 次（单独记录，不计入主审查计量）。")
-    if history.verified_defects:
+    if history.findings:
+        priorities = {"fix_before_merge": "建议合并前修复", "assess_improvement": "评估改进", "assess_impact": "需补核影响"}
+        lines.append("经独立代码核验确认仍存在的问题（按当前影响分级）：")
+        for item in history.findings:
+            lines.append(f"- [{item.severity}] {markdown_text(item.discussion_id)}：{priorities[item.priority]}；"
+                         + markdown_text(item.affected_behavior or item.reason))
+            if item.recommendation:
+                lines.append("  建议：" + markdown_text(item.recommendation))
+            lines.append("  代码证据：" + "、".join(markdown_text(e) for e in item.evidence_ids))
+            if item.discussion_url:
+                lines.append(f"  [查看已有讨论]({item.discussion_url})")
+    elif history.verified_defects:
         lines.append("经独立代码核验确认仍存在的问题：")
         for item in history.verified_defects:
             location = markdown_text(item.get("path") or "未记录文件", 500)
@@ -490,9 +505,9 @@ def _next_steps(plan):
     outcome = plan.outcome
     lines = ["", "## 下一步建议", ""]
     steps = []
-    if plan.digest.merge_decision.blocking_finding_keys:
+    if plan.digest.merge_decision.blocking_finding_keys or plan.digest.merge_decision.blocking_historical_keys:
         steps.append("- 修复上方高优先级问题并在新快照重新核验；人工标记已处理不能代替机器复核。")
-    if plan.digest.merge_decision.nonblocking_finding_keys:
+    if plan.digest.merge_decision.nonblocking_finding_keys or plan.digest.merge_decision.nonblocking_historical_keys:
         steps.append("- 逐项评估非高优先级建议的影响与处理方式。")
     if plan.digest.incomplete_goals:
         steps.append("- 补查未完成目标，再判断整轮审查是否完整。")
@@ -510,6 +525,9 @@ def _next_steps(plan):
 def _comment_risks(plan):
     """只列影响合并判断的限制；未逐项核验的作者声明留在详细报告。"""
     risks = list(plan.digest.merge_decision.limits)
+    if "usage_integrity_unknown" in plan.outcome.reason_codes:
+        risks.append("运行计量记录不完整：模型请求计量不完整或不一致；未知用量不能当作完整统计。"
+                     "运行或计量异常本身不代表发现代码缺陷。")
     for item in plan.digest.intent_assessments:
         if item.status == "contradicted":
             locations = []
@@ -558,6 +576,7 @@ def _comment_history_lines(plan):
                    if match.get("same_subject") is True and match.get("same_trigger") is True
                    and match.get("same_impact") is True and match.get("new_information") is False}
     lines = []
+    assessed = {item.discussion_id: item for item in plan.outcome.historical_discussion.findings}
     for item in plan.digest.discussion_rechecks:
         status = item.get("status")
         if status in {"fixed", "not_present", "background"} or item.get("discussion_id") in represented:
@@ -565,8 +584,18 @@ def _comment_history_lines(plan):
         identity = item.get("discussion_id") or "未记录"
         url = plan.digest.discussion_links.get(identity)
         source = f"[历史讨论]({url})" if url else f"历史讨论 {markdown_text(identity)}"
-        label = "复核仍存在" if status == "still_present" else "待核实，不能判断已修复"
+        finding = assessed.get(identity)
+        label = ("复核仍存在；[" + finding.severity + "] " + {
+            "fix_before_merge": "建议合并前修复", "assess_improvement": "评估改进",
+            "assess_impact": "严重度及影响尚待核对"}[finding.priority]) if finding else (
+                "复核仍存在" if status == "still_present" else "待核实，不能判断已修复")
         lines.append(f"- {source}：{label}；{markdown_text(item.get('reason') or '缺少充分代码证据', 240)}。")
+        if finding:
+            if finding.affected_behavior:
+                lines.append("  影响：" + markdown_text(finding.affected_behavior))
+            if finding.recommendation:
+                lines.append("  建议：" + markdown_text(finding.recommendation))
+            lines.append("  代码证据：" + "、".join(markdown_text(e) for e in finding.evidence_ids))
     return lines
 
 
@@ -622,7 +651,8 @@ def _comment_other_results(plan, *, omitted, retained, withheld, full, title="�
 def _validation_sentence(plan) -> str:
     state = plan.digest.validation_state
     return {
-        "not_executed": "未执行目标仓库代码、测试或构建。",
+        "not_executed": ("当前 Head 未执行受控动态验证；Base 参考与独立补丁结果仅适用于各自对象。"
+            if plan.digest.validations else "未执行目标仓库代码、测试或构建。"),
         "passed": "已有与当前 Head 绑定的受控验证通过记录；不代替完整 CI 或审批。",
         "failed": "已有与当前 Head 绑定的验证失败记录，需核对失败原因。",
         "independent_results": "已有独立补丁验证结果；补丁通过不代表当前 PR Head 已通过测试。",

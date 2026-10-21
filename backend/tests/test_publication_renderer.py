@@ -95,8 +95,9 @@ def test_complete_scope_with_unknown_usage_explains_reliability_separately():
     assert plan.outcome.review_completeness == "complete"
     assert plan.outcome.runtime_reliability == "unreliable"
     assert "计量不完整" in plan.summary_markdown and "部分目标未完成检查" not in plan.summary_markdown
-    assert plan.digest.merge_decision.status == "resolve_unknowns"
-    assert plan.digest.merge_decision.label == "审查已结束，但结果可靠性仍需核对"
+    assert plan.outcome.coverage == "complete"
+    assert plan.digest.merge_decision.status == "conditional_merge"
+    assert plan.digest.merge_decision.label == "已检查范围内未发现已确认问题"
     for markdown in (plan.summary_markdown, plan.user_report_markdown, plan.review_comment_markdown):
         assert "部分问题尚未核实" not in markdown
         assert "先补齐“审查局限”中的证据缺口" not in markdown

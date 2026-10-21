@@ -14,6 +14,9 @@ export interface DiscussionRecheck {
   path?: string | null;
   status: "still_present" | "not_present" | "fixed" | "insufficient_evidence" | "not_checked" | "background";
   reason: string; evidence_ids: string[]; limitations: string[];
+  severity?: "critical" | "high" | "medium" | "low" | null;
+  affected_behavior?: string | null;
+  recommendation?: string | null;
 }
 export interface DiscussionItem {
   id: string; source: "conversation" | "review" | "inline"; path: string | null;

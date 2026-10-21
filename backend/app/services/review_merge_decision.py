@@ -19,11 +19,15 @@ def merge_decision(plan):
     views = [item for item in plan.digest.findings if item.review_status == "confirmed"]
     blocking = sorted({item.id for item in views if item.severity in {"critical", "high"}})
     suggestions = sorted({item.id for item in views if item.severity in {"medium", "low"}})
-    unresolved = [reason.value for reason in plan.outcome.reason_codes]
-    if plan.outcome.historical_discussion.affects_risk:
+    # 计量未知保留审计含义，不作为代码核验或合并判断的证据缺口。
+    unresolved = [reason.value for reason in plan.outcome.reason_codes if reason != "usage_integrity_unknown"]
+    history = plan.outcome.historical_discussion
+    history_blocking = sorted({item.discussion_id for item in history.findings if item.priority == "fix_before_merge"})
+    history_suggestions = sorted({item.discussion_id for item in history.findings if item.priority == "assess_improvement"})
+    classified_history = set(history_blocking + history_suggestions)
+    if history.affects_risk and (not history.findings or any(
+            item.get("discussion_id") not in classified_history for item in history.verified_defects)):
         unresolved.append("historical_discussion_unresolved")
-    if plan.digest.author_context_status in {"truncated", "unknown"}:
-        unresolved.append("author_context_" + plan.digest.author_context_status)
     if plan.outcome.confirmed_count > plan.outcome.publishable_count:
         unresolved.append("confirmed_findings_withheld")
     if any(item.severity not in {"critical", "high", "medium", "low"} for item in views):
@@ -35,6 +39,9 @@ def merge_decision(plan):
     decision = MergeDecision(blocking_finding_keys=blocking, nonblocking_finding_keys=suggestions,
                              unresolved_reasons=reasons,
                              limits=[_LIMITS.get(reason) or REASON_LABELS.get(reason, reason) for reason in reasons])
+    if history_blocking or history_suggestions:
+        decision.blocking_historical_keys = history_blocking
+        decision.nonblocking_historical_keys = history_suggestions
     if plan.outcome.kind in {"failed", "cancelled"} or not plan.content_eligible:
         decision.status = "unavailable"
         # 失败与用户停止的原因不同，标签必须让读者知道为什么没有结论。
@@ -42,15 +49,20 @@ def merge_decision(plan):
                           "cancelled": "审查已停止，已保留部分结果"}.get(
                               plan.outcome.kind, MERGE_LABELS["unavailable"])
         return decision
-    if blocking:
+    if blocking or history_blocking:
         decision.status = "fix_blockers"
         decision.advice = ("存在有代码证据支持、按审查策略建议合并前处理的高优先级问题。"
                            "请优先修复下列问题并在新快照重新核验；人工标记已处理不能代替新快照核验。"
                            + POLICY_BOUNDARY)
+        if history_blocking:
+            decision.label = f"发现 {len(blocking) + len(history_blocking)} 项高优先级问题（含历史复核），建议修复后复审"
+            decision.advice += " 历史复核问题应按其当前影响修复，不计入本轮 Diff 新增问题。"
+            if "head_validation_failed" not in reasons:
+                return decision
         if "head_validation_failed" in reasons:
             # 同时存在高优先级问题与验证失败时不能只保留一个标题，否则概览与评论的主结论会不一致。
             decision.advice += " 另需核对当前 Head 的动态检查失败记录：静态问题修复不代表动态检查已恢复通过。"
-            decision.label = f"发现 {len(blocking)} 项高优先级问题，另有当前版本动态检查未通过"
+            decision.label = f"发现 {len(blocking) + len(history_blocking)} 项高优先级问题，另有当前版本动态检查未通过"
             return decision
     elif reasons:
         decision.status = "resolve_unknowns"
@@ -83,16 +95,21 @@ def merge_decision(plan):
         else:
             decision.advice = "尚无足够记录说明限制原因，请核对详细报告；不能据此判断代码存在缺陷或审查已完成。"
         return decision
-    elif suggestions:
+    elif suggestions or history_suggestions:
         # 只有非高优先级建议时不能与“无问题”共用同一句结论，否则读者无法区分是否还有事项要处理。
         decision.status = "conditional_merge"
         decision.advice = ("在已检查范围内，本次静态审查没有发现按审查策略建议合并前处理的问题；请结合 CI、审批和人工判断决定是否合并。"
-                           f"另有 {len(suggestions)} 项代码证据已确认的改进建议，建议评估影响后处理。"
+                           f"另有 {len(suggestions) + len(history_suggestions)} 项代码证据已确认的改进建议，建议评估影响后处理。"
                            + POLICY_BOUNDARY)
-    elif plan.outcome.kind == "clean":
+    elif plan.outcome.kind == "clean" or (plan.outcome.review_completeness == "complete"
+            and set(plan.outcome.reason_codes) == {"usage_integrity_unknown"}):
         decision.status = "conditional_merge"
         decision.advice = "在已检查范围内，本次静态审查没有发现按审查策略建议合并前处理的问题；请结合 CI、审批和人工判断决定是否合并。"
+        if "usage_integrity_unknown" in plan.outcome.reason_codes:
+            decision.label = "已检查范围内未发现已确认问题"
+            decision.advice += " 运行计量记录不完整，未知用量不能当作完整统计；运行或计量异常本身不代表发现代码缺陷。"
+            return decision
     decision.label = (f"发现 {len(blocking)} 项高优先级问题，建议修复后复审" if blocking
-                      else f"发现 {len(suggestions)} 项改进建议，暂无高优先级问题" if suggestions
+                      else f"发现 {len(suggestions) + len(history_suggestions)} 项改进建议，暂无高优先级问题" if suggestions or history_suggestions
                       else MERGE_LABELS[decision.status])
     return decision

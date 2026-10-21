@@ -83,19 +83,20 @@ def derive_review_outcome(task: ReviewTask, *, publishable_count: int | None = N
         # Planner 使用同一个准入函数；原始确认数始终保留，不因扣留而减少。
         publishable = (publishable_count if publishable_count is not None
                        else len(select_publication_findings(task, report.findings)[0]))
-    # 主审查字段只反映本轮 Diff；历史风险由独立结果进入综合合并建议。
+    # 覆盖描述代码检查完整性；计量和执行限制保留在各自的审计维度。
+    completeness = (CoverageKind.UNKNOWN if not total or not snapshot_valid(task) else
+        CoverageKind.PARTIAL if any(reason in reasons for reason in (
+            Reason.SCOPE_INCOMPLETE, Reason.VERIFICATION_UNRESOLVED, Reason.FINDING_STATUS_UNKNOWN,
+            Reason.INVESTIGATION_INCOMPLETE, Reason.UNSCHEDULED_INVESTIGATION)) else CoverageKind.COMPLETE)
     return ReviewOutcome(kind=kind,
-                         coverage=CoverageKind.PARTIAL if reasons else CoverageKind.COMPLETE,
+                         coverage=completeness,
                          confirmed_count=confirmed, publishable_count=publishable, unresolved_count=unresolved,
                          total_goals=total, examined_goals=examined, incomplete_investigations=investigations,
                          reason_codes=reasons,
                          dynamic_validation=validation_digest(task)[0],
                          finding_conclusion="confirmed" if confirmed else "unresolved" if unresolved else
                              "unknown" if unknown else "no_confirmed_findings",
-                         review_completeness=CoverageKind.UNKNOWN if not total else CoverageKind.PARTIAL if
-                             any(reason in reasons for reason in (Reason.SCOPE_INCOMPLETE, Reason.VERIFICATION_UNRESOLVED,
-                                 Reason.FINDING_STATUS_UNKNOWN, Reason.INVESTIGATION_INCOMPLETE, Reason.UNSCHEDULED_INVESTIGATION))
-                             else CoverageKind.COMPLETE,
+                         review_completeness=completeness,
                          runtime_reliability="unreliable" if any(reason in reasons for reason in (
                              Reason.TASK_FAILED, Reason.TASK_CANCELLED, Reason.TERMINATION_INCOMPLETE,
                              Reason.USAGE_INTEGRITY_UNKNOWN, Reason.SNAPSHOT_MISSING)) else "reliable",
