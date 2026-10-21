@@ -179,7 +179,7 @@ export function reviewSituation(
       tone: "danger", icon: "alert", actions: actions("view_blockers", ...extra), copy: COPY_REVIEW };
   }
   if (outcome.dynamic_validation === "failed") {
-    return { ...counts, key: "validation_failed", title: titleOf("当前版本存在验证失败记录，需检查原因"),
+    return { ...counts, key: "validation_failed", title: titleOf("当前版本存在受控验证失败记录，需检查原因"),
       description: "已有与本次 Head 绑定的受控检查失败记录，不能据此宣称验证通过。请点击“查看验证记录”核对检查范围与失败原因。", tone: "danger", icon: "flask",
       actions: actions("view_validation", "rereview"), copy: COPY_RECORD };
   }

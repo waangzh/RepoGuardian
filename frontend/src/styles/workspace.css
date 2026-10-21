@@ -63,6 +63,7 @@ button { color: inherit; }
 .rg-app .side-link:hover { color: var(--nav-hover-text); background: var(--nav-hover-bg); }
 .rg-app .side-link.active { color: var(--nav-active-text); background: var(--nav-active-bg); }
 .rg-app .nav-divider { margin: 16px 12px; }
+.rg-app .nav-subheading { margin-top: 12px; font-size: 9.5px; }
 .rg-app .topbar { min-height: 64px; height: auto; padding: 12px var(--page-gutter); }
 .rg-app .main { display: block; min-width: 0; }
 .rg-app .page { width: 100%; max-width: calc(var(--contentmax) + 2 * var(--page-gutter)); padding: var(--page-top) var(--page-gutter) var(--page-bottom); }
@@ -146,7 +147,9 @@ button { color: inherit; }
 .rg-app .kpi .rg-number-small { font-size: 24px; }
 .rg-app .subnav { overflow-x: auto; }
 .rg-app .subnav button { flex-shrink: 0; }
-.rg-app .subnav .tab-action { margin-left: auto; color: var(--primary); }
+.rg-app .subnav .tab-group { display: flex; flex-shrink: 0; align-items: center; gap: 4px; padding-left: 6px; border-left: 1px solid var(--line); }
+.rg-app .subnav .tab-group button { font-weight: 620; }
+.rg-app .subnav .tab-action { margin-left: 8px; color: var(--primary); }
 .rg-boundary-row { display: flex; align-items: start; gap: 10px; margin: 18px 0; }
 .rg-boundary-row .app-icon { color: var(--primary); }
 .rg-boundary-row strong { font-size: .8125rem; }

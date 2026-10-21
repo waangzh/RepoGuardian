@@ -14,7 +14,7 @@ OUTCOME_LABELS = {"clean": "已检查范围内未发现需处理的问题", "fin
 OUTCOME_DESCRIPTIONS = {
     "clean": "已完成本次约定范围的静态审查，在已检查范围内未发现具有充分代码证据、需要 PR 作者处理的问题。未发现问题不等于证明代码正确。",
     "findings": "请逐项核对下列已确认问题及建议；仍需关注的限制见下方说明。",
-    "inconclusive": "目前没有可确认的问题，但审查仍存在缺口或可靠性限制，不能据此认定本次变更没有问题。",
+    "inconclusive": "本轮变更范围内未新增已确认问题，但审查仍存在缺口或可靠性限制，不能据此认定本次变更没有问题。",
     "failed": "审查因执行错误中断，请处理运行故障并重新审查；已有记录不能视为完整结论。",
     "cancelled": "审查已由用户停止，请补查剩余范围后再判断本次变更。",
 }
@@ -93,6 +93,24 @@ def review_limitation_label(outcome, reasons=()):
             return "部分已确认记录未通过交付准入，需核对证据"
         return "存在未核实事项，暂不能给出完整建议"
     return INCOMPLETE_LABELS.get(kind, "审查结论暂不完整")
+
+
+def outcome_description(plan) -> str:
+    """区分本轮 Diff 与历史复核：已核验的既有风险不能被写成“没有可确认的问题”。"""
+    outcome = plan.outcome
+    if outcome.kind != "failed" and outcome.kind != "cancelled" \
+            and outcome.historical_discussion.affects_risk:
+        return ("本轮变更范围内未新增已确认问题；但历史讨论复核确认的既有问题在当前代码中仍然存在，"
+                "属于已核验风险，不能据此认定本次变更没有问题。")
+    return OUTCOME_DESCRIPTIONS[outcome.kind]
+
+
+def historical_risk_line(plan) -> str:
+    outcome = plan.outcome
+    count = len(outcome.historical_discussion.verified_defects)
+    if not outcome.historical_discussion.affects_risk or not count:
+        return ""
+    return f"历史讨论复核确认 {count} 项既有问题在当前代码中仍存在；不计入本轮 Diff 新增问题，但会影响合并判断。"
 
 
 def markdown_text(value: str, limit: int = 2000) -> str:
@@ -318,7 +336,7 @@ def _appendix_lines(plan, task):
     outcome = plan.outcome
     lines = ["", "## 附录：审查范围与限制", "",
         f"- 审查目标完成：{outcome.examined_goals} / {outcome.total_goals}",
-        f"- 已确认问题：{outcome.confirmed_count}；未决候选：{outcome.unresolved_count}",
+        f"- 本轮 Diff 新增已确认问题：{outcome.confirmed_count}；未决候选：{outcome.unresolved_count}",
         f"- 审查完整性：{ {'complete': '完整', 'partial': '不完整', 'unknown': '未知'}[outcome.review_completeness] }；"
         f"运行可靠性：{ {'reliable': '可靠', 'unreliable': '存在限制', 'unknown': '未知'}[outcome.runtime_reliability] }",
         f"- 审查 Commit：{markdown_text(plan.snapshot.head_sha or '未记录', 64)}",
@@ -352,9 +370,12 @@ def render_user_report(task, plan: PublicationPlan) -> str:
     outcome = plan.outcome
     label, advice = merge_heading(plan)
     lines = ["# RepoGuardian 详细审查报告", "", "## 审查结论", "", f"**{label}**", "", advice, "",
-             OUTCOME_DESCRIPTIONS[outcome.kind], "",
-             f"已确认问题 {outcome.confirmed_count} 项（其中 {outcome.publishable_count} 项形成可发布意见）；"
+             outcome_description(plan), "",
+             f"本轮 Diff 新增已确认问题 {outcome.confirmed_count} 项（其中 {outcome.publishable_count} 项形成可发布意见）；"
              f"未决候选 {outcome.unresolved_count} 项。"]
+    history = historical_risk_line(plan)
+    if history:
+        lines += ["", history]
     if plan.digest.merge_decision.limits:
         lines += ["", "需要补充或确认：", *[f"- {value}" for value in plan.digest.merge_decision.limits]]
     lines += _change_understanding(plan, full=True)
@@ -656,6 +677,9 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False, inc
         stats = plan.digest.discussion_stats
         lines += [f"当前结论针对本轮变更范围；已参考 {stats['referenced']} 项历史讨论，"
                   f"另有 {stats['unchecked']} 项历史事项未核验。", ""]
+    history = historical_risk_line(plan)
+    if history:
+        lines += [history, ""]
     if any(item.default_selection_reason == "historical_duplicate" for item in included):
         lines += ["已有历史讨论的当前问题仍保留风险摘要；已有讨论不代表已修复。", ""]
     note = partial_review_note(plan)
@@ -789,11 +813,14 @@ def render_summary(plan, *, discussion_urls: dict[str, str] | None = None) -> st
         stats = digest.discussion_stats
         lines += [f"已参考 {stats['referenced']} 项相关讨论；历史复核独立于当前变更结论，"
                   f"{stats['unchecked']} 项尚未核验。", ""]
+    history = historical_risk_line(plan)
+    if history:
+        lines += [history, ""]
     note = partial_review_note(plan)
     if note:
         lines += [note, ""]
     lines += [advice, "",
-             f"- 已确认问题：{outcome.confirmed_count}",
+             f"- 本轮 Diff 新增已确认问题：{outcome.confirmed_count}",
              f"- 审查目标完成：{outcome.examined_goals} / {outcome.total_goals}",
              f"- 未决候选：{outcome.unresolved_count}", "", "### 审查范围", ""]
     area_labels = {"head_source_ranges": "Head 变更源码区间", "base_source_ranges": "Base 删除前源码区间",

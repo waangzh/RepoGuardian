@@ -58,7 +58,7 @@ def merge_decision(plan):
                 "它们不属于本轮 Diff 新增问题，但会影响合并判断。请核对证据、影响范围与修复状态后再决定是否合并。")
             return decision
         if "head_validation_failed" in reasons:
-            decision.label = "当前版本存在验证失败记录，需检查原因"
+            decision.label = "当前版本存在受控验证失败记录，需检查原因"
             decision.advice = "当前 Head 的已记录受控检查失败，请核对验证记录中的范围、来源与失败原因；不能将部分检查当作整个项目 CI。"
             return decision
         limitation = review_limitation_kind(plan.outcome, reasons)

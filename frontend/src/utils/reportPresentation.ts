@@ -35,6 +35,7 @@ const REASON_LABELS: Record<string, string> = {
   unscheduled_investigation: '仍有未处理的调查线索', usage_integrity_unknown: '模型请求计量不完整或不一致',
   snapshot_missing: '审查快照缺失或身份无效', runtime_report_missing: '缺少任务运行报告',
   runtime_report_invalid: '任务运行报告格式无效', unsupported_legacy_projection: '历史引擎不支持此发布协议，请查看原始审计报告',
+  historical_discussion_unresolved: '历史讨论复核确认原问题在当前代码中仍存在，需核对',
 };
 export const reportReasonLabel = (value: string): string => REASON_LABELS[value] || value;
 
@@ -50,7 +51,7 @@ const WITHHELD_REASON_LABELS: Record<string, string> = {
 export const withheldReasonLabel = (value: string): string => WITHHELD_REASON_LABELS[value] || value;
 
 export function reportValidationLabel(value?: ReviewOutcome['dynamic_validation']): string {
-  return ({ not_executed: '未执行', passed: '当前 Head 的受控检查通过', failed: '当前版本存在验证失败记录，需检查原因',
+  return ({ not_executed: '未执行', passed: '当前 Head 的受控检查通过', failed: '当前版本存在受控验证失败记录，需检查原因',
     independent_results: '独立结果 · Head 未知', unknown: '未知' })[value || 'unknown'];
 }
 
