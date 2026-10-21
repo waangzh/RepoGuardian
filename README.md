@@ -118,16 +118,16 @@ npm run dev
 
 在 **系统设置** 点击展开 **默认审查深度**，可选择跟随服务端默认或固定深度。主题、信息密度和默认深度仅保存在当前浏览器，不跨设备同步；默认深度用于新方案首次预览，单次方案中的调整不会改写默认偏好，也不影响已有方案和任务。**校验并保存方案** 保存的是本次 PR 的待确认方案，不是永久复用的方案模板。
 
-### 手动发布到 GitHub（可选）
+### 交付到 GitHub（可选：复制评论 / 直接发布）
 
 默认关闭。仅支持可信的本地单用户部署，发布接口要求本机连接及独立 Bearer 操作口令，不支持直接公开到公网。操作口令仅在页面内存中临时使用，不是 GitHub PAT。
 
 1. 在 `backend/.env` 中配置独立的 `REPOGUARDIAN_GITHUB_PUBLISH_TOKEN`（Fine-grained PAT，仅授权目标仓库的 **Pull requests: write**）、数字仓库 ID allowlist、PAT 用户数字 ID，以及至少 32 字符的 `REPOGUARDIAN_PUBLICATION_API_TOKEN`。不会回退使用只读 `GITHUB_TOKEN`。
 2. 在 GitHub 核对该 PAT 的权限后设置 `REPOGUARDIAN_GITHUB_PUBLISH_PULL_REQUESTS_WRITE_CONFIRMED=true`，再启用 `REPOGUARDIAN_GITHUB_PUBLISH_ENABLED=true`。预检还会读取 GitHub 身份与仓库写角色；仓库角色不等于 Token grant，实际写入的 401/403 仍会被明确拒绝。完整配置见 [环境变量示例](.env.example)。
-3. 在 `backend/` 执行 `uv run alembic upgrade head`，再重启后端。在终态审查页进入 **发布到 GitHub**，输入操作口令、选择问题并预检。确认 Summary 创建/更新、Head、Inline 行映射和已有评论后，二次确认写入。
+3. 在 `backend/` 执行 `uv run alembic upgrade head`，再重启后端。在终态审查页进入 **交付到 GitHub**。未启用发布时页面只提供 **复制评论**（写入剪贴板，不写入 GitHub）。启用后输入操作口令、选择问题并预检；确认总结评论创建/更新、审查版本、代码行定位和已有评论后，二次确认写入。
 4. 发布状态与 Review Outcome 独立。可通过发布历史重新查看状态及 GitHub 返回的链接。`uncertain` 使用 **检查远端发布状态**：先核对已发送批次，无法确认时保留未知并要求人工处理，不盲目重发 POST。
 
-Summary 复用同一 PR、同一发布身份的主评论；Inline 按同一 Head 的严格内容和定位去重。过期 Base/Head、关闭 PR、未知作者或手工修改的摘要会阻止写入。无法精确映射的已核验问题可降为 Summary-only，需要明确确认部分发布。跨系统写入并非原子事务，不承诺 exactly-once；API 版本复查后仍存在短暂远端竞态窗口。
+PR 总结评论复用同一 PR、同一发布身份的主评论；代码行评论按同一 Head 的严格内容和定位去重。过期 Base/Head、关闭 PR、未知作者或手工修改的摘要会阻止写入。无法精确映射到代码行的已核验问题会写入总结评论，并需要明确确认部分发布。跨系统写入并非原子事务，不承诺 exactly-once；API 版本复查后仍存在短暂远端竞态窗口。
 
 ### 结果解读与报告交付
 

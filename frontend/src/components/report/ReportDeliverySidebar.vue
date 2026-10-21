@@ -29,7 +29,7 @@ const chapters = computed(() => props.plan ? reportChapters(props.plan) : [{ id:
       <button type="button" class="btn secondary rd-full rd-space" :disabled="busy || !available" @click="emit('download')"><AppIcon name="download" :size="15" />{{ mode === 'comment' ? '导出 Markdown' : mode === 'user' ? '导出详细报告' : '导出技术审计记录' }}</button>
       <button type="button" class="rd-text-button rd-space" :disabled="!available" @click="emit('full')">查看完整 Markdown</button>
     </section>
-    <section v-if="mode === 'comment'" class="rd-aside-card"><h3>发布到 GitHub</h3><p>正式发布需要独立授权、服务端预检和二次确认。</p><button type="button" class="btn secondary rd-full" :disabled="!canPublish" @click="emit('publish')">查看发布流程<AppIcon name="arrow-right" :size="15" /></button></section>
+    <section v-if="mode === 'comment'" class="rd-aside-card"><h3>交付到 GitHub</h3><p>复制评论只写入剪贴板；直接发布需要独立授权、服务端预检和二次确认。</p><button type="button" class="btn secondary rd-full" :disabled="!canPublish" @click="emit('publish')">打开交付选项<AppIcon name="arrow-right" :size="15" /></button></section>
     <section v-else class="rd-aside-card"><h3>事实边界</h3><div class="rd-safety"><AppIcon name="info" :size="17" /><div><strong>证据支持 ≠ 动态验证</strong><small>已读测试代码不代表通过 CI</small></div></div></section>
     <p class="rd-context-tip">RepoGuardian · 证据可追溯<br />结论仅适用于本次审查快照。</p>
   </aside>

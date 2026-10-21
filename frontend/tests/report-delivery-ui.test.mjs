@@ -94,7 +94,9 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
         else finding.raw_title = raw;
         const before = JSON.stringify(plan);
         for (const component of [Readable, Publication]) {
-          const html = await renderToString(createSSRApp(component, { plan, reviewId: plan.review_id }));
+          // 发布能力由页面进入前探测；合成发布面板时直接声明已启用，避免异步探测影响快照。
+          const html = await renderToString(createSSRApp(component, { plan, reviewId: plan.review_id,
+            capability: { enabled: true, mode: 'publish' } }));
           assert.ok(html.includes(raw));
           assert.ok(!html.includes(encoded));
         }
@@ -143,7 +145,7 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
         assert.equal(html.match(/统一审查页面标题/g)?.length, 1);
         assert.ok(html.includes('aria-label="审查结果导航"'));
         assert.ok(html.includes('>新建审查</button>'));
-        assert.match(html, new RegExp(`aria-current="page"[^>]*>${({ report: '审查报告', files: '变更文件', publish: '发布到 GitHub' })[section]}`));
+        assert.match(html, new RegExp(`aria-current="page"[^>]*>${({ report: '审查报告', files: '变更文件', publish: '交付到 GitHub' })[section]}`));
       }
     });
     await t.test('嵌入式快照卡片保留结论与 Head，不重复 PR 标题和任务状态', async () => {

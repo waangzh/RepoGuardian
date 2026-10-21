@@ -66,6 +66,7 @@ test("历史重复项保留发布资格，默认不选但允许手动纳入", as
         default_selected: false, discussion_urls: ["https://github.com/o/r/pull/1#discussion_r1"] },
     ];
     const html = await renderToString(createSSRApp({ render: () => h(Component, { reviewId: "run",
+      capability: { enabled: true, mode: "publish" },
       plan: { inline_drafts: findings, summary_findings: [] } }) }));
     assert.match(html, /<input(?=[^>]*value="new")(?=[^>]*checked)[^>]*>/);
     assert.doesNotMatch(html, /<input(?=[^>]*value="old")(?=[^>]*checked)[^>]*>/);

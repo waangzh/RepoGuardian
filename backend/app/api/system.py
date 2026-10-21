@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.database import schema_is_current
 from app.models.operations import (
     ModelCatalogResponse,
+    PublicationCapability,
     SystemDiagnostics,
     VersionDiagnostics,
     WorkspaceCleanupPreview,
@@ -29,6 +30,13 @@ router = APIRouter(prefix="/system", tags=["system"])
 @router.get("/review-capabilities", response_model=ReviewCapabilities)
 async def get_review_capabilities() -> ReviewCapabilities:
     return capabilities()
+
+
+@router.get("/publication-capability", response_model=PublicationCapability)
+async def get_publication_capability() -> PublicationCapability:
+    """发布页进入前探测；未启用时前端只提供复制评论路径。"""
+    enabled = settings.repoguardian_github_publish_enabled
+    return PublicationCapability(enabled=enabled, mode="publish" if enabled else "copy_only")
 
 
 def _active_workspace_paths() -> tuple[object, ...]:

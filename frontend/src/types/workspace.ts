@@ -6,5 +6,5 @@ export const reviewSections: Array<{ id: ReviewSection; label: string; icon: str
   { id: "files", label: "变更文件", icon: "file" },
   { id: "activity", label: "技术记录", icon: "activity" },
   { id: "report", label: "审查报告", icon: "report" },
-  { id: "publish", label: "发布到 GitHub", icon: "send" },
+  { id: "publish", label: "交付到 GitHub", icon: "send" },
 ];
