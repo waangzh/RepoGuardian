@@ -163,8 +163,13 @@ button { color: inherit; }
 .rg-pr-original__body :is(pre,table) { max-width: 100%; overflow: auto; }
 .rg-findings { display: grid; grid-template-columns: minmax(230px,.85fr) minmax(320px,1.35fr) minmax(280px,1.05fr); gap: 15px; align-items: start; }
 .rg-findings > * { min-width: 0; }
-.rg-filters { display: flex; gap: 8px; margin-bottom: 14px; }
+.rg-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
 .rg-filters .select { min-width: 0; padding: 7px; font-size: .8125rem; flex: 1; }
+/* 来源筛选：当前选中项必须有可见状态，不能只靠 aria-pressed。 */
+.rg-filters .btn.soft[aria-pressed="true"] { background: var(--primary); color: #fff; }
+.rg-filters .btn.soft[aria-pressed="true"]:hover { background: var(--primary); }
+.rg-history-evidence p { font-size: .8125rem; line-height: 1.8; }
+.rg-history-evidence > p + p { margin-top: 12px; }
 .rg-finding-row { display: grid; gap: 8px; width: 100%; padding: 13px; background: var(--surface); border: 1px solid var(--line); border-radius: 9px; text-align: left; color: var(--ink); margin-top: 8px; }
 .rg-finding-row:hover { border-color: var(--line2); }
 .rg-finding-row.active { border-color: var(--primary); box-shadow: inset 3px 0 var(--primary); background: var(--blueWash); }
