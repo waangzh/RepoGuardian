@@ -529,7 +529,7 @@ def _comment_risks(plan):
     return [f"- {value}" for value in dict.fromkeys(risks)]
 
 
-def _comment_finding_lines(plan, finding, index, view, *, full):
+def _comment_finding_lines(plan, finding, view, *, full):
     """按对外评论结构渲染单条问题：等级、标题、位置、影响、建议。"""
     severity = finding.severity.title()
     category = f" · {markdown_text(finding.category.title(), 100)}" if finding.category else ""
@@ -577,7 +577,7 @@ def _comment_location(plan, finding) -> str:
     return f"[{label}]({href})" if href else label
 
 
-def _comment_change_overview(plan, *, title="变更概述"):
+def _comment_change_overview(plan, *, title="变更理解"):
     """分别展示作者声明和绑定证据的代码观察。"""
     understanding = plan.digest.change_understanding
     author = _author_goal(plan)
@@ -589,7 +589,7 @@ def _comment_change_overview(plan, *, title="变更概述"):
     return lines
 
 
-def _comment_other_results(plan, *, omitted, retained, withheld, full, title="审查局限", extra_lines=()):
+def _comment_other_results(plan, *, omitted, retained, withheld, full, title="仍需确认的事项", extra_lines=()):
     """只展开实际缺口；通用验证边界统一放在文末。"""
     entries = list(_comment_risks(plan))
     if plan.digest.incomplete_goals:
@@ -668,7 +668,11 @@ def _comment_next_steps(plan, *, has_findings: bool):
 
 
 def render_review_comment(plan, *, detail="compact", exclude_resolved=False, include_discussed=False):
-    """按实际风险展开评论；历史重复项可压缩为风险摘要。"""
+    """固定章节语义，只按风险调整顺序；没有内容的章节不输出。
+
+    章节含义在所有状态下一致：结论、本次变更理解、需要处理的问题、其他建议、
+    仍需确认的事项、下一步、快照与验证边界。这样不同 PR 复制出的评论遵循同一套阅读顺序。
+    """
     included, omitted, retained = comment_selection(plan, exclude_resolved=exclude_resolved,
                                                      include_discussed=include_discussed)
     full = detail == "full"
@@ -698,14 +702,17 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False, inc
     views = {item.id: item for item in plan.digest.findings}
 
     def finding_section(findings, title):
+        # 只有实际条目才输出章节，避免出现“建议”标题后只有行动文案的空章节。
+        if not findings:
+            return []
         result = ["", f"## {title}", ""]
-        for index, finding in enumerate(findings, 1):
+        for finding in findings:
             discussed = finding.default_selection_reason == "historical_duplicate"
             needs_evidence = (full or (discussed and include_discussed) or finding.severity in {"high", "critical"}
                 or finding.finding_key in blockers)
             if discussed and not include_discussed and not full:
                 needs_evidence = False
-            result += _comment_finding_lines(plan, finding, index, views.get(finding.finding_key), full=needs_evidence)
+            result += _comment_finding_lines(plan, finding, views.get(finding.finding_key), full=needs_evidence)
             if discussed:
                 from app.services.pr_discussion_matching import safe_discussion_url
 
@@ -724,38 +731,42 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False, inc
         scope_lines += _goal_lines(plan.digest.incomplete_goals, "未完成目标", limit=None)
         scope_lines += [f"- 排除文件：{markdown_text(item.path)}；{markdown_text(item.reason)}" for item in plan.digest.excluded_files]
 
-    def limitations(title):
+    def limitations():
         return _comment_other_results(plan, omitted=omitted, retained=retained, withheld=withheld,
-            full=full, title=title, extra_lines=scope_lines)
+            full=full, extra_lines=scope_lines)
 
-    next_steps = _comment_next_steps(plan, has_findings=bool(included))
+    def next_steps_section():
+        return ["", "## 下一步", "", *_comment_next_steps(plan, has_findings=bool(included))]
+
+    def understanding_section():
+        return ["", *_comment_change_overview(plan)]
+
     if interrupted:
-        lines += ["", *_comment_change_overview(plan, title="已保留记录")]
+        lines += understanding_section()
         scope = (f"约定目标已检查 {plan.outcome.examined_goals} / {plan.outcome.total_goals} 项"
                  if plan.outcome.total_goals else "约定目标的检查范围未知")
         lines += ["", scope + "；以上仅为已保存的检查观察，不代表完整结论。"]
-        lines += limitations("未覆盖范围")
-        lines += ["", "## 重新审查", "", *next_steps]
+        lines += limitations()
+        lines += next_steps_section()
     elif blocking_findings:
-        lines += finding_section(blocking_findings, "高优先级问题")
-        lines += ["", *_comment_change_overview(plan, title="变更理解")]
-        lines += limitations("其他局限")
-        lines += finding_section(suggestions, "建议") + next_steps
+        lines += finding_section(blocking_findings, "需要处理的问题")
+        lines += understanding_section()
+        lines += finding_section(suggestions, "其他建议")
+        lines += limitations()
+        lines += next_steps_section()
     elif suggestions or omitted:
-        lines += ["", *_comment_change_overview(plan, title="变更理解")]
-        lines += finding_section(suggestions, "建议项")
-        if not suggestions:
-            lines += ["人工标记已处理的非高优先级建议已按本次选择省略；这不代表机器重新核验通过，明细见下方局限。", ""]
-        lines += next_steps
-        lines += limitations("局限")
+        lines += understanding_section()
+        lines += finding_section(suggestions, "其他建议")
+        lines += limitations()
+        lines += next_steps_section()
     elif incomplete:
-        lines += limitations("未检查/未核实事项") or [
-            "", "## 未检查/未核实事项", "", "缺口或运行记录尚不明确，请先核对详细报告。"]
-        lines += ["", "## 下一步", "", *next_steps]
+        lines += limitations() or [
+            "", "## 仍需确认的事项", "", "缺口或运行记录尚不明确，请先核对详细报告。"]
+        lines += next_steps_section()
     else:
-        lines += ["", *_comment_change_overview(plan)]
-        lines += limitations("合并前提醒") or ["", "## 合并前提醒", ""]
-        lines += next_steps
+        lines += understanding_section()
+        lines += limitations()
+        lines += next_steps_section()
     validation = _validation_sentence(plan)
     boundary = "" if any(validation in line for line in lines) else validation
     subject = "本记录" if note else "本结论"
