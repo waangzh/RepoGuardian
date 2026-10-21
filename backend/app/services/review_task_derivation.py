@@ -12,14 +12,16 @@ from app.models.review_runtime import (Candidate, VerificationResult, ReviewWork
 from app.review.tool_scope import is_sensitive_repository_path
 from app.services.fingerprints import stable_hash
 from app.services.issue_policy import IssuePolicyService
+from app.services.review_runtime import EvidenceIdentityConflict
 from app.services.review_task_executor import ReviewTaskExecutor
 from app.services.review_task_step import InspectTaskStep
 from app.services.review_publication import verification_subject_hash, publication_view
 
 
 def evidence_key(value):
-    return {key: value.get(key) for key in
-            ("file_path", "start_line", "end_line", "content_hash", "head_sha", "base_sha", "side")}
+    return {**{key: value.get(key) for key in
+               ("file_path", "start_line", "end_line", "content_hash", "head_sha", "base_sha")},
+            "side": value.get("side", "head")}
 
 
 def strict_candidate_key(candidate, goal, catalog, spec, scope):
@@ -77,7 +79,7 @@ class TaskReviewDerivation:
                     # 来源/检索元数据可随读取更新；身份绑定的原文与快照必须一致。
                     if (evidence_key(previous) != evidence_key(value)
                             or previous.get("content") != value.get("content")):
-                        raise ValueError("conflicting evidence identity across runtime")
+                        raise EvidenceIdentityConflict("conflicting evidence identity across runtime")
                     value = {**value, **previous}
                 catalog[identity] = value
         return catalog
@@ -186,9 +188,10 @@ class TaskReviewDerivation:
         return issue.model_copy(update={"severity": check.normalized_severity}), check.reasons
 
     def _candidate(self, candidate, origin):
-        if candidate.candidate_id in self.data["processed_candidates"]:
+        if (candidate.candidate_id in self.data["processed_candidates"]
+                and any(candidate.candidate_id in record["source_candidate_ids"]
+                        for record in self.data["candidates"].values())):
             return
-        self.data["processed_candidates"].append(candidate.candidate_id)
         source = self.steps[origin]
         goal = source.executor.goals[candidate.primary_anchor]
         root = self._root(origin)
@@ -214,13 +217,14 @@ class TaskReviewDerivation:
             record["discovery_origin"] = {"kind": "verify", "work_item_id": origin,
                 "original_candidate_id": source.executor.work_item.verification_candidate.candidate_id,
                 "request_id": source.executor.request_id, "attempt_id": source.executor.attempt_id}
-        self.data["candidates"][key] = record
         if reasons:
+            self.data["candidates"][key] = record
             return
         invalid_requests = [request for request in candidate.evidence_requests
                             if request.file_path not in self.allowed_files or is_sensitive_repository_path(request.file_path)]
         if invalid_requests:
             record.update(status="unresolved", reason="evidence_request_outside_frozen_scope")
+            self.data["candidates"][key] = record
             return
         missing = [request for request in candidate.evidence_requests
                    if not self._request_covered(request, catalog)]
@@ -231,8 +235,10 @@ class TaskReviewDerivation:
                 record["investigation_work_item_id"] = investigation.executor.work_item.work_item_id
             else:
                 record.update(status="unresolved", reason="evidence_preparation_not_scheduled")
+            self.data["candidates"][key] = record
             return
         self._verify(record, catalog)
+        self.data["candidates"][key] = record
 
     @staticmethod
     def _request_covered(request, catalog):
@@ -398,6 +404,8 @@ class TaskReviewDerivation:
         for identity, step in list(self.steps.items()):
             for candidate in list(step.executor.projection.candidates.values()):
                 self._candidate(candidate, identity)
+                if candidate.candidate_id not in self.data["processed_candidates"]:
+                    self.data["processed_candidates"].append(candidate.candidate_id)
             for lead in step.executor.projection.leads:
                 if lead.lead_id in self.data["processed_leads"]:
                     continue

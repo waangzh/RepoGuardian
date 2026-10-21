@@ -94,17 +94,26 @@ def test_binding_rejections_remain_precise_and_conservative(tmp_path, case, reas
     response = valid(payload_for(step))
     item = response["examinations"][0]
     assessment = item["intent_assessments"][0]
-    if case == "quote": assessment["author_quote"] = "return value"
-    elif case == "missing": item["intent_assessments"] = []
-    elif case == "foreign": assessment["evidence_ids"] = ["foreign"]
-    elif case == "empty": assessment["evidence_ids"] = []
-    elif case == "blocked": item["disposition"] = "blocked"
-    elif case == "whole_range": item["evidence_ids"] = ["e1"]
-    elif case == "stale": step.executor.evidence_catalog["e1"]["head_sha"] = "c" * 40
-    elif case == "tampered": step.executor.evidence_catalog["e1"]["content"] = "tampered"
+    if case == "quote":
+        assessment["author_quote"] = "return value"
+    elif case == "missing":
+        item["intent_assessments"] = []
+    elif case == "foreign":
+        assessment["evidence_ids"] = ["foreign"]
+    elif case == "empty":
+        assessment["evidence_ids"] = []
+    elif case == "blocked":
+        item["disposition"] = "blocked"
+    elif case == "whole_range":
+        item["evidence_ids"] = ["e1"]
+    elif case == "stale":
+        step.executor.evidence_catalog["e1"]["head_sha"] = "c" * 40
+    elif case == "tampered":
+        step.executor.evidence_catalog["e1"]["content"] = "tampered"
     else:
         evidence = deepcopy(step.executor.evidence_catalog["e1"])
-        if case == "range": evidence.update(start_line=3, end_line=3)
+        if case == "range":
+            evidence.update(start_line=3, end_line=3)
         if case == "file":
             evidence["file_path"] = "src/b.py"
             step.executor.work_item.scope_files.append("src/b.py")

@@ -17,6 +17,7 @@ from app.services.review_run_budget import (
     run_budget_task_id,
 )
 from app.services.review_task_executor import ReviewTaskExecutor
+from app.services.review_runtime import EvidenceIdentityConflict
 from app.services.review_task_protocol import TaskReviewV1Protocol
 from app.tools.context_files import ScopedContextTool
 from app.tools.git_tool import GitTool
@@ -181,7 +182,20 @@ class InspectTaskStep:
                 if executor.spec.prompt_version in {"task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7"}:
                     feedback.update(rejected_items=self.rejected_items,
                         accepted_target_ids=sorted(executor.projection.accepted_target_ids))
-                if executor.spec.intent_assessment_contract:
+                if any(error["reason"] == "incomplete_goal_evidence" for error in self.repair_errors):
+                    feedback["examination_evidence_requirements"] = [{
+                        "target_id": goal.goal_id, "file_path": goal.target_ref,
+                        "start_line": goal.start_line, "end_line": goal.end_line,
+                        "side": executor.goal_side(goal),
+                        "visible_evidence_ids": [
+                            identity for identity in sorted(executor.active_evidence_ids)
+                            if (executor.evidence_catalog[identity]["file_path"] == goal.target_ref
+                                and executor.evidence_catalog[identity].get("side", "head")
+                                == executor.goal_side(goal))]
+                    } for goal in current_goals]
+                if executor.spec.intent_assessment_contract and any(
+                        "intent" in error["reason"] or error["reason"] == "unknown_author_target"
+                        for error in self.repair_errors):
                     from app.services.review_intent import author_targets
                     reasons = sorted({error["reason"] for error in self.repair_errors
                                       if isinstance(error.get("reason"), str)})
@@ -271,6 +285,17 @@ class InspectTaskStep:
                          or error.reason == "field_must_be_array"
                          or (error.reason == "incomplete_investigation_evidence"
                              and executor.investigation_citation_readiness()["status"] == "ready")]
+        visible = sorted(executor.active_evidence_ids)
+        if executor.evidence_error(visible) is None:
+            for error in parsed.errors:
+                if error.reason != "incomplete_goal_evidence" or error.index is None:
+                    continue
+                examinations = dict(zip(parsed.item_indices.get("examinations", []),
+                                        parsed.response.examinations))
+                target_id = examinations[error.index].target_id
+                goal = next((goal for goal in executor.current_goals() if goal.goal_id == target_id), None)
+                if goal is not None and executor._covers(goal, visible):
+                    schema_errors.append(asdict(error))
         if schema_errors and executor.work_item.format_corrections < 1:
             executor.work_item.format_corrections += 1
             self.repair_errors = schema_errors
@@ -342,7 +367,10 @@ class InspectTaskStep:
         chunks = store_chunks(self.store)
         for identity, item in chunks.items():
             previous = executor.evidence_catalog.get(identity, {})
+            if previous.get("side", "head") != "head":
+                raise EvidenceIdentityConflict("conflicting evidence identity across runtime")
             executor.evidence_catalog[identity] = {**item, "file_path": item["file"],
+                "side": "head",
                 **{key: previous[key] for key in ("hunk_id", "canonical_change") if key in previous}}
         visible = {item["evidence_id"] for item in canonical}
         executor.active_evidence_ids.update(visible)

@@ -406,6 +406,7 @@ class ReviewTaskExecutor:
                      if len({stable_hash(item.model_dump(mode="json")) for item in items}) > 1}
         valid_examinations: list[ExaminationSubmission] = []
         for index, item in enumerate(getattr(response, "examinations", [])):
+            index = item_indices.get("examinations", list(range(len(response.examinations))))[index]
             if item.target_id in conflicts:
                 errors.append(RuntimeParseError("examinations", index, "conflicting_duplicate_target"))
                 continue
