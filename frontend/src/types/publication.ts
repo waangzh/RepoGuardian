@@ -130,6 +130,11 @@ export interface MergeDecision {
   limits: string[];
   blocking_historical_keys?: string[];
   nonblocking_historical_keys?: string[];
+  /** 按严格重复关联去重后的独立缺陷数；缺失时（旧冻结计划）回退为来源相加。 */
+  blocking_independent_count?: number | null;
+  nonblocking_independent_count?: number | null;
+  /** 与本轮问题指向同一缺陷、已在计数中合并的历史讨论。 */
+  deduplicated_historical_keys?: string[];
 }
 export interface ReviewCommentOptions {
   detail: "compact" | "full";

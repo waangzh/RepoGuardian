@@ -214,6 +214,26 @@ test("计量附注和历史分级采用后端事实并引导到可见证据", as
     assert.equal(reviewSituation(history).nonblockingCount, 1);
     assert.equal(reviewSituation(history).key, "nonblocking");
     assert.equal(reviewSituation(history).actions[0].key, "view_report");
+    // 同一缺陷同时出现在本轮与历史复核时，标题与概览只计一次；旧计划缺少去重字段才相加。
+    const duplicate = structuredClone(history);
+    duplicate.digest.merge_decision.blocking_finding_keys = ["key-a"];
+    duplicate.digest.merge_decision.nonblocking_finding_keys = [];
+    duplicate.digest.merge_decision.nonblocking_historical_keys = [];
+    duplicate.digest.merge_decision.blocking_historical_keys = ["inline:1"];
+    duplicate.digest.merge_decision.blocking_independent_count = 1;
+    duplicate.digest.merge_decision.deduplicated_historical_keys = ["inline:1"];
+    assert.equal(reviewSituation(duplicate).blockingCount, 1);
+    assert.equal(overviewFacts(duplicate, null).blockers, 1);
+    duplicate.digest.merge_decision.blocking_independent_count = null;
+    assert.equal(reviewSituation(duplicate).blockingCount, 2, "旧冻结计划保留来源相加");
+    assert.equal(overviewFacts(duplicate, null).blockers, 2);
+    const suggestions = structuredClone(history);
+    suggestions.digest.merge_decision = { status: "conditional_merge", label: "", blocking_finding_keys: [],
+      nonblocking_finding_keys: ["key-a"], blocking_historical_keys: [], nonblocking_historical_keys: ["inline:1"],
+      nonblocking_independent_count: 1 };
+    assert.equal(reviewSituation(suggestions).nonblockingCount, 1);
+    suggestions.digest.merge_decision.nonblocking_independent_count = null;
+    assert.equal(reviewSituation(suggestions).nonblockingCount, 2, "旧冻结计划保留来源相加");
     const plan = structuredClone(fixtures.clean.plan);
     plan.outcome.historical_discussion = { findings: [{ discussion_id: "inline:1", status: "still_present",
       severity: "high", priority: "fix_before_merge", affected_behavior: "受保护分支仍可被匿名访问",

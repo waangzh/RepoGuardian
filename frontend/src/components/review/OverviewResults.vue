@@ -13,7 +13,8 @@ const facts = computed(() => overviewFacts(props.plan, props.runtime));
 const suggestions = computed(() => {
   const decision = props.plan?.digest.merge_decision;
   return decision?.nonblocking_finding_keys
-    ? decision.nonblocking_finding_keys.length + (decision.nonblocking_historical_keys?.length ?? 0) : null;
+    ? decision.nonblocking_independent_count
+      ?? decision.nonblocking_finding_keys.length + (decision.nonblocking_historical_keys?.length ?? 0) : null;
 });
 const highlights = computed(() => {
   const blockers = props.plan?.digest.merge_decision?.blocking_finding_keys || [];
@@ -29,7 +30,7 @@ const highlights = computed(() => {
       <button type="button" class="ov-metric" @click="emit('navigate', 'findings')">
         <span class="ov-metric__title"><AppIcon name="shield" :size="16" />高优先级问题</span>
         <strong :class="{ 'ov-count-danger': facts.blockers !== null && facts.blockers > 0 }">{{ facts.blockers ?? "未知" }}</strong>
-        <small>{{ facts.blockers === null ? "摘要未提供准确数量" : facts.blockers > 0 ? "按审查策略建议合并前处理" : "没有达到高优先级标准的证据" }}</small>
+        <small>{{ facts.blockers === null ? "摘要未提供准确数量" : facts.blockers > 0 ? "按审查策略建议合并前处理 · 同一缺陷只计一次" : "没有达到高优先级标准的证据" }}</small>
       </button>
       <button type="button" class="ov-metric" @click="emit('navigate', 'findings')">
         <span class="ov-metric__title"><AppIcon name="help" :size="16" />待确认疑点</span>

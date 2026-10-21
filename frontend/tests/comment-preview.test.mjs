@@ -40,6 +40,13 @@ test('评论分节保留真实问题、选择说明、快照限制和历史正�
       assert.equal(document.sections[0].markdown.trim(), overview);
       assert.equal(document.sections[1].markdown.trim(), reminder);
       assert.equal(document.snapshot, snapshot);
+      // 已核验的既有风险是正式风险章节，不是待确认事项；预览保留原文标题并识别为问题条目。
+      const historyRisk = `RepoGuardian · PR Code Review\n\n⚠️ 结论：发现 1 项高优先级问题（含历史复核），建议修复后复审\n\n## 已核验的既有风险\n\n**[High · 历史复核] 受保护分支仍可被匿名访问**\n\n**代码位置：** src/a.py\n\n**复核结论：** 建议合并前修复；固定源码证据\n\n${snapshot}`;
+      const riskDocument = parseCommentPreview(historyRisk);
+      assert.ok(riskDocument);
+      assert.deepEqual(riskDocument.sections.map(item => item.title), ['已核验的既有风险']);
+      assert.equal(riskDocument.sections[0].findings, true);
+      assert.equal(riskDocument.sections[0].findingCount, 1);
       const note = '> 以下为执行失败前已保留的部分审查记录，不是完整审查结论。';
       const partial = parseCommentPreview(markdown.replace(preamble, `${note}\n\n${preamble}`));
       assert.equal(partial.preamble, `${note}\n\n${preamble}`);
