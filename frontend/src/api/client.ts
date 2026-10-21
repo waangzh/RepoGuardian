@@ -136,6 +136,7 @@ async function request<T>(path: string, init?: RequestInit, conflictMessage: str
       Array.isArray(detail) ? detail.map(item => item.msg).join('；') : `请求失败：${response.status}`;
     throw new Error(message);
   }
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
@@ -204,6 +205,10 @@ export async function listReviews(options: {
   if (options.status) params.set("status", options.status);
   if (options.q) params.set('q', options.q);
   return request<ReviewTaskListResponse>(`/api/reviews?${params.toString()}`, { signal: options.signal });
+}
+
+export function deleteReview(taskId: string, signal?: AbortSignal): Promise<void> {
+  return request<void>(`/api/reviews/${encodeURIComponent(taskId)}`, { method: "DELETE", signal }, null);
 }
 
 export async function getSystemDiagnostics(): Promise<SystemDiagnostics> {

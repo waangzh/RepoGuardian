@@ -23,8 +23,8 @@ onMounted(async () => {
 <template>
   <ReviewStepper :current="0" />
   <section class="hero-import">
-    <div class="eyebrow">MAKE EVERY REVIEW EXPLAINABLE</div><h1>更清楚地审查每一个<br />Pull Request。</h1>
-    <p>从代码变更出发，先了解审查范围，再获取带证据的审查结论。结论、覆盖与尚未解决的事项，清楚呈现。</p>
+    <div class="eyebrow">从 PR 链接到审查交付</div><h1>粘贴 GitHub PR 链接，<br />获取风险分析与审查结论。</h1>
+    <p>确认审查方案后，获取代码风险分析、详细审查报告和可直接复制的 PR 评论。代码证据、历史讨论与检查限制随结果一并呈现。</p>
     <form @submit.prevent="valid && !loading && !busy && emit('preview')">
       <label class="field-label" for="pr-url">GitHub Pull Request 链接</label>
       <div class="hero-input"><input id="pr-url" class="input" type="url" :value="prUrl" placeholder="https://github.com/owner/repo/pull/123" autocomplete="url" :disabled="busy" aria-describedby="pr-hint" @input="emit('update:prUrl', ($event.target as HTMLInputElement).value)" /><button type="submit" class="btn primary" :disabled="!valid || loading || busy"><AppIcon :name="loading ? 'clock' : 'arrow-right'" />{{ loading ? '正在预览 PR 变更…' : '预览 PR 变更' }}</button></div>

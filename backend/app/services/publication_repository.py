@@ -12,6 +12,7 @@ from app.models.orm import (PublicationAttemptOrm as Attempt, PublicationItemOrm
     PublicationRequestOrm as RequestKey, PublicationBatchOrm as Batch, GitHubSummarySlotOrm as Slot, WorkerJobOrm, utcnow)
 from app.models.publication import PublicationAttempt, PublicationItem, GitHubSummarySlot
 from app.services.fingerprints import stable_hash
+from app.services.review_task_access import lock_live_review
 
 
 class PublicationConflict(ValueError):
@@ -47,6 +48,8 @@ class PublicationRepository:
         request_key = stable_hash([context["publisher_identity"], key])
         identity = uuid4().hex
         with self.sessions.begin() as session:
+            if not lock_live_review(session, plan.review_id):
+                raise PublicationConflict("review_unavailable")
             # 先 INSERT，避免 SQLite read→write 升级竞争；唯一键处理并发重复请求。
             session.execute(insert(Attempt).values(id=identity, review_id=plan.review_id,
                 repository_id=context["repository_id"], pr_number=context["pr_number"],
@@ -202,6 +205,9 @@ class PublicationRepository:
 
     def retry(self, identity):
         with self.sessions.begin() as session:
+            review_id = select(Attempt.review_id).where(Attempt.id == identity).scalar_subquery()
+            if not lock_live_review(session, review_id):
+                raise PublicationConflict("review_unavailable")
             job = session.scalar(select(WorkerJobOrm).where(WorkerJobOrm.idempotency_key == "github_publication:" + identity))
             if job is None or (job.status == "leased" and job.lease_until and job.lease_until.replace(tzinfo=utcnow().tzinfo) > utcnow()):
                 raise PublicationConflict("publication_busy")

@@ -6,6 +6,7 @@ from enum import Enum
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.review import ReviewIssue, ReviewTask, ReviewUnit, ReviewUnitResult
+from app.models.publication import MergeDecision, ReviewOutcome
 
 
 class HumanRequestStatus(str, Enum):
@@ -54,8 +55,18 @@ class HumanRequestAnswerResponse(BaseModel):
     idempotent_replay: bool = False
 
 
+class ReviewHistoryResult(BaseModel):
+    outcome: ReviewOutcome
+    merge_decision: MergeDecision
+
+
+class ReviewTaskListItem(ReviewTask):
+    model_config = ConfigDict(from_attributes=True)
+    history_result: ReviewHistoryResult | None = None
+
+
 class ReviewTaskListResponse(BaseModel):
-    items: list[ReviewTask]
+    items: list[ReviewTaskListItem]
     total: int = Field(ge=0)
     page: int = Field(ge=1)
     page_size: int = Field(ge=1)

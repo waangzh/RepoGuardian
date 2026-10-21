@@ -51,6 +51,8 @@ class PublicationService:
         return PublicationPreflightResult.model_validate(await self.checked(review_id, keys))
 
     async def create(self, review_id, selection, key):
+        if await asyncio.to_thread(self.task_loader, review_id) is None:
+            raise KeyError("review_not_found")
         publisher = f"user:{self.config.repoguardian_github_publish_publisher_id}"
         existing = await asyncio.to_thread(self.repo.existing_request, review_id, selection, publisher, key)
         if existing:
@@ -69,6 +71,8 @@ class PublicationService:
             raise GitHubPublishError("repository_not_authorized")
 
     async def get(self, review_id, identity):
+        if await asyncio.to_thread(self.task_loader, review_id) is None:
+            raise KeyError("review_not_found")
         attempt = await asyncio.to_thread(self.repo.get, identity)
         if attempt is None or attempt.review_id != review_id:
             raise KeyError("publication_not_found")

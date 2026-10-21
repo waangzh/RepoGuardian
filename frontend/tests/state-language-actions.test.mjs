@@ -111,7 +111,7 @@ test("状态文案区分事实、合并影响与可执行入口", async t => {
       assert.ok(passed.includes("所选检查通过") && passed.includes("不代表整个项目 CI 全部通过"));
       const { default: Confirmation } = await server.ssrLoadModule("/src/components/review/ReviewCommentConfirmation.vue");
       const unknown = await render(Confirmation, { pending: { status: "unknown", reviewed_head_sha: "a".repeat(40) }, feedback: "" });
-      assert.ok(unknown.includes("暂时无法确认 PR 是否有新提交") && unknown.includes("重试检查"));
+      assert.ok(unknown.includes("暂时无法确认 PR 是否有新提交") && unknown.includes("重新检查 PR 版本"));
     });
   } finally { await server.close(); }
 });

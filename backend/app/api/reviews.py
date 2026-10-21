@@ -34,6 +34,7 @@ from app.models.persistence import (
     PatchDetail,
     ReviewIssueDetail,
     ReviewTaskListResponse,
+    ReviewHistoryResult,
     ReviewUnitDetail,
     ValidationDetail,
 )
@@ -128,9 +129,17 @@ async def list_reviews(
     pr_number: int | None = Query(default=None, ge=1),
     head_sha: str | None = Query(default=None, pattern=r"^[0-9a-f]{40}$"),
 ) -> ReviewTaskListResponse:
-    return await asyncio.to_thread(get_review_service().list_tasks,
-        status=task_status, page=page, page_size=page_size, q=q,
-        repository=repository, pr_number=pr_number, head_sha=head_sha)
+    def load_history():
+        result = get_review_service().list_tasks(
+            status=task_status, page=page, page_size=page_size, q=q,
+            repository=repository, pr_number=pr_number, head_sha=head_sha)
+        for task in result.items:
+            plan = PublicationPlanner().build(task, include_markdown=False)
+            task.history_result = ReviewHistoryResult(
+                outcome=plan.outcome, merge_decision=plan.digest.merge_decision)
+        return result
+
+    return await asyncio.to_thread(load_history)
 
 
 @router.post("/preview/quick", response_model=QuickPreviewResponse)
@@ -163,6 +172,25 @@ async def preview_review(request: ReviewPreviewRequest) -> ReviewPreviewResponse
         raise HTTPException(status_code=exc.api_status, detail=exc.public_detail()) from None
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_review(task_id: str) -> Response:
+    try:
+        deleted = await asyncio.to_thread(get_review_service().delete_task, task_id)
+    except ValueError as exc:
+        reasons = {
+            "only terminal tasks can be deleted": ("review_not_terminal", "审查尚未结束，请先停止审查后再删除。"),
+            "review_publication_pending": ("review_publication_pending", "该记录仍在发布或等待确认发布结果，请完成状态核对后再删除。"),
+            "review_job_active": ("review_job_active", "该记录仍有后台作业，请等待作业结束后再删除。"),
+            "review_delete_persistence_required": ("review_delete_persistence_required", "当前服务未启用持久化，无法删除历史记录。"),
+        }
+        code, message = reasons.get(str(exc), ("review_delete_conflict", "任务状态已变化，暂时无法删除，请刷新后重试。"))
+        raise HTTPException(status_code=503 if code == "review_delete_persistence_required" else 409,
+                            detail={"code": code, "message": message}) from None
+    if not deleted:
+        raise HTTPException(status_code=404, detail="审查记录不存在。")
+    return Response(status_code=204)
 
 
 @router.post("/{task_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
@@ -270,7 +298,10 @@ async def update_finding_disposition(task_id: str, finding_id: str, value: Findi
         raise HTTPException(status_code=404, detail="Finding not found")
     current = value.model_dump(mode="json")
     if service._repository:
-        await asyncio.to_thread(service._repository.save_finding_disposition, task_id, finding_id, {"current": current})
+        try:
+            await asyncio.to_thread(service._repository.save_finding_disposition, task_id, finding_id, {"current": current})
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Task not found") from None
     else:
         service._dispositions.setdefault(task_id, {})[finding_id] = {
             "current": current, "updated_at": datetime.now(timezone.utc)}
@@ -443,6 +474,8 @@ async def get_report(task_id: str) -> Response:
 async def stream_review(task_id: str, request: Request) -> EventSourceResponse:
     """SSE 端点：推送步骤状态变化，任务结束时发送 done。"""
     service = get_review_service()
+    if await asyncio.to_thread(service.get_task, task_id) is None:
+        raise HTTPException(status_code=404, detail="Task not found")
 
     async def event_generator():
         last_step_signature: tuple[tuple[object, ...], ...] = ()
@@ -450,7 +483,7 @@ async def stream_review(task_id: str, request: Request) -> EventSourceResponse:
         while True:
             if await request.is_disconnected():
                 break
-            task = service.get_task(task_id)
+            task = await asyncio.to_thread(service.get_task, task_id)
             if task is None:
                 yield {"event": "error", "data": json.dumps({"message": "Task not found"})}
                 break

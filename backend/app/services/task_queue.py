@@ -17,6 +17,7 @@ from sqlalchemy import or_, select, update
 from app.core.config import settings
 from app.core.database import sync_session
 from app.models.orm import ReviewTaskOrm, WorkerJobOrm, utcnow
+from app.services.review_task_access import lock_live_review
 
 
 class NonRetryableJobError(ValueError):
@@ -60,6 +61,8 @@ class DatabaseTaskQueue:
     ) -> str:
         key = idempotency_key or f"{kind}:{task_id}:{unit_id or 'task'}"
         with (self._session_factory.begin() if session is None else nullcontext(session)) as session:
+            if not lock_live_review(session, task_id):
+                raise KeyError(task_id)
             existing = session.scalar(
                 select(WorkerJobOrm).where(WorkerJobOrm.idempotency_key == key)
             )

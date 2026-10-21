@@ -28,6 +28,7 @@ const props = defineProps<{
   plan?: PublicationPlan | null;
   embedded?: boolean;
   stale?: boolean;
+  refreshing?: boolean;
 }>();
 const emit = defineEmits<{ publish: []; file: [path: string]; finding: [key: string]; rereview: []; snapshot: [status: "current" | "stale" | "unknown"] }>();
 const panelId = useId();
@@ -41,7 +42,9 @@ const reportView = ref<ReportMode>(initialView());
 const detail = ref<"compact" | "full">("compact");
 const excludeResolved = ref(false);
 const includeDiscussed = ref(false);
-watch(() => props.reviewId, () => { includeDiscussed.value = false; });
+watch(() => props.reviewId, () => {
+  includeDiscussed.value = false; detail.value = "compact"; excludeResolved.value = false;
+});
 const selection = ref<ReviewCommentCheck | null>(null);
 const previewLoading = ref(false);
 const previewRevision = ref(0);
@@ -60,7 +63,12 @@ const { copied, feedback, checking, pendingCopy, headCheck, previewMarkdown, che
 const currentMarkdown = computed(() => reportView.value === "comment" ? previewMarkdown.value : sourceMarkdown.value);
 watch(headCheck, result => { if (result) emit("snapshot", result.status); });
 const snapshotStale = computed(() => props.stale || headCheck.value?.status === "stale");
-watch([() => props.reviewMarkdown, () => props.userMarkdown, () => props.reviewId], () => { reportView.value = initialView(); });
+const reportUpdated = ref(false);
+watch(() => props.reviewId, () => { reportView.value = initialView(); reportUpdated.value = false; });
+watch([() => props.reviewMarkdown, () => props.userMarkdown, () => props.markdown, () => props.plan], (_, previous) => {
+  if (previous.some(value => value != null)) reportUpdated.value = true;
+});
+watch(() => props.refreshing, value => { if (value) resetCopy(); });
 watch(reportView, resetCopy, { flush: 'sync' });
 watch([detail, excludeResolved, includeDiscussed, previewRevision, () => props.reviewId, () => props.reviewedHeadSha, () => props.reviewMarkdown], async () => {
   resetCopy(); previewController?.abort(); selection.value = null; previewLoading.value = false;
@@ -82,12 +90,12 @@ const reportDialog = ref<HTMLDialogElement | null>(null);
 const confirmationDialog = ref<HTMLDialogElement | null>(null);
 const deliveryAction = ref<'copy' | 'download'>('copy');
 watch(pendingCopy, async () => { await nextTick(); if (pendingCopy.value) confirmationDialog.value?.showModal(); else confirmationDialog.value?.close(); });
-const busy = computed(() => checking.value || (reportView.value === 'comment' && previewLoading.value));
+const busy = computed(() => props.refreshing || checking.value || (reportView.value === 'comment' && previewLoading.value));
 const headLabel = computed(() => checking.value ? '检查中' : snapshotStale.value ? 'PR 已更新' : ({ current: '与快照一致', stale: 'PR 有新提交', unknown: '无法确认' })[headCheck.value?.status || 'unknown']);
 const headNote = computed(() => headCheck.value ? `检查于 ${new Date(headCheck.value.checked_at).toLocaleString('zh-CN')}。${headCheck.value.status === 'unknown' ? '暂时无法确认 PR 是否有新提交，请点击“重试检查”。' : '复制或导出时将再次核对当前 Head。'}` : snapshotStale.value ? '已检测到 PR 更新；本轮记录仅适用于旧快照，建议重新审查。' : '尚未核对远端版本。复制或导出前将由服务端检查 PR 当前 Head。');
 
 async function copyMarkdown() {
-  if (!currentMarkdown.value || checking.value) return;
+  if (!currentMarkdown.value || busy.value) return;
   if (reportView.value !== "comment") { await writeClipboard(currentMarkdown.value); return; }
   deliveryAction.value = 'copy';
   await copyCheckedComment();
@@ -104,7 +112,7 @@ function downloadMarkdown(content: string, kind: string) {
 }
 
 async function exportMarkdown() {
-  if (!currentMarkdown.value || checking.value) return;
+  if (!currentMarkdown.value || busy.value) return;
   // 外部分享类交付与复制共用快照检查；详细报告的历史导出不要求 Head 一致。
   if (reportView.value === "comment") {
     deliveryAction.value = 'download';
@@ -133,6 +141,7 @@ function rereview() { cancelPending(); emit("rereview"); }
       <div class="rd-layout"><section :id="panelId" class="rd-main" role="tabpanel" :aria-label="currentLabel" tabindex="0">
         <div class="rd-view-title"><div><h2>{{ currentLabel }}</h2><p>{{ reportView === 'comment' ? '供 PR 作者和 Reviewer 阅读，可复制为 GitHub Markdown 评论，也可导出。' : reportView === 'user' ? '面向开发者的分析报告：结论、变更理解、代码依据、未发布记录、局限与建议，与后端 Markdown 覆盖同一组事实。' : '供排障、复核与历史追溯使用。先读结构化摘要，原始字段按需展开；与主导航“技术记录”运行页不同。' }}</p></div><span class="badge" :class="reportView === 'comment' ? 'blue' : reportView === 'user' ? 'success' : 'neutral'">{{ reportView === 'comment' ? '默认交付' : reportView === 'user' ? '证据导向' : '高级内容' }}</span></div>
         <p v-if="feedback" class="rd-notice rd-feedback" role="status">{{ feedback }}</p>
+        <p class="rd-context-tip" role="status">{{ refreshing ? '正在更新报告，阅读位置将保留；更新后可继续交付。' : reportUpdated ? '报告已更新，已保留当前阅读位置与选择。' : '' }}</p>
         <div v-if="previewLoading && reportView === 'comment'" class="rd-notice" role="status">正在生成所选内容预览…</div>
         <ReportReadableView v-else-if="reportView === 'user' && plan" :plan="plan" :pr-url="task?.pr_url" @file="emit('file', $event)" @finding="emit('finding', $event)" />
         <AuditSummaryView v-else-if="reportView === 'audit' && plan" :task="task" :plan="plan" :markdown="markdown" @file="emit('file', $event)" />

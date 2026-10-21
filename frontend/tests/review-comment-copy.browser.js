@@ -54,7 +54,7 @@
   assert(!output() && stale(), "取消不得复制或清除过期状态");
   await overviewCopy();
   await confirmation("stale");
-  click(dialog(), "仍复制带旧快照说明的历史记录");
+  click(dialog(), "仍复制旧版审查记录");
   await wait(() => output().includes("快照检查：stale") && !dialog(), "历史复制失败");
   assert(stale(), "复制成功不得恢复当前版本");
   results.push("stale 情景不卸载；取消不复制；确认后保留说明与过期状态");
@@ -65,7 +65,7 @@
   select("快照场景", "unknown");
   click(document.querySelector(".rd-aside"), "复制 PR 评论");
   await confirmation("unknown");
-  click(dialog(), "仍复制带未知状态说明的历史记录");
+  click(dialog(), "仍复制旧版审查记录");
   await wait(() => output().includes("快照检查：unknown") && !dialog(), "未知状态确认失败");
   assert(document.querySelector(".rd-aside").textContent.includes("PR 已更新"), "unknown 不得清除已知 stale");
   results.push("报告共用确认区；unknown 保留服务端说明和已知过期事实");
@@ -79,7 +79,7 @@
   try {
     click(document.querySelector(".rd-aside"), "导出 Markdown");
     await confirmation("stale");
-    click(dialog(), "仍导出带旧快照说明的历史记录");
+    click(dialog(), "仍导出旧版审查记录");
     await wait(() => exported && !dialog(), "确认后未导出");
     assert((await exported.text()).includes("快照检查：stale"), "导出应保留旧快照说明");
     assert(!output(), "导出不能误执行复制");

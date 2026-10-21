@@ -81,7 +81,7 @@
     await wait(() => dialog()?.querySelector(".comment-confirmation"), "未知状态缺少独立确认");
     assert(dialog().contains(document.activeElement), "确认焦点不在弹窗内");
     assert(!output(), "未知状态确认前不得复制");
-    button(dialog(), "仍复制带未知状态说明的历史记录").click();
+    button(dialog(), "仍复制旧版审查记录").click();
     await wait(() => output() && !dialog(), "未知状态确认后未交付");
     assert(output() === lastResponse.review_comment_markdown && output().includes("快照检查：unknown"), "未知快照说明丢失");
     results.push("未知 Head：先确认更新正文，再显式确认快照限制");

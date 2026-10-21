@@ -1,0 +1,85 @@
+{
+  "protocol_version": "aacr-review-v2",
+  "diff_policy": "merge_base",
+  "context_lines": 80,
+  "dataset_lock_sha256": "cfd94dc241f0dea5aecad5facbea62c0e3ae2fd199a7842336f662b56310cd3d",
+  "samples": [
+    {
+      "instance_id": "comfyanonymous__ComfyUI@b55c224",
+      "declared_base_sha": "832e3f5ca3c357e527fdf811502357bd2798425e",
+      "head_sha": "b55c2247654476fbc744e572ba7a834fd9378745",
+      "effective_base_sha": "fca304debf5a4e6c71f8def10ac41cf69519fde3",
+      "diff_sha256": "8c785f6372e26d5f0440f8141ab3b271054fd5f16ff9d31a2a7e9a9a7b13ead6",
+      "changed_lines": 15,
+      "changed_files": [
+        "comfy/clip_model.py",
+        "comfy/ldm/flux/math.py",
+        "comfy/model_management.py"
+      ],
+      "alignment_status": "ready"
+    },
+    {
+      "instance_id": "bluewave-labs__Checkmate@29e03a6",
+      "declared_base_sha": "7c369e84052aaee15a6dedf8928b5af4c869037b",
+      "head_sha": "29e03a6294edfe43b49eba20fe49099cef601d34",
+      "effective_base_sha": "7c369e84052aaee15a6dedf8928b5af4c869037b",
+      "diff_sha256": "915658a64c640ad536e89c5e1e492af94034d9745258745545aa8f1e371d3621",
+      "changed_lines": 225,
+      "changed_files": [
+        ".github/scripts/download-translations.js",
+        ".github/workflows/README.md",
+        ".github/workflows/poeditor-sync.yml"
+      ],
+      "alignment_status": "ready"
+    },
+    {
+      "instance_id": "google-gemini__gemini-cli@77ea28a",
+      "declared_base_sha": "de968877895a8ae5f0edb83a43b37fa190cc8ec9",
+      "head_sha": "77ea28a234023019ddda3f4a5f7a81b3514d3eb8",
+      "effective_base_sha": "273e74c09da89492d16fc076cfbff4d043eafa4c",
+      "diff_sha256": "4e689d94ec4f60c7a199be386328362cf57599f4bf62bc9a67ea8ccb9b117e15",
+      "changed_lines": 463,
+      "changed_files": [
+        "packages/cli/src/services/BuiltinCommandLoader.test.ts",
+        "packages/cli/src/services/BuiltinCommandLoader.ts",
+        "packages/cli/src/ui/commands/mcpCommand.test.ts",
+        "packages/cli/src/ui/commands/mcpCommand.ts",
+        "packages/cli/src/ui/commands/promptCommands.ts",
+        "packages/core/src/tools/mcp-client.test.ts",
+        "packages/core/src/tools/mcp-client.ts"
+      ],
+      "alignment_status": "ready"
+    },
+    {
+      "instance_id": "infiniflow__ragflow@7051234",
+      "declared_base_sha": "b1c874698469ac999d210cd8cde59425781e4da2",
+      "head_sha": "705123406ec7cd5eb1f9be26f6c5c31357aeffc9",
+      "effective_base_sha": "b271cc34b3e5fa24ca067d662b2b0ac4fb561c51",
+      "diff_sha256": "c8eb871d5513242294d2b27dc1cd6a8caf718224ab17645cf6b5573e903d24ff",
+      "changed_lines": 37,
+      "changed_files": [
+        "api/apps/api_app.py",
+        "api/db/services/common_service.py",
+        "api/db/services/document_service.py",
+        "api/db/services/user_canvas_version.py"
+      ],
+      "alignment_status": "ready"
+    },
+    {
+      "instance_id": "ollama__ollama@c2d08dd",
+      "declared_base_sha": "f53f4198c36d0a943de598ad91a20baa9481c5c5",
+      "head_sha": "c2d08dd67a9bcf15e52a2f15b1fad888afffcd32",
+      "effective_base_sha": "ed443a03930a10bec6182c55091f0880baa1e620",
+      "diff_sha256": "c1f41aa5e7e448188fd716dcf4d25945a9924439be72a9d9b1c158582df3c857",
+      "changed_lines": 74,
+      "changed_files": [
+        "api/types.go",
+        "api/types_test.go",
+        "envconfig/config.go",
+        "envconfig/config_test.go",
+        "llm/memory_test.go"
+      ],
+      "alignment_status": "ready"
+    }
+  ]
+}
