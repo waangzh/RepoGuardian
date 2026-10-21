@@ -3,13 +3,12 @@ import { useId } from "vue";
 import type { ReviewCapabilities, ReviewPlanOptions } from "../../types/reviewPlan";
 
 defineProps<{
-  modelValue: ReviewPlanOptions["depth"] | "server";
+  modelValue: ReviewPlanOptions["depth"];
   presets: ReviewCapabilities["depth_presets"];
-  allowServerDefault?: boolean;
   disabled?: boolean;
   label?: string;
 }>();
-const emit = defineEmits<{ "update:modelValue": [value: ReviewPlanOptions["depth"] | "server"] }>();
+const emit = defineEmits<{ "update:modelValue": [value: ReviewPlanOptions["depth"]] }>();
 const id = useId();
 const descriptions: Record<ReviewPlanOptions["depth"], string> = {
   quick: "聚焦直接变更的行为，限制扩展调查，先做快速筛查。",
@@ -23,10 +22,6 @@ function amount(value: number | null, unit: string) {
 
 <template>
   <div class="review-depth-selector" role="group" :aria-label="label || '审查深度'">
-    <button v-if="allowServerDefault" type="button" class="option-card review-depth-server" :class="{ selected: modelValue === 'server' }" :disabled="disabled" :aria-pressed="modelValue === 'server'" :aria-describedby="`${id}-server`" @click="emit('update:modelValue', 'server')">
-      <span class="opt-head">跟随服务端默认<span v-if="modelValue === 'server'" aria-hidden="true">✓</span></span>
-      <span :id="`${id}-server`" class="opt-desc">新建方案时，由服务端选择默认深度和资源预设。</span>
-    </button>
     <div class="option-grid">
       <button v-for="preset in presets" :key="preset.id" type="button" class="option-card review-depth-card" :class="{ selected: modelValue === preset.id }" :disabled="disabled" :aria-label="preset.label" :aria-pressed="modelValue === preset.id" :aria-describedby="`${id}-${preset.id}`" @click="emit('update:modelValue', preset.id)">
         <span class="opt-head">{{ preset.label }}<span v-if="modelValue === preset.id" aria-hidden="true">✓</span></span>
@@ -45,7 +40,6 @@ function amount(value: number | null, unit: string) {
 
 <style scoped>
 .review-depth-selector { min-width: 0; }
-.option-card.review-depth-server { min-height: 0; margin-bottom: 12px; }
 .review-depth-card { height: 100%; }
 .review-depth-caption { display: block; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); font-size: .8125rem; color: var(--muted); }
 .review-depth-limits { display: grid; gap: 6px; margin-top: 8px; font-size: .8125rem; }
