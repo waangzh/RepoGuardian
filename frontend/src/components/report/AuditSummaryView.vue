@@ -19,7 +19,7 @@ const stepStatus: Record<string, string> = { completed: '已完成', running: '�
 </script>
 <template>
   <div class="rd-doc">
-    <div class="rd-notice"><AppIcon name="info" :size="17" /><div><strong>技术审计导出与面向开发者的交付报告分离。</strong> 此处呈现机器执行、证据索引和覆盖说明，未验证线索仍保留未决状态；运行步骤与计量请查看主导航“技术记录”。</div></div>
+    <div class="rd-notice"><AppIcon name="info" :size="17" /><div><strong>技术审计记录与面向开发者的交付报告分离。</strong> 此处呈现机器执行、证据索引和覆盖说明，未验证线索仍保留未决状态；运行步骤与计量请查看主导航“技术记录”。</div></div>
     <div v-if="stale" class="rd-notice warn rd-space"><AppIcon name="history" :size="17" /><div><strong>历史快照记录。</strong>以下执行记录与证据索引来自原 Head <code>{{ plan.snapshot.head_sha?.slice(0, 12) || '未记录' }}</code>；PR 已有新提交，不能用于判断最新版本。</div></div>
     <div class="rd-audit-grid"><div><strong>{{ task?.changed_files.length ?? '未知' }}</strong><small>Diff 文件</small></div><div><strong>{{ task ? `+${task.changed_files.reduce((sum, file) => sum + file.additions, 0)}` : '未知' }}</strong><small>新增行数</small></div><div><strong>{{ plan.outcome.examined_goals ?? '?' }}/{{ plan.outcome.total_goals ?? '?' }}</strong><small>约定目标检查</small></div><div><strong>{{ plan.outcome.publishable_count ?? '未知' }}</strong><small>可发布问题</small></div></div>
     <p v-if="stale" class="rd-history-note">以上数量来自旧快照，不适用于最新 Head。</p>

@@ -53,7 +53,7 @@ export function overviewFacts(plan: ReviewSummary | null, runtime: TaskRuntimeSu
       target: "scope",
     },
     {
-      title: "关联证据与限制",
+      title: "未确认事项与审查限制",
       value: !plan ? "证据状态未知" : investigationCount ? `${investigationCount} 项调查未完成`
         : evidenceGap ? "证据尚不充分" : limitation === "runtime_limits" ? "运行或计量记录受限" : limitations.length ? "存在已知限制"
         : outcome?.runtime_reliability === "unknown" ? "证据边界待核对" : "查看证据边界",
@@ -101,7 +101,7 @@ const SITUATION_DESCRIPTIONS: Record<SituationKey, string> = {
   validation_failed: "当前 Head 绑定的受控检查存在失败记录，不代表全部 CI 失败。",
   blockers: "问题已有代码证据支持，按审查策略建议在合并前处理；该建议不是 GitHub Mergeability 结论。",
   evidence_gaps: "历史复核确认的既有风险与本轮未确认事项分别记录，均会限制合并判断。",
-  scope_incomplete: "检查范围完整性尚待核对，未完成目标需单独确认。",
+  scope_incomplete: "尚无法确认检查范围是否完整，未完成目标需单独确认。",
   runtime_limits: "执行、计量或可靠性信息尚待核对，不据此判断代码存在缺陷。",
   nonblocking: "是否在合并前处理，取决于项目要求和实际影响。",
   clean: "这是已检查范围内的静态结论，不等同于项目 CI 通过。",
@@ -135,8 +135,8 @@ const NEXT_STEPS: Record<SituationKey, NextSteps> = {
     steps: [["查看问题与证据", "确认触发条件、定位和影响范围"], ["修复并完成项目验证", "使用项目 CI 或受控外部验证"], ["基于新提交重新审查", "旧快照结论不自动适用于新 Head"]],
   },
   clean: {
-    title: "可以准备审查交付",
-    description: "阅读报告，或预览并复制 PR 评论。",
+    title: "先核对完整报告",
+    description: "核对结论与覆盖边界，再准备 PR 评论。",
     steps: [["核对版本与 CI", "确认 PR 当前 Head 和项目验证结果"], ["阅读交付摘要", "核对结论措辞与覆盖边界"], ["由人工决定是否合并", "静态结论不代替项目审批"]],
   },
   nonblocking: {

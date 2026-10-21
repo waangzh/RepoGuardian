@@ -35,9 +35,31 @@ for (const { task } of Object.values(fixtures)) {
     ] }] }];
 }
 const params = new URLSearchParams(location.search);
+if (params.has("readability")) {
+  const path = `src/非常长的中文模块路径/${"nested-caller-contract/".repeat(7)}返回值与消费路径.ts`;
+  const stats = { status: "partial" as const, collected: 5, comments: 12, referenced: 2,
+    referenced_comments: 4, checked: 2, unchecked: 3, limitations: ["部分评论未读取，未读取内容保持未知。"],
+    termination_reason: "budget_exhausted" };
+  for (const fixture of Object.values(fixtures)) {
+    fixture.task.changed_files[0]!.file_path = path;
+    fixture.plan.digest.discussion_stats = stats;
+    fixture.summary.digest.discussion_stats = stats;
+    fixture.plan.digest.change_understanding = fixture.summary.digest.change_understanding = {
+      author_goal: "整理返回值与调用方的约定，处理空数据，并让异常反馈更清晰。",
+      actual_changes: "本次修改调整了服务返回值与调用方处理分支。静态观察只描述代码行为，不能据此推断作者目标已经实现或项目测试已经通过。",
+      alignment: "尚未核对的下游路径仍需结合项目测试与人工审查确认。",
+    };
+  }
+}
+if (params.get("theme") === "dark") document.documentElement.dataset.theme = "dark";
 const initialScene = params.get("scene") || "findings";
 const choice = ref(fixtures[initialScene] ? initialScene : "findings");
 const task = ref(fixtures[choice.value]!.task);
+if (params.has("progress")) {
+  task.value = { ...task.value, status: "running", steps: [{ name: "review", status: "running",
+    message: "正在核对变更涉及的调用链", started_at: null, completed_at: null,
+    progress: { percent: params.get("progress") === "unknown" ? null : Number(params.get("progress")), detail: "核对返回值与下游消费路径" } }] };
+}
 const section = ref<ReviewSection>(params.get("section") === "overview" ? "overview" : "report");
 const snapshotState = ref('current');
 const copiedText = ref('');

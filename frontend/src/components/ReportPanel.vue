@@ -55,7 +55,7 @@ const visibleFindingCount = computed(() => headCheck.value?.included_finding_key
 const sourceMarkdown = computed(() => reportView.value === "comment" ? (customSelection.value ? selection.value?.review_comment_markdown : props.reviewMarkdown)
   : reportView.value === "user" ? props.userMarkdown : props.markdown);
 const currentLabel = computed(() => reportView.value === "comment" ? "PR 评论草稿"
-  : reportView.value === "user" ? "详细审查报告" : "技术审计导出");
+  : reportView.value === "user" ? "详细审查报告" : "技术审计记录");
 const { copied, feedback, checking, pendingCopy, headCheck, previewMarkdown, checkHead, cancelPending, resetCopy, writeClipboard, copyCheckedComment, copyAcknowledged, checkedComment, retryPending } = useReviewCommentCopy({
   reviewId: () => props.reviewId, reviewedHeadSha: () => props.reviewedHeadSha, markdown: () => sourceMarkdown.value,
   options: () => ({ detail: detail.value, exclude_resolved: excludeResolved.value, include_discussed: includeDiscussed.value }),

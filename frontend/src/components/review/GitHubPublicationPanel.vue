@@ -111,7 +111,7 @@ const placementLabel = (placement: string) => placement === "inline" ? "代码�
 
 <template>
   <details class="github-publication" aria-label="GitHub 交付">
-    <summary>交付到 GitHub</summary>
+    <summary>发布或复制到 GitHub</summary>
     <div class="github-publication__body">
       <section class="github-publication__paths" aria-label="交付方式">
         <article class="github-publication__path">

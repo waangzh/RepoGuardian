@@ -5,7 +5,7 @@ import type { ReviewSummary } from "../../types/publication";
 import type { ReviewSituation } from "../../utils/reviewSituation";
 import type { ReviewSection } from "../../types/workspace";
 import { overviewConclusionDescription, overviewFacts } from "../../utils/overviewPresentation";
-import { coverageLabel, reportValidationLabel } from "../../utils/reportPresentation";
+import { coverageLabel, reportValidationLabel, reviewScopeLabel } from "../../utils/reportPresentation";
 import AppIcon from "../common/AppIcon.vue";
 
 const props = defineProps<{
@@ -41,11 +41,11 @@ function navigate(section: ReviewSection) {
       <div class="ov-verdict__kicker"><AppIcon :name="situation?.icon || 'info'" :size="18" />本轮结论 · {{ plan ? kicker : "摘要暂不可用" }}</div>
       <h2 id="overview-conclusion">{{ situation?.title || (summaryLoading ? "正在读取审查结论" : summaryError ? "当前无法读取完整审查结论" : "暂时无法形成完整结论") }}</h2>
       <p class="ov-verdict__description">{{ overviewConclusionDescription(situation) || (summaryLoading ? "正在读取摘要，加载完成前不能判断合并建议。" : "摘要缺失不代表零问题或审查失败，当前不能判断合并建议。") }}</p>
-      <p v-if="situation?.nextStep" class="ov-verdict__next"><strong>下一步：</strong>{{ situation.nextStep }}</p>
+      <slot />
       <div class="ov-verdict__bottom">
         <div class="ov-verdict__meta">
           <span><AppIcon name="activity" :size="15" />{{ execution }}</span>
-          <span><AppIcon name="units" :size="15" />{{ facts.examined ?? "未知" }} / {{ facts.total ?? "未知" }} 项目标已检查</span>
+          <span><AppIcon name="units" :size="15" />{{ reviewScopeLabel(facts.examined, facts.total) }}</span>
           <span><AppIcon name="flask" :size="15" />{{ facts.validation === "not_executed" ? "仅静态审查" : reportValidationLabel(facts.validation) }}</span>
         </div>
         <button type="button" class="ov-link" @click="explanationOpen = true">结论如何得出 <AppIcon name="arrow-right" :size="15" /></button>

@@ -21,7 +21,12 @@
     select.dispatchEvent(new Event('change', { bubbles: true }));
   };
   const overview = () => document.querySelector('.rg-overview');
-  await wait(() => overview()?.textContent.includes('可以准备审查交付'), '概览未就绪');
+  await wait(() => button(overview() || document, '查看完整报告'), '概览未就绪');
+  const disclosures = [...overview().querySelectorAll('.ov-disclosure')];
+  assert(disclosures.length === 3 && disclosures.every(item => !item.open), '补充信息应默认收起');
+  assert(!overview().innerText.includes('结论依据与可信边界'), '可信边界不应默认占据首屏');
+  const primary = [...document.querySelectorAll('.rg-overview .primary, .head-actions .primary')].filter(item => item.getClientRects().length);
+  assert(primary.length === 1 && primary[0].textContent.includes('查看完整报告'), '概览应只有一个主操作');
   const steps = overview().querySelector('.ov-step-details');
   assert(!steps.open && !steps.innerText.includes('核对版本与 CI'), '步骤应默认收起');
   steps.querySelector('summary').click();
@@ -33,6 +38,9 @@
   assert(!button(overview(), '阅读详细审查报告'), '已有报告动作时不应重复入口');
   assert(document.documentElement.scrollWidth <= innerWidth + 1, '页面存在横向溢出');
   results.push(`折叠、单一报告入口与无溢出：${innerWidth}px`);
+  disclosures[0].querySelector('summary').click();
+  assert(disclosures[0].open && overview().innerText.includes('结论依据与可信边界'), '检查范围无法展开');
+  disclosures[0].querySelector('summary').click();
 
   const trigger = button(overview(), '结论如何得出');
   trigger.focus();
