@@ -135,17 +135,27 @@ def test_historical_discussion_timeout_and_usage_never_degrade_completed_primary
     assert outcome.historical_discussion.affects_risk is False
 
 
-def test_only_code_verified_historical_defect_affects_overall_risk():
-    task = completed_task()
+@pytest.mark.parametrize("updates,status", [
+    ({}, "completed"),
+    ({"scope_complete": False}, "completed_with_warnings"),
+    ({"usage_integrity": "unknown"}, "completed_with_warnings"),
+    ({"findings": [{"status": "candidate"}]}, "completed_with_warnings"),
+    ({"execution_status": "failed", "termination_reason": "technical_failure"}, "failed"),
+    ({"execution_status": "cancelled", "termination_reason": "cancelled"}, "cancelled"),
+])
+def test_code_verified_history_preserves_all_primary_review_dimensions(updates, status):
+    task = completed_task(**updates)
+    task.status = status
+    primary = derive_review_outcome(task).model_dump(mode="json")
     task.pr_discussion = discussion(rechecks=[
         {"discussion_id": "inline:1", "path": "src/a.py", "status": "still_present",
          "reason": "当前实现仍返回空值", "evidence_ids": ["e1"], "limitations": []},
         {"discussion_id": "inline:2", "status": "not_checked", "reason": "未核验"}])
     outcome = derive_review_outcome(task)
-    assert outcome.kind == "inconclusive"
-    assert "historical_discussion_unresolved" in outcome.reason_codes
-    # 历史证据不改变当前 Diff 的范围完整性与运行可靠性。
-    assert outcome.review_completeness == "complete" and outcome.runtime_reliability == "reliable"
+    combined = outcome.model_dump(mode="json")
+    combined.pop("historical_discussion")
+    assert combined == primary
+    assert "historical_discussion_unresolved" not in outcome.reason_codes
     assert outcome.historical_discussion.affects_risk is True
     assert [item["discussion_id"] for item in outcome.historical_discussion.verified_defects] == ["inline:1"]
 

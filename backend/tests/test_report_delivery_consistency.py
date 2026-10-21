@@ -48,6 +48,10 @@ def test_failure_classification_keeps_known_failure_distinct_from_unknown(kind, 
             exit_code=0 if passed else 1, passed=passed)])]
     plan = PublicationPlanner().build(task)
     assert plan.outcome.dynamic_validation == plan.digest.validation_state == plan.digest.validations[0].status == expected
+    for text in (plan.review_comment_markdown, plan.summary_markdown):
+        assert ("已有与当前 Head 绑定的验证失败记录" in text) is (expected == "failed")
+        if expected == "unknown":
+            assert text.count("动态验证状态未知") == 1
     if expected == "failed":
         assert "已有与当前 Head 绑定的验证失败记录" in plan.review_comment_markdown
         assert "head_validation_failed" in plan.digest.merge_decision.unresolved_reasons
@@ -67,7 +71,11 @@ def test_known_regression_does_not_bypass_identity_or_command_checks(bad):
     else:
         snapshot.command_results[0].exit_code = 0
     task.validation_snapshots = [snapshot]
-    assert PublicationPlanner().build(task).outcome.dynamic_validation == "unknown"
+    plan = PublicationPlanner().build(task)
+    assert plan.outcome.dynamic_validation == "unknown"
+    for text in (plan.review_comment_markdown, plan.summary_markdown):
+        assert "已有与当前 Head 绑定的验证失败记录" not in text
+        assert "动态验证状态未知" in text
 
 
 @pytest.mark.parametrize("disposition", ["examined", "blocked"])

@@ -20,5 +20,7 @@ CLAUDE.md
 .zvec-grep
 docs/
 /.trellis
+/.agents/
+/.codex/
 .pytest-*/
 .vite/

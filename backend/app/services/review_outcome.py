@@ -76,10 +76,6 @@ def derive_review_outcome(task: ReviewTask, *, publishable_count: int | None = N
         reasons.append(Reason.BUDGET_EXHAUSTED)
     elif report.termination_reason == "deadline":
         reasons.append(Reason.DEADLINE_EXCEEDED)
-    # 历史讨论复核是补充性的独立结果：其超时或计量缺失不再自动把已完成的主审查
-    # 降级为未知；只有复核实际取得“问题仍存在”的代码证据时才影响整体风险判断。
-    if discussion and discussion.get("affects_risk"):
-        reasons.append(Reason.HISTORICAL_DISCUSSION_UNRESOLVED)
     if not cancelled and not failed:
         kind = Kind.FINDINGS if confirmed else Kind.CLEAN if not reasons else Kind.INCONCLUSIVE
     publishable = 0
@@ -87,9 +83,7 @@ def derive_review_outcome(task: ReviewTask, *, publishable_count: int | None = N
         # Planner 使用同一个准入函数；原始确认数始终保留，不因扣留而减少。
         publishable = (publishable_count if publishable_count is not None
                        else len(select_publication_findings(task, report.findings)[0]))
-    # 历史讨论复核的“已核验仍存在”是独立证据：保留在 reason_codes 供裁决与展示，
-    # 不改变当前 Diff 的检查范围完整性、覆盖率和运行可靠性（由 review_completeness /
-    # runtime_reliability 分别派生，它们只检查各自原因集合）。
+    # 主审查字段只反映本轮 Diff；历史风险由独立结果进入综合合并建议。
     return ReviewOutcome(kind=kind,
                          coverage=CoverageKind.PARTIAL if reasons else CoverageKind.COMPLETE,
                          confirmed_count=confirmed, publishable_count=publishable, unresolved_count=unresolved,

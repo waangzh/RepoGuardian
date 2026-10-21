@@ -18,6 +18,8 @@ def merge_decision(plan):
     blocking = sorted({item.id for item in views if item.severity in {"critical", "high"}})
     suggestions = sorted({item.id for item in views if item.severity in {"medium", "low"}})
     unresolved = [reason.value for reason in plan.outcome.reason_codes]
+    if plan.outcome.historical_discussion.affects_risk:
+        unresolved.append("historical_discussion_unresolved")
     if plan.digest.author_context_status in {"truncated", "unknown"}:
         unresolved.append("author_context_" + plan.digest.author_context_status)
     if plan.outcome.confirmed_count > plan.outcome.publishable_count:

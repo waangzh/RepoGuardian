@@ -105,20 +105,21 @@ test("历史讨论复核的独立状态不改变主审查情景", async () => {
     assert.equal(situation.key, "clean");
     assert.equal(situation.title, "已检查范围内未发现需处理的问题");
 
-    // 只有经独立代码核验确认仍存在的历史问题才进入证据缺口情景。
+    // 主审查保持 clean，综合建议独立披露历史已核验风险。
     const affected = structuredClone(clean);
-    affected.outcome.kind = "inconclusive";
-    affected.outcome.reason_codes = ["historical_discussion_unresolved"];
     affected.outcome.historical_discussion.status = "completed";
     affected.outcome.historical_discussion.affects_risk = true;
     affected.outcome.historical_discussion.verified_defects = [{ discussion_id: "inline:1", path: "src/a.py",
       reason: "当前实现仍返回空值", evidence_ids: ["e1"] }];
     affected.digest.merge_decision.status = "resolve_unknowns";
+    affected.digest.merge_decision.unresolved_reasons = ["historical_discussion_unresolved"];
     const verified = reviewSituation(affected);
     assert.equal(verified.key, "evidence_gaps");
     assert.equal(verified.title, "历史讨论中的问题经代码核验仍存在，需先核对");
     assert.match(verified.description, /已用当前固定代码确认/);
     assert.doesNotMatch(verified.description, /未决事项不等于已确认代码缺陷/);
+    assert.equal(affected.outcome.kind, "clean");
+    assert.deepEqual(affected.outcome.reason_codes, []);
     const { overviewConclusionDescription } = await server.ssrLoadModule("/src/utils/overviewPresentation.ts");
     // 概览的通用说明同样不能把已核验的历史风险写成未决事项。
     assert.match(overviewConclusionDescription(verified), /历史复核确认的既有风险/);
