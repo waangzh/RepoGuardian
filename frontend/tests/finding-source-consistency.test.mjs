@@ -126,3 +126,46 @@ test("来源数量与总数无法对账时不展示拆分", async () => {
     assert.doesNotMatch(html, /ov-source/);
   } finally { await server.close(); }
 });
+
+test("已核验但未分级的历史风险进入完整报告，不跳到缺少条目的问题列表", async () => {
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  try {
+    const { reviewSituation, situationActionTarget } = await server.ssrLoadModule("/src/utils/reviewSituation.ts");
+    const { historicalFindingRows } = await server.ssrLoadModule("/src/utils/findingWorkbench.ts");
+    const { default: Overview } = await server.ssrLoadModule("/src/components/pages/ReviewOverviewPage.vue");
+    const fixtures = JSON.parse(await readFile(new URL("./fixtures/publication-plans.json", import.meta.url), "utf8"));
+    for (const variant of ["unclassified", "legacy", "with-suggestion"]) {
+      const plan = withHistory(fixtures.clean.summary, {
+        status: "resolve_unknowns", label: "历史讨论中的问题经代码核验仍存在，需先核对",
+        blocking_historical_keys: [], blocking_independent_count: null,
+        unresolved_reasons: ["historical_discussion_unresolved"],
+      });
+      plan.outcome.historical_discussion = {
+        status: "completed", affects_risk: true,
+        verified_defects: [{ discussion_id: HISTORICAL.discussion_id, path: HISTORICAL.path,
+          reason: HISTORICAL.reason, evidence_ids: HISTORICAL.evidence_ids }],
+        findings: variant === "legacy" ? undefined
+          : [{ ...HISTORICAL, severity: "unknown", priority: "assess_impact" }],
+      };
+      if (variant === "with-suggestion") {
+        plan.outcome.historical_discussion.findings.push({
+          ...HISTORICAL, discussion_id: "inline:suggestion", severity: "low", priority: "assess_improvement",
+        });
+        plan.digest.merge_decision.nonblocking_historical_keys = ["inline:suggestion"];
+      }
+      const situation = reviewSituation(plan);
+      assert.equal(situation.key, "evidence_gaps", variant);
+      assert.equal(situation.actions[0].key, "view_report", variant);
+      assert.equal(situationActionTarget(situation.actions[0].key).section, "report", variant);
+      assert.match(situation.nextStep, /查看完整报告/);
+      assert.match(situation.description, /已用当前固定代码确认/);
+      assert.equal(historicalFindingRows(plan).some(row => row.key === HISTORICAL.discussion_id), false);
+      const html = await renderToString(createSSRApp(Overview, {
+        task: fixtures.clean.task, summaryPlan: plan, summary: null,
+        findings: [], warnings: [], terminal: true,
+      }));
+      assert.match(html, /查看完整报告/);
+      assert.doesNotMatch(html, /查看高优先级问题中的历史复核来源/);
+    }
+  } finally { await server.close(); }
+});

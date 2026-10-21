@@ -230,8 +230,8 @@ export function reviewSituation(
     if (limitation === "evidence_gaps") {
       const reasons = [...(outcome.reason_codes ?? []), ...(decision?.unresolved_reasons ?? [])];
       const historical = reasons.includes("historical_discussion_unresolved");
-      // 历史风险已进入问题工作台，可按来源核对，不必只跳转到报告正文。
-      const action = historical ? "view_blockers" : unresolvedCount > 0 ? "view_unresolved"
+      // 未分级的已核验历史风险可能没有问题列表键，完整报告才保留这些记录。
+      const action = historical ? "view_report" : unresolvedCount > 0 ? "view_unresolved"
         : outcome.incomplete_investigations > 0 || reasons.some(reason => ["investigation_incomplete", "unscheduled_investigation"].includes(reason))
           ? "view_investigations" : "view_report";
       return { ...counts, key: "evidence_gaps", title: titleOf(evidenceTitle(outcome, reasons)),
@@ -239,7 +239,7 @@ export function reviewSituation(
           ? "历史复核已用当前固定代码确认部分既有问题仍然存在；它们不计入本轮 Diff 的新增问题，但会影响合并判断。"
           : "未确认事项不等于代码证据已确认的缺陷，但会限制合并判断。",
         nextStep: historical
-          ? "查看高优先级问题中的历史复核来源，核对证据、影响范围与修复状态。"
+          ? "查看完整报告，核对历史问题的证据、影响范围与修复状态。"
           : action === "view_unresolved" ? "查看未确认事项，补齐代码或目标依据后再判断。"
             : action === "view_investigations" ? "查看未完成调查，补齐关联证据后再判断。"
               : "查看完整报告，核对证据缺口后再判断。",
