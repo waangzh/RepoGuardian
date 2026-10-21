@@ -132,7 +132,7 @@ def test_compact_comment_is_publishable_and_does_not_repeat_boilerplate():
     assert compact.index("回归令牌校验缺失") < compact.index("本结论基于提交")
     # 省略没有实际限制的空章节，同时保留问题与快照。
     assert compact.startswith("RepoGuardian · PR Code Review\n\n✅ 结论：发现 1 项改进建议，暂无高优先级问题")
-    assert [line for line in compact.splitlines() if line.startswith("## ")] == ["## 变更理解", "## 建议项"]
+    assert [line for line in compact.splitlines() if line.startswith("## ")] == ["## 变更理解", "## 其他建议", "## 下一步"]
     assert "非高优先级问题" in compact
     # 非阻断问题也必须保留标题、位置和建议，只是省略证据展开。
     assert "**建议：**" in compact and "src/a" in compact
@@ -173,7 +173,7 @@ def test_blockers_with_failed_head_validation_share_one_combined_conclusion():
     assert "动态检查失败" in decision.advice
     assert summary_projection(plan).digest.merge_decision.label == decision.label
     # 阻断建议仍保留修复与重新核验的顺序。
-    assert plan.review_comment_markdown.index(decision.label) < plan.review_comment_markdown.index("## 高优先级问题")
+    assert plan.review_comment_markdown.index(decision.label) < plan.review_comment_markdown.index("## 需要处理的问题")
 
 
 def test_clean_comment_is_brief_and_keeps_one_validation_boundary():
@@ -188,7 +188,7 @@ def test_clean_comment_is_brief_and_keeps_one_validation_boundary():
     assert plan.outcome.confirmed_count == 0
     assert markdown.count("未执行目标仓库代码、测试或构建") == 1
     assert markdown.count("不替代 CI 与人工审批") == 1
-    assert [line for line in markdown.splitlines() if line.startswith("## ")] == ["## 变更概述", "## 合并前提醒"]
+    assert [line for line in markdown.splitlines() if line.startswith("## ")] == ["## 变更理解", "## 下一步"]
     assert "作者声明（未经独立验证）：" not in markdown
     for state in ("passed", "failed", "independent_results", "unknown"):
         changed = plan.model_copy(deep=True)
@@ -236,7 +236,8 @@ def test_multiple_findings_share_one_document_validation_boundary():
     assert plan.outcome.publishable_count == 2
     for markdown in (plan.user_report_markdown, render_review_comment(plan, detail="full")):
         assert "缓存读取失败" in markdown and "刷新路径失败" in markdown
-        assert markdown.count("未执行目标仓库代码") == 1
+        assert sum(markdown.count(text) for text in (
+            "未执行目标仓库代码", "当前 Head 未执行受控动态验证")) == 1
         assert markdown.count("来源与验证边界") <= 1
 
 
@@ -268,7 +269,7 @@ def test_incomplete_comments_only_show_gaps_and_next_steps(updates, reason):
         markdown = render_review_comment(plan, detail=detail)
         assert reason in markdown
         assert [line for line in markdown.splitlines() if line.startswith("## ")] == [
-            "## 未检查/未核实事项", "## 下一步"]
+            "## 仍需确认的事项", "## 下一步"]
         assert "## 变更概述" not in markdown and "## 已确认问题" not in markdown
         assert markdown.count("未执行目标仓库代码、测试或构建") == 1
 
@@ -291,10 +292,26 @@ def test_blockers_precede_observations_and_limits_even_with_execution_gaps(sever
     for detail in ("compact", "full"):
         markdown = render_review_comment(plan, detail=detail)
         assert [line for line in markdown.splitlines() if line.startswith("## ")] == [
-            "## 高优先级问题", "## 变更理解", "## 其他局限", "## 建议"]
+            "## 需要处理的问题", "## 变更理解", "## 仍需确认的事项", "## 下一步"]
         assert "**代码证据：**" in markdown and "**触发场景：**" in markdown
         assert markdown.count("权限绕过导致未授权数据访问") == 1
     assert task.model_dump(mode="json") == before
+
+
+def test_comment_sections_never_render_empty_or_misplaced_action_blocks():
+    """有阻断问题但没有非阻断建议时，不能出现空“建议”章节或缺少“下一步”标题的行动文案。"""
+    task = publishable_task(severity="high", claim="权限绕过导致未授权数据访问")
+    task.task_runtime_report["findings"][0]["issue"]["confidence"] = 0.99
+    plan = PublicationPlanner().build(task)
+    assert plan.digest.merge_decision.nonblocking_finding_keys == []
+    for detail in ("compact", "full"):
+        markdown = render_review_comment(plan, detail=detail)
+        headings = [line for line in markdown.splitlines() if line.startswith("## ")]
+        assert "## 其他建议" not in headings and "## 建议" not in headings
+        # 行动文案必须位于独立“下一步”章节内，而不是挂在最后一条问题后面。
+        action = markdown.split("## 下一步\n\n", 1)[1].split("\n\n---", 1)[0]
+        assert "先修复上述高优先级问题" in action
+        assert action.strip() not in markdown.split("## 下一步")[0]
 
 
 def test_nonblocking_findings_remain_before_runtime_limits():
@@ -305,7 +322,7 @@ def test_nonblocking_findings_remain_before_runtime_limits():
     for detail in ("compact", "full"):
         markdown = render_review_comment(plan, detail=detail)
         assert [line for line in markdown.splitlines() if line.startswith("## ")] == [
-            "## 变更理解", "## 建议项", "## 局限"]
+            "## 变更理解", "## 其他建议", "## 仍需确认的事项", "## 下一步"]
 
 
 def test_mixed_findings_only_put_blockers_before_change_understanding():
@@ -321,8 +338,9 @@ def test_mixed_findings_only_put_blockers_before_change_understanding():
     for detail in ("compact", "full"):
         markdown = render_review_comment(plan, detail=detail)
         assert markdown.index("权限绕过导致未授权数据访问") < markdown.index("## 变更理解")
-        assert markdown.index("缓存改进建议") > markdown.index("## 其他局限")
-        assert "缓存改进建议" not in markdown.split("## 建议\n")[0]
+        assert markdown.index("缓存改进建议") > markdown.index("## 其他建议")
+        assert markdown.index("缓存改进建议") < markdown.index("## 仍需确认的事项")
+        assert "缓存改进建议" not in markdown.split("## 其他建议\n")[0]
         assert markdown.count("缓存改进建议") == 1
         assert markdown.count("权限绕过导致未授权数据访问") == 1
     assert plan.model_dump(mode="json") == before
@@ -422,7 +440,7 @@ def test_failed_or_cancelled_copy_is_explicitly_a_partial_record():
         assert "部分问题尚未核实" not in markdown
         assert "审查因执行错误中断，以下建议不构成完整审查结论" in markdown
         assert [line for line in markdown.splitlines() if line.startswith("## ")] == [
-            "## 已保留记录", "## 未覆盖范围", "## 重新审查"]
+            "## 变更理解", "## 仍需确认的事项", "## 下一步"]
     assert "部分审查记录" in plan.summary_markdown
     assert "部分审查记录" not in PublicationPlanner().build(completed_task()).review_comment_markdown
 
@@ -436,4 +454,4 @@ def test_failed_or_cancelled_copy_is_explicitly_a_partial_record():
         assert "以下为用户停止前已保留的部分审查记录" in markdown
         assert "审查已由用户停止，以下建议仅基于停止前保留的记录" in markdown
         assert [line for line in markdown.splitlines() if line.startswith("## ")] == [
-            "## 已保留记录", "## 未覆盖范围", "## 重新审查"]
+            "## 变更理解", "## 仍需确认的事项", "## 下一步"]
