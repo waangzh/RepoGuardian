@@ -416,6 +416,8 @@ async def test_supplemental_queue_checks_files_outside_diff_and_preserves_main_t
     from app.services import pr_discussion_recheck as module
     step, messages = make_slice(tmp_path, [lambda payload: {"kind": "submit", "investigation": {
         "answer": "supported", "resolution": "still_present", "reason": "Current source still returns null",
+        "severity": "high", "affected_behavior": "Unauthenticated calls still reach the protected path",
+        "recommendation": "Reject unauthenticated callers before accessing the protected path",
         "evidence_ids": [v["id"] for v in payload["active_evidence"]], "limitations": []}}])
     store = await store_for(tmp_path)
     async def open_frozen(*args, **kwargs):
@@ -441,6 +443,8 @@ async def test_supplemental_queue_checks_files_outside_diff_and_preserves_main_t
         "termination": store.data.get("termination_reason"), "queue": store.data.get("history_checkpoint", {}).get("items")}
     assert result["pr_discussion"]["stats"]["checked"] == 1 and len(messages) == 1
     assert repeated["pr_discussion"]["stats"]["checked"] == 1
+    assert store.data["rechecks"]["inline:1"]["severity"] == "high"
+    assert store.data["rechecks"]["inline:1"]["affected_behavior"].startswith("Unauthenticated")
 
 
 async def test_outer_deadline_during_recheck_keeps_completed_part_and_marks_rest_unchecked(tmp_path, monkeypatch):

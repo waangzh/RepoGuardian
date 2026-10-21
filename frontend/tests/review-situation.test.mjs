@@ -134,8 +134,9 @@ test("缺口按实际原因区分，混合限制和旧记录不伪装成代码�
     const fixtures = JSON.parse(await readFile(new URL("./fixtures/publication-plans.json", import.meta.url), "utf8"));
     const runtime = structuredClone(fixtures.runtime_limits.summary);
     assert.equal(reviewSituation(runtime).title, runtime.digest.merge_decision.label);
-    assert.match(reviewSituation(runtime).description, /已检查 1\/1 项/);
-    assert.match(reviewSituation(runtime).description, /不代表代码缺陷/);
+    assert.equal(reviewSituation(runtime).key, "clean");
+    assert.match(reviewSituation(runtime).description, /运行计量记录不完整/);
+    runtime.digest.merge_decision.status = "resolve_unknowns";
     runtime.outcome.reason_codes.push("investigation_incomplete");
     assert.equal(reviewSituation(runtime).key, "evidence_gaps");
     runtime.outcome.reason_codes.push("scope_incomplete");
@@ -184,5 +185,43 @@ test("结果概览按情景渲染主操作与复制语义", async () => {
       // 已完成或部分完成的审查不再引导用户“完成审查”。
       assert.ok(!html.includes("完成审查"), `${name}: 不应出现完成审查`);
     }
+  } finally { await server.close(); }
+});
+
+
+test("计量附注和历史分级采用后端事实并引导到可见证据", async () => {
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  try {
+    const { reviewSituation } = await server.ssrLoadModule("/src/utils/reviewSituation.ts");
+    const fixtures = JSON.parse(await readFile(new URL("./fixtures/publication-plans.json", import.meta.url), "utf8"));
+    const meter = structuredClone(fixtures.runtime_limits.summary);
+    assert.equal(meter.outcome.kind, "inconclusive");
+    assert.equal(meter.outcome.coverage, "complete");
+    assert.equal(reviewSituation(meter).key, "clean");
+    assert.equal(reviewSituation(meter).title, "已检查范围内未发现已确认问题");
+    assert.match(reviewSituation(meter).description, /计量记录不完整/);
+    const history = structuredClone(fixtures.clean.summary);
+    history.digest.merge_decision = { status: "fix_blockers", label: "历史高优先级问题", blocking_finding_keys: [],
+      nonblocking_finding_keys: [], blocking_historical_keys: ["inline:1"], nonblocking_historical_keys: [] };
+    const { overviewFacts } = await server.ssrLoadModule("/src/utils/overviewPresentation.ts");
+    assert.equal(overviewFacts(history, null).blockers, 1);
+    assert.equal(reviewSituation(history).blockingCount, 1);
+    assert.equal(reviewSituation(history).key, "blockers");
+    assert.equal(reviewSituation(history).actions[0].key, "view_report");
+    history.digest.merge_decision.status = "conditional_merge";
+    history.digest.merge_decision.blocking_historical_keys = [];
+    history.digest.merge_decision.nonblocking_historical_keys = ["inline:1"];
+    assert.equal(reviewSituation(history).nonblockingCount, 1);
+    assert.equal(reviewSituation(history).key, "nonblocking");
+    assert.equal(reviewSituation(history).actions[0].key, "view_report");
+    const plan = structuredClone(fixtures.clean.plan);
+    plan.outcome.historical_discussion = { findings: [{ discussion_id: "inline:1", status: "still_present",
+      severity: "high", priority: "fix_before_merge", affected_behavior: "受保护分支仍可被匿名访问",
+      recommendation: "在访问前校验身份", reason: "固定源码证据", evidence_ids: ["history-e1"],
+      discussion_url: "https://github.com/o/r/pull/1#discussion_r1" }] };
+    const Readable = (await server.ssrLoadModule("/src/components/report/ReportReadableView.vue")).default;
+    const html = await renderToString(createSSRApp(Readable, { plan }));
+    for (const text of ["建议合并前修复", "受保护分支仍可被匿名访问", "在访问前校验身份", "history-e1", "查看已有讨论"])
+      assert.ok(html.includes(text), text);
   } finally { await server.close(); }
 });

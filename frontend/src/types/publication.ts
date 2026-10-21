@@ -29,6 +29,20 @@ export interface HistoricalDiscussionOutcome {
   limitations: string[];
   usage: Record<string, unknown>;
   affects_risk: boolean;
+  findings?: HistoricalFindingView[];
+}
+
+export interface HistoricalFindingView {
+  discussion_id: string;
+  path: string | null;
+  status: "still_present";
+  severity: "critical" | "high" | "medium" | "low" | "unknown";
+  priority: "fix_before_merge" | "assess_improvement" | "assess_impact";
+  affected_behavior: string | null;
+  recommendation: string | null;
+  reason: string;
+  evidence_ids: string[];
+  discussion_url: string | null;
 }
 
 export interface DigestGoal {
@@ -114,6 +128,8 @@ export interface MergeDecision {
   nonblocking_finding_keys: string[];
   unresolved_reasons: string[];
   limits: string[];
+  blocking_historical_keys?: string[];
+  nonblocking_historical_keys?: string[];
 }
 export interface ReviewCommentOptions {
   detail: "compact" | "full";

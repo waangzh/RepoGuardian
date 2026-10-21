@@ -164,7 +164,7 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
       assert.ok(!html.includes('作者声明（未经独立验证）：'));
       assert.equal(html.split('作者输入已截断，尾部尚未核验。').length - 1, 1);
       assert.ok(html.indexOf('来源与验证边界') < html.indexOf('作者输入已截断'));
-      assert.equal(html.split('未执行目标仓库代码、测试或构建。').length - 1, 1);
+      assert.equal(html.split('当前 Head 未执行受控动态验证').length - 1, 1);
       assert.ok(html.includes('不代表目标已实现'));
       assert.equal(JSON.stringify(plan), before);
     });

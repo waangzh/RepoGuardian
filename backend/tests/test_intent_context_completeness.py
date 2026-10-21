@@ -63,7 +63,7 @@ def assessed_task(spec, alignment="not_applicable"):
 
 
 @pytest.mark.parametrize("alignment", ["not_applicable", "supported"])
-def test_omitted_tail_stays_unresolved_in_all_deliverables_even_when_visible_targets_pass(alignment):
+def test_omitted_tail_is_disclosed_without_becoming_a_merge_requirement(alignment):
     marker = "必须拒绝已过期的登录令牌"
     spec = spec_for("说明" * 2100 + "\n" + marker)
     task = assessed_task(spec, alignment)
@@ -73,8 +73,8 @@ def test_omitted_tail_stays_unresolved_in_all_deliverables_even_when_visible_tar
     assert marker not in [item.author_target for item in plan.digest.intent_assessments]
     assert plan.outcome.review_completeness == "complete"
     assert plan.digest.author_context_status == "truncated"
-    assert plan.digest.merge_decision.status == "resolve_unknowns"
-    assert "author_context_truncated" in plan.digest.merge_decision.unresolved_reasons
+    assert plan.digest.merge_decision.status == "conditional_merge"
+    assert "author_context_truncated" not in plan.digest.merge_decision.unresolved_reasons
     for markdown in (plan.review_comment_markdown, plan.user_report_markdown, plan.summary_markdown, render_technical_audit(plan)):
         assert "送审内容已截断" in markdown and "未输入的部分尚未核验" in markdown
     assert task.task_runtime_report == original
@@ -87,9 +87,9 @@ def test_missing_historical_metadata_is_not_complete(flag, expected):
     spec = spec.model_copy(update={"pr_intent_context_truncated": flag})
     plan = PublicationPlanner().build(assessed_task(spec))
     assert plan.digest.author_context_status == expected
-    assert plan.digest.merge_decision.status == ("conditional_merge" if flag is False else "resolve_unknowns")
+    assert plan.digest.merge_decision.status == "conditional_merge"
     if flag is None:
-        assert "author_context_unknown" in plan.digest.merge_decision.unresolved_reasons
+        assert "author_context_unknown" not in plan.digest.merge_decision.unresolved_reasons
         assert "历史审查未记录" in plan.review_comment_markdown
 
 
@@ -114,4 +114,4 @@ async def test_copy_check_preserves_input_gap_and_rechecks_head(monkeypatch):
         response = await client.post("/api/reviews/run/review-comment-check")
     assert response.status_code == 200
     assert response.json()["status"] == "current" and calls == [task.pr_url]
-    assert "未输入部分的目标尚未核验" in response.json()["review_comment_markdown"]
+    assert "未输入的部分尚未核验" in response.json()["review_comment_markdown"]

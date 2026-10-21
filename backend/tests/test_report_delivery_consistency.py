@@ -72,10 +72,11 @@ def test_known_regression_does_not_bypass_identity_or_command_checks(bad):
         snapshot.command_results[0].exit_code = 0
     task.validation_snapshots = [snapshot]
     plan = PublicationPlanner().build(task)
-    assert plan.outcome.dynamic_validation == "unknown"
+    expected = "not_executed" if bad == "sha" else "unknown"
+    assert plan.outcome.dynamic_validation == expected
     for text in (plan.review_comment_markdown, plan.summary_markdown):
         assert "已有与当前 Head 绑定的验证失败记录" not in text
-        assert "动态验证状态未知" in text
+        assert ("动态验证状态未知" in text) is (expected == "unknown")
 
 
 @pytest.mark.parametrize("disposition", ["examined", "blocked"])

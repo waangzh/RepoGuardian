@@ -55,13 +55,13 @@ def test_publication_interfaces_cover_backend_fields() -> None:
         PublicationSnapshot, ReviewOutcome, WithheldFinding, PublicationAttempt, PublicationItem,
         PublicationSelection, PublicationPreflightResult, PublicationAccepted, ReviewDigest, DigestGoal, DigestExcludedFile, ReviewCommentCheck,
         DigestInvestigation, DigestIntent, DigestValidation, MergeDecision, ReviewCommentOptions,
-        ChangeUnderstanding, ReviewSummary, ReviewSummaryDigest)
+        ChangeUnderstanding, ReviewSummary, ReviewSummaryDigest, HistoricalFindingView, HistoricalDiscussionOutcome)
     source = FRONTEND_TYPES.with_name("publication.ts").read_text(encoding="utf-8")
     for model in (PublicationPlan, PublicationFinding, PublicationAnchor, PublicationSnapshot, ReviewOutcome, WithheldFinding,
                   PublicationAttempt, PublicationItem, PublicationSelection, PublicationPreflightResult, PublicationAccepted,
                   ReviewDigest, DigestGoal, DigestExcludedFile, ReviewCommentCheck, DigestInvestigation,
                   DigestIntent, DigestValidation, MergeDecision, ReviewCommentOptions,
-                  ChangeUnderstanding, ReviewSummary, ReviewSummaryDigest):
+                  ChangeUnderstanding, ReviewSummary, ReviewSummaryDigest, HistoricalFindingView, HistoricalDiscussionOutcome):
         body = _interface_body(source, model.__name__)
         assert all(re.search(rf"\b{name}\??\s*:", body) for name in model.model_fields)
 

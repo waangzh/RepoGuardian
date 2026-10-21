@@ -1,6 +1,8 @@
 """历史 PR 讨论复核的独立结论；不并入也不降级当前 Diff 主审查。"""
 
 from app.models.pr_discussion import DiscussionUsage
+from app.models.publication import HistoricalFindingView
+from app.services.pr_discussion_matching import safe_discussion_url
 
 # 历史上已由独立代码核验确认仍存在的问题才会影响整体风险判断。
 _VERIFIED = {"still_present"}
@@ -36,6 +38,24 @@ def historical_discussion_outcome(task) -> dict | None:
                  "evidence_ids": list(item.get("evidence_ids") or [])}
                 for item in checks
                 if item.get("status") in _VERIFIED and item.get("evidence_ids")]
+    findings = []
+    for item in checks:
+        if item.get("status") not in _VERIFIED or not item.get("evidence_ids") or not item.get("discussion_id"):
+            continue
+        # 旧记录只有“仍存在”并不等于已评估影响；不从原讨论、路径或标签猜严重度。
+        severity = item.get("severity")
+        behavior = str(item.get("affected_behavior") or "").strip() or None
+        recommendation = str(item.get("recommendation") or "").strip() or None
+        if severity not in {"critical", "high", "medium", "low"} or not behavior or not recommendation:
+            severity = "unknown"
+        findings.append(HistoricalFindingView(
+            discussion_id=item["discussion_id"], path=item.get("path"), severity=severity,
+            priority="fix_before_merge" if severity in {"critical", "high"} else
+                "assess_improvement" if severity in {"medium", "low"} else "assess_impact",
+            affected_behavior=behavior, recommendation=recommendation,
+            reason=item.get("reason") or "未记录原因", evidence_ids=item["evidence_ids"],
+            discussion_url=safe_discussion_url((value.get("links") or {}).get(item["discussion_id"]), task.pr_url)
+        ).model_dump(mode="json"))
     usage = stats.get("usage") or {}
     try:
         usage_value = DiscussionUsage.model_validate(usage)
@@ -52,6 +72,7 @@ def historical_discussion_outcome(task) -> dict | None:
         "usage": usage_value.model_dump(mode="json"),
         # 只有独立代码核验确认仍存在的问题才影响整体风险判断。
         "affects_risk": bool(verified),
+        "findings": sorted(findings, key=lambda item: item["discussion_id"]),
     }
 
 

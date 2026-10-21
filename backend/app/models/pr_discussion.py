@@ -123,3 +123,6 @@ class DiscussionRecheck(BaseModel):
     reason: str
     evidence_ids: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
+    severity: Literal["critical", "high", "medium", "low"] | None = None
+    affected_behavior: str | None = None
+    recommendation: str | None = None

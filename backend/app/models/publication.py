@@ -43,6 +43,19 @@ class OutcomeReason(StrEnum):
     HISTORICAL_DISCUSSION_UNRESOLVED = "historical_discussion_unresolved"
 
 
+class HistoricalFindingView(BaseModel):
+    discussion_id: str
+    path: str | None = None
+    status: Literal["still_present"] = "still_present"
+    severity: Literal["critical", "high", "medium", "low", "unknown"] = "unknown"
+    priority: Literal["fix_before_merge", "assess_improvement", "assess_impact"] = "assess_impact"
+    affected_behavior: str | None = None
+    recommendation: str | None = None
+    reason: str
+    evidence_ids: list[str] = Field(default_factory=list)
+    discussion_url: str | None = None
+
+
 class HistoricalDiscussionOutcome(BaseModel):
     """历史 PR 讨论复核的独立结论；与当前 Diff 主审查分别判定。"""
 
@@ -55,6 +68,14 @@ class HistoricalDiscussionOutcome(BaseModel):
     limitations: list[str] = Field(default_factory=list)
     usage: dict = Field(default_factory=dict)
     affects_risk: bool = False
+    findings: list[HistoricalFindingView] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def serialize_findings(self, handler):
+        value = handler(self)
+        if "findings" not in self.model_fields_set:
+            value.pop("findings", None)
+        return value
 
 
 class ReviewOutcome(BaseModel):
@@ -139,6 +160,16 @@ class MergeDecision(BaseModel):
     nonblocking_finding_keys: list[str] = Field(default_factory=list)
     unresolved_reasons: list[str] = Field(default_factory=list)
     limits: list[str] = Field(default_factory=list)
+    blocking_historical_keys: list[str] = Field(default_factory=list)
+    nonblocking_historical_keys: list[str] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def serialize_history_keys(self, handler):
+        value = handler(self)
+        for key in ("blocking_historical_keys", "nonblocking_historical_keys"):
+            if key not in self.model_fields_set:
+                value.pop(key, None)
+        return value
 
 
 class ChangeUnderstanding(BaseModel):

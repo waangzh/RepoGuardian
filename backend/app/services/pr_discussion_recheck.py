@@ -85,7 +85,10 @@ def _record_completed_rechecks(store, snapshot, steps):
             store.data["rechecks"][thread.id] = DiscussionRecheck(discussion_id=thread.id,
                 path=thread.path,
                 status=getattr(result, "resolution", "insufficient_evidence"), reason=result.reason,
-                evidence_ids=result.evidence_ids, limitations=result.limitations).model_dump(mode="json")
+                evidence_ids=result.evidence_ids, limitations=result.limitations,
+                severity=getattr(result, "severity", None),
+                affected_behavior=getattr(result, "affected_behavior", None),
+                recommendation=getattr(result, "recommendation", None)).model_dump(mode="json")
 
 
 def _mark_incomplete_rechecks(store, snapshot, steps):

@@ -166,12 +166,12 @@ def enrich_review_digest(digest, task, report, dispositions):
         if report.pr_intent_context_truncated is True:
             digest.author_context_status = "truncated"
             digest.author_context_limitation = ("作者声明超过输入上限，送审内容已截断；未输入的部分尚未核验，"
-                "不能据此判断全部作者目标已实现。请补充目标并重新审查。")
+                "目标对照可能不完整；如需完整对照，可补充尾部要求。此限制本身不代表代码风险。")
         elif report.pr_intent_context:
             digest.author_context_status = "complete" if report.pr_intent_context_truncated is False else "unknown"
             if digest.author_context_status == "unknown":
                 digest.author_context_limitation = ("历史审查未记录作者声明是否完整输入，无法确认是否遗漏作者目标；"
-                    "请重新审查以确认输入范围。")
+                    "保留输入范围未知，不据此推断代码风险或要求重新审查。")
         digest.validation_state, digest.validations = validation_digest(task)
         if report.pr_intent_context:
             digest.author_goal = report.pr_intent_context

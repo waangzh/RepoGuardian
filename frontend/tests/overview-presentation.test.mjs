@@ -28,7 +28,7 @@ test("概览保留未知计数、真实限制及独立验证边界", async () =>
     assert.equal(facts.unresolved, incomplete.outcome.unresolved_count);
     assert.equal(facts.boundaries[1].tone, "warning");
     assert.ok(facts.limitations.includes("真实限制：关联返回值消费路径未核验"));
-    assert.equal(facts.boundaries[2].value, "未执行");
+    assert.equal(facts.boundaries[2].value, "当前 Head 未执行");
     assert.equal(facts.boundaries[2].tone, "neutral");
     for (const validation of ["passed", "failed", "independent_results", "unknown"]) {
       incomplete.outcome.dynamic_validation = validation;
@@ -83,7 +83,7 @@ test("概览正常状态短显，具体限制仅在可信边界常驻展示", as
     assert.equal(facts.boundaries[1].description, "");
     assert.equal(facts.boundaries[2].description, "");
     assert.equal(facts.boundaries[2].tone, "neutral");
-    assert.equal(facts.boundaries[2].value, "未执行");
+    assert.equal(facts.boundaries[2].value, "当前 Head 未执行");
     assert.equal(overviewConclusionDescription(null), "");
     for (const name of ["clean", "findings", "inconclusive", "failed", "cancelled", "runtime_limits"]) {
       const situation = reviewSituation(fixtures[name].summary);

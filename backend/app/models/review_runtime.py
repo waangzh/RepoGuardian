@@ -294,6 +294,9 @@ class InvestigationSubmission(BaseModel):
 
 class DiscussionInvestigationSubmission(InvestigationSubmission):
     resolution: Literal["still_present", "not_present", "fixed", "insufficient_evidence", "background"]
+    severity: Literal["critical", "high", "medium", "low"] | None = None
+    affected_behavior: str | None = Field(default=None, min_length=1, max_length=2_000)
+    recommendation: str | None = Field(default=None, min_length=1, max_length=2_000)
 
 
 class VerificationSubmission(BaseModel):
@@ -430,8 +433,8 @@ class InvestigationResult(InvestigationSubmission):
     snapshot_head_sha: Revision
 
 
-class DiscussionInvestigationResult(InvestigationResult):
-    resolution: Literal["still_present", "not_present", "fixed", "insufficient_evidence", "background"]
+class DiscussionInvestigationResult(InvestigationResult, DiscussionInvestigationSubmission):
+    pass
 
 
 class VerificationResult(VerificationSubmission):
