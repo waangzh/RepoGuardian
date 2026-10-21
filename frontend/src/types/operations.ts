@@ -34,6 +34,12 @@ export interface SystemDiagnostics {
   versions: VersionDiagnostics;
 }
 
+/** 发布能力探测结果；不包含凭据、仓库或操作口令。 */
+export interface PublicationCapability {
+  enabled: boolean;
+  mode: "publish" | "copy_only";
+}
+
 export interface WorkspaceCleanupPreview {
   mode: "expired_only";
   ttl_seconds: number;

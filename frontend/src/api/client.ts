@@ -17,6 +17,7 @@ import type {
 } from "../types/operations";
 import type { PublicationPlan } from "../types/publication";
 import type { PublicationSelection, PublicationPreflightResult, PublicationAccepted, PublicationAttempt } from "../types/publication";
+import { publicationErrorText } from "../utils/publicationPresentation";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
@@ -54,6 +55,9 @@ export function getFileContext(taskId: string, fileId: number, signal?: AbortSig
 import type { ReviewCapabilities, ReviewPlanOptions, FindingView, FindingDisposition } from '../types/reviewPlan';
 
 export function getReviewCapabilities() { return request<ReviewCapabilities>('/api/system/review-capabilities'); }
+export function getPublicationCapability() {
+  return request<import('../types/operations').PublicationCapability>('/api/system/publication-capability');
+}
 export function getFindings(id: string, signal?: AbortSignal) {
   return request<{ items: FindingView[] }>(`${publicationPath(id)}/findings`, { signal });
 }
@@ -69,15 +73,7 @@ async function publicationRequest<T>(path: string, token: string, init: RequestI
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
     const code = typeof payload?.detail?.code === "string" ? payload.detail.code : `HTTP ${response.status}`;
-    const labels: Record<string, string> = {
-      publication_disabled: "服务端尚未启用 GitHub 发布，请先完成独立凭据与仓库授权配置。",
-      publication_operator_unauthorized: "发布操作口令无效，或当前连接不符合本地单用户访问限制。",
-      publication_stale: "PR 版本已改变，请重新审查。", github_permission_denied: "发布身份的 GitHub 权限不足。",
-      repository_not_authorized: "目标仓库不在发布授权范围。", partial_acknowledgement_required: "请明确确认部分审查或部分发布。",
-      summary_operation_uncertain: "Summary 存在未确认操作，请从发布历史检查远端状态。",
-      summary_newer_review: "已有更新的审查摘要，旧结果不能覆盖。", idempotency_key_conflict: "本次确认标识对应不同内容，请重新预检。",
-    };
-    throw new Error(labels[code] || `发布请求失败：${code}`);
+    throw new Error(publicationErrorText(code));
   }
   return response.json() as Promise<T>;
 }

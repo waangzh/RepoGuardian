@@ -295,7 +295,7 @@ dialog::backdrop { background: rgba(12,22,45,.45); backdrop-filter: blur(3px); }
 [data-density='compact'] .rg-app { --panel-padding: 16px; --panel-gap: 12px; --section-gap: 20px; --page-top: 20px; }
 [data-density='compact'] .rg-app :is(.rg-table td,.rg-table th,.aside-stat) { padding-top: 9px; padding-bottom: 9px; }
 [data-density='compact'] .rg-finding-row { padding: 9px 12px; gap: 5px; }
-[data-theme='dark'] .rg-app :is(.report-mode-switch,.report-comment-export,.github-publication fieldset,.diagnostic-score,.version-grid > div,.secret-grid > div) { background: var(--surface2); color: var(--ink); border-color: var(--line); }
+[data-theme='dark'] .rg-app :is(.report-mode-switch,.report-comment-export,.github-publication fieldset,.github-publication__path,.github-publication__notice,.diagnostic-score,.version-grid > div,.secret-grid > div) { background: var(--surface2); color: var(--ink); border-color: var(--line); }
 [data-theme='dark'] .rg-app :is(.report-document blockquote,.report-document th,.runtime-warning-block,.runtime-stats > div) { background: var(--surface2); color: var(--ink); border-color: var(--line); }
 [data-theme='dark'] .rg-app :is(.github-publication input,.github-publication__dialog,.report-comment-export textarea) { background: var(--surface); color: var(--ink); border-color: var(--line2); }
 @media (max-width: 1250px) {

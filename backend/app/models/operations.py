@@ -47,6 +47,15 @@ class SystemDiagnostics(BaseModel):
     versions: VersionDiagnostics
 
 
+class PublicationCapability(BaseModel):
+    """只读发布能力：仅暴露是否启用，不包含凭据、仓库或操作口令。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    mode: Literal["publish", "copy_only"]
+
+
 class WorkspaceCleanupRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
