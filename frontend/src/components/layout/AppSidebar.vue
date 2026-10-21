@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AppPage } from "../../types/operations";
-import { reviewSections, type ReviewSection } from "../../types/workspace";
+import { reviewPrimarySections, reviewSecondarySections, type ReviewSection } from "../../types/workspace";
 import AppIcon from "../common/AppIcon.vue";
 import brandIcon from "../../assets/repoguardian-icon.png";
 
@@ -30,7 +30,9 @@ const emit = defineEmits<{
       <button type="button" class="side-link" :class="{ active: modelValue === 'dashboard' && !hasReview }" :disabled="taskActive || busy" @click="emit('create')"><AppIcon name="plus" /><span class="nav-text">新建审查</span></button>
       <button v-for="item in ([['history', 'history', '审查历史'], ['settings', 'settings', '系统设置']] as const)" :key="item[0]" type="button" class="side-link" :class="{ active: modelValue === item[0] }" :aria-current="modelValue === item[0] ? 'page' : undefined" @click="emit('update:modelValue', item[0])"><AppIcon :name="item[1]" /><span class="nav-text">{{ item[2] }}</span></button>
       <div class="nav-divider" /><div class="nav-heading">当前 PR 审查</div>
-      <button v-for="item in reviewSections" :key="item.id" type="button" class="side-link" :class="{ active: hasReview && modelValue === 'dashboard' && section === item.id }" :aria-current="hasReview && modelValue === 'dashboard' && section === item.id ? 'page' : undefined" :disabled="!hasReview" @click="emit('section', item.id)"><AppIcon :name="item.icon" /><span class="nav-text">{{ item.label }}</span></button>
+      <button v-for="item in reviewPrimarySections" :key="item.id" type="button" class="side-link" :class="{ active: hasReview && modelValue === 'dashboard' && section === item.id }" :aria-current="hasReview && modelValue === 'dashboard' && section === item.id ? 'page' : undefined" :disabled="!hasReview" @click="emit('section', item.id)"><AppIcon :name="item.icon" /><span class="nav-text">{{ item.label }}</span></button>
+      <div class="nav-heading nav-subheading">补充证据</div>
+      <button v-for="item in reviewSecondarySections" :key="item.id" type="button" class="side-link" :class="{ active: hasReview && modelValue === 'dashboard' && section === item.id }" :aria-current="hasReview && modelValue === 'dashboard' && section === item.id ? 'page' : undefined" :disabled="!hasReview" @click="emit('section', item.id)"><AppIcon :name="item.icon" /><span class="nav-text">{{ item.label }}</span></button>
     </nav>
   </aside>
 </template>

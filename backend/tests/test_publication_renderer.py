@@ -12,7 +12,7 @@ from test_review_outcome import completed_task
 def test_rendered_counts_and_repeatability(task, label):
     plan = PublicationPlanner().build(task)
     assert label in plan.summary_markdown
-    assert f"已确认问题：{plan.outcome.confirmed_count}" in plan.summary_markdown
+    assert f"本轮 Diff 新增已确认问题：{plan.outcome.confirmed_count}" in plan.summary_markdown
     assert plan.summary_markdown == render_summary(plan)
     assert plan.user_report_markdown == render_user_report(task, plan)
     if plan.inline_drafts:
@@ -128,6 +128,26 @@ def test_unresolved_candidates_and_investigations_do_not_inflate_issue_count():
         admitted_investigations=[{"status": "not_executed"}] * 3))
     assert plan.digest.merge_decision.label == "2 项问题尚未核实，暂不能给出完整建议"
     assert plan.outcome.incomplete_investigations == 3
+
+
+def test_historical_verified_defect_never_reads_as_no_confirmed_problem():
+    """历史复核确认既有缺陷时，通用说明必须区分“本轮未新增”与“历史仍存在”。"""
+    task = completed_task()
+    task.pr_discussion = {
+        "stats": {"status": "complete", "collected": 1, "comments": 1, "referenced": 1,
+                  "referenced_comments": 1, "checked": 1, "unchecked": 0, "limitations": [],
+                  "termination_reason": "plan_exhausted"},
+        "rechecks": [{"discussion_id": "inline:1", "path": "src/a.py", "status": "still_present",
+                      "reason": "当前实现仍返回空值", "evidence_ids": ["e1"], "limitations": []}]}
+    plan = PublicationPlanner().build(task)
+    assert plan.outcome.kind == "inconclusive"
+    assert plan.digest.merge_decision.label == "历史讨论中的问题经代码核验仍存在，需先核对"
+    for markdown in (plan.summary_markdown, plan.user_report_markdown, plan.review_comment_markdown):
+        assert "目前没有可确认的问题" not in markdown
+        assert "历史讨论复核确认 1 项既有问题在当前代码中仍存在" in markdown
+    assert "本轮变更范围内未新增已确认问题" in plan.user_report_markdown
+    assert "本轮 Diff 新增已确认问题 0 项" in plan.user_report_markdown
+    assert "本轮 Diff 新增已确认问题：0" in plan.summary_markdown
 
 
 def test_bound_evidence_text_is_escaped_without_copying_raw_code():

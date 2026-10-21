@@ -32,7 +32,7 @@ test("结果概览情景矩阵与主要操作", async () => {
         digest: { merge_decision: { status: "resolve_unknowns", blocking_finding_keys: [], nonblocking_finding_keys: [] } } },
         "审查运行记录存在限制，需核对结果完整性", ["view_limits", "rereview"], "复制审查记录", "secondary"],
       ["validation_failed", { outcome: { ...clean.outcome, dynamic_validation: "failed" }, digest: clean.digest },
-        "当前版本存在验证失败记录，需检查原因", ["view_validation", "rereview"], "复制审查记录", "secondary"],
+        "当前版本存在受控验证失败记录，需检查原因", ["view_validation", "rereview"], "复制审查记录", "secondary"],
       ["failed", { outcome: { ...clean.outcome, kind: "failed" },
         digest: { merge_decision: { status: "unavailable", blocking_finding_keys: [], nonblocking_finding_keys: [] } } },
         "审查因执行错误中断，已保留部分记录", ["view_error", "rereview"], "复制部分审查记录", "secondary"],
@@ -77,9 +77,9 @@ test("结果概览情景矩阵与主要操作", async () => {
     assert.match(blockedAndFailed.description, /另有验证失败记录/);
     // 仅有验证失败且后端已给出标签时，展示层不另造标题。
     const failedOnly = { outcome: { ...clean.outcome, dynamic_validation: "failed" },
-      digest: { merge_decision: { status: "resolve_unknowns", label: "当前版本存在验证失败记录，需检查原因",
+      digest: { merge_decision: { status: "resolve_unknowns", label: "当前版本存在受控验证失败记录，需检查原因",
         blocking_finding_keys: [], nonblocking_finding_keys: [] } } };
-    assert.equal(reviewSituation(failedOnly).title, "当前版本存在验证失败记录，需检查原因");
+    assert.equal(reviewSituation(failedOnly).title, "当前版本存在受控验证失败记录，需检查原因");
     // 旧冻结计划缺少标签时保留展示层回退，不显示占位文案。
     const legacy = { outcome: { ...clean.outcome, kind: "findings", confirmed_count: 1 },
       digest: { merge_decision: { status: "fix_blockers", label: "暂不能给出合并建议",
@@ -119,6 +119,10 @@ test("历史讨论复核的独立状态不改变主审查情景", async () => {
     assert.equal(verified.title, "历史讨论中的问题经代码核验仍存在，需先核对");
     assert.match(verified.description, /已用当前固定代码确认/);
     assert.doesNotMatch(verified.description, /未决事项不等于已确认代码缺陷/);
+    const { overviewConclusionDescription } = await server.ssrLoadModule("/src/utils/overviewPresentation.ts");
+    // 概览的通用说明同样不能把已核验的历史风险写成未决事项。
+    assert.match(overviewConclusionDescription(verified), /历史复核确认的既有风险/);
+    assert.doesNotMatch(overviewConclusionDescription(verified), /未决事项不等于已确认缺陷/);
   } finally { await server.close(); }
 });
 

@@ -106,7 +106,7 @@ def test_blockers_with_failed_head_validation_share_one_combined_conclusion():
     # 主结论只出现一次，且同一标签进入评论、详细报告与轻量摘要。
     for markdown in (plan.review_comment_markdown, plan.user_report_markdown, plan.summary_markdown):
         assert markdown.count(decision.label) == 1
-    assert "当前版本存在验证失败记录" not in plan.review_comment_markdown
+    assert "当前版本存在受控验证失败记录" not in plan.review_comment_markdown
     assert "验证失败" in decision.advice
     assert summary_projection(plan).digest.merge_decision.label == decision.label
     # 阻断建议仍保留修复与重新核验的顺序。

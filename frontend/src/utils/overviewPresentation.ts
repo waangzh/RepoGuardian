@@ -25,6 +25,7 @@ export function overviewFacts(plan: ReviewSummary | null, runtime: TaskRuntimeSu
     investigation_incomplete: "关联调查尚未完成，需要补充证据。",
     usage_integrity_unknown: "模型用量记录不完整或不一致，不能视为完整统计。",
     termination_incomplete: "运行未可靠完成全部计划，请核对执行记录。",
+    historical_discussion_unresolved: "历史讨论复核确认的既有问题在当前代码中仍存在。",
   };
   const limitations = [...new Set([
     ...(decision?.limits || []),
@@ -92,9 +93,9 @@ export function overviewConclusionDescription(situation: ReviewSituation | null)
     stale: "记录仅适用于原 Head，最新提交需要重新审查。",
     failed: "执行错误导致中断，现有结果仅代表部分审查。",
     cancelled: "用户主动停止审查，剩余范围尚未完成。",
-    validation_failed: "当前 Head 绑定的受控检查存在失败记录。",
+    validation_failed: "当前 Head 绑定的受控检查存在失败记录，不代表全部 CI 失败。",
     blockers: "问题可能影响关键行为，需要核对证据并优先处理。",
-    evidence_gaps: "未决事项不等于已确认缺陷，但仍限制合并判断。",
+    evidence_gaps: "历史复核确认的既有风险与本轮未决事项分别记录，均会限制合并判断。",
     scope_incomplete: "检查范围完整性尚待核对，未完成目标需单独确认。",
     runtime_limits: "执行、计量或可靠性信息尚待核对，不据此判断代码存在缺陷。",
     nonblocking: "是否在合并前处理，取决于项目要求和实际影响。",
@@ -112,7 +113,7 @@ interface NextSteps {
 const NEXT_STEPS: Record<SituationKey, NextSteps> = {
   evidence_gaps: {
     title: "建议先核对证据缺口",
-    description: "定位未决事项，再决定补查或交付记录。",
+    description: "定位历史已核验风险或未决事项，再决定补查或交付记录。",
     steps: [["查看未核验线索", "核对缺口与当前 PR 风险的关系"], ["补充运行级证据", "结合项目 CI 或受控外部验证"], ["复核后再形成决定", "结合业务约定与人工审批"]],
   },
   scope_incomplete: {
