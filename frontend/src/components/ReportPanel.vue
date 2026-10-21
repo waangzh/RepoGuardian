@@ -129,7 +129,7 @@ function rereview() { cancelPending(); emit("rereview"); }
 </script>
 
 <template>
-  <label v-if="reportView === 'comment' && plan && [...plan.inline_drafts, ...plan.summary_findings].some(item => item.default_selection_reason === 'historical_duplicate')" class="rd-history-toggle"><input v-model="includeDiscussed" type="checkbox" />展开已有讨论问题的完整证据（默认保留风险摘要与讨论链接）</label>
+  <label v-if="reportView === 'comment' && plan && (plan.digest.discussion_rechecks?.some(item => !['fixed', 'not_present', 'background'].includes(item.status)) || [...plan.inline_drafts, ...plan.summary_findings].some(item => item.default_selection_reason === 'historical_duplicate'))" class="rd-history-toggle"><input v-model="includeDiscussed" type="checkbox" />展示历史核实补充摘要与重复问题证据（已核验的当前风险始终保留）</label>
   <section id="review-report" class="rd-workspace" :class="{ 'rd-workspace--embedded': embedded }">
     <header v-if="!embedded" class="rd-heading">
       <div><div class="rd-eyebrow">Review delivery workspace</div><h1>审查报告与交付</h1><p>先确认结论与局限，再生成适合不同读者的交付内容。</p></div>

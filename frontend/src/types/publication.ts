@@ -72,6 +72,7 @@ export interface ChangeUnderstanding {
   alignment: string;
 }
 export interface ReviewDigest {
+  discussion_review_enabled?: boolean | null;
   discussion_stats?: import("./prDiscussion").DiscussionStats | null;
   discussion_rechecks?: import("./prDiscussion").DiscussionRecheck[];
   discussion_links?: Record<string, string>;
@@ -200,6 +201,7 @@ export interface PublicationPlan {
 }
 
 export interface ReviewSummaryDigest {
+  discussion_review_enabled?: boolean | null;
   discussion_stats?: import("./prDiscussion").DiscussionStats | null;
   author_goal?: string | null;
   author_context_status?: "complete" | "truncated" | "unknown" | "not_recorded";
