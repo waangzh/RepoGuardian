@@ -144,9 +144,16 @@ export function reviewSituation(
   const status = decision?.status;
   const historyBlocking = decision?.blocking_historical_keys?.length ?? 0;
   const historySuggestions = decision?.nonblocking_historical_keys?.length ?? 0;
+  const currentBlocking = decision?.blocking_finding_keys?.length ?? 0;
+  const currentSuggestions = decision?.nonblocking_finding_keys?.length ?? 0;
+  // 标题按独立缺陷计数：后端已按严格重复关联去重时使用该数量，
+  // 旧冻结计划没有该字段时才回退为两份证据来源相加。
   const blockingCount = decision?.blocking_finding_keys
-    ? decision.blocking_finding_keys.length + historyBlocking : historyBlocking || null;
-  const nonblockingCount = (decision?.nonblocking_finding_keys?.length ?? 0) + historySuggestions;
+    ? decision.blocking_independent_count ?? currentBlocking + historyBlocking
+    : historyBlocking || null;
+  const nonblockingCount = decision?.nonblocking_finding_keys
+    ? decision.nonblocking_independent_count ?? currentSuggestions + historySuggestions
+    : historySuggestions;
   const unresolvedCount = outcome.unresolved_count ?? 0;
   const examinedGoals = outcome.examined_goals ?? 0;
   const totalGoals = outcome.total_goals ?? 0;

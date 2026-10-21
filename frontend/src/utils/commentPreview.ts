@@ -46,7 +46,8 @@ export function parseCommentPreview(markdown: string) {
         '其他局限': '仍需确认的事项', '未检查/未核实事项': '仍需确认的事项', '合并前提醒': '仍需确认的事项',
         '已保留记录': '变更理解', '未覆盖范围': '仍需确认的事项', '重新审查': '下一步',
       } as Record<string, string>)[token.text] || token.text;
-      section = { title: label, markdown: pendingNote, findings: label === '已确认问题' };
+      section = { title: label, markdown: pendingNote,
+        findings: label === '已确认问题' || label === '已核验的既有风险' };
       pendingNote = '';
       sections.push(section);
     } else if (section) {
@@ -64,7 +65,8 @@ export function parseCommentPreview(markdown: string) {
   }
   if (!sections.length) return null;
   for (const section of sections) {
-    if (!["需要处理的问题", "其他建议"].includes(section.title)) continue;
+    // 历史风险章节使用同样的等级标记；计数徽标只对正式问题章节有意义。
+    if (!["需要处理的问题", "其他建议", "已核验的既有风险"].includes(section.title)) continue;
     const count = marked.lexer(section.markdown).filter(token => token.type === "paragraph"
       && /^\*\*\[(Critical|High|Medium|Low)(?:\s|·|\])/.test(token.text)).length;
     // 历史“建议”章节可能只有行动文案；没有条目时不显示计数徽标。

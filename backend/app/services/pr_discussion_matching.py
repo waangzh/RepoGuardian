@@ -19,10 +19,20 @@ def valid_matches(matches, discussions, path):
     return output
 
 
+def exact_duplicate_matches(matches):
+    """只有主体、触发条件、影响都相同且没有新信息时，才视为同一缺陷的重复记录。
+
+    文件路径相同或标题相似都不足以去重；这里只读取执行器已保存的结构化匹配元数据。
+    """
+    return [match for match in matches or []
+            if isinstance(match, dict) and match.get("same_subject") is True
+            and match.get("same_trigger") is True and match.get("same_impact") is True
+            and match.get("new_information") is False]
+
+
 def finding_discussions(record):
     matches = record.get("verification", {}).get("discussion_matches") or []
-    duplicate = any(m.get("same_subject") is True and m.get("same_trigger") is True
-                    and m.get("same_impact") is True and m.get("new_information") is False for m in matches)
+    duplicate = bool(exact_duplicate_matches(matches))
     return matches, duplicate
 
 
