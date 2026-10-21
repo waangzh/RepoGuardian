@@ -149,7 +149,7 @@ function rereview() { cancelPending(); emit("rereview"); }
         <div v-else class="rd-doc">
           <p v-if="snapshotStale && reportView !== 'comment'" class="rd-notice warn"><AppIcon name="history" :size="17" /><span><strong>历史快照内容。</strong>以下正文来自旧 Head，不适用于最新提交；请重新审查后再引用。</span></p>
           <div v-if="reportView === 'comment'" class="rd-notice"><AppIcon name="info" :size="17" /><div><strong>评论草稿不代表合并批准。</strong> 复制或导出前将核对 PR 当前 Head；过期或未知时需要明确确认限制。</div></div>
-          <p v-if="selection && reportView === 'comment'" class="rd-context-tip" role="status">包含 {{ selection.included_finding_keys.length }} 项，明确省略 {{ selection.omitted_finding_keys.length }} 项；保留 {{ selection.retained_blocking_keys.length }} 项已处理阻断问题。</p>
+          <p v-if="selection && reportView === 'comment'" class="rd-context-tip" role="status">包含 {{ selection.included_finding_keys.length }} 项，明确省略 {{ selection.omitted_finding_keys.length }} 项；保留 {{ selection.retained_blocking_keys.length }} 项已处理的高优先级问题。</p>
           <div :class="{ 'rd-comment': reportView === 'comment' }">
             <header v-if="reportView === 'comment'" class="rd-comment-header"><div><strong>评论正文预览</strong><small>以下是 GitHub PR 评论将呈现的核心内容</small></div><span class="badge neutral">Markdown</span></header>
             <p v-if="reportView === 'comment' && snapshotStale" class="rd-notice warn rd-stale-notice"><AppIcon name="history" :size="17" /><span><strong>历史快照评论草稿。</strong>草稿结论来自旧 Head，不适用于最新提交；交付时会再次核对并要求明确确认。</span></p>

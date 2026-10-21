@@ -131,9 +131,9 @@ def test_compact_comment_is_publishable_and_does_not_repeat_boilerplate():
     assert "静态审查 · 未执行目标代码" not in compact
     assert compact.index("回归令牌校验缺失") < compact.index("本结论基于提交")
     # 省略没有实际限制的空章节，同时保留问题与快照。
-    assert compact.startswith("RepoGuardian · PR Code Review\n\n✅ 结论：发现 1 项改进建议，未发现阻断性问题")
+    assert compact.startswith("RepoGuardian · PR Code Review\n\n✅ 结论：发现 1 项改进建议，暂无高优先级问题")
     assert [line for line in compact.splitlines() if line.startswith("## ")] == ["## 变更理解", "## 建议项"]
-    assert "非阻断问题" in compact
+    assert "非高优先级问题" in compact
     # 非阻断问题也必须保留标题、位置和建议，只是省略证据展开。
     assert "**建议：**" in compact and "src/a" in compact
 
@@ -165,15 +165,15 @@ def test_blockers_with_failed_head_validation_share_one_combined_conclusion():
     plan = PublicationPlanner().build(task)
     decision = plan.digest.merge_decision
     assert decision.status == "fix_blockers"
-    assert decision.label == "发现 1 项高优先级问题，另有当前版本验证失败"
+    assert decision.label == "发现 1 项高优先级问题，另有当前版本动态检查未通过"
     # 主结论只出现一次，且同一标签进入评论、详细报告与轻量摘要。
     for markdown in (plan.review_comment_markdown, plan.user_report_markdown, plan.summary_markdown):
         assert markdown.count(decision.label) == 1
     assert "当前版本存在受控验证失败记录" not in plan.review_comment_markdown
-    assert "验证失败" in decision.advice
+    assert "动态检查失败" in decision.advice
     assert summary_projection(plan).digest.merge_decision.label == decision.label
     # 阻断建议仍保留修复与重新核验的顺序。
-    assert plan.review_comment_markdown.index(decision.label) < plan.review_comment_markdown.index("## 阻断问题")
+    assert plan.review_comment_markdown.index(decision.label) < plan.review_comment_markdown.index("## 高优先级问题")
 
 
 def test_clean_comment_is_brief_and_keeps_one_validation_boundary():
@@ -183,7 +183,7 @@ def test_clean_comment_is_brief_and_keeps_one_validation_boundary():
     plan = PublicationPlanner().build(task)
     markdown = plan.review_comment_markdown
     for phrase in ("**PR 目标：** 修复空值异常。", "不代表目标已实现", "**代码观察：**",
-                   "已检查范围内未发现需处理的问题", "本结论基于提交"):
+                   "本次检查未发现需在合并前处理的问题", "本结论基于提交"):
         assert phrase in markdown
     assert plan.outcome.confirmed_count == 0
     assert markdown.count("未执行目标仓库代码、测试或构建") == 1
@@ -291,7 +291,7 @@ def test_blockers_precede_observations_and_limits_even_with_execution_gaps(sever
     for detail in ("compact", "full"):
         markdown = render_review_comment(plan, detail=detail)
         assert [line for line in markdown.splitlines() if line.startswith("## ")] == [
-            "## 阻断问题", "## 变更理解", "## 其他局限", "## 建议"]
+            "## 高优先级问题", "## 变更理解", "## 其他局限", "## 建议"]
         assert "**代码证据：**" in markdown and "**触发场景：**" in markdown
         assert markdown.count("权限绕过导致未授权数据访问") == 1
     assert task.model_dump(mode="json") == before
@@ -398,13 +398,13 @@ def test_merge_decision_separates_code_blockers_from_runtime_limits():
     bounded = PublicationPlanner().build(completed_task(termination_reason="budget_exhausted"))
     assert bounded.digest.merge_decision.status == "resolve_unknowns"
     # 只有执行边界限制时，不把结论描述成“代码有问题”。
-    assert bounded.digest.merge_decision.label == "审查运行记录存在限制，需核对结果完整性"
+    assert bounded.digest.merge_decision.label == "审查已结束，但结果可靠性仍需核对"
     assert "执行、计量或验证记录" in bounded.digest.merge_decision.advice
     assert "审查预算耗尽，请核对是否仍有未完成目标" in bounded.digest.merge_decision.limits
-    assert "修复上方阻断问题" not in bounded.user_report_markdown
+    assert "修复上方高优先级问题" not in bounded.user_report_markdown
     clean = PublicationPlanner().build(completed_task())
     assert clean.digest.merge_decision.status == "conditional_merge"
-    assert clean.digest.merge_decision.label == "已检查范围内未发现需处理的问题"
+    assert clean.digest.merge_decision.label == "本次检查未发现需在合并前处理的问题"
     assert clean.digest.merge_decision.limits == []
 
 
@@ -416,7 +416,7 @@ def test_failed_or_cancelled_copy_is_explicitly_a_partial_record():
     plan = PublicationPlanner().build(failed)
     assert plan.outcome.kind == "failed"
     for markdown in (plan.review_comment_markdown, render_review_comment(plan, detail="full")):
-        assert "审查因执行错误中断，已保留部分记录（部分审查记录）" in markdown
+        assert "审查中断，尚无完整结论（部分审查记录）" in markdown
         assert "以下为执行失败前已保留的部分审查记录" in markdown
         # 不再复用正常审查的合并建议措辞。
         assert "部分问题尚未核实" not in markdown
@@ -432,7 +432,7 @@ def test_failed_or_cancelled_copy_is_explicitly_a_partial_record():
     plan = PublicationPlanner().build(cancelled)
     assert plan.outcome.kind == "cancelled"
     for markdown in (plan.review_comment_markdown, render_review_comment(plan, detail="full")):
-        assert "审查已停止，已保留停止前的记录（部分审查记录）" in markdown
+        assert "审查已停止，已保留部分结果（部分审查记录）" in markdown
         assert "以下为用户停止前已保留的部分审查记录" in markdown
         assert "审查已由用户停止，以下建议仅基于停止前保留的记录" in markdown
         assert [line for line in markdown.splitlines() if line.startswith("## ")] == [

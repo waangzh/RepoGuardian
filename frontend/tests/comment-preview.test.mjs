@@ -77,10 +77,10 @@ ${verdict}
         assert.ok(document.sections[0].markdown.includes('部分审查记录'));
       }
     });
-    await t.test('阻断问题与建议分章计数，不将总问题数重复显示', async () => {
+    await t.test('高优先级问题与建议分章计数，不将总问题数重复显示', async () => {
       const value = variants.blockers['compact:false'];
       const document = parseCommentPreview(value.review_comment_markdown);
-      assert.deepEqual(document.sections.map(item => item.title), ['阻断问题', '变更理解', '其他局限', '建议']);
+      assert.deepEqual(document.sections.map(item => item.title), ['高优先级问题', '变更理解', '其他局限', '建议']);
       const blockers = document.sections[0], suggestions = document.sections[3];
       assert.equal(blockers.findingCount, 1);
       assert.equal(suggestions.findingCount, 1);

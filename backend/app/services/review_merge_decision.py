@@ -4,13 +4,15 @@ from app.models.publication import MergeDecision
 from app.services.publication_renderer import MERGE_LABELS, REASON_LABELS, review_limitation_kind, review_limitation_label
 
 _LIMITS = {
-    "confirmed_findings_withheld": "仍有未通过发布准入的机器确认记录",
+    "confirmed_findings_withheld": "仍有代码证据已确认但未通过发布准入的记录",
     "author_context_truncated": "作者声明输入已截断，未输入部分的目标尚未核验",
     "author_context_unknown": "作者声明输入是否完整未知，目标范围仍需确认",
     "finding_severity_unknown": "存在严重度未知的问题记录",
     "head_validation_failed": "当前 Head 的已有验证记录为失败",
     "head_validation_unknown": "已有验证记录无法确定当前 Head 结果",
 }
+# 合并建议是审查策略输出，不是 GitHub Mergeability 或分支保护结论。
+POLICY_BOUNDARY = "这是 RepoGuardian 按审查策略给出的建议，不代表 GitHub 的 Mergeability 状态或分支保护会阻止合并。"
 
 
 def merge_decision(plan):
@@ -36,19 +38,19 @@ def merge_decision(plan):
     if plan.outcome.kind in {"failed", "cancelled"} or not plan.content_eligible:
         decision.status = "unavailable"
         # 失败与用户停止的原因不同，标签必须让读者知道为什么没有结论。
-        decision.label = {"failed": "审查因执行错误中断，已保留部分记录",
-                          "cancelled": "审查已停止，已保留停止前的记录"}.get(
+        decision.label = {"failed": "审查中断，尚无完整结论",
+                          "cancelled": "审查已停止，已保留部分结果"}.get(
                               plan.outcome.kind, MERGE_LABELS["unavailable"])
         return decision
     if blocking:
         decision.status = "fix_blockers"
-        decision.advice = ("存在已核验且影响关键行为的问题，需要先处理。"
-                           "请优先修复下列机器确认的 High/Critical 问题并在新快照重新核验；"
-                           "人工标记已处理不能代替新快照核验。")
+        decision.advice = ("存在有代码证据支持、按审查策略建议合并前处理的高优先级问题。"
+                           "请优先修复下列问题并在新快照重新核验；人工标记已处理不能代替新快照核验。"
+                           + POLICY_BOUNDARY)
         if "head_validation_failed" in reasons:
-            # 同时存在阻断与验证失败时不能只保留一个标题，否则概览与评论的主结论会不一致。
-            decision.advice += " 另需核对当前 Head 的验证失败记录：静态问题修复不代表动态检查已恢复通过。"
-            decision.label = f"发现 {len(blocking)} 项高优先级问题，另有当前版本验证失败"
+            # 同时存在高优先级问题与验证失败时不能只保留一个标题，否则概览与评论的主结论会不一致。
+            decision.advice += " 另需核对当前 Head 的动态检查失败记录：静态问题修复不代表动态检查已恢复通过。"
+            decision.label = f"发现 {len(blocking)} 项高优先级问题，另有当前版本动态检查未通过"
             return decision
     elif reasons:
         decision.status = "resolve_unknowns"
@@ -60,8 +62,8 @@ def merge_decision(plan):
                 "它们不属于本轮 Diff 新增问题，但会影响合并判断。请核对证据、影响范围与修复状态后再决定是否合并。")
             return decision
         if "head_validation_failed" in reasons:
-            decision.label = "当前版本存在受控验证失败记录，需检查原因"
-            decision.advice = "当前 Head 的已记录受控检查失败，请核对验证记录中的范围、来源与失败原因；不能将部分检查当作整个项目 CI。"
+            decision.label = "本次记录的动态检查未通过"
+            decision.advice = "本次记录的动态检查未通过，请核对验证记录中的范围、来源与失败原因；不能将部分检查当作整个项目 CI。"
             return decision
         limitation = review_limitation_kind(plan.outcome, reasons)
         decision.label = review_limitation_label(plan.outcome, reasons)
@@ -82,14 +84,15 @@ def merge_decision(plan):
             decision.advice = "尚无足够记录说明限制原因，请核对详细报告；不能据此判断代码存在缺陷或审查已完成。"
         return decision
     elif suggestions:
-        # 只有非阻断建议时不能与“无问题”共用同一句结论，否则读者无法区分是否还有事项要处理。
+        # 只有非高优先级建议时不能与“无问题”共用同一句结论，否则读者无法区分是否还有事项要处理。
         decision.status = "conditional_merge"
-        decision.advice = ("在已检查范围内，本次静态审查没有发现需要阻止合并的问题；请结合 CI、审批和人工判断决定是否合并。"
-                           f"另有 {len(suggestions)} 项已确认的非阻断问题，建议评估影响后处理。")
+        decision.advice = ("在已检查范围内，本次静态审查没有发现按审查策略建议合并前处理的问题；请结合 CI、审批和人工判断决定是否合并。"
+                           f"另有 {len(suggestions)} 项代码证据已确认的改进建议，建议评估影响后处理。"
+                           + POLICY_BOUNDARY)
     elif plan.outcome.kind == "clean":
         decision.status = "conditional_merge"
-        decision.advice = "在已检查范围内，本次静态审查没有发现需要阻止合并的问题；请结合 CI、审批和人工判断决定是否合并。"
-    decision.label = (f"发现 {len(blocking)} 项高优先级问题，建议修复后再合并" if blocking
-                      else f"发现 {len(suggestions)} 项改进建议，未发现阻断性问题" if suggestions
+        decision.advice = "在已检查范围内，本次静态审查没有发现按审查策略建议合并前处理的问题；请结合 CI、审批和人工判断决定是否合并。"
+    decision.label = (f"发现 {len(blocking)} 项高优先级问题，建议修复后复审" if blocking
+                      else f"发现 {len(suggestions)} 项改进建议，暂无高优先级问题" if suggestions
                       else MERGE_LABELS[decision.status])
     return decision

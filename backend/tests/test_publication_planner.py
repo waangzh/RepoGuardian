@@ -79,7 +79,7 @@ def test_withholds_without_losing_confirmed_count(problem, reason):
     assert plan.outcome.kind == "findings" and plan.outcome.confirmed_count == 1
     assert plan.outcome.publishable_count == 0 and not plan.inline_drafts and not plan.summary_findings
     assert plan.withheld_findings[0].reason_code == reason
-    assert "1 项已确认记录未进入发布草稿" in plan.summary_markdown
+    assert "1 项代码证据已确认的记录未进入发布草稿" in plan.summary_markdown
     assert "未核验的新主张" not in plan.summary_markdown
 
 

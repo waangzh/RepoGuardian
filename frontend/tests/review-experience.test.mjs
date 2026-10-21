@@ -10,7 +10,7 @@ test("历史结论和验证范围复用后端投影，缺失记录不转为成�
   try {
     const { historyConclusion, historyValidation } = await server.ssrLoadModule("/src/utils/reviewHistoryPresentation.ts");
     const fixtures = JSON.parse(await readFile(new URL("./fixtures/publication-plans.json", import.meta.url), "utf8"));
-    for (const [name, expected] of [["clean", "已检查范围内无阻断问题"], ["findings", "无阻断问题，有改进建议"],
+    for (const [name, expected] of [["clean", "未发现需在合并前处理的问题"], ["findings", "有改进建议，暂无高优先级问题"],
       ["failed", "审查中断"], ["cancelled", "审查已停止"]]) {
       const { task, plan } = fixtures[name];
       const value = { ...task, history_result: { outcome: plan.outcome, merge_decision: plan.digest.merge_decision } };
@@ -26,7 +26,7 @@ test("历史结论和验证范围复用后端投影，缺失记录不转为成�
     high.plan.digest.merge_decision.status = "fix_blockers";
     high.plan.digest.merge_decision.blocking_finding_keys = ["high"];
     assert.equal(historyConclusion({ ...high.task, history_result: { outcome: high.plan.outcome,
-      merge_decision: high.plan.digest.merge_decision } }).title, "存在高风险问题");
+      merge_decision: high.plan.digest.merge_decision } }).title, "存在高优先级问题");
     assert.equal(historyConclusion({ status: "completed" }).title, "结论未知");
     assert.equal(historyConclusion({ status: "reviewing" }).title, "尚未形成结论");
     assert.equal(historyValidation({}), "验证结果或适用范围未知");

@@ -80,7 +80,7 @@ test("完整问题与无 Issue 候选独立可达，已排除不混入需关注�
   assert.deepEqual(filterRuntimeFindings(rows, "unknown"), []);
   assert.equal(taskRuntimeSummary(report).findings.active, 2);
   assert.match(rows[1].reason, /尚未完成/);
-  assert.match(reviewCompletionMessage({ engine: "task_review_v1", issues: [issue], task_runtime_report: report }), /1 项已确认问题，1 项待确认候选/);
+  assert.match(reviewCompletionMessage({ engine: "task_review_v1", issues: [issue], task_runtime_report: report }), /1 项代码证据已确认的问题，1 项待确认候选/);
 });
 
 test("零候选不能掩盖调查、范围、未知用量和异常结束", () => {

@@ -23,11 +23,11 @@ const technicalReasons = computed(() => [...new Set([
   ...(props.plan?.digest.merge_decision?.unresolved_reasons || []),
 ])]);
 const kicker = computed(() => ({
-  clean: "已检查范围内无阻断问题", nonblocking: "有改进建议", blockers: "需要优先处理",
+  clean: "未发现需在合并前处理的问题", nonblocking: "有改进建议", blockers: "需要优先处理",
   evidence_gaps: "需要补充核实", scope_incomplete: "范围未完整覆盖",
-  runtime_limits: "运行记录需核对",
-  stale: "PR 已更新", failed: "执行错误中断", cancelled: "用户已停止",
-  validation_failed: "已有验证失败",
+  runtime_limits: "结果可靠性需核对",
+  stale: "PR 已更新", failed: "审查中断", cancelled: "用户已停止",
+  validation_failed: "动态检查未通过",
 })[props.situation?.key || "evidence_gaps"]);
 function navigate(section: ReviewSection) {
   explanationOpen.value = false;
@@ -41,6 +41,7 @@ function navigate(section: ReviewSection) {
       <div class="ov-verdict__kicker"><AppIcon :name="situation?.icon || 'info'" :size="18" />本轮结论 · {{ plan ? kicker : "摘要暂不可用" }}</div>
       <h2 id="overview-conclusion">{{ situation?.title || (summaryLoading ? "正在读取审查结论" : summaryError ? "当前无法读取完整审查结论" : "暂时无法形成完整结论") }}</h2>
       <p class="ov-verdict__description">{{ overviewConclusionDescription(situation) || (summaryLoading ? "正在读取摘要，加载完成前不能判断合并建议。" : "摘要缺失不代表零问题或审查失败，当前不能判断合并建议。") }}</p>
+      <p v-if="situation?.nextStep" class="ov-verdict__next"><strong>下一步：</strong>{{ situation.nextStep }}</p>
       <div class="ov-verdict__bottom">
         <div class="ov-verdict__meta">
           <span><AppIcon name="activity" :size="15" />{{ execution }}</span>

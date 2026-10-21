@@ -39,7 +39,9 @@ export function parseCommentPreview(markdown: string) {
     }
     if (inSnapshot) { snapshot += token.raw; continue; }
     if (token.type === 'heading' && token.depth === 2) {
-      const label = ({ '发现的问题': '已确认问题', '其他审查结果': '审查局限' } as Record<string, string>)[token.text] || token.text;
+      // 旧评论使用“阻断问题/已确认问题”等标题；新评论改为“高优先级问题/代码证据已确认的问题”，两者都要正确识别。
+      const label = ({ '发现的问题': '已确认问题', '其他审查结果': '审查局限',
+        '阻断问题': '高优先级问题', '代码证据已确认的问题': '已确认问题' } as Record<string, string>)[token.text] || token.text;
       section = { title: label, markdown: pendingNote, findings: label === '已确认问题' };
       pendingNote = '';
       sections.push(section);
@@ -58,7 +60,7 @@ export function parseCommentPreview(markdown: string) {
   }
   if (!sections.length) return null;
   for (const section of sections) {
-    if (!["阻断问题", "建议项", "建议"].includes(section.title)) continue;
+    if (!["高优先级问题", "建议项", "建议"].includes(section.title)) continue;
     const count = marked.lexer(section.markdown).filter(token => token.type === "paragraph"
       && /^\*\*\[(Critical|High|Medium|Low)(?:\s|·|\])/.test(token.text)).length;
     if (count || section.title !== "建议") {

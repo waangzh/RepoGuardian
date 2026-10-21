@@ -61,13 +61,13 @@ def _append_task_runtime_report(lines: list[str], report: dict) -> None:
     scope = summary["scope"]
     lines.extend(["## 审查摘要", "",
         f"本轮审查{('已结束' if report.get('execution_status') != 'running' else '仍在运行')}："
-        f"{findings['confirmed']} 项已确认问题，{findings['unresolved']} 项待确认候选。",
+        f"{findings['confirmed']} 项代码证据已确认的问题，{findings['unresolved']} 项待确认候选。",
         f"检查范围：已检查 {scope['examined']} / {scope['total']} 个目标；"
         f"范围缺口 {scope['incomplete']} 项。",
         f"调查：{investigations['answered']} 项已有答案，"
         f"{investigations['insufficient_evidence']} 项证据不足，"
         f"{investigations['not_executed']} 项未执行。", "",
-        "已确认问题与待确认候选分别呈现；本报告不代表所有业务路径均已验证。", ""])
+        "代码证据已确认的问题与待确认候选分别呈现；本报告不代表所有业务路径均已验证。", ""])
     if not scope["total"]:
         lines.append("- 尚无可核对的范围记录，检查完整性未知。")
     if findings["unknown"]:
@@ -90,7 +90,7 @@ def _report_text(value) -> str:
 
 
 def _append_user_runtime_findings(lines: list[str], report: dict) -> None:
-    groups = (("已确认问题", {"confirmed", "published"}), ("待确认候选", {"candidate", "unresolved"}))
+    groups = (("代码证据已确认的问题", {"confirmed", "published"}), ("待确认候选", {"candidate", "unresolved"}))
     for title, statuses in groups:
         records = [item for item in report.get("findings", []) if item.get("status") in statuses]
         lines.extend(["", f"## {title}", ""])
@@ -374,7 +374,7 @@ def _append_issue_summary(lines: list[str], task: ReviewTask) -> None:
         severity_counts = Counter(issue.severity.value for issue in task.issues)
         confirmed = sum(issue.status.value == "confirmed" for issue in task.issues)
         lines.append(
-            f"本次审查汇总 {len(task.issues)} 项发现（已确认 {confirmed} 项，"
+            f"本次审查汇总 {len(task.issues)} 项发现（代码证据已确认 {confirmed} 项，"
             f"未确认 {len(task.issues) - confirmed} 项），风险等级："
             f"critical {severity_counts['critical']} 个，"
             f"high {severity_counts['high']} 个，"

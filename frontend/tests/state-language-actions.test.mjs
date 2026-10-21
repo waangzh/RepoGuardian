@@ -26,7 +26,7 @@ test("状态文案区分事实、合并影响与可执行入口", async t => {
       delete unknown.digest.merge_decision.blocking_finding_keys;
       unknown.digest.merge_decision.label = "暂不能给出合并建议";
       assert.equal(reviewSituation(unknown).blockingCount, null);
-      assert.equal(reviewSituation(unknown).title, "发现高优先级问题，建议修复后再合并");
+      assert.equal(reviewSituation(unknown).title, "发现高优先级问题，建议修复后复审");
       const inconsistent = structuredClone(fixtures.clean.summary);
       inconsistent.outcome.kind = "inconclusive";
       inconsistent.outcome.reason_codes = ["scope_incomplete"];

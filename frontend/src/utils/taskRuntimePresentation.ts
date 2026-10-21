@@ -4,7 +4,7 @@ const statusLabels: Record<string, string> = {
   not_scheduled: "未调度", duplicate: "重复线索", hint: "取证提示",
   examined: "已检查", blocked: "证据阻塞", not_examined: "尚未检查", unsupported: "不支持检查",
   answered: "已有答案", insufficient_evidence: "证据不足", not_executed: "未执行",
-  confirmed: "已确认", dismissed: "已驳回", candidate: "待验证候选", unresolved: "未确认",
+  confirmed: "代码证据已确认", dismissed: "已驳回", candidate: "待验证候选", unresolved: "未确认",
   supported: "支持命题", refuted: "反驳命题", complete: "完整", unknown: "未知", inconsistent: "不一致",
   plan_exhausted: "计划处理结束", budget_exhausted: "预算耗尽", deadline: "运行超时",
   no_progress: "无进展停止", technical_failure: "技术失败", model_response_rejected: "模型输出未通过验收",
@@ -134,7 +134,7 @@ export function reviewCompletionMessage(task: ReviewTask): string {
   const report = runtimeReport(task);
   if (!report) return task.issues.length ? `发现 ${task.issues.length} 个需关注的问题，报告已生成。` : "已检查范围内未发现达到报告门槛的问题，报告已生成。";
   const summary = taskRuntimeSummary(report);
-  return `${summary.findings.confirmed} 项已确认问题，${summary.findings.unresolved} 项待确认候选。`
+  return `${summary.findings.confirmed} 项代码证据已确认的问题，${summary.findings.unresolved} 项待确认候选。`
     + (runtimeWarnings(report).join(" ") || "约定范围已检查，报告已生成。");
 }
 

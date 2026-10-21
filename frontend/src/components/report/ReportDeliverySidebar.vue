@@ -18,7 +18,7 @@ const chapters = computed(() => props.plan ? reportChapters(props.plan) : [{ id:
     <section v-if="mode === 'comment'" class="rd-aside-card">
       <h3>交付设置<AppIcon name="settings" :size="16" /></h3><p>控制复制到 PR 的信息密度，而不是改变机器审查结论。</p>
       <label class="rd-field">评论内容密度<select :value="detail" :disabled="!canCheck" aria-label="评论内容密度" @change="emit('update:detail', ($event.target as HTMLSelectElement).value as 'compact' | 'full')"><option value="compact">简洁评论 · 包含所有可交付问题及处理建议</option><option value="full">详细评论 · 增加证据、触发场景与审查范围</option></select></label>
-      <label class="rd-checkrow"><input :checked="excludeResolved" :disabled="!canCheck" type="checkbox" @change="emit('update:excludeResolved', ($event.target as HTMLInputElement).checked)" /><span>排除已处理的非阻断事项<small>不会隐藏阻断问题</small></span></label>
+      <label class="rd-checkrow"><input :checked="excludeResolved" :disabled="!canCheck" type="checkbox" @change="emit('update:excludeResolved', ($event.target as HTMLInputElement).checked)" /><span>排除已处理的非高优先级事项<small>不会隐藏高优先级问题</small></span></label>
       <div class="rd-safety"><AppIcon name="shield" :size="17" /><div><strong>不会改变审查事实</strong><small>评论选项仅调整交付内容</small></div></div>
     </section>
     <section v-if="mode === 'user'" class="rd-aside-card"><h3>章节导航</h3><nav class="rd-toc" aria-label="详细报告章节"><a v-for="chapter in chapters" :key="chapter.id" :href="`#rd-detail-${chapter.id}`">{{ chapter.label }}</a></nav></section>

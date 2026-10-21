@@ -9,10 +9,10 @@ export function historyConclusion(task: ReviewHistoryTask) {
   if (!result) return { title: "结论未知", tone: "warning", description: "历史记录未提供结论投影，请打开详情核对。" };
   const situation = reviewSituation({ outcome: result.outcome, digest: { merge_decision: result.merge_decision } })!;
   const titles: Record<string, string> = {
-    failed: "审查中断", cancelled: "审查已停止", blockers: "存在高风险问题",
-    validation_failed: "当前审查版本验证失败", evidence_gaps: "仍有事项需核对",
-    scope_incomplete: "审查不完整", runtime_limits: "结论受限",
-    nonblocking: "无阻断问题，有改进建议", clean: "已检查范围内无阻断问题",
+    failed: "审查中断", cancelled: "审查已停止", blockers: "存在高优先级问题",
+    validation_failed: "动态检查未通过", evidence_gaps: "仍有事项需确认",
+    scope_incomplete: "检查范围未完整覆盖", runtime_limits: "结果可靠性需核对",
+    nonblocking: "有改进建议，暂无高优先级问题", clean: "未发现需在合并前处理的问题",
   };
   const historical = result.merge_decision.unresolved_reasons?.includes("historical_discussion_unresolved")
     && situation.key === "evidence_gaps";

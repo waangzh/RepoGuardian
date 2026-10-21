@@ -137,7 +137,7 @@ export function publishedFollowupIssues(result: CrossUnitFollowupResult | undefi
 
 export function issueStatusBreakdown(result: CrossUnitFollowupResult | undefined) {
   const issues = result?.unit_result?.issues || [];
-  const labels: Record<string, string> = { candidate: "候选待核验", evidence_resolved: "证据已定位", confirmed: "已确认", published: "已发布", unresolved: "未确认", needs_human: "未确认（历史）", dismissed: "已过滤" };
+  const labels: Record<string, string> = { candidate: "候选待核验", evidence_resolved: "证据已定位", confirmed: "代码证据已确认", published: "已发布", unresolved: "未确认", needs_human: "未确认（历史）", dismissed: "已过滤" };
   const counts = Object.entries(labels).map(([status, label]) => ({ label, count: issues.filter((issue) => issue.status === status).length })).filter((item) => item.count > 0);
   const unknown = issues.length - counts.reduce((sum, item) => sum + item.count, 0);
   return unknown > 0 ? [...counts, { label: "状态未记录", count: unknown }] : counts;

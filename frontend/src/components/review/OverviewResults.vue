@@ -18,14 +18,14 @@ const extraWarnings = computed(() => [...new Set(props.warnings)]
     <header class="ov-section-head"><div><h2 id="overview-results-title">关键结果</h2></div><button type="button" class="ov-link" @click="emit('navigate', 'scope')">覆盖详情 <AppIcon name="external" :size="14" /></button></header>
     <div class="ov-panel ov-metrics">
       <button type="button" class="ov-metric" @click="emit('navigate', 'findings')">
-        <span class="ov-metric__title"><AppIcon name="shield" :size="16" />阻断问题</span>
+        <span class="ov-metric__title"><AppIcon name="shield" :size="16" />高优先级问题</span>
         <strong :class="{ 'ov-count-danger': facts.blockers !== null && facts.blockers > 0 }">{{ facts.blockers ?? "未知" }}</strong>
-        <small>{{ facts.blockers === null ? "摘要未提供准确数量" : facts.blockers > 0 ? "需要优先核对和修复" : "没有达到阻断标准的证据" }}</small>
+        <small>{{ facts.blockers === null ? "摘要未提供准确数量" : facts.blockers > 0 ? "按审查策略建议合并前处理" : "没有达到高优先级标准的证据" }}</small>
       </button>
       <button type="button" class="ov-metric" @click="emit('navigate', 'findings')">
-        <span class="ov-metric__title"><AppIcon name="help" :size="16" />待确认候选</span>
+        <span class="ov-metric__title"><AppIcon name="help" :size="16" />待确认疑点</span>
         <strong>{{ facts.unresolved ?? "未知" }}</strong>
-        <small>问题候选 · 不含关联线索</small>
+        <small>尚未确认缺陷 · 不含关联线索</small>
       </button>
       <button type="button" class="ov-metric" @click="emit('navigate', 'scope')">
         <span class="ov-metric__title"><AppIcon name="units" :size="16" />约定目标已检查</span>
