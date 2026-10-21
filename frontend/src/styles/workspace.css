@@ -287,6 +287,10 @@ dialog::backdrop { background: rgba(12,22,45,.45); backdrop-filter: blur(3px); }
 .rg-preference-row { display: flex; align-items: center; gap: 20px; justify-content: space-between; border-top: 1px solid var(--line); padding: 18px 0; }
 .rg-preference-row strong { font-size: .875rem; }
 .rg-preference-row p { font-size: .8125rem; color: var(--muted); margin-top: 5px; }
+.rg-preference-select { display: block; width: min(260px, 100%); flex: 0 0 auto; }
+.rg-preference-select .app-select { min-width: 180px; }
+.rg-preference-select .app-select__trigger { width: 100%; }
+.rg-discussion-preference { align-items: flex-start; }
 .rg-history-search { flex: 1; display: flex; align-items: center; gap: 10px; font-size: .8125rem; color: var(--muted); }
 .rg-history-search span { white-space: nowrap; }
 .rg-history-search input { min-width: 160px; max-width: 340px; }

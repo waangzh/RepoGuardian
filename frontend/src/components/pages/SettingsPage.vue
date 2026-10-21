@@ -11,14 +11,24 @@ import type {
 } from "../../types/operations";
 import EmptyState from "../common/EmptyState.vue";
 import StatusBadge from "../common/StatusBadge.vue";
+import AppSelect from "../common/AppSelect.vue";
 import { usePreferences } from "../../composables/usePreferences";
 import ReviewDepthSelector from "../review/ReviewDepthSelector.vue";
 import type { ReviewCapabilities } from "../../types/reviewPlan";
 const props = defineProps<{ capabilities: ReviewCapabilities | null }>();
 const { theme, density, defaultReviewDepth, defaultPrDiscussions } = usePreferences();
-const currentDepthLabel = computed(() => ({ quick: "快速初筛", standard: "标准审查", deep: "深度核验" })[defaultReviewDepth.value]);
 const discussionsEnabled = computed(() => defaultPrDiscussions.value === "enabled"
   && props.capabilities?.pr_discussions_available === true);
+const discussionSelectValue = computed(() => discussionsEnabled.value ? "enabled" : "disabled");
+const discussionOptions = [
+  { value: "enabled", label: "开启", description: "采集并复核 PR 历史讨论" },
+  { value: "disabled", label: "关闭", description: "不纳入本次新建审查" },
+];
+const depthOptions = computed(() => (props.capabilities?.depth_presets ?? []).map(preset => ({
+  value: preset.id,
+  label: preset.label,
+  description: ({ quick: "聚焦直接变更，限制扩展调查", standard: "检查变更、调用关系与关联契约", deep: "扩大调查并主动寻找反证" })[preset.id],
+})));
 
 const diagnostics = ref<SystemDiagnostics | null>(null);
 const loading = ref(false);
@@ -134,18 +144,26 @@ onMounted(load);
       <div class="rg-preference-row"><div><strong>外观主题</strong><p>按阅读习惯切换浅色或深色</p></div><div class="segmented"><button v-for="item in ([['light', '浅色'], ['dark', '深色']] as const)" :key="item[0]" type="button" :class="{ active: theme === item[0] }" :aria-pressed="theme === item[0]" @click="theme = item[0]">{{ item[1] }}</button></div></div>
       <div class="rg-preference-row"><div><strong>信息密度</strong><p>紧凑模式减少表格与列表的间距</p></div><div class="segmented"><button v-for="item in ([['comfortable', '舒适'], ['compact', '紧凑']] as const)" :key="item[0]" type="button" :class="{ active: density === item[0] }" :aria-pressed="density === item[0]" @click="density = item[0]">{{ item[1] }}</button></div></div>
       <details class="rg-preference-row rg-depth-preference">
-        <summary :aria-label="`默认审查深度：${currentDepthLabel}`">
+        <summary aria-label="默认审查深度设置">
           <div><strong>默认审查深度</strong><p>自动保存于此浏览器，仅用于新建方案；可在单次审查中调整，不影响已有方案或任务，不跨设备同步。</p></div>
-          <span class="rg-depth-current">{{ currentDepthLabel }}<span class="rg-depth-chevron" aria-hidden="true">⌄</span></span>
+          <span class="rg-preference-select" @click.stop>
+            <AppSelect v-if="capabilities" v-model="defaultReviewDepth" :options="depthOptions" compact aria-label="默认审查深度" />
+            <span v-else class="rg-preference-value">等待加载深度选项</span>
+          </span>
         </summary>
         <ReviewDepthSelector v-if="capabilities" v-model="defaultReviewDepth" class="space-top" :presets="capabilities.depth_presets" label="默认审查深度" />
         <p v-else>深度能力尚未加载，请刷新页面重试。</p>
       </details>
       <div class="rg-preference-row rg-discussion-preference">
         <div><strong>审查时参考 PR 历史讨论</strong><p>仅用于新建方案，可在单次审查中覆盖；已有任务继续使用保存的选择。</p><p>开启后采集、参考并复核历史讨论，可能增加耗时与模型用量；关闭后不执行这些步骤。</p><p v-if="!capabilities">正在读取历史讨论审查能力…</p><p v-else-if="!capabilities.pr_discussions_available">服务端未开放历史讨论审查，当前为关闭。</p></div>
-        <div class="segmented" role="group" aria-label="历史讨论审查默认选择">
-          <button type="button" :class="{ active: discussionsEnabled }" :aria-pressed="discussionsEnabled" :disabled="!capabilities?.pr_discussions_available" @click="defaultPrDiscussions = 'enabled'">开启</button>
-          <button type="button" :class="{ active: !discussionsEnabled }" :aria-pressed="!discussionsEnabled" :disabled="!capabilities" @click="defaultPrDiscussions = 'disabled'">关闭</button>
+        <div class="rg-preference-select">
+          <AppSelect
+            :model-value="discussionSelectValue"
+            :options="discussionOptions"
+            :disabled="!capabilities?.pr_discussions_available"
+            aria-label="历史讨论审查默认选择"
+            @update:model-value="value => defaultPrDiscussions = value === 'enabled' ? 'enabled' : 'disabled'"
+          />
         </div>
       </div>
     </section>

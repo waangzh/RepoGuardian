@@ -54,18 +54,19 @@ test('默认深度偏好持久化、恢复并生成真实 Preview 方案', async
     assert.match(html, /审查时参考 PR 历史讨论/);
     assert.match(html, /已有任务继续使用保存的选择/);
     assert.doesNotMatch(html, /跟随服务端默认|<select\b/);
-    assert.match(html, /class="segmented" role="group" aria-label="历史讨论审查默认选择"/);
-    assert.match(html, /aria-pressed="true"[^>]*>开启<\/button>/);
+    assert.match(html, /class="app-select__trigger app-select__trigger--compact"/);
+    assert.match(html, /aria-label="历史讨论审查默认选择"/);
+    assert.match(html, /aria-label="默认审查深度"/);
     const unavailableHtml = await renderToString(createSSRApp(Settings, {
       capabilities: { ...capabilities, pr_discussions_available: false },
     }));
     assert.match(unavailableHtml, /当前为关闭/);
-    assert.match(unavailableHtml, /aria-pressed="true"[^>]*>关闭<\/button>/);
+    assert.match(unavailableHtml, /服务端未开放历史讨论审查，当前为关闭/);
     assert.equal(preferences.initialReviewPlan({ ...capabilities, pr_discussions_available: false }).include_pr_discussions, false);
     const detailsTag = html.match(/<details\b[^>]*class="[^"]*rg-depth-preference[^"]*"[^>]*>/)?.[0];
     assert.ok(detailsTag);
     assert.doesNotMatch(detailsTag, /\bopen(?:\s|=|>)/);
-    assert.match(html, /<summary[^>]*aria-label="默认审查深度：深度核验"/);
+    assert.match(html, /<summary[^>]*aria-label="默认审查深度设置"/);
     assert.doesNotMatch(html, /后端尚未提供深度预设|尚未接入，不能调整/);
     const { default: Selector } = await server.ssrLoadModule('/src/components/review/ReviewDepthSelector.vue');
     const selectorHtml = await renderToString(createSSRApp(Selector, {
