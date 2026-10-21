@@ -61,3 +61,27 @@ test("概览只突出一个情景操作，证据在前、补充信息默认收�
     assert.match(html.replace(/<!--[\s\S]*?-->/g, ""), /未确认 · src\/a.py:7/);
   } finally { await server.close(); }
 });
+
+test("概览建议指标采用独立缺陷数，旧记录回退来源计数", async () => {
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  try {
+    const { default: Results } = await server.ssrLoadModule("/src/components/review/OverviewResults.vue");
+    const fixtures = JSON.parse(await readFile(new URL("./fixtures/publication-plans.json", import.meta.url), "utf8"));
+    const plan = structuredClone(fixtures.clean.summary);
+    const decision = plan.digest.merge_decision;
+    decision.nonblocking_finding_keys = ["current"];
+    decision.nonblocking_historical_keys = ["history"];
+    const count = async () => {
+      const html = await renderToString(createSSRApp(Results, { plan, runtime: null, findings: [] }));
+      return html.match(/改进建议<\/span>\s*<strong>([^<]+)<\/strong>/)?.[1];
+    };
+    decision.nonblocking_independent_count = 1;
+    assert.equal(await count(), "1");
+    decision.nonblocking_independent_count = 0;
+    assert.equal(await count(), "0", "已记录零值不能回退成来源相加");
+    decision.nonblocking_independent_count = null;
+    assert.equal(await count(), "2");
+    delete decision.nonblocking_independent_count;
+    assert.equal(await count(), "2");
+  } finally { await server.close(); }
+});

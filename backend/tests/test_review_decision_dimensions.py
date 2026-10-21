@@ -80,7 +80,8 @@ def test_history_is_ranked_by_current_impact_without_rewriting_primary_review(se
     assert plan.digest.merge_decision.blocking_historical_keys == (["inline:1"] if status == "fix_blockers" else [])
     for text in (plan.summary_markdown, plan.review_comment_markdown, plan.user_report_markdown):
         assert "Guard the affected branch" in text
-        assert finding.severity in text
+        # 历史风险章节与当前问题一致使用首字母大写等级；严重度本身必须可见。
+        assert finding.severity in text.lower()
     assert PublicationPlan.model_validate_json(plan.model_dump_json()).model_dump(mode="json") == plan.model_dump(mode="json")
     assert task.task_runtime_report == original
 
