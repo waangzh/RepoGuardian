@@ -4,6 +4,7 @@ from copy import deepcopy
 
 import pytest
 
+from app.models.review import ChangedFile
 from app.models.review_runtime import IntentAssessment
 from app.services.publication_planner import PublicationPlanner, summary_projection
 from app.services.publication_renderer import render_review_comment, render_user_report
@@ -262,16 +263,67 @@ def test_compact_blockers_keep_evidence_and_trigger_without_changing_admission(s
         {"goal_id": "gap", "target_ref": "src/missing.py", "status": "not_examined", "reason": "上下文不足"}]}, "上下文不足"),
     ({"termination_reason": "budget_exhausted"}, "预算耗尽"),
     ({"usage_integrity": "unknown"}, "计量不完整"),
+    ({"findings": [{"status": "candidate"}]}, "候选问题尚未确认"),
+    ({"admitted_investigations": [{"status": "not_executed"}]}, "调查尚未完成"),
 ])
-def test_incomplete_comments_only_show_gaps_and_next_steps(updates, reason):
+def test_incomplete_comments_keep_understanding_gaps_and_next_steps(updates, reason):
     plan = PublicationPlanner().build(completed_task(**updates))
+    before = plan.model_dump(mode="json")
     for detail in ("compact", "full"):
         markdown = render_review_comment(plan, detail=detail)
         assert reason in markdown
         assert [line for line in markdown.splitlines() if line.startswith("## ")] == [
-            "## 仍需确认的事项", "## 下一步"]
+            "## 变更理解", "## 仍需确认的事项", "## 下一步"]
+        assert "未保存变更明细，无法归纳实际修改。" in markdown
+        assert markdown.count("不代表所有目标已完成核验") == 1
         assert "## 变更概述" not in markdown and "## 已确认问题" not in markdown
         assert markdown.count("未执行目标仓库代码、测试或构建") == 1
+    assert plan.model_dump(mode="json") == before
+
+
+@pytest.mark.parametrize("observation_state", ["bound", "unbound", "not_examined"])
+def test_incomplete_comment_only_preserves_admitted_change_observations(observation_state):
+    task = publishable_task()
+    task.changed_files = [ChangedFile(file_path="src/a.py", change_type="modified", additions=1, deletions=0)]
+    report = task.task_runtime_report
+    report["findings"] = []
+    report["scope_complete"] = False
+    report["pr_intent_context"] = "拒绝空值。"
+    report["pr_intent_context_truncated"] = False
+    goal = report["initial_scope_coverage"][0]
+    goal.update(target_ref="src/a.py", target_kind="source_range", status="examined", result_id="result-1",
+        snapshot_head_sha=task.run_manifest.head_sha, snapshot_base_sha=task.run_manifest.effective_base_sha,
+        evidence_ids=["e1"], intent_assessments=[IntentAssessment(author_quote="拒绝空值。",
+            actual_behavior="空值分支在读取字段前返回", alignment="supported",
+            evidence_ids=["e1"]).model_dump(mode="json")])
+    if observation_state == "unbound":
+        goal["snapshot_head_sha"] = "d" * 40
+    elif observation_state == "not_examined":
+        goal["status"] = "not_examined"
+    report["initial_scope_coverage"].append(
+        {"goal_id": "gap", "target_ref": "src/missing.py", "status": "not_examined", "reason": "上下文不足"})
+    plan = PublicationPlanner().build(task)
+    assert plan.outcome.kind == "inconclusive"
+    assert plan.outcome.confirmed_count == plan.outcome.publishable_count == 0
+    for markdown in (plan.review_comment_markdown, render_review_comment(plan, detail="full")):
+        assert "**PR 目标：** 拒绝空值。（作者声明，不代表目标已实现）" in markdown
+        assert ("空值分支在读取字段前返回" in markdown) is (observation_state == "bound")
+        if observation_state != "bound":
+            assert "以上仅为变更元数据" in markdown
+        assert markdown.count("## 变更理解") == 1
+        assert "不代表所有目标已完成核验" in markdown
+        assert "上下文不足" in markdown
+        assert markdown.index("## 变更理解") < markdown.index("## 仍需确认的事项") < markdown.index("## 下一步")
+
+
+def test_incomplete_comment_without_saved_understanding_keeps_unknown_explicit():
+    plan = PublicationPlanner().build(completed_task(scope_complete=False))
+    plan.digest.change_understanding = None
+    for detail in ("compact", "full"):
+        markdown = render_review_comment(plan, detail=detail)
+        assert "**代码观察：** 未保存可归纳的实际变更。" in markdown
+        assert "不代表所有目标已完成核验" in markdown
+        assert "## 仍需确认的事项" in markdown
 
 
 @pytest.mark.parametrize("severity", ["high", "critical"])
