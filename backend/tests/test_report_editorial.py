@@ -183,7 +183,7 @@ def test_clean_comment_is_brief_and_keeps_one_validation_boundary():
     task.task_runtime_report["pr_intent_context_truncated"] = False
     plan = PublicationPlanner().build(task)
     markdown = plan.review_comment_markdown
-    for phrase in ("**PR 目标：** 修复空值异常。", "不代表目标已实现", "**代码观察：**",
+    for phrase in ("**PR 目标：** 修复空值异常。", "不代表目标已实现", "**实现变化：**", "**测试核对：**",
                    "本次检查未发现需在合并前处理的问题", "本结论基于提交"):
         assert phrase in markdown
     assert plan.outcome.confirmed_count == 0

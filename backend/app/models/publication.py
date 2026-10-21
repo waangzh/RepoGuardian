@@ -183,6 +183,17 @@ class ChangeUnderstanding(BaseModel):
     author_goal: str = "未记录明确的作者目标。"
     actual_changes: str = "未保存可归纳的实际变更。"
     alignment: str = "未保存逐目标的符合性核验记录，不能由覆盖率推断作者目标已经实现。"
+    author_goal_source: Literal["summary", "description", "title", "unknown"] | None = None
+    implementation_changes: str | None = None
+    test_observations: str | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_editorial_fields(self, handler):
+        value = handler(self)
+        for key in ("author_goal_source", "implementation_changes", "test_observations"):
+            if getattr(self, key) is None:
+                value.pop(key, None)
+        return value
 
 
 class ReviewDigest(BaseModel):

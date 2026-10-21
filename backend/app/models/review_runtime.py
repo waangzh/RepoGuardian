@@ -103,7 +103,7 @@ class ReviewRunSpec(BaseModel):
     review_strategy: dict = Field(default_factory=dict)
     pr_intent_context: str | None = Field(default=None, min_length=1, max_length=4_000)
     pr_intent_context_truncated: bool | None = Field(default=None, strict=True)
-    intent_assessment_contract: Literal["structured-intent-v1", "structured-intent-v2", "structured-intent-v3"] | None = None
+    intent_assessment_contract: Literal["structured-intent-v1", "structured-intent-v2", "structured-intent-v3", "structured-intent-v4"] | None = None
     discussion_manifest_hash: str | None = None
     discussion_context: list[dict] | None = None
     discussion_profile: dict | None = None
@@ -245,6 +245,14 @@ class IntentAssessment(BaseModel):
     alignment: Literal["supported", "contradicted", "insufficient", "not_applicable"]
     evidence_ids: list[str] = Field(default_factory=list, max_length=20)
     limitations: list[str] = Field(default_factory=list, max_length=20)
+    author_goal_summary: str | None = Field(default=None, min_length=1, max_length=240)
+
+    @model_serializer(mode="wrap")
+    def serialize_goal_summary(self, handler):
+        value = handler(self)
+        if self.author_goal_summary is None:
+            value.pop("author_goal_summary", None)
+        return value
 
 
 class ExaminationSubmission(BaseModel):

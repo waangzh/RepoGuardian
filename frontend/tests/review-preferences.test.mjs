@@ -48,6 +48,8 @@ test('默认深度偏好持久化、恢复并生成真实 Preview 方案', async
     const html = await renderToString(createSSRApp(Settings, { capabilities }));
     assert.match(html, /深度核验/);
     assert.match(html, /仅用于新建方案/);
+    assert.match(html, /审查时参考 PR 历史讨论/);
+    assert.match(html, /已有任务继续使用保存的选择/);
     const detailsTag = html.match(/<details\b[^>]*class="[^"]*rg-depth-preference[^"]*"[^>]*>/)?.[0];
     assert.ok(detailsTag);
     assert.doesNotMatch(detailsTag, /\bopen(?:\s|=|>)/);
@@ -82,6 +84,18 @@ test('默认深度偏好持久化、恢复并生成真实 Preview 方案', async
     const historyPlan = preferences.initialReviewPlan(capabilities);
     assert.equal(historyPlan.include_pr_discussions, false);
     assert.equal(historyPlan.depth, 'standard');
+    const { default: Controls } = await server.ssrLoadModule('/src/components/review/ReviewPlanControls.vue');
+    const controls = await renderToString(createSSRApp(Controls, {
+      preview: { effective_plan: historyPlan, changed_files: [] },
+      capabilities: { ...capabilities, pr_discussions_available: true }, busy: false,
+    }));
+    assert.match(controls, /审查时参考 PR 历史讨论/);
+    assert.match(controls, /关闭后不采集、不提供给模型/);
+    const disabledControls = await renderToString(createSSRApp(Controls, {
+      preview: { effective_plan: historyPlan, changed_files: [] },
+      capabilities: { ...capabilities, pr_discussions_available: false }, busy: false,
+    }));
+    assert.match(disabledControls, /服务端未开放历史讨论审查/);
     const { preferences: historyRestored } = await loadPreferences();
     assert.equal(historyRestored.defaultPrDiscussions.value, 'disabled');
     preferences.defaultPrDiscussions.value = 'server';

@@ -10,6 +10,7 @@ from app.services.review_intent import author_targets, matched_author_targets
 from app.services.review_validation_digest import validation_digest
 from app.services.review_findings import finding_views
 from app.services.fingerprints import stable_hash
+from app.services.review_prose import concise_text
 
 _EXECUTION_KEYS = (
     "execution_status", "termination_reason", "usage_integrity", "sent_calls", "settled_tokens",
@@ -71,7 +72,13 @@ def _module_summary(paths: list[str]) -> str:
 
 
 def _change_understanding(digest, task, report) -> ChangeUnderstanding:
-    goal = _first_paragraph(digest.author_goal)
+    summaries = list(dict.fromkeys(observation["author_goal_summary"]
+        for item in digest.intent_assessments for observation in item.observations
+        if observation.get("author_goal_summary")))
+    body = _first_paragraph(task.pr.body) if task.pr else ""
+    goal = " ".join(concise_text(value) for value in summaries[:2]) if summaries else body or _first_paragraph(digest.author_goal)
+    source = ("summary" if summaries else "description" if body else
+              "title" if task.pr and goal == _first_paragraph(task.pr.title) else "unknown")
     # 正文只保存目标内容；输入完整性与符合性仍由 Digest 的独立字段表达。
     author_goal = goal or "未记录明确的作者目标。"
     observed_goals = [goal for goal in digest.examined_goals if goal.reason and goal.reason.strip()]
@@ -88,14 +95,21 @@ def _change_understanding(digest, task, report) -> ChangeUnderstanding:
         for observation in item.observations:
             behavior = " ".join(str(observation.get("actual_behavior") or "").split())
             if observation.get("alignment") in {"supported", "contradicted"} and behavior:
-                observed.append(behavior)
+                observed.append((str(observation.get("path") or ""), behavior))
     if not observed:
         # 没有结构化目标对照时，使用已检查目标的静态理由，仍不推断作者目标已经实现。
-        observed = [((goal.path + "：") if goal.path else "") + " ".join(goal.reason.split())
+        observed = [(goal.path or "", " ".join(goal.reason.split()))
                     for goal in observed_goals]
-    observed = list(dict.fromkeys(observed))[:2]
+    observed = list(dict.fromkeys(observed))
+    implementation, tests = [], []
+    for path, behavior in observed:
+        is_test = bool(re.search(r"(^|/)(tests?|__tests__|specs?)(/|$)|(^|/)test_|_test\.|[.]test[.]|[.]spec[.]", path, re.I))
+        (tests if is_test else implementation).append(concise_text(behavior, 280))
+    implementation_text = " ".join(dict.fromkeys(implementation[:2])) or "尚未形成可引用的实现行为观察。"
+    test_text = " ".join(dict.fromkeys(tests[:2])) or "尚未形成可引用的测试断言核对记录。"
     if observed:
-        actual = (f"根据已绑定证据的局部检查，代码行为表现为：{'；'.join(observed)}。"
+        actual = (f"根据已绑定证据的局部检查，代码行为表现为：{implementation_text}"
+                  + (f" 测试静态核对：{test_text}" if tests else "")
                   + (f"本次 Diff {stats}。" if paths else ""))
     elif paths:
         symbols = set()
@@ -115,6 +129,9 @@ def _change_understanding(digest, task, report) -> ChangeUnderstanding:
                   + " 尚未形成可引用的局部行为观察，以上仅为变更元数据。")
     else:
         actual = "未保存变更明细，无法归纳实际修改。"
+    if not observed:
+        implementation_text = ("尚未形成可引用的实现行为观察；以上仅为变更元数据。"
+                               if paths else actual)
     if digest.intent_assessments:
         total = len(digest.intent_assessments)
         supported = sum(item.status == "observed" for item in digest.intent_assessments)
@@ -136,7 +153,8 @@ def _change_understanding(digest, task, report) -> ChangeUnderstanding:
                      "不能用已检查目标数量推断作者目标已经实现。")
     else:
         alignment = "未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。"
-    return ChangeUnderstanding(author_goal=author_goal, actual_changes=actual, alignment=alignment)
+    return ChangeUnderstanding(author_goal=author_goal, actual_changes=actual, alignment=alignment,
+        author_goal_source=source, implementation_changes=implementation_text, test_observations=test_text)
 
 
 def enrich_review_digest(digest, task, report, dispositions):
@@ -208,6 +226,8 @@ def enrich_review_digest(digest, task, report, dispositions):
                     entry.observations.append({"goal_id": goal.get("goal_id"), "path": goal.get("target_ref"),
                         "start_line": goal.get("start_line"), "side": "base" if goal.get("target_kind") == "base_source_range" else "head",
                         "actual_behavior": assessment.actual_behavior,
+                        **({"author_goal_summary": assessment.author_goal_summary}
+                           if bound and assessment.author_goal_summary else {}),
                         "alignment": assessment.alignment if bound else "insufficient",
                         "evidence_ids": assessment.evidence_ids if bound else [],
                         "limitations": assessment.limitations + ([] if bound else [
