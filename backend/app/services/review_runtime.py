@@ -11,6 +11,10 @@ class ExperimentalUnitDeadline(TimeoutError):
     """仅用于评测的冻结 Unit 生命周期消融。"""
 
 
+class EvidenceIdentityConflict(ValueError):
+    """同一证据身份绑定了不一致的源码或快照。"""
+
+
 class TaskReviewRuntime:
     """唯一工作队列；Unit 公平轮转，每个任务一次只推进一个动作。"""
 
@@ -239,6 +243,9 @@ class TaskReviewRuntime:
             failure["provider_failure"] = provider_failure_info(exc)
             if exc.work_item_id in self._items:
                 failure["work_item_id"] = exc.work_item_id
+        else:
+            failure["category"] = ("evidence_identity_conflict" if isinstance(exc, EvidenceIdentityConflict)
+                                   else "runtime_internal_error")
         self.failures.append(failure)
 
     async def run(self, steps: dict[str, Any], *, deadline_seconds: float) -> str:

@@ -91,7 +91,8 @@ def test_incomplete_derivation_keeps_accepted_candidates():
     candidate = Candidate(candidate_id="c", primary_anchor="g", claim="缺陷", affected_behavior="行为",
         failure_scenario="场景", supporting_evidence=[], source_result_ids=[])
     step = SimpleNamespace(executor=SimpleNamespace(work_item=SimpleNamespace(kind=SimpleNamespace(value="inspect")),
-        projection=SimpleNamespace(candidates={"c": candidate}, examinations={}), spec=SimpleNamespace(readable_scope_files=())),
+            projection=SimpleNamespace(candidates={"c": candidate}, examinations={}),
+            spec=SimpleNamespace(readable_scope_files=(), pr_intent_context=None, pr_intent_context_truncated=None)),
         last_observation={}, tool_observations=[], budget=None)
     queue = TaskReviewRuntime()
     queue.record_failure(ValueError(), stage="task_derivation")

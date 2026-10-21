@@ -13,10 +13,33 @@ REASON_HINTS = {
     "invalid_intent_assessment_binding": "作者目标对照未通过验收",
     "invalid_json": "模型返回的 JSON 无法解析",
     "invalid_response_kind": "模型返回了不支持的响应类型",
+    "incomplete_goal_evidence": "检查引用的证据未覆盖完整目标范围",
+    "response_schema_invalid": "模型返回结构未通过校验",
+}
+_REJECTION_REASON_CODES = set(REASON_HINTS) | {
+    "unknown_submit_field", "field_must_be_array", "array_limit_exceeded",
+    "read_path_outside_work_item_scope", "incomplete_investigation_evidence",
+    "discussion_resolution_mismatch", "verification_candidate_identity_mismatch",
+    "verification_subject_hash_mismatch", "publication_narrowing_has_no_change",
+    "incomplete_verification_evidence", "conflicting_duplicate_target", "unknown_target_id",
+    "target_not_in_current_page", "unknown_primary_anchor", "anchor_evidence_mismatch",
+    "unknown_related_target", "unknown_or_inactive_evidence", "diff_observation_requires_source_anchor",
+    "stale_evidence_snapshot", "unknown_evidence_side", "evidence_outside_scope",
+    "evidence_content_hash_mismatch", "invalid_evidence_source_range", "intent_contract_not_enabled",
+    "repeated_read_no_progress", "response_validation_failed",
 }
 
 
 def runtime_failure_summary(diagnostics, *, termination_reason=None):
+    for diagnostic in diagnostics or []:
+        if not isinstance(diagnostic, dict):
+            continue
+        if diagnostic.get("category") == "evidence_identity_conflict":
+            return "运行时证据身份冲突（evidence_identity_conflict）；审查已停止，已接受结果保留。"
+        if diagnostic.get("category") == "runtime_internal_error":
+            error_type = diagnostic.get("error_type")
+            detail = f"，{error_type}" if error_type in _ALLOWED_ERROR_TYPES else ""
+            return f"审查运行时内部错误（runtime_internal_error{detail}）；审查已停止，已接受结果保留。"
     codes = []
     for diagnostic in diagnostics or []:
         if not isinstance(diagnostic, dict):
@@ -130,11 +153,19 @@ def project_task_runtime(runtime, steps, goals, *, termination_reason, budget=No
 
 _PROVIDER_FIELDS = {"category", "error_type", "attempts", "status_code", "cause_types"}
 _DIAGNOSTIC_FIELDS = {"stage", "error_type", "provider_failure", "work_item_id", "category",
-                      "reason_codes", "format_corrections"}
+                      "reason_codes", "format_corrections", "frames"}
 _ALLOWED_ERROR_TYPES = {
     "APIConnectionError", "APITimeoutError", "AuthenticationError", "PermissionDeniedError",
     "RateLimitError", "BadRequestError", "NotFoundError", "UnprocessableEntityError",
     "InternalServerError", "LLMProviderError",
+    "ValueError", "TypeError", "KeyError", "RuntimeError", "OSError", "TimeoutError",
+    "EvidenceIdentityConflict",
+}
+_RUNTIME_FRAME_FUNCTIONS = {
+    "advance_one", "advance_round", "_advance_round", "run", "refresh", "_candidate",
+    "_all_evidence", "_policy_issue", "_verify", "_investigation", "restore_item",
+    "advance", "apply_response", "_read", "_other_read", "persist", "_persist_locked",
+    "restore", "_restore_step", "task_review_runtime_node",
 }
 
 
@@ -145,6 +176,17 @@ def _safe_diagnostic(failure: dict) -> dict:
         value.pop("error_type", None)
     if not isinstance(value.get("reason_codes"), list):
         value.pop("reason_codes", None)
+    else:
+        value["reason_codes"] = [code for code in value["reason_codes"]
+                                 if isinstance(code, str) and code in _REJECTION_REASON_CODES]
+    if "frames" in value:
+        value["frames"] = [{"function": frame["function"], "line": frame["line"]}
+                           for frame in value["frames"][:12]
+                           if (isinstance(frame, dict)
+                               and isinstance(frame.get("function"), str)
+                               and frame.get("function") in _RUNTIME_FRAME_FUNCTIONS
+                               and type(frame.get("line")) is int and 0 < frame["line"] <= 10_000_000)
+                           ] if isinstance(value["frames"], list) else []
     provider = failure.get("provider_failure")
     if isinstance(provider, dict):
         safe = {key: provider[key] for key in _PROVIDER_FIELDS if key in provider}
@@ -167,7 +209,7 @@ def _rejection_diagnostics(runtime, steps, termination_reason):
     diagnostics = [_safe_diagnostic(failure) for failure in runtime.failures if isinstance(failure, dict)]
     rejected = [item for item in runtime._items.values()
                 if item.state.value == "failed" and item.reason == "model_response_rejected"]
-    if termination_reason != "model_response_rejected" or not rejected:
+    if not rejected:
         return diagnostics
     codes: list[str] = []
     corrections = 0
@@ -176,8 +218,11 @@ def _rejection_diagnostics(runtime, steps, termination_reason):
         observation = getattr(step, "last_observation", {}) or {}
         for error in observation.get("errors") or []:
             reason = error.get("reason") if isinstance(error, dict) else None
-            if isinstance(reason, str) and reason not in codes:
-                codes.append(reason)
+            if isinstance(reason, str):
+                code = (reason if reason in _REJECTION_REASON_CODES else
+                        "response_schema_invalid" if "validation error" in reason else "response_validation_failed")
+                if code not in codes:
+                    codes.append(code)
         if step is not None:
             corrections = max(corrections, step.executor.work_item.format_corrections)
     diagnostics.append({"category": "model_response_rejected", "stage": "task_advance",
