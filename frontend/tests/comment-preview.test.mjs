@@ -35,7 +35,8 @@ test('评论分节保留真实问题、选择说明、快照限制和历史正�
       assert.ok(document);
       assert.equal(document.conclusion, '结论：已检查范围内未发现需处理的问题');
       assert.equal(document.preamble, preamble);
-      assert.deepEqual(document.sections.map(item => item.title), ['变更概述', '合并前提醒']);
+      // 历史“变更概述/合并前提醒”统一映射为“变更理解/仍需确认的事项”。
+      assert.deepEqual(document.sections.map(item => item.title), ['变更理解', '仍需确认的事项']);
       assert.equal(document.sections[0].markdown.trim(), overview);
       assert.equal(document.sections[1].markdown.trim(), reminder);
       assert.equal(document.snapshot, snapshot);
@@ -73,15 +74,15 @@ ${verdict}
         const document = parseCommentPreview(markdown);
         assert.ok(document, verdict);
         assert.equal(document.positive, false);
-        assert.deepEqual(document.sections.slice(0, 4).map(item => item.title), ['变更概述', '已确认问题', '审查局限', '建议']);
+        assert.deepEqual(document.sections.slice(0, 4).map(item => item.title), ['变更理解', '已确认问题', '审查局限', '其他建议']);
         assert.ok(document.sections[0].markdown.includes('部分审查记录'));
       }
     });
     await t.test('高优先级问题与建议分章计数，不将总问题数重复显示', async () => {
       const value = variants.blockers['compact:false'];
       const document = parseCommentPreview(value.review_comment_markdown);
-      assert.deepEqual(document.sections.map(item => item.title), ['高优先级问题', '变更理解', '其他局限', '建议']);
-      const blockers = document.sections[0], suggestions = document.sections[3];
+      assert.deepEqual(document.sections.map(item => item.title), ['需要处理的问题', '变更理解', '其他建议', '仍需确认的事项', '下一步']);
+      const blockers = document.sections[0], suggestions = document.sections[2];
       assert.equal(blockers.findingCount, 1);
       assert.equal(suggestions.findingCount, 1);
       assert.ok(!blockers.markdown.includes('缓存改进建议'));
@@ -113,7 +114,7 @@ ${verdict}
       for (const subject of ['本结论', '本记录']) {
         const markdown = `RepoGuardian · PR Code Review\n\n❓ 结论：仅适用于已检查范围\n\n## 审查局限\n\n需补查调用方。\n\n## 建议\n\n补查后重审。\n\n## 变更概述\n\n局部观察。\n\n---\n\n${subject}基于提交 \`head\`；未执行测试。`;
         const document = parseCommentPreview(markdown);
-        assert.deepEqual(document.sections.map(item => item.title), ['审查局限', '建议', '变更概述']);
+        assert.deepEqual(document.sections.map(item => item.title), ['审查局限', '其他建议', '变更理解']);
         assert.ok(document.snapshot.startsWith(subject));
         assert.ok(document.sections[0].markdown.includes('需补查调用方'));
       }

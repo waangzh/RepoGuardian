@@ -73,10 +73,11 @@ async def test_structured_intent_survives_pages_and_checkpoint_with_same_budget(
     plan = PublicationPlanner().build(task)
     assert [item.status for item in plan.digest.intent_assessments] == ["observed", "not_checked"]
     assert len(plan.digest.intent_assessments[0].observations) == 2
-    assert "异常路径未核验" in plan.review_comment_markdown and "尚未核验" in plan.user_report_markdown
+    # 逐项观察的限制只留在详细报告；评论仅保留影响合并判断的缺口。
+    assert "异常路径未核验" in plan.user_report_markdown
+    assert "异常路径未核验" not in plan.review_comment_markdown
     # 未逐项核验的作者声明是辅助信息，不再单独把结论降为证据缺口情景。
-    expected = "conditional_merge" if truncated is False else "resolve_unknowns"
-    assert plan.digest.merge_decision.status == expected
+    assert plan.digest.merge_decision.status == "conditional_merge"
     assert plan.digest.author_context_status == ("unknown" if truncated is None else "truncated" if truncated else "complete")
     task.task_runtime_report["initial_scope_coverage"][0]["snapshot_base_sha"] = "d" * 40
     assert PublicationPlanner().build(task).digest.intent_assessments[0].status == "insufficient"
@@ -113,20 +114,20 @@ async def test_structured_intent_keeps_zero_budget_and_stale_evidence_rejection(
 
 
 @pytest.mark.parametrize("stage,sha,passed,expected", [("head", "a", True, "passed"),
-    ("head", "a", False, "failed"), ("head", "d", True, "unknown"), ("base", "c", True, "unknown")])
+    ("head", "a", False, "failed"), ("head", "d", True, "not_executed"),
+    ("base", "c", True, "not_executed")])
 def test_validation_stage_identity_and_failure_remain_separate(stage, sha, passed, expected):
     task = completed_task()
     task.validation_snapshots = [ValidationSnapshot(stage=stage, sha=sha * 40, passed=passed,
         command_results=[RunResult(tool="test_runner", command="pytest", exit_code=0 if passed else 1, passed=passed)])]
     plan = PublicationPlanner().build(task)
     assert plan.digest.validation_state == plan.outcome.dynamic_validation == expected
-    if expected in {"failed", "unknown"}:
-        assert plan.digest.merge_decision.status == "resolve_unknowns"
+    assert plan.digest.validations[0].stage == stage
+    assert plan.digest.merge_decision.status == ("resolve_unknowns" if expected == "failed" else "conditional_merge")
 
 
-@pytest.mark.parametrize("trusted,bound,expected", [(True, True, "independent_results"),
-    (False, True, "unknown"), (True, False, "unknown")])
-def test_patch_success_never_becomes_head_success(trusted, bound, expected):
+@pytest.mark.parametrize("trusted,bound", [(True, True), (False, True), (True, False)])
+def test_patch_success_never_becomes_head_success(trusted, bound):
     from app.services.review_validation_digest import validation_digest
     result = ValidationResult(id="v", backend="user_runner", status="passed", trusted=trusted,
         trust_source="user_runner", head_sha="a" * 40, patch_sha="hash", patch_id="p")
@@ -134,7 +135,8 @@ def test_patch_success_never_becomes_head_success(trusted, bound, expected):
         validation_snapshots=[], validation=[result], patches=[SimpleNamespace(id="p", head_sha="a" * 40,
             patch_sha="hash" if bound else "other", validation_result_id="v")])
     state, records = validation_digest(task)
-    assert state == expected and state != "passed" and records[0].stage == "patched"
+    assert state == "not_executed" and records[0].stage == "patched"
+    assert records[0].trusted is (trusted and bound)
 
 
 def test_blockers_withheld_and_human_resolved_do_not_disappear():
