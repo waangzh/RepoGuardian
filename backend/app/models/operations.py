@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ProviderModelInfo(BaseModel):
@@ -35,6 +35,7 @@ class SystemDiagnostics(BaseModel):
     version: str
     provider: str
     default_model: str
+    model_base_url: str
     database_schema_current: bool
     worker_status: Literal["running", "idle"]
     artifact_directory_writable: bool
@@ -45,6 +46,32 @@ class SystemDiagnostics(BaseModel):
     retention_days: int
     configured_secrets: dict[str, bool]
     versions: VersionDiagnostics
+
+
+class SystemSettingsUpdate(BaseModel):
+    """可由本地设置页修改的非秘密配置。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    patch_max_files: int | None = Field(default=None, ge=1, le=10)
+    patch_max_changed_lines: int | None = Field(default=None, ge=1, le=1_000)
+    retention_days: int | None = Field(default=None, ge=1, le=3_650)
+    model_base_url: str | None = Field(default=None, min_length=1, max_length=2_000)
+    model_name: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @field_validator("model_base_url")
+    @classmethod
+    def validate_model_base_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        from urllib.parse import urlsplit
+
+        parsed = urlsplit(value.strip())
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("model_base_url must be an HTTP(S) URL")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError("model_base_url cannot contain credentials, query or fragment")
+        return value.strip().rstrip("/")
 
 
 class PublicationCapability(BaseModel):

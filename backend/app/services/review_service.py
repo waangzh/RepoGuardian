@@ -167,6 +167,10 @@ class ReviewService:
                 self._run_tasks[task.id] = asyncio.create_task(self._run_graph(task.id))
         return task
 
+    def reload_provider(self, provider: LLMProvider) -> None:
+        """切换新建审查使用的 Provider；已冻结任务仍按自己的配置恢复。"""
+        self._provider = provider
+
     async def _create_and_dispatch(self, request, *, configuration=None, preview_id=None):
         task = await asyncio.to_thread(self.create_task, request, configuration=configuration,
                                        preview_id=preview_id, dispatch=False)

@@ -27,6 +27,7 @@ export interface SystemDiagnostics {
   version: string;
   provider: string;
   default_model: string;
+  model_base_url: string;
   database_schema_current: boolean;
   worker_status: "running" | "idle";
   artifact_directory_writable: boolean;
@@ -37,6 +38,14 @@ export interface SystemDiagnostics {
   retention_days: number;
   configured_secrets: Record<string, boolean>;
   versions: VersionDiagnostics;
+}
+
+export interface SystemSettingsUpdate {
+  patch_max_files?: number;
+  patch_max_changed_lines?: number;
+  retention_days?: number;
+  model_base_url?: string;
+  model_name?: string;
 }
 
 /** 发布能力探测结果；不包含凭据、仓库或操作口令。 */

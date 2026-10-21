@@ -59,7 +59,7 @@ async def test_fetch_model_catalog_uses_openai_compatible_models_endpoint(
     assert fake_client.request is not None
     assert str(fake_client.request.url) == "https://api.openai.com/v1/models"
     assert fake_client.request.headers["authorization"] == "Bearer secret-key"
-    assert FakeAsyncClient.options == {"timeout": 15, "follow_redirects": True}
+    assert FakeAsyncClient.options == {"timeout": 15, "follow_redirects": False, "trust_env": False}
 
 
 @pytest.mark.asyncio

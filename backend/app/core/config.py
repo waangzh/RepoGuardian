@@ -1,5 +1,7 @@
 ﻿"""全局配置 —— 从 .env 文件 / 环境变量加载，提供类型安全的 Settings 单例。"""
 
+import os
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -187,6 +189,37 @@ class Settings(BaseSettings):
         extra="ignore",
         hide_input_in_errors=True,
     )
+
+
+_EDITABLE_ENV_KEYS = {
+    "REPOGUARDIAN_PATCH_MAX_FILES",
+    "REPOGUARDIAN_PATCH_MAX_CHANGED_LINES",
+    "REPOGUARDIAN_RETENTION_DAYS",
+    "OPENAI_BASE_URL",
+    "REPOGUARDIAN_MODEL",
+}
+
+
+def persist_editable_settings(values: dict[str, object]) -> None:
+    """更新白名单配置并原子写回 backend/.env，不触碰秘密字段。"""
+    env_path = Path(__file__).resolve().parents[2] / ".env"
+    existing = env_path.read_text(encoding="utf-8-sig") if env_path.exists() else ""
+    lines = existing.splitlines()
+    updates = {key: str(value) for key, value in values.items() if key in _EDITABLE_ENV_KEYS}
+    for key, value in updates.items():
+        if "\n" in value or "\r" in value:
+            raise ValueError(f"{key} contains a line break")
+        pattern = re.compile(rf"^{re.escape(key)}=.*$")
+        for index, line in enumerate(lines):
+            if pattern.match(line):
+                lines[index] = f"{key}={value}"
+                break
+        else:
+            lines.append(f"{key}={value}")
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = env_path.with_name(env_path.name + ".tmp")
+    temp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.replace(temp_path, env_path)
 
 
 # 全局配置单例

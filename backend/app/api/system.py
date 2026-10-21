@@ -7,12 +7,14 @@ from importlib.metadata import PackageNotFoundError, version
 from fastapi import APIRouter, HTTPException, status
 
 from app.api.reviews import get_review_service
-from app.core.config import settings
+from app.agents.providers import build_provider
+from app.core.config import persist_editable_settings, settings
 from app.core.database import schema_is_current
 from app.models.operations import (
     ModelCatalogResponse,
     PublicationCapability,
     SystemDiagnostics,
+    SystemSettingsUpdate,
     VersionDiagnostics,
     WorkspaceCleanupPreview,
     WorkspaceCleanupRequest,
@@ -77,6 +79,7 @@ async def get_system_diagnostics() -> SystemDiagnostics:
         version=app_version,
         provider=settings.repoguardian_provider,
         default_model=settings.repoguardian_model,
+        model_base_url=settings.openai_base_url,
         database_schema_current=schema_is_current(),
         worker_status="running" if worker_running else "idle",
         artifact_directory_writable=writable_target.exists() and os.access(writable_target, os.W_OK),
@@ -106,6 +109,47 @@ async def get_system_diagnostics() -> SystemDiagnostics:
             patch_policy=settings.repoguardian_patch_policy_version,
         ),
     )
+
+
+@router.patch("/settings", response_model=SystemDiagnostics)
+async def update_system_settings(value: SystemSettingsUpdate) -> SystemDiagnostics:
+    """更新本地单用户可编辑配置；密钥和执行安全边界不在此接口内。"""
+    updates: dict[str, object] = {}
+    mapping = {
+        "patch_max_files": "repoguardian_patch_max_files",
+        "patch_max_changed_lines": "repoguardian_patch_max_changed_lines",
+        "retention_days": "repoguardian_retention_days",
+        "model_base_url": "openai_base_url",
+        "model_name": "repoguardian_model",
+    }
+    changes: dict[str, object] = {}
+    for field, setting_name in mapping.items():
+        item = getattr(value, field)
+        if item is None:
+            continue
+        changes[setting_name] = item
+        env_key = {
+            "repoguardian_patch_max_files": "REPOGUARDIAN_PATCH_MAX_FILES",
+            "repoguardian_patch_max_changed_lines": "REPOGUARDIAN_PATCH_MAX_CHANGED_LINES",
+            "repoguardian_retention_days": "REPOGUARDIAN_RETENTION_DAYS",
+            "openai_base_url": "OPENAI_BASE_URL",
+            "repoguardian_model": "REPOGUARDIAN_MODEL",
+        }[setting_name]
+        updates[env_key] = item
+    if updates:
+        try:
+            await asyncio.to_thread(persist_editable_settings, updates)
+            for setting_name, item in changes.items():
+                setattr(settings, setting_name, item)
+            get_review_service().reload_provider(build_provider(
+                settings.repoguardian_provider,
+                settings.openai_api_key,
+                settings.openai_base_url,
+                settings.repoguardian_model,
+            ))
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="保存本地配置失败") from exc
+    return await get_system_diagnostics()
 
 
 @router.get("/workspaces/cleanup/preview", response_model=WorkspaceCleanupPreview)

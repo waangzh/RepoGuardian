@@ -4,6 +4,7 @@ import {
   cleanupExpiredWorkspaces,
   getSystemDiagnostics,
   previewWorkspaceCleanup,
+  updateSystemSettings,
 } from "../../api/client";
 import type {
   SystemDiagnostics,
@@ -16,6 +17,7 @@ import { usePreferences } from "../../composables/usePreferences";
 import ReviewDepthSelector from "../review/ReviewDepthSelector.vue";
 import type { ReviewCapabilities } from "../../types/reviewPlan";
 const props = defineProps<{ capabilities: ReviewCapabilities | null }>();
+const emit = defineEmits<{ "settings-saved": [] }>();
 const { theme, density, defaultReviewDepth, defaultPrDiscussions } = usePreferences();
 const discussionsEnabled = computed(() => defaultPrDiscussions.value === "enabled"
   && props.capabilities?.pr_discussions_available === true);
@@ -37,6 +39,13 @@ const workspacePreview = ref<WorkspaceCleanupPreview | null>(null);
 const workspaceScanning = ref(false);
 const workspaceCleaning = ref(false);
 const workspaceMessage = ref<string | null>(null);
+const settingsSaving = ref(false);
+const settingsMessage = ref<string | null>(null);
+const patchMaxFiles = ref<number | null>(null);
+const patchMaxChangedLines = ref<number | null>(null);
+const retentionDays = ref<number | null>(null);
+const modelBaseUrl = ref("");
+const modelName = ref("");
 
 const secretLabels: Record<string, string> = {
   github: "GitHub Token",
@@ -55,24 +64,44 @@ const versionLabels: Record<string, string> = {
   patch_policy: "补丁策略",
 };
 
-const healthyChecks = computed(() => {
-  if (!diagnostics.value) return 0;
-  return [
-    diagnostics.value.database_schema_current,
-    diagnostics.value.artifact_directory_writable,
-    diagnostics.value.security_mode === "restricted",
-  ].filter(Boolean).length;
-});
-
 async function load() {
   loading.value = true;
   error.value = null;
   try {
-    diagnostics.value = await getSystemDiagnostics();
+    const next = await getSystemDiagnostics();
+    diagnostics.value = next;
+    patchMaxFiles.value = next.patch_max_files;
+    patchMaxChangedLines.value = next.patch_max_changed_lines;
+    retentionDays.value = next.retention_days;
+    modelBaseUrl.value = next.model_base_url;
+    modelName.value = next.default_model;
   } catch (err) {
     error.value = err instanceof Error ? err.message : "读取系统诊断失败";
   } finally {
     loading.value = false;
+  }
+}
+
+async function saveSettings() {
+  if (patchMaxFiles.value === null || patchMaxChangedLines.value === null
+      || retentionDays.value === null || !modelBaseUrl.value.trim() || !modelName.value.trim()) return;
+  settingsSaving.value = true;
+  settingsMessage.value = null;
+  error.value = null;
+  try {
+    diagnostics.value = await updateSystemSettings({
+      patch_max_files: patchMaxFiles.value,
+      patch_max_changed_lines: patchMaxChangedLines.value,
+      retention_days: retentionDays.value,
+      model_base_url: modelBaseUrl.value.trim(),
+      model_name: modelName.value.trim(),
+    });
+    settingsMessage.value = "设置已保存，新建审查将使用更新后的配置。已有任务继续使用冻结配置。";
+    emit("settings-saved");
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : "保存设置失败";
+  } finally {
+    settingsSaving.value = false;
   }
 }
 
@@ -168,17 +197,7 @@ onMounted(load);
       </div>
     </section>
     <p v-if="error" class="workspace-error" role="alert">{{ error }}</p>
-    <section v-if="diagnostics" class="diagnostics-layout" :aria-busy="loading">
-      <article class="diagnostic-hero panel">
-        <div class="diagnostic-score"><strong>{{ healthyChecks }}/3</strong><span>核心检查通过</span></div>
-        <div>
-          <span>RepoGuardian</span>
-          <h2>v{{ diagnostics.version }}</h2>
-          <p>{{ diagnostics.provider }} / {{ diagnostics.default_model }}</p>
-        </div>
-        <StatusBadge :status="diagnostics.security_mode === 'restricted' ? 'passed' : 'warning'" :label="diagnostics.security_mode === 'restricted' ? '受限模式' : '本地非安全模式'" />
-      </article>
-
+    <section v-if="diagnostics" class="diagnostics-layout" :aria-busy="loading || settingsSaving">
       <article class="diagnostic-panel panel">
         <header><span aria-hidden="true">◎</span><div><h2>运行状态</h2><p>服务、数据库与产物目录</p></div></header>
         <dl class="diagnostic-list">
@@ -191,11 +210,25 @@ onMounted(load);
 
       <article class="diagnostic-panel panel">
         <header><span aria-hidden="true">◆</span><div><h2>安全策略</h2><p>候选补丁与记录保留边界</p></div></header>
-        <dl class="diagnostic-list">
-          <div><dt>单补丁文件上限</dt><dd>{{ diagnostics.patch_max_files }} 个</dd></div>
-          <div><dt>单补丁变更行上限</dt><dd>{{ diagnostics.patch_max_changed_lines }} 行</dd></div>
-          <div><dt>记录保留</dt><dd>{{ diagnostics.retention_days }} 天</dd></div>
-        </dl>
+        <div class="settings-form">
+          <label><span>单补丁文件上限</span><input v-model.number="patchMaxFiles" type="number" min="1" max="10" /></label>
+          <label><span>单补丁变更行上限</span><input v-model.number="patchMaxChangedLines" type="number" min="1" max="1000" /></label>
+          <label><span>记录保留天数</span><input v-model.number="retentionDays" type="number" min="1" max="3650" /></label>
+        </div>
+      </article>
+
+      <article class="diagnostic-panel panel">
+        <header><span aria-hidden="true">◈</span><div><h2>模型配置</h2><p>使用 OpenAI-compatible 接口；API Key 仍由后端环境配置管理</p></div></header>
+        <div class="settings-form">
+          <label><span>模型服务 URL</span><input v-model="modelBaseUrl" type="url" inputmode="url" placeholder="https://api.openai.com/v1" /></label>
+          <label><span>默认模型名称</span><input v-model="modelName" type="text" placeholder="gpt-4.1-mini" /></label>
+          <p class="field-hint">修改后会更新模型目录和新建审查；已有任务不切换模型。</p>
+        </div>
+      </article>
+
+      <article class="diagnostic-panel diagnostic-panel--wide settings-actions panel">
+        <div><strong>保存设置</strong><p>安全策略和模型配置会写入本地后端配置；不会返回或保存 API Key。</p><p v-if="settingsMessage" class="workspace-maintenance__message" role="status">{{ settingsMessage }}</p></div>
+        <button type="button" class="button button--primary" :disabled="settingsSaving" @click="saveSettings">{{ settingsSaving ? "保存中…" : "保存设置" }}</button>
       </article>
 
       <article class="diagnostic-panel diagnostic-panel--wide workspace-maintenance panel">

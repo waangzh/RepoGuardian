@@ -58,6 +58,12 @@ export function getReviewCapabilities() { return request<ReviewCapabilities>('/a
 export function getPublicationCapability() {
   return request<import('../types/operations').PublicationCapability>('/api/system/publication-capability');
 }
+export function updateSystemSettings(value: import("../types/operations").SystemSettingsUpdate) {
+  return request<SystemDiagnostics>("/api/system/settings", {
+    method: "PATCH",
+    body: JSON.stringify(value),
+  });
+}
 export function getFindings(id: string, signal?: AbortSignal) {
   return request<{ items: FindingView[] }>(`${publicationPath(id)}/findings`, { signal });
 }
