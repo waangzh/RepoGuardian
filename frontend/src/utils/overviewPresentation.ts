@@ -80,9 +80,11 @@ export function overviewFacts(plan: ReviewSummary | null, runtime: TaskRuntimeSu
   ];
   return {
     examined, total, validation,
-    // 情景矩阵可使用保守阻断标记；指标只展示后端提供的实际数量。
+    // 情景矩阵可使用保守阻断标记；指标展示按缺陷身份去重后的独立数量，
+    // 旧冻结计划缺少该字段时才回退为来源相加。
     blockers: decision?.blocking_finding_keys
-      ? decision.blocking_finding_keys.length + (decision.blocking_historical_keys?.length ?? 0) : null,
+      ? decision.blocking_independent_count
+        ?? decision.blocking_finding_keys.length + (decision.blocking_historical_keys?.length ?? 0) : null,
     unresolved: outcome?.unresolved_count ?? null,
     limitations, boundaries,
   };

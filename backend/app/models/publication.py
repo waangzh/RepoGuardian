@@ -162,11 +162,16 @@ class MergeDecision(BaseModel):
     limits: list[str] = Field(default_factory=list)
     blocking_historical_keys: list[str] = Field(default_factory=list)
     nonblocking_historical_keys: list[str] = Field(default_factory=list)
+    # 独立缺陷数按“当前问题—历史讨论”的严格重复关联去重；来源数量仍由上方键列表分别保留。
+    blocking_independent_count: int | None = Field(default=None, ge=0)
+    nonblocking_independent_count: int | None = Field(default=None, ge=0)
+    deduplicated_historical_keys: list[str] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
     def serialize_history_keys(self, handler):
         value = handler(self)
-        for key in ("blocking_historical_keys", "nonblocking_historical_keys"):
+        for key in ("blocking_historical_keys", "nonblocking_historical_keys", "blocking_independent_count",
+                    "nonblocking_independent_count", "deduplicated_historical_keys"):
             if key not in self.model_fields_set:
                 value.pop(key, None)
         return value

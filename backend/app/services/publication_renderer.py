@@ -5,7 +5,8 @@ import re
 import unicodedata
 from urllib.parse import quote
 
-from app.models.publication import PublicationFinding, PublicationPlan
+from app.models.publication import HistoricalFindingView, PublicationFinding, PublicationPlan
+from app.services.pr_discussion_matching import exact_duplicate_matches
 
 
 OUTCOME_LABELS = {"clean": "本次检查未发现需在合并前处理的问题", "findings": "发现代码证据已确认的问题",
@@ -111,11 +112,19 @@ def outcome_description(plan) -> str:
 
 
 def historical_risk_line(plan) -> str:
+    """历史复核的已核验风险与未完成调查分别计数，避免把未知写成已确认。"""
     outcome = plan.outcome
-    count = len(outcome.historical_discussion.verified_defects)
-    if not outcome.historical_discussion.affects_risk or not count:
+    history = outcome.historical_discussion
+    if not history.affects_risk:
         return ""
-    return f"历史讨论复核确认 {count} 项既有问题在当前代码中仍存在；不计入本轮 Diff 新增问题，但会影响合并判断。"
+    verified = len(history.findings) or len(history.verified_defects)
+    pending = _history_entries(plan)[1]
+    if not verified:
+        return ""
+    line = f"历史讨论复核确认 {verified} 项既有问题在当前代码中仍存在；不计入本轮 Diff 新增问题，但会影响合并判断。"
+    if pending:
+        line += f" 另有 {len(pending)} 项历史事项尚未完成核验，不能据此判断已修复。"
+    return line
 
 
 def markdown_text(value: str, limit: int = 2000) -> str:
@@ -259,14 +268,28 @@ def partial_review_note(plan) -> str:
     return ""
 
 
+def _independent_count(decision, current: int, historical: int, kind: str) -> int:
+    """优先使用 Planner 保存的去重数量；旧冻结计划回退为来源相加。"""
+    saved = (decision.blocking_independent_count if kind == "blocking"
+             else decision.nonblocking_independent_count)
+    return saved if saved is not None else current + historical
+
+
 def merge_advice(plan):
     label, advice = merge_heading(plan)
     decision = plan.digest.merge_decision
     lines = [f"**{label}**", "", advice]
     if decision.status != "unavailable" or decision.blocking_finding_keys or decision.nonblocking_finding_keys:
+        blocking_current = len(decision.blocking_finding_keys)
+        blocking_history = len(decision.blocking_historical_keys)
+        suggestions_current = len(decision.nonblocking_finding_keys)
+        suggestions_history = len(decision.nonblocking_historical_keys)
+        # 审计视图同时给出独立缺陷数与两份证据来源，避免相加后的数字被误读。
         lines.append(
-            f"高优先级问题 {len(decision.blocking_finding_keys) + len(decision.blocking_historical_keys)} 项；"
-            f"非高优先级建议 {len(decision.nonblocking_finding_keys) + len(decision.nonblocking_historical_keys)} 项。"
+            f"独立缺陷：高优先级问题 {_independent_count(decision, blocking_current, blocking_history, 'blocking')} 项，"
+            f"非高优先级建议 {_independent_count(decision, suggestions_current, suggestions_history, 'nonblocking')} 项。"
+            f"证据来源：本轮记录高优先级 {blocking_current} 项、建议 {suggestions_current} 项；"
+            f"历史复核高优先级 {blocking_history} 项、建议 {suggestions_history} 项。"
             "严重度映射不替代对部署条件和业务影响的判断，仍需满足项目要求的 CI 与必要审批。"
             "上述数量与建议由 RepoGuardian 审查策略生成，不代表 GitHub Mergeability 或分支保护结论。")
     if decision.limits:
@@ -390,7 +413,10 @@ def render_user_report(task, plan: PublicationPlan) -> str:
     findings = _ordered_findings(plan)
     views = {item.id: item for item in plan.digest.findings}
     if not findings:
-        lines.append("当前没有通过发布准入、具备代码证据的问题。未确认候选和证据缺口见下方“未决风险”。")
+        # 有已核验历史风险时不能只写“没有问题”，否则结论与章节互相矛盾。
+        lines.append("本轮 Diff 没有通过发布准入、具备代码证据的新增问题；"
+                     + ("已核验的既有风险见下节。" if _history_entries(plan)[0]
+                        else "未确认候选和证据缺口见下方“未决风险”。"))
     for finding in findings:
         lines += _report_finding_lines(plan, finding, views.get(finding.finding_key))
     published_keys = {item.finding_key for item in findings}
@@ -411,6 +437,11 @@ def render_user_report(task, plan: PublicationPlan) -> str:
             lines += _human_lines(view)
             if view.review_status != "confirmed":
                 lines.append("以上为候选或排除记录，不能作为已核验的发布评论。")
+    history_risks = _history_entries(plan)[0]
+    if history_risks:
+        lines += ["", "## 已核验的既有风险", "",
+                  "以下问题经历史讨论复核并以当前固定代码核验仍存在；不计入本轮 Diff 新增问题，但会影响合并判断。", "",
+                  *_comment_history_risk_lines(plan, history_risks)]
     lines += _risk_section(plan)
     lines += _next_steps(plan)
     lines += discussion_report_lines(plan, task)
@@ -522,9 +553,14 @@ def _next_steps(plan):
     return lines
 
 
-def _comment_risks(plan):
-    """只列影响合并判断的限制；未逐项核验的作者声明留在详细报告。"""
-    risks = list(plan.digest.merge_decision.limits)
+def _comment_risks(plan, *, include_history=True):
+    """只列影响合并判断的限制；未逐项核验的作者声明留在详细报告。
+
+    已核验的历史风险在评论中有独立章节，通用限制行不再重复同一条结论；
+    尚未完成的历史调查仍由待确认章节逐项呈现。
+    """
+    risks = [value for value in plan.digest.merge_decision.limits
+             if include_history or value != REASON_LABELS["historical_discussion_unresolved"]]
     if "usage_integrity_unknown" in plan.outcome.reason_codes:
         risks.append("运行计量记录不完整：模型请求计量不完整或不一致；未知用量不能当作完整统计。"
                      "运行或计量异常本身不代表发现代码缺陷。")
@@ -569,33 +605,101 @@ def _comment_finding_lines(plan, finding, view, *, full):
     return lines
 
 
-def _comment_history_lines(plan):
-    """历史状态独立呈现；平台 resolved 和人工注记均不等于代码修复。"""
+def _history_entries(plan):
+    """把历史复核分成“已核验的既有风险”和“尚未完成的调查”。
+
+    只有取得独立代码证据且判定仍存在的记录才是已核验风险；平台 resolved、
+    人工注记和缺少证据的模型判断都留在待确认一侧。已被当前问题按严格重复
+    关联覆盖的历史记录不重复展示，但仍保留在合并决策的来源计数中。
+    """
+    history = plan.outcome.historical_discussion
     represented = {match.get("discussion_id") for finding in _ordered_findings(plan)
-                   for match in finding.discussion_matches
-                   if match.get("same_subject") is True and match.get("same_trigger") is True
-                   and match.get("same_impact") is True and match.get("new_information") is False}
-    lines = []
-    assessed = {item.discussion_id: item for item in plan.outcome.historical_discussion.findings}
+                   for match in exact_duplicate_matches(finding.discussion_matches)}
+    assessed = {item.discussion_id: item for item in history.findings}
+    # 旧冻结计划可能没有 findings 字段；有证据编号的 verified_defects 仍是已核验风险。
+    legacy = {str(item.get("discussion_id")): item for item in history.verified_defects
+              if item.get("discussion_id") and item.get("evidence_ids")}
+    risks, pending = [], []
     for item in plan.digest.discussion_rechecks:
         status = item.get("status")
-        if status in {"fixed", "not_present", "background"} or item.get("discussion_id") in represented:
-            continue
         identity = item.get("discussion_id") or "未记录"
-        url = plan.digest.discussion_links.get(identity)
-        source = f"[历史讨论]({url})" if url else f"历史讨论 {markdown_text(identity)}"
+        if status in {"fixed", "not_present", "background"} or identity in represented:
+            continue
         finding = assessed.get(identity)
-        label = ("复核仍存在；[" + finding.severity + "] " + {
-            "fix_before_merge": "建议合并前修复", "assess_improvement": "评估改进",
-            "assess_impact": "严重度及影响尚待核对"}[finding.priority]) if finding else (
-                "复核仍存在" if status == "still_present" else "待核实，不能判断已修复")
+        if finding is None and identity in legacy:
+            finding = HistoricalFindingView(discussion_id=identity, path=legacy[identity].get("path"),
+                severity="unknown", priority="assess_impact",
+                reason=legacy[identity].get("reason") or "未记录原因",
+                evidence_ids=list(legacy[identity]["evidence_ids"]),
+                discussion_url=_history_url(plan, identity))
+        if finding is not None:
+            risks.append(finding)
+        elif status == "still_present":
+            pending.append((identity, "复核仍存在，但缺少可引用的代码证据，尚不能作为已核验风险", item))
+        else:
+            pending.append((identity, "待核实，不能判断已修复", item))
+    return risks, pending
+
+
+def _history_url(plan, identity):
+    return plan.digest.discussion_links.get(identity)
+
+
+def _history_priority(finding) -> str:
+    return {"fix_before_merge": "建议合并前修复", "assess_improvement": "评估改进",
+            "assess_impact": "严重度及影响尚待核对"}[finding.priority]
+
+
+def _comment_history_risk_lines(plan, risks):
+    """已核验的既有风险按正式问题格式呈现，并明确不计入本轮 Diff 新增问题。"""
+    lines = []
+    for finding in risks:
+        title = finding.affected_behavior or finding.reason
+        lines += [f"**[{finding.severity.title()} · 历史复核] {markdown_text(title, 200)}**", "",
+                  f"**代码位置：** {markdown_text(finding.path, 500) if finding.path else '未记录文件'}", ""]
+        lines += [f"**复核结论：** {_history_priority(finding)}；{markdown_text(finding.reason)}", ""]
+        if finding.recommendation:
+            lines += [f"**建议：** {markdown_text(finding.recommendation)}", ""]
+        if finding.evidence_ids:
+            lines += [f"**代码证据：** {'、'.join(markdown_text(item) for item in finding.evidence_ids)}", ""]
+        url = finding.discussion_url or _history_url(plan, finding.discussion_id)
+        if url:
+            lines += [f"[历史讨论]({url})", ""]
+    return lines
+
+
+def _comment_history_risk_section(plan, risks):
+    """已核验的既有风险使用正式风险章节，而不是与未完成调查混在待确认事项中。"""
+    if not risks:
+        return []
+    return ["", "## 已核验的既有风险", "",
+            "以下问题经历史讨论复核并以当前固定代码核验仍存在；不计入本轮 Diff 新增问题，但会影响合并判断。", "",
+            *_comment_history_risk_lines(plan, risks)]
+
+
+def _comment_history_pending_lines(plan, pending):
+    """尚未完成或缺少证据的历史调查仍进入待确认章节，并说明不能据此判断修复。"""
+    lines = []
+    for identity, label, item in pending:
+        url = _history_url(plan, identity)
+        source = f"[历史讨论]({url})" if url else f"历史讨论 {markdown_text(identity)}"
         lines.append(f"- {source}：{label}；{markdown_text(item.get('reason') or '缺少充分代码证据', 240)}。")
-        if finding:
-            if finding.affected_behavior:
-                lines.append("  影响：" + markdown_text(finding.affected_behavior))
-            if finding.recommendation:
-                lines.append("  建议：" + markdown_text(finding.recommendation))
-            lines.append("  代码证据：" + "、".join(markdown_text(e) for e in finding.evidence_ids))
+    return lines
+
+
+def _comment_history_lines(plan):
+    """交付摘要使用的一行式历史状态；已核验风险与待确认调查分别表述。"""
+    risks, pending = _history_entries(plan)
+    lines = []
+    for finding in risks:
+        lines.append(f"- 历史复核仍存在：[{finding.severity}] {markdown_text(finding.affected_behavior or finding.reason, 240)}；"
+                     f"{_history_priority(finding)}；{markdown_text(finding.path or '未记录文件', 500)}。"
+                     "不计入本轮 Diff 新增问题。")
+        if finding.recommendation:
+            lines.append("  建议：" + markdown_text(finding.recommendation))
+        if finding.evidence_ids:
+            lines.append("  代码证据：" + "、".join(markdown_text(item) for item in finding.evidence_ids))
+    lines += _comment_history_pending_lines(plan, pending)
     return lines
 
 
@@ -618,9 +722,18 @@ def _comment_change_overview(plan, *, title="变更理解"):
     return lines
 
 
-def _comment_other_results(plan, *, omitted, retained, withheld, full, title="仍需确认的事项", extra_lines=()):
-    """只展开实际缺口；通用验证边界统一放在文末。"""
-    entries = list(_comment_risks(plan))
+def _comment_other_results(plan, *, omitted, retained, withheld, full, title=None, extra_lines=()):
+    """只展开实际缺口；通用验证边界统一放在文末。
+
+    章节标题按内容决定：确实存在未确认事项时使用“仍需确认的事项”；
+    只有完整版的审查范围、来源等补充信息时使用“审查范围与补充信息”，
+    不让完整明细本身制造一个并不存在的风险章节。简洁版与完整版共享同一
+    判断结果，完整版只追加明细，不改变章节是否存在。
+    """
+    # 已核验风险有独立章节，避免通用限制行与它重复表达同一事实。
+    risks = _comment_risks(plan, include_history=not _history_entries(plan)[0])
+    pending = _history_entries(plan)[1]
+    entries = list(risks)
     if plan.digest.incomplete_goals:
         entries.append(f"- 约定目标仍有 {len(plan.digest.incomplete_goals)} 项未完成检查。")
         entries += _goal_lines(plan.digest.incomplete_goals, "待补查目标", limit=3)
@@ -635,7 +748,8 @@ def _comment_other_results(plan, *, omitted, retained, withheld, full, title="�
     if withheld:
         entries.append(f"- 另有 {withheld} 项代码证据已确认的记录未通过发布准入，详见完整报告；"
                        "当前评论未将其描述为已核验问题。")
-    entries += _comment_history_lines(plan)
+    entries += _comment_history_pending_lines(plan, pending)
+    has_pending = bool(entries)
     if full:
         source = _author_source_lines(plan)
         if source:
@@ -644,8 +758,12 @@ def _comment_other_results(plan, *, omitted, retained, withheld, full, title="�
         limitation = markdown_text(plan.digest.author_context_limitation)
         if not any(limitation in entry for entry in entries):
             entries.append("- 作者目标输入限制：" + limitation)
+            has_pending = True
     entries += extra_lines
-    return ["", f"## {title}", "", *entries] if entries else []
+    if not entries:
+        return []
+    heading = title or ("仍需确认的事项" if has_pending else "审查范围与补充信息")
+    return ["", f"## {heading}", "", *entries]
 
 
 def _validation_sentence(plan) -> str:
@@ -771,29 +889,36 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False, inc
     def understanding_section():
         return ["", *_comment_change_overview(plan)]
 
+    # 已核验的历史风险进入正式风险章节；未完成的历史调查留在待确认章节。
+    history_section = _comment_history_risk_section(plan, _history_entries(plan)[0])
     if interrupted:
         lines += understanding_section()
         scope = (f"约定目标已检查 {plan.outcome.examined_goals} / {plan.outcome.total_goals} 项"
                  if plan.outcome.total_goals else "约定目标的检查范围未知")
         lines += ["", scope + "；以上仅为已保存的检查观察，不代表完整结论。"]
+        lines += history_section
         lines += limitations()
         lines += next_steps_section()
     elif blocking_findings:
         lines += finding_section(blocking_findings, "需要处理的问题")
+        lines += history_section
         lines += understanding_section()
         lines += finding_section(suggestions, "其他建议")
         lines += limitations()
         lines += next_steps_section()
     elif suggestions or omitted:
+        lines += history_section
         lines += understanding_section()
         lines += finding_section(suggestions, "其他建议")
         lines += limitations()
         lines += next_steps_section()
     elif incomplete:
+        lines += history_section
         lines += limitations() or [
             "", "## 仍需确认的事项", "", "缺口或运行记录尚不明确，请先核对详细报告。"]
         lines += next_steps_section()
     else:
+        lines += history_section
         lines += understanding_section()
         lines += limitations()
         lines += next_steps_section()
