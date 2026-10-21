@@ -14,6 +14,7 @@ from app.languages.adapters import (
     load_typescript_grammar,
 )
 from app.languages.base import AnalysisLevel, FileAnalysis, LanguageAnalysisAdapter
+from app.languages.isolation import ParserCancelled
 
 
 class LanguageAnalysisRegistry:
@@ -35,7 +36,9 @@ class LanguageAnalysisRegistry:
     def for_path(self, path: str | Path) -> LanguageAnalysisAdapter | None:
         return self._by_extension.get(Path(path).suffix.casefold())
 
-    def analyze(self, file_path: Path, relative_path: str) -> FileAnalysis:
+    def analyze(self, file_path: Path, relative_path: str, *, cancel_event=None) -> FileAnalysis:
+        if cancel_event is not None and cancel_event.is_set():
+            raise ParserCancelled()
         adapter = self.for_path(relative_path)
         if adapter is None:
             return FileAnalysis(
@@ -44,7 +47,11 @@ class LanguageAnalysisRegistry:
                 parser_id="text.v1",
             )
         try:
+            if isinstance(adapter, TreeSitterLanguageAdapter):
+                return adapter.analyze(file_path, relative_path, cancel_event=cancel_event)
             return adapter.analyze(file_path, relative_path)
+        except ParserCancelled:
+            raise
         except Exception as exc:
             return FileAnalysis(
                 language_id=adapter.language_id,

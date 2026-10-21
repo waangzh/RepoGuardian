@@ -400,6 +400,8 @@ class ReviewService:
                 options = {"call_resolution_version": configuration["call_resolution_version"]}
                 if progress:
                     options["progress"] = progress
+                if cancel_event is not None:
+                    options["cancel_event"] = cancel_event
                 index = await RepoIndexer().execute(repo_path=str(repo_path), **options)
                 diff_context = await self._diff_context(repo_path, pr)
                 prepared = {"diff": diff_text, "index": index, "diff_context": diff_context}

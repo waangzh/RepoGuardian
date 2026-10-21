@@ -16,7 +16,7 @@ def test_semantic_parser_failure_downgrades_to_heuristic(tmp_path: Path) -> None
         {".ts"},
         lambda _: (_ for _ in ()).throw(ValueError("grammar unavailable")),
     )
-    analysis = adapter.analyze(source, "module.ts")
+    analysis = adapter._analyze_native(source.read_bytes(), "module.ts", ".ts")
 
     assert analysis.level == AnalysisLevel.heuristic
     assert analysis.parser_id == "regex.typescript.v1"

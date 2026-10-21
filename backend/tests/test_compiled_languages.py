@@ -181,8 +181,11 @@ def test_failure_is_explicit_l1(language, failure, tmp_path, monkeypatch):
     if failure == "grammar":
         def unavailable(_):
             raise ImportError("grammar unavailable")
-        monkeypatch.setattr(default_language_registry.get(language), "_grammar_loader", unavailable)
-    result = default_language_registry.analyze(path, filename)
+        adapter = default_language_registry.get(language)
+        monkeypatch.setattr(adapter, "_grammar_loader", unavailable)
+        result = adapter._analyze_native(path.read_bytes(), filename, path.suffix)
+    else:
+        result = default_language_registry.analyze(path, filename)
     assert result.level == AnalysisLevel.heuristic
     assert result.parser_id == f"regex.{language}.v1"
     assert "downgraded to L1" in result.diagnostics[0]

@@ -11,10 +11,13 @@ import ast
 import asyncio
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
 from app.languages.registry import default_language_registry
+from app.languages.base import FileAnalysis
+from app.languages.isolation import ParserCancelled
 from app.tools.base import BaseTool
 from app.review.tool_scope import ReviewPathPolicyError, validate_repository_file
 from app.tools.git_tool import GitTool
@@ -59,7 +62,19 @@ class RepoIndexer(BaseTool):
     name = "repo_indexer"
     description = "Scan repository structure and build file-level and symbol-level index."
 
+    def __init__(self):
+        self._cancel_event = threading.Event()
+        self._analyses: dict[tuple, FileAnalysis] | None = None
+
     async def execute(self, **kwargs: Any) -> dict[str, Any]:
+        self._cancel_event = kwargs.get("cancel_event") or threading.Event()
+        self._analyses = {}
+        try:
+            return await self._execute(**kwargs)
+        finally:
+            self._analyses = None
+
+    async def _execute(self, **kwargs: Any) -> dict[str, Any]:
         """执行完整扫描，返回三层索引。"""
         repo_path = kwargs["repo_path"]
         progress = kwargs.get("progress")
@@ -86,7 +101,29 @@ class RepoIndexer(BaseTool):
         }
 
     async def build_file_index(self, repo_path: str) -> list[dict[str, Any]]:
-        return await asyncio.to_thread(self._build_file_index_sync, repo_path)
+        try:
+            return await asyncio.to_thread(self._build_file_index_sync, repo_path)
+        except asyncio.CancelledError:
+            self._cancel_event.set()
+            raise
+
+    def _analyze(self, file_path: Path, relative_path: str) -> FileAnalysis:
+        if self._cancel_event.is_set():
+            raise ParserCancelled()
+        try:
+            stat = file_path.stat()
+        except OSError:
+            return default_language_registry.analyze(
+                file_path, relative_path, cancel_event=self._cancel_event)
+        key = (file_path, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        cache = self._analyses
+        if cache is not None and key in cache:
+            return cache[key]
+        analysis = default_language_registry.analyze(
+            file_path, relative_path, cancel_event=self._cancel_event)
+        if cache is not None and len(cache) < 512:
+            cache[key] = analysis
+        return analysis
 
     def _build_file_index_sync(self, repo_path: str) -> list[dict[str, Any]]:
         """遍历仓库目录，构建文件级索引（路径、语言、大小、导入）。"""
@@ -117,7 +154,7 @@ class RepoIndexer(BaseTool):
                     size = stat.st_size
                 except OSError:
                     size = 0
-                analysis = default_language_registry.analyze(file_path_obj, rel_path)
+                analysis = self._analyze(file_path_obj, rel_path)
                 language = analysis.language_id
                 index.append({
                     "path": rel_path,
@@ -133,7 +170,11 @@ class RepoIndexer(BaseTool):
         return sorted(index, key=lambda f: f["path"])
 
     async def build_symbol_index(self, repo_path: str) -> list[dict[str, Any]]:
-        return await asyncio.to_thread(self._build_symbol_index_sync, repo_path)
+        try:
+            return await asyncio.to_thread(self._build_symbol_index_sync, repo_path)
+        except asyncio.CancelledError:
+            self._cancel_event.set()
+            raise
 
     def _build_symbol_index_sync(self, repo_path: str) -> list[dict[str, Any]]:
         """通过内置语言适配器提取声明与调用，保留解析器和置信度。"""
@@ -157,7 +198,7 @@ class RepoIndexer(BaseTool):
                     validate_repository_file(root, rel_path, tracked_files=tracked_files)
                 except (OSError, ReviewPathPolicyError):
                     continue
-                analysis = default_language_registry.analyze(file_path_obj, rel_path)
+                analysis = self._analyze(file_path_obj, rel_path)
                 index.extend(symbol.to_index_entry() for symbol in analysis.symbols)
         return index
 

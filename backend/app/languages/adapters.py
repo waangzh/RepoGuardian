@@ -67,7 +67,10 @@ class RegexLanguageAdapter:
         self.rule_pack_id = f"review.language.{language_id}"
 
     def analyze(self, file_path: Path, relative_path: str) -> FileAnalysis:
-        content = file_path.read_text(encoding="utf-8", errors="ignore")
+        return self.analyze_source(file_path.read_bytes(), relative_path)
+
+    def analyze_source(self, source: bytes, relative_path: str) -> FileAnalysis:
+        content = source.decode("utf-8", errors="ignore")
         parser_id = f"regex.{self.language_id}.v1"
         imports = _regex_imports(content, self.language_id, parser_id)
         lines = content.splitlines()
@@ -119,12 +122,20 @@ class TreeSitterLanguageAdapter(RegexLanguageAdapter):
         super().__init__(language_id, extensions)
         self._grammar_loader = grammar_loader
 
-    def analyze(self, file_path: Path, relative_path: str) -> FileAnalysis:
+    def analyze(self, file_path: Path, relative_path: str, *, cancel_event=None) -> FileAnalysis:
+        from app.languages.isolation import MAX_SOURCE_BYTES, analyze_isolated
+
+        with file_path.open("rb") as stream:
+            source = stream.read(MAX_SOURCE_BYTES + 1)
+        return analyze_isolated(self, source, relative_path, file_path.suffix.casefold(),
+                                cancel_event=cancel_event)
+
+    def _analyze_native(self, source: bytes, relative_path: str, extension: str) -> FileAnalysis:
+        """Only the trusted parser worker may call this native entry point."""
         try:
-            source = file_path.read_bytes()
             from tree_sitter import Language, Parser
 
-            language = Language(self._grammar_loader(file_path.suffix.casefold()))
+            language = Language(self._grammar_loader(extension))
             parser = Parser(language)
             tree = parser.parse(source)
             if tree.root_node.has_error:
@@ -156,7 +167,7 @@ class TreeSitterLanguageAdapter(RegexLanguageAdapter):
                 python_namespace=namespace,
             )
         except Exception as exc:
-            fallback = super().analyze(file_path, relative_path)
+            fallback = super().analyze_source(source, relative_path)
             fallback.diagnostics.append(f"semantic parser unavailable; downgraded to L1: {type(exc).__name__}")
             return fallback
 

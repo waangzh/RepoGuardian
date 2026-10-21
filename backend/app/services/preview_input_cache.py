@@ -11,9 +11,10 @@ from sqlalchemy import delete, select
 from app.models.orm import PreviewInputCacheOrm, utcnow
 from app.services.fingerprints import stable_hash
 from app.tools.git_tool import DIFF_CONTEXT_LINES, DIFF_POLICY_VERSION
+from app.languages.isolation import parser_fingerprint
 
 logger = logging.getLogger("RepoGuardian.PreviewCache")
-INDEX_CACHE_VERSION = "preview-input-v3"
+INDEX_CACHE_VERSION = "preview-input-v4"
 MAX_BYTES = 32 * 1024 * 1024
 MAX_RAW_BYTES = 512 * 1024 * 1024
 MAX_ENTRIES = 4
@@ -21,7 +22,8 @@ MAX_ENTRIES = 4
 
 def input_cache_key(pr, configuration):
     return stable_hash({"repository": pr.clone_url, "base": pr.base.sha, "head": pr.head.sha,
-        "index": INDEX_CACHE_VERSION, "diff": DIFF_POLICY_VERSION, "context": DIFF_CONTEXT_LINES,
+        "index": INDEX_CACHE_VERSION, "parser": parser_fingerprint(),
+        "diff": DIFF_POLICY_VERSION, "context": DIFF_CONTEXT_LINES,
         "call_resolution": configuration["call_resolution_version"],
         "tool_schema": configuration.get("tool_schema_version"),
         "config_version": configuration.get("config_version")})
