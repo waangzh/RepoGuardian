@@ -15,10 +15,10 @@ const filtered = computed(() => props.store.items.value.filter(item => matchesDi
 const pages = computed(() => Math.max(1, Math.ceil(filtered.value.length / 8)));
 const visible = computed(() => filtered.value.slice((page.value - 1) * 8, page.value * 8));
 const metrics = computed(() => [
-  { label: "已采集线程", value: stats.value?.collected, icon: "context" },
-  { label: "相关评论", value: stats.value?.comments, icon: "file" },
-  { label: "已有核验结论", value: stats.value?.checked, icon: "check" },
-  { label: "尚未核验充分", value: stats.value?.unchecked, icon: "help" },
+  { label: "已保存的 PR 评论", value: stats.value?.comments, icon: "file" },
+  { label: "整理出的讨论", value: stats.value?.collected, icon: "context" },
+  { label: "已有复核结论", value: stats.value?.checked, icon: "check" },
+  { label: "尚未核实充分", value: stats.value?.unchecked, icon: "help" },
 ]);
 watch([query, filter], () => { page.value = 1; });
 watch(visible, items => {
@@ -42,8 +42,8 @@ onBeforeUnmount(() => props.store.cancel());
 <template>
   <section class="pd pd-workbench" aria-label="历史讨论核验">
     <header class="pd-workhead"><div><div class="pd-row pd-breadcrumb"><button type="button" class="pd-btn ghost" @click="emit('back')">‹ {{ backLabel || '返回结果概览' }}</button><span>/ 历史讨论核验</span></div><h1 ref="heading" tabindex="-1">已有 PR 讨论</h1><p>查看历史主张、GitHub 线程状态和本轮快照下的代码核验依据。</p></div><div class="pd-row pd-actions"><button type="button" class="pd-btn" @click="reset"><AppIcon name="history" :size="15" />重置筛选</button><a v-if="safeDiscussionLink(prUrl)" class="pd-btn" :href="safeDiscussionLink(prUrl)" target="_blank" rel="noopener noreferrer">打开 GitHub PR <AppIcon name="external" :size="14" /></a></div></header>
-    <div class="pd-topstats"><div v-for="metric in metrics" :key="metric.label" class="pd-panel pd-topstat"><div class="pd-caps"><AppIcon :name="metric.icon" :size="13" />{{ metric.label }}</div><b>{{ stats && !['not_recorded', 'unavailable'].includes(stats.status) ? metric.value ?? '未知' : '—' }}</b><p>{{ metric.label === '已有核验结论' ? '已获特定静态核验结论' : '基于本轮保存的讨论快照' }}</p></div></div>
-    <div class="pd-notice" :class="{ amber: !stats || stats.status !== 'complete' }"><AppIcon :name="!stats || stats.status !== 'complete' ? 'alert' : 'shield'" :size="17" /><div>{{ discussionNotice(stats) }}<p v-if="stats && !['not_recorded', 'unavailable'].includes(stats.status)">已参考 {{ stats.referenced }} 项相关讨论，包含 {{ stats.referenced_comments }} 条评论。</p><ul v-if="stats?.limitations.length"><li v-for="(value, index) in stats.limitations" :key="index">{{ value }}</li></ul></div></div>
+    <div class="pd-topstats"><div v-for="metric in metrics" :key="metric.label" class="pd-panel pd-topstat"><div class="pd-caps"><AppIcon :name="metric.icon" :size="13" />{{ metric.label }}</div><b>{{ stats && !['not_recorded', 'unavailable'].includes(stats.status) ? metric.value ?? '未知' : '—' }}</b><p>{{ metric.label === '已有复核结论' ? '含代码核对结果和背景讨论' : '仅统计本轮已保存的内容' }}</p></div></div>
+    <div class="pd-notice" :class="{ amber: !stats || stats.status !== 'complete' }"><AppIcon :name="!stats || stats.status !== 'complete' ? 'alert' : 'shield'" :size="17" /><div>{{ discussionNotice(stats) }}<details v-if="stats && !['not_recorded', 'unavailable'].includes(stats.status)" class="pd-limits"><summary>讨论统计口径</summary><p>已参考 {{ stats.referenced }} 项相关讨论，包含 {{ stats.referenced_comments }} 条评论；引用数是已保存讨论的子集。</p><p>评论按已保存的 ID 去重，讨论按线程统计。复核结论包括代码核对结果和背景说明；尚未核实充分包括未核对及证据不足，不能将这些数量都理解为代码已验证。</p></details><ul v-if="stats?.limitations.length"><li v-for="(value, index) in stats.limitations" :key="index">{{ value }}</li></ul></div></div>
     <div v-if="store.error.value" class="pd-notice amber" role="alert">{{ store.error.value }}<button type="button" class="pd-btn" @click="store.load">重试读取快照</button></div>
     <div class="pd-board">
       <DiscussionThreadList :items="visible" :total="filtered.length" :page="page" :pages="pages" :query="query" :filter="filter" :selected-id="store.selected.value?.id" :loading="store.loading.value" :failed="!!store.error.value" @query="query = $event" @filter="filter = $event" @page="page = $event" @select="select" />

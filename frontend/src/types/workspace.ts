@@ -21,7 +21,7 @@ export const reviewSecondarySections: ReviewNavItem[] = [
 ];
 
 /** 交付是操作而非信息页，从审查报告的 PR 评论草稿进入。 */
-export const reviewPublishSection: ReviewNavItem = { id: "publish", label: "交付到 GitHub", icon: "send" };
+export const reviewPublishSection: ReviewNavItem = { id: "publish", label: "发布或复制到 GitHub", icon: "send" };
 
 /** 全部页面用于标题查找；导航只渲染上面的主次分组。 */
 export const reviewSections: ReviewNavItem[] = [

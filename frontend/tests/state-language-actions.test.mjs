@@ -13,9 +13,11 @@ test("状态文案区分事实、合并影响与可执行入口", async t => {
     const { reviewSituation, situationActionTarget } = await server.ssrLoadModule("/src/utils/reviewSituation.ts");
     await t.test("概览和后端标签一致，候选与调查不相加，未知计数不补造", () => {
       for (const name of ["clean", "findings", "blockers", "inconclusive", "runtime_limits", "failed", "cancelled"]) {
-        assert.equal(reviewSituation(fixtures[name].summary).title, fixtures[name].plan.digest.merge_decision.label, name);
+        const label = fixtures[name].plan.digest.merge_decision.label;
+        assert.equal(reviewSituation(fixtures[name].summary).title,
+          label === "检查范围完整性尚待核对" ? "尚无法确认检查范围是否完整" : label, name);
       }
-      // 主结论始终是后端标签；展示层只补操作与说明，不另造标题。
+      // 主结论沿用后端标签；仅对一个已知旧术语做等义展示转换。
       const mixed = structuredClone(fixtures.runtime_limits.summary);
       mixed.outcome.unresolved_count = 2;
       mixed.outcome.incomplete_investigations = 3;
@@ -32,7 +34,7 @@ test("状态文案区分事实、合并影响与可执行入口", async t => {
       inconsistent.outcome.reason_codes = ["scope_incomplete"];
       inconsistent.digest.merge_decision.status = "resolve_unknowns";
       inconsistent.digest.merge_decision.label = "暂不能给出合并建议";
-      assert.equal(reviewSituation(inconsistent).title, "检查范围完整性尚待核对");
+      assert.equal(reviewSituation(inconsistent).title, "尚无法确认检查范围是否完整");
     });
     await t.test("操作目标保留筛选与记录区，不止跳到通用页面", () => {
       assert.deepEqual(situationActionTarget("view_blockers"), { section: "findings", findingFilter: "blockers" });
@@ -89,7 +91,7 @@ test("状态文案区分事实、合并影响与可执行入口", async t => {
         assert.ok(missing.includes("尚无可核对的动态验证结果"));
       }
     });
-    await t.test("摘要失败有明确重试入口，无问题时复制是主要交付操作", async () => {
+    await t.test("摘要失败可重试，无问题时先阅读报告再准备交付", async () => {
       const { default: Overview } = await server.ssrLoadModule("/src/components/pages/ReviewOverviewPage.vue");
       const base = { task: fixtures.clean.task, summary: null, findings: [], warnings: [], terminal: true };
       const failed = await render(Overview, { ...base, summaryPlan: null, summaryError: true });
@@ -97,13 +99,13 @@ test("状态文案区分事实、合并影响与可执行入口", async t => {
       const clean = await render(Overview, { ...base, summaryPlan: fixtures.clean.summary });
       const copyButton = [...clean.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/g)]
         .find(([, , content]) => content.replace(/<[^>]*>/g, "").trim() === "复制 PR 评论");
-      assert.ok(copyButton && /\bbutton--primary\b/.test(copyButton[1]), "复制评论应呈现为主要操作");
-      assert.ok(clean.includes("阅读报告，或预览并复制 PR 评论。"));
+      assert.ok(copyButton && !/\bbutton--primary\b/.test(copyButton[1]), "复制评论应呈现为次级操作");
+      assert.match(clean, /class="btn primary ov-main-action">查看完整报告/);
       assert.ok(!clean.includes("请点击“复制 PR 评论”"), "结论区不再重复操作教学");
     });
     await t.test("执行完成不是质量结论，验证通过只覆盖已记录检查", async () => {
       const { reportValidationLabel } = await server.ssrLoadModule("/src/utils/reportPresentation.ts");
-      assert.equal(reportValidationLabel("passed"), "当前 Head 的受控检查通过");
+      assert.equal(reportValidationLabel("passed"), "当前 PR 版本已记录的对应检查通过");
       const { default: Badge } = await server.ssrLoadModule("/src/components/common/StatusBadge.vue");
       const completed = await render(Badge, { status: "completed" });
       assert.ok(completed.includes("执行已完成") && completed.includes("不代表 PR 安全或可以合并"));

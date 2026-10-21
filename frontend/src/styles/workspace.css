@@ -35,8 +35,8 @@ button { color: inherit; }
 .rg-app.app { grid-template-columns: var(--nav-width) minmax(0,1fr); }
 .rg-app .sidebar {
   height: 100dvh;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --nav-caption: #98a3b3;
+  font-family: var(--font-sans);
+  --nav-caption: #627088;
   --nav-text: #68758a;
   --nav-hover-text: #263e66;
   --nav-hover-bg: #f5f8ff;
@@ -58,12 +58,12 @@ button { color: inherit; }
 .rg-app .brand strong { font-size: 1rem; }
 .rg-app .brand small { font-size: .8125rem; letter-spacing: 0; text-transform: none; line-height: 1.5; margin-top: 2px; }
 .rg-app .side-scroll { padding: 8px; }
-.rg-app .nav-heading { margin: 14px 14px 5px; padding: 7px 0; color: var(--nav-caption); font-size: 10px; font-weight: 750; letter-spacing: 1.35px; line-height: 1.6; text-transform: uppercase; }
+.rg-app .nav-heading { margin: 14px 14px 5px; padding: 7px 0; color: var(--nav-caption); font-size: 12px; font-weight: 750; letter-spacing: 1.35px; line-height: 1.6; text-transform: uppercase; }
 .rg-app .side-link { min-height: 42px; padding: 11px 13px; gap: 12px; margin-bottom: 3px; color: var(--nav-text); font-size: 13px; font-weight: 620; line-height: 1.6; border-radius: 9px; }
 .rg-app .side-link:hover { color: var(--nav-hover-text); background: var(--nav-hover-bg); }
 .rg-app .side-link.active { color: var(--nav-active-text); background: var(--nav-active-bg); }
 .rg-app .nav-divider { margin: 16px 12px; }
-.rg-app .nav-subheading { margin-top: 12px; font-size: 9.5px; }
+.rg-app .nav-subheading { margin-top: 12px; font-size: 12px; }
 .rg-app .topbar { min-height: 64px; height: auto; padding: 12px var(--page-gutter); }
 .rg-app .main { display: block; min-width: 0; }
 .rg-app .page { width: 100%; max-width: calc(var(--contentmax) + 2 * var(--page-gutter)); padding: var(--page-top) var(--page-gutter) var(--page-bottom); }

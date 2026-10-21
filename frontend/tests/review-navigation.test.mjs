@@ -23,7 +23,7 @@ test("审查导航突出概览、问题与报告，证据页与发布入口不�
     assert.match(sideText, /补充证据/);
     for (const label of ["结果概览", "问题与证据", "审查报告", "覆盖与限制", "变更文件", "技术记录"]) assert.ok(sideText.includes(label), label);
     // 发布入口不再出现在侧栏主导航中。
-    assert.ok(!sideText.includes("交付到 GitHub"), "侧栏不应平铺发布入口");
+    assert.ok(!sideText.includes("发布或复制到 GitHub"), "侧栏不应平铺发布入口");
 
     const { default: Workspace } = await server.ssrLoadModule("/src/components/review/ReviewWorkspace.vue");
     const task = { id: "run", status: "completed", engine: "task_review_v1", changed_files: [], issues: [], pr_url: "https://github.com/o/r/pull/1" };
@@ -31,7 +31,7 @@ test("审查导航突出概览、问题与报告，证据页与发布入口不�
       statusText: "执行已完成", duration: "1 秒", cancelling: false, retryingUnitId: null }));
     const nav = /<nav[^>]*aria-label="审查结果导航"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] || "";
     const labels = [...nav.matchAll(/<button[^>]*>([^<]*)</g)].map(match => match[1].trim());
-    assert.deepEqual(labels, ["结果概览", "问题与证据", "审查报告", "覆盖与限制", "变更文件", "技术记录", "交付到 GitHub"]);
+    assert.deepEqual(labels, ["结果概览", "问题与证据", "审查报告", "覆盖与限制", "变更文件", "技术记录", "发布或复制到 GitHub"]);
     assert.match(nav, /role="group" aria-label="补充证据"/);
     assert.match(nav, /class="tab-action"/);
   } finally { await server.close(); }

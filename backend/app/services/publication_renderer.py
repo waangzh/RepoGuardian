@@ -81,7 +81,7 @@ def review_limitation_label(outcome, reasons=()):
         if not outcome.total_goals:
             return "检查范围尚不明确"
         remaining = outcome.total_goals - outcome.examined_goals
-        return f"还有 {remaining} 项约定检查未完成" if remaining > 0 else "检查范围完整性尚待核对"
+        return f"还有 {remaining} 项约定检查未完成" if remaining > 0 else "尚无法确认检查范围是否完整"
     if kind == "evidence_gaps":
         if outcome.unresolved_count:
             return f"有 {outcome.unresolved_count} 项疑点需要进一步确认"
@@ -368,7 +368,7 @@ def _appendix_lines(plan, task):
         lines += ["", "未进入发布正文的记录：", *[
             f"- {markdown_text(item.candidate_id, 160)}：{markdown_text(item.reason_code)}"
             for item in plan.withheld_findings]]
-    lines += ["", "运行过程与证据追踪请查看技术审计导出；此 Markdown 不代表全部原始事件。"]
+    lines += ["", "运行过程与证据追踪请查看技术审计记录；此 Markdown 不代表全部原始事件。"]
     return lines
 
 
@@ -394,7 +394,7 @@ def render_user_report(task, plan: PublicationPlan) -> str:
     for finding in findings:
         lines += _report_finding_lines(plan, finding, views.get(finding.finding_key))
     published_keys = {item.finding_key for item in findings}
-    for heading, states in (("机器已确认但未形成发布意见", {"confirmed"}),
+    for heading, states in (("已确认但暂不能发布的代码问题", {"confirmed"}),
                             ("需要人工确认的疑点（尚未确认缺陷）", {"candidate", "unresolved", "unknown"}),
                             ("已排除的候选", {"dismissed"})):
         candidates = [item for item in plan.digest.findings if item.id not in published_keys and item.review_status in states]
@@ -402,7 +402,7 @@ def render_user_report(task, plan: PublicationPlan) -> str:
             lines += ["", f"## {heading}", ""]
         for view in candidates:
             lines += [f"### {markdown_text(view.title or '未命名记录')}", "",
-                f"- AI 判定：{ {'confirmed': '机器已确认，发布准入未通过', 'candidate': '候选', 'unresolved': '尚未确认', 'dismissed': '已排除', 'unknown': '未知'}[view.review_status]}",
+                f"- AI 判定：{ {'confirmed': '代码问题已确认，但暂不能生成可发布评论', 'candidate': '候选', 'unresolved': '尚未确认', 'dismissed': '已排除', 'unknown': '未知'}[view.review_status]}",
                 f"- 严重程度：{markdown_text(view.severity or '未知')}",
                 f"- 位置：{markdown_text(view.location.path + ':' + str(view.location.start_line)) + '（' + view.location.side + '）' if view.location else '尚无可靠代码定位'}"]
             for field, value in (("影响", view.impact), ("触发场景", view.message), ("建议", view.recommendation)):
@@ -427,8 +427,10 @@ def discussion_report_lines(plan, task=None):
                      "unavailable": "复核记录不可用", "not_recorded": "未记录"}
     lines = ["", "## 历史讨论复核", "",
         f"复核状态：{status_labels.get(history.status, '未知')}；"
-        f"已参考 {stats['referenced']} 项相关讨论／包含 {stats['referenced_comments']} 条评论；"
-        f"已采集 {stats['collected']} 项，已核验 {stats['checked']} 项，未核验 {stats['unchecked']} 项。",
+        f"已读取并保存 {stats['comments']} 条 PR 评论，整理为 {stats['collected']} 项讨论；"
+        f"其中 {stats['checked']} 项已有复核结论，{stats['unchecked']} 项尚未核实充分。",
+        f"引用口径：已参考 {stats['referenced']} 项相关讨论，包含 {stats['referenced_comments']} 条评论。"
+        "复核结论含代码核对结果和背景说明，不代表每项都经过代码验证。",
         "本节独立于当前 Diff 的审查结论与覆盖率；平台已解决和作者修复声明不是代码证据。"
         "历史复核的超时或计量缺失不改变已完成的主审查结论。"]
     usage = history.usage or {}
@@ -487,7 +489,7 @@ def _risk_section(plan):
     else:
         lines += items
     if plan.digest.investigations_known and len(pending) > 5:
-        lines.append(f"- 另有 {len(pending) - 5} 项未决调查，完整记录见技术审计导出。")
+        lines.append(f"- 另有 {len(pending) - 5} 项未决调查，完整记录见技术审计记录。")
     answered = [item for item in plan.digest.investigations if item.answer != "unresolved"]
     if answered:
         lines += ["", "### 关键调查摘要", ""]
@@ -497,7 +499,7 @@ def _risk_section(plan):
                          + (f"；{markdown_text(item.reason)}" if item.reason else "")
                          + "".join(f"；限制：{markdown_text(value)}" for value in item.limitations))
         if len(answered) > 5:
-            lines.append(f"- 另有 {len(answered) - 5} 项已回答调查，完整记录见技术审计导出。")
+            lines.append(f"- 另有 {len(answered) - 5} 项已回答调查，完整记录见技术审计记录。")
     return lines
 
 

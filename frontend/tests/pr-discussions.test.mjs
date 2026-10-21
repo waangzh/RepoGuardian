@@ -14,7 +14,7 @@ test("历史讨论区分平台状态与代码核验，旧记录不显示零条",
     const html = await renderToString(createSSRApp({ render: () => h(Component, { reviewId: "current",
       stats: { status: "partial", collected: 5, comments: 12, referenced: 2, referenced_comments: 4,
         checked: 1, unchecked: 4, limitations: ["inline_thread_state_unavailable"], termination_reason: "budget_exhausted" } }) }));
-    for (const text of ["已参考 2", "包含 4", "已采集 5", "未核验 4", "线程已解决不代表代码问题已修复", "不完整"]) assert.ok(html.includes(text), text);
+    for (const text of ["已参考 2", "包含 4", "保存 12 条 PR 评论", "整理为 5 项讨论", "已有复核结论", "尚未核实充分", "线程已解决不代表代码问题已修复", "不完整"]) assert.ok(html.includes(text), text);
     assert.match(html, /<details class="pd-limits"><summary>讨论统计口径<\/summary>/);
     assert.ok(!html.includes("<pre>"));
   } finally { await server.close(); }

@@ -16,7 +16,7 @@ export const severityLabel = (value?: string | null): string =>
   ({ critical: '严重', high: '高', medium: '中', low: '低' } as Record<string, string>)[value || ''] || value || '未知';
 
 export const reviewStatusLabel = (value: FindingView['review_status']): string => ({
-  confirmed: '机器已确认，发布准入未通过', candidate: '候选', unresolved: '尚未确认',
+  confirmed: '代码问题已确认，但暂不能生成可发布评论', candidate: '候选', unresolved: '尚未确认',
   dismissed: '已排除', unknown: '未知',
 })[value] || '未知';
 
@@ -51,8 +51,14 @@ const WITHHELD_REASON_LABELS: Record<string, string> = {
 export const withheldReasonLabel = (value: string): string => WITHHELD_REASON_LABELS[value] || value;
 
 export function reportValidationLabel(value?: ReviewOutcome['dynamic_validation']): string {
-  return ({ not_executed: '当前 Head 未执行', passed: '当前 Head 的受控检查通过', failed: '本次记录的动态检查未通过',
+  return ({ not_executed: '当前 PR 版本未执行', passed: '当前 PR 版本已记录的对应检查通过', failed: '本次记录的动态检查未通过',
     independent_results: '独立结果 · Head 未知', unknown: '未知' })[value || 'unknown'];
+}
+
+export function reviewScopeLabel(examined: number | null, total: number | null): string {
+  if (examined === null || total === null) return "检查范围尚不明确";
+  const remaining = total - examined;
+  return `已检查 ${examined}/${total} 项约定范围${remaining > 0 ? `，${remaining} 项待补查` : ""}`;
 }
 
 /** 旧计划的系统前缀只在展示时去除；输入完整性与核验状态仍保留在 Digest。 */

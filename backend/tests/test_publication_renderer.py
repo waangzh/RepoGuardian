@@ -8,7 +8,7 @@ from test_review_outcome import completed_task
 
 
 @pytest.mark.parametrize("task,label", [(completed_task(), "本次检查未发现需在合并前处理的问题"),
-    (completed_task(scope_complete=False), "检查范围完整性尚待核对"), (publishable_task(), "发现 1 项改进建议，暂无高优先级问题")])
+    (completed_task(scope_complete=False), "尚无法确认检查范围是否完整"), (publishable_task(), "发现 1 项改进建议，暂无高优先级问题")])
 def test_rendered_counts_and_repeatability(task, label):
     plan = PublicationPlanner().build(task)
     assert label in plan.summary_markdown
@@ -105,13 +105,13 @@ def test_complete_scope_with_unknown_usage_explains_reliability_separately():
 
 
 @pytest.mark.parametrize("updates,label", [
-    ({"scope_complete": False}, "检查范围完整性尚待核对"),
+    ({"scope_complete": False}, "尚无法确认检查范围是否完整"),
     ({"initial_scope_coverage": []}, "检查范围尚不明确"),
     ({"findings": [{"status": "unresolved"}]}, "有 1 项疑点需要进一步确认"),
     ({"admitted_investigations": [{"status": "not_executed"}]}, "有 1 项关联调查尚未完成"),
     ({"unscheduled_leads": [{"status": "not_scheduled"}]}, "存在未确认事项，需进一步核实"),
     ({"termination_reason": "budget_exhausted"}, "审查已结束，但结果可靠性仍需核对"),
-    ({"scope_complete": False, "usage_integrity": "unknown"}, "检查范围完整性尚待核对"),
+    ({"scope_complete": False, "usage_integrity": "unknown"}, "尚无法确认检查范围是否完整"),
     ({"usage_integrity": "unknown", "admitted_investigations": [{"status": "not_executed"}]},
      "有 1 项关联调查尚未完成"),
 ])
@@ -152,6 +152,8 @@ def test_historical_verified_defect_never_reads_as_no_confirmed_problem():
     assert "本轮变更范围内未新增代码证据已确认的问题" in plan.user_report_markdown
     assert "本轮 Diff 新增代码证据已确认的问题 0 项" in plan.user_report_markdown
     assert "本轮 Diff 新增代码证据已确认的问题：0" in plan.summary_markdown
+    assert "已读取并保存 1 条 PR 评论，整理为 1 项讨论" in plan.user_report_markdown
+    assert "复核结论含代码核对结果和背景说明" in plan.user_report_markdown
 
 
 def test_new_findings_and_verified_history_are_both_disclosed():

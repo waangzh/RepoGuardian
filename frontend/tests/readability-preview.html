@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>阅读体验宽度验收</title>
+<style>
+  body { margin: 0; background: #e5eaf2; }
+  iframe { display: block; border: 0; height: 1600px; background: white; }
+</style>
+<iframe title="阅读体验验收页面"></iframe>
+<script type="module">
+  // A real browsing context gives media queries the requested CSS viewport.
+  const params = new URLSearchParams(location.search);
+  const width = ["320", "390", "1440"].includes(params.get("width")) ? params.get("width") : "390";
+  const frame = document.querySelector("iframe");
+  frame.style.width = `${width}px`;
+  const page = new URL("./publication-preview.html", location.href);
+  page.search = new URLSearchParams({
+    scene: "clean", section: "overview", shell: "", readability: "",
+    theme: params.get("theme") === "dark" ? "dark" : "light",
+  });
+  frame.src = page.href;
+</script>
+</html>

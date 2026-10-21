@@ -8,7 +8,7 @@ const id = useId();
 const modes = [
   { id: 'comment' as const, label: 'PR 评论草稿', icon: 'copy' },
   { id: 'user' as const, label: '详细审查报告', icon: 'report' },
-  { id: 'audit' as const, label: '技术审计导出', icon: 'code' },
+  { id: 'audit' as const, label: '技术审计记录', icon: 'code' },
 ];
 function move(event: KeyboardEvent, index: number) {
   if (event.altKey || event.ctrlKey || event.metaKey) return;

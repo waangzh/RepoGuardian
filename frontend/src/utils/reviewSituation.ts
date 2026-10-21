@@ -152,8 +152,9 @@ export function reviewSituation(
   const totalGoals = outcome.total_goals ?? 0;
   const counts = { blockingCount, nonblockingCount, unresolvedCount, examinedGoals, totalGoals };
   // 主结论以后端已保存的决策标签为准；只有旧冻结计划缺少标签时才回退到展示层措辞。
-  const backendTitle = decision?.label?.trim() && decision.label.trim() !== "暂不能给出合并建议"
-    ? decision.label.trim() : null;
+  const savedTitle = decision?.label?.trim();
+  const backendTitle = savedTitle && savedTitle !== "暂不能给出合并建议"
+    ? savedTitle === "检查范围完整性尚待核对" ? "尚无法确认检查范围是否完整" : savedTitle : null;
   const titleOf = (fallback: string) => backendTitle || fallback;
   const meteringOnly = status === "conditional_merge" && outcome.review_completeness === "complete"
     && outcome.unresolved_count === 0 && outcome.incomplete_investigations === 0
@@ -208,7 +209,7 @@ export function reviewSituation(
     if (limitation === "scope_incomplete") {
       return { ...counts, key: "scope_incomplete",
         title: titleOf(totalGoals > examinedGoals ? `还有 ${totalGoals - examinedGoals} 项约定检查未完成`
-          : totalGoals > 0 ? "检查范围完整性尚待核对" : "检查范围尚不明确"),
+          : totalGoals > 0 ? "尚无法确认检查范围是否完整" : "检查范围尚不明确"),
         description: totalGoals > 0
           ? `已检查 ${examinedGoals}/${totalGoals} 项；范围完整性尚不能确认。`
           : "没有可用的约定目标记录，无法判断检查范围。",

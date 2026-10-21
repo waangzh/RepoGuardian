@@ -25,7 +25,7 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
           canCheck: true, canPublish: true,
         }));
       // 报告标签不再复用主导航“技术记录”，避免两个入口同名但内容不同。
-      for (const text of ['PR 评论草稿', '详细审查报告', '技术审计导出',
+      for (const text of ['PR 评论草稿', '详细审查报告', '技术审计记录',
         '简洁评论 · 包含所有可交付问题及处理建议', '详细评论 · 增加证据、触发场景与审查范围']) assert.ok(html.includes(text));
       for (const text of ['PR 交付摘要', '保留全部问题正文', '附加完整范围信息', '>PR Summary<']) assert.ok(!html.includes(text));
       const audit = await renderToString(createSSRApp(Audit, { task, plan }));
@@ -53,11 +53,11 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
     await t.test('交互式详细报告覆盖后端未发布记录与审查附录', async () => {
       const { plan } = fixtures.withheld;
       const html = await renderToString(createSSRApp(Readable, { plan }));
-      // 后端 render_user_report 会输出“机器已确认但未形成发布意见”；交互视图必须给出同一事实。
+      // 后端 render_user_report 会输出“已确认但暂不能发布的代码问题”；交互视图必须给出同一事实。
       assert.ok(html.includes('id="rd-detail-retained"'));
-      assert.ok(html.includes('机器已确认但未形成发布意见'));
+      assert.ok(html.includes('已确认但暂不能发布的代码问题'));
       assert.ok(html.includes('空返回值破坏调用方契约'));
-      assert.ok(html.includes('机器已确认，发布准入未通过'));
+      assert.ok(html.includes('代码问题已确认，但暂不能生成可发布评论'));
       // 扣留原因以可读文本呈现，原始 ID 仍可追溯。
       assert.ok(html.includes('核验用量未知，不能视为完整证据'));
       assert.ok(html.includes('candidate-a'));
@@ -187,7 +187,7 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
         assert.equal(html.match(/统一审查页面标题/g)?.length, 1);
         assert.ok(html.includes('aria-label="审查结果导航"'));
         assert.ok(html.includes('>新建审查</button>'));
-        assert.match(html, new RegExp(`aria-current="page"[^>]*>${({ report: '审查报告', files: '变更文件', publish: '交付到 GitHub' })[section]}`));
+        assert.match(html, new RegExp(`aria-current="page"[^>]*>${({ report: '审查报告', files: '变更文件', publish: '发布或复制到 GitHub' })[section]}`));
       }
     });
     await t.test('嵌入式快照卡片保留结论与 Head，不重复 PR 标题和任务状态', async () => {
