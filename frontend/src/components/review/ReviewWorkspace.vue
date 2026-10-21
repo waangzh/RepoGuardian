@@ -18,6 +18,7 @@ import EmptyState from "../common/EmptyState.vue";
 import DiscussionWorkbench from "./discussion/DiscussionWorkbench.vue";
 import { discussionWorkspaceKey, usePrDiscussions } from "../../composables/usePrDiscussions";
 import { situationActionTarget, type FindingEntryFilter, type SituationActionKey } from "../../utils/reviewSituation";
+import type { FindingSource } from "../../utils/findingWorkbench";
 const props = defineProps<{ task: ReviewTask; report: string | null; section: ReviewSection; statusText: string; duration: string; cancelling: boolean; retryingUnitId: string | null }>();
 const emit = defineEmits<{ navigate: [section: ReviewSection]; cancel: []; create: []; rereview: []; retry: [unitId: string] }>();
 const { runtime, summary: runtimeSummary, findings, warnings, terminal } = useReviewWorkspace(() => props.task);
@@ -25,6 +26,7 @@ const { summary, plan, loading, detailLoading, error, ensurePlan, reload } = use
 const focusKey = ref("");
 const focusedFile = ref('');
 const findingFilter = ref<FindingEntryFilter>("all");
+const findingSource = ref<FindingSource>("all");
 const scopeFilter = ref<"all" | "incomplete">("all");
 const investigationsOpen = ref(false);
 const activityFocus = ref<"limits" | "validation" | "error">();
@@ -32,10 +34,18 @@ function runSituationAction(key: Exclude<SituationActionKey, "rereview">) {
   const target = situationActionTarget(key);
   focusKey.value = "";
   findingFilter.value = target.findingFilter || "all";
+  findingSource.value = "all";
   scopeFilter.value = target.scopeFilter || "all";
   investigationsOpen.value = !!target.investigations;
   activityFocus.value = target.activityFocus;
   emit("navigate", target.section);
+}
+// 概览指标按来源拆分：数量与发现页筛选一一对应，保证每个数字都能展开成完整条目。
+function openFindingFilter(filter: FindingEntryFilter, source: FindingSource) {
+  focusKey.value = "";
+  findingFilter.value = filter;
+  findingSource.value = source;
+  emit("navigate", "findings");
 }
 const publicationFindings = computed(() => [...(plan.value?.inline_drafts || []), ...(plan.value?.summary_findings || [])]);
 const comments = computed(() => publicationFindings.value.map(item => item.body_markdown).join('\n\n---\n\n'));
@@ -47,7 +57,7 @@ function updateSnapshot(status: "current" | "stale" | "unknown") {
   if (status !== "unknown") stale.value = status === "stale";
 }
 watch(() => props.task.id, () => {
-  focusKey.value = ''; focusedFile.value = ''; findingFilter.value = "all";
+  focusKey.value = ''; focusedFile.value = ''; findingFilter.value = "all"; findingSource.value = "all";
   scopeFilter.value = "all"; investigationsOpen.value = false; activityFocus.value = undefined;
 });
 // 完整计划只在需要逐条正文或发布时读取；概览使用轻量摘要。
@@ -55,7 +65,7 @@ watch([() => props.section, () => summary.value], () => {
   if (summary.value && ['report', 'findings', 'publish'].includes(props.section)) ensurePlan();
 }, { immediate: true });
 watch(() => props.section, section => { if (section === 'publish') ensurePlan(); });
-function openFinding(key: string) { focusKey.value = key; findingFilter.value = "all"; emit('navigate', 'findings'); }
+function openFinding(key: string) { focusKey.value = key; findingFilter.value = "all"; findingSource.value = "all"; emit('navigate', 'findings'); }
 function openFile(path: string) { focusedFile.value = path; emit('navigate', 'files'); }
 const discussionOpen = ref(false);
 const discussions = usePrDiscussions(() => props.task.id);
@@ -84,8 +94,8 @@ const githubLink = computed(() => {
   <p v-if="loading" class="muted small space-bottom" role="status">正在读取审查结论…</p><p v-if="error" class="notice warn" role="alert">{{ error }} <button type="button" class="link" @click="reload">{{ summary ? '重试加载报告' : '重试加载摘要' }}</button></p>
   <DiscussionWorkbench v-if="discussionOpen" :store="discussions" :initial-stats="summary?.digest.discussion_stats" :pr-url="task.pr?.html_url || task.pr_url" :head-sha="task.snapshot?.head_sha || task.pr?.head.sha" :back-label="section === 'report' ? '返回审查报告' : '返回结果概览'" can-open-file @back="closeDiscussions" @file="discussionOpen = false; openFile($event)" />
   <ReviewProgressPage v-if="section === 'overview' && !terminal && !legacy" :task="task" :runtime="runtime" :cancelling="cancelling" @cancel="emit('cancel')" @activity="emit('navigate', 'activity')" />
-  <ReviewOverviewPage v-else-if="section === 'overview'" v-show="!discussionOpen" :task="task" :report="report" :summary-plan="summary" :summary="runtimeSummary" :findings="findings" :warnings="warnings" :terminal="terminal" :stale="stale" :summary-error="!summary && !!error" :summary-loading="loading" @reload="reload" @action="runSituationAction" @snapshot="updateSnapshot" @navigate="emit('navigate', $event)" @finding="openFinding" @file="openFile" @rereview="emit('rereview')" />
-  <ReviewFindingsPage v-else-if="section === 'findings'" :key="task.id" :task="task" :findings="findings" :focus-key="focusKey" :initial-filter="findingFilter" :blocking-keys="summary?.digest.merge_decision?.blocking_finding_keys" :suggestion-keys="summary?.digest.merge_decision?.nonblocking_finding_keys" :publication-findings="publicationFindings" @activity="emit('navigate', 'activity')" />
+  <ReviewOverviewPage v-else-if="section === 'overview'" v-show="!discussionOpen" :task="task" :report="report" :summary-plan="summary" :summary="runtimeSummary" :findings="findings" :warnings="warnings" :terminal="terminal" :stale="stale" :summary-error="!summary && !!error" :summary-loading="loading" @reload="reload" @action="runSituationAction" @snapshot="updateSnapshot" @navigate="emit('navigate', $event)" @finding="openFinding" @file="openFile" @rereview="emit('rereview')" @filter="openFindingFilter" />
+  <ReviewFindingsPage v-else-if="section === 'findings'" :key="task.id" :task="task" :findings="findings" :focus-key="focusKey" :initial-filter="findingFilter" :initial-source="findingSource" :summary="summary" :blocking-keys="summary?.digest.merge_decision?.blocking_finding_keys" :suggestion-keys="summary?.digest.merge_decision?.nonblocking_finding_keys" :publication-findings="publicationFindings" @activity="emit('navigate', 'activity')" />
   <ReviewScopePage v-else-if="section === 'scope'" :task="task" :runtime="runtime" :initial-filter="scopeFilter" :investigations-open="investigationsOpen" :terminal="terminal && !legacy" :retrying-unit-id="retryingUnitId" @retry="emit('retry', $event)" />
   <ReviewFilesPage v-else-if="section === 'files'" :key="task.id" :task="task" :findings="findings" :initial-path="focusedFile" @finding="openFinding" />
   <template v-else-if="section === 'activity'"><ReviewActivityPage :task="task" :runtime="runtime" :duration="duration" :summary="summary" :initial-focus="activityFocus" /><details v-if="legacy" class="card card-pad space-top"><summary>完整历史审查、证据与契约记录</summary><ReviewViewer :task="task" :report="report" :status-text="statusText" :task-duration="duration" :cancelling="false" :retrying-unit-id="null" @new-review="emit('create')" /></details></template>
