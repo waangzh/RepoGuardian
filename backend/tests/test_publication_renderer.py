@@ -140,7 +140,10 @@ def test_historical_verified_defect_never_reads_as_no_confirmed_problem():
         "rechecks": [{"discussion_id": "inline:1", "path": "src/a.py", "status": "still_present",
                       "reason": "当前实现仍返回空值", "evidence_ids": ["e1"], "limitations": []}]}
     plan = PublicationPlanner().build(task)
-    assert plan.outcome.kind == "inconclusive"
+    assert plan.outcome.kind == "clean"
+    assert plan.outcome.coverage == "complete" and plan.outcome.reason_codes == []
+    assert plan.digest.merge_decision.status == "resolve_unknowns"
+    assert "historical_discussion_unresolved" in plan.digest.merge_decision.unresolved_reasons
     assert plan.digest.merge_decision.label == "历史讨论中的问题经代码核验仍存在，需先核对"
     for markdown in (plan.summary_markdown, plan.user_report_markdown, plan.review_comment_markdown):
         assert "目前没有可确认的问题" not in markdown
@@ -148,6 +151,67 @@ def test_historical_verified_defect_never_reads_as_no_confirmed_problem():
     assert "本轮变更范围内未新增已确认问题" in plan.user_report_markdown
     assert "本轮 Diff 新增已确认问题 0 项" in plan.user_report_markdown
     assert "本轮 Diff 新增已确认问题：0" in plan.summary_markdown
+
+
+def test_new_findings_and_verified_history_are_both_disclosed():
+    from test_review_outcome import discussion
+
+    task = publishable_task()
+    task.pr_discussion = discussion(rechecks=[
+        {"discussion_id": "inline:1", "path": "src/old.py", "status": "still_present",
+         "reason": "已有调用仍缺少权限检查", "evidence_ids": ["history-e1"], "limitations": []}])
+    plan = PublicationPlanner().build(task)
+    assert plan.outcome.kind == "findings" and plan.outcome.coverage == "complete"
+    assert plan.outcome.reason_codes == []
+    assert plan.digest.merge_decision.status == "resolve_unknowns"
+    assert "本轮变更范围内发现 1 项已确认问题" in plan.user_report_markdown
+    assert "本轮变更范围内未新增已确认问题" not in plan.user_report_markdown
+    for markdown in (plan.summary_markdown, plan.user_report_markdown, plan.review_comment_markdown):
+        assert "已有调用仍缺少权限检查" in markdown
+        assert "空返回值破坏调用方契约" in markdown
+
+
+def test_summary_keeps_material_gaps_without_runtime_and_file_audit():
+    from app.models.review import ExcludedReviewFile
+
+    task = completed_task(initial_scope_coverage=[
+        {"goal_id": "g1", "target_ref": "src/checked.py", "target_kind": "base_source_range",
+         "status": "examined", "reason": "静态检查完成"},
+        {"goal_id": "g2", "target_ref": "src/pending.py", "status": "not_examined",
+         "reason": "budget_exhausted"}], scope_complete=False, termination_reason="budget_exhausted",
+        usage_integrity="unknown", findings=[{"status": "unresolved"}])
+    task.excluded_files = [ExcludedReviewFile(file_path="excluded.bin", reason="binary")]
+    plan = PublicationPlanner().build(task)
+    text = plan.summary_markdown
+    for phrase in ("1 项约定目标未完成检查", "1 项候选问题尚未确认", "计量不完整", "### 下一步",
+                   "1 个文件未纳入本轮审查", plan.snapshot.head_sha):
+        assert phrase in text
+    for phrase in ("Base 删除前源码区间", "src/checked", "src/pending", "budget_exhausted",
+                   "scope_incomplete", "usage_integrity_unknown", "运行终止记录", "可信绑定", "excluded.bin"):
+        assert phrase not in text
+    assert "src/pending" in plan.user_report_markdown
+    assert "budget_exhausted" in plan.user_report_markdown
+    assert text.count("未执行目标仓库代码、测试或构建") == 1
+
+
+def test_summary_preserves_actionable_summary_only_findings_and_inline_links():
+    from copy import deepcopy
+
+    task = publishable_task()
+    summary = deepcopy(publishable_task(placement="summary", candidate_id="summary-b",
+                                       claim="缓存失效后读取失败").task_runtime_report["findings"][0])
+    summary["key"] = "key-b"
+    task.task_runtime_report["findings"].append(summary)
+    plan = PublicationPlanner().build(task)
+    before = plan.model_dump(mode="json")
+    url = task.pr_url + "#discussion_r123"
+    text = render_summary(plan, discussion_urls={"key-a": url})
+    assert text.index("### 问题索引") < text.index("### 下一步")
+    assert f"[查看 Inline 讨论]({url})" in text
+    assert "缓存失效后读取失败" in text
+    for phrase in ("调用方字段读取失败", "服务返回空值时直接读取字段", "先处理空值"):
+        assert phrase in text
+    assert plan.model_dump(mode="json") == before
 
 
 def test_bound_evidence_text_is_escaped_without_copying_raw_code():

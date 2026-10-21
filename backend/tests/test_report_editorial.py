@@ -374,6 +374,26 @@ def test_unchecked_author_claims_do_not_block_merge_but_contradictions_are_shown
     assert "author_intent_unresolved" not in contradicted.digest.merge_decision.unresolved_reasons
 
 
+@pytest.mark.parametrize("alignment", ["supported", "insufficient", "contradicted"])
+def test_observation_limitations_stay_in_report_while_contradictions_reach_comments(alignment):
+    task = publishable_task()
+    task.task_runtime_report["pr_intent_context"] = "拒绝空值。"
+    task.task_runtime_report["pr_intent_context_truncated"] = False
+    goal = task.task_runtime_report["initial_scope_coverage"][0]
+    limitation = "本项局部观察未覆盖其他部署环境"
+    goal.update(target_ref="src/a.py", status="examined", result_id="result-1", evidence_ids=["e1"],
+        snapshot_head_sha=task.run_manifest.head_sha, snapshot_base_sha=task.run_manifest.effective_base_sha,
+        intent_assessments=[IntentAssessment(author_quote="拒绝空值。", actual_behavior="空值分支的实际行为",
+            alignment=alignment, evidence_ids=["e1"], limitations=[limitation]).model_dump(mode="json")])
+    plan = PublicationPlanner().build(task)
+    assert limitation in plan.user_report_markdown
+    for text in (plan.review_comment_markdown, render_review_comment(plan, detail="full"), plan.summary_markdown):
+        assert limitation not in text
+        assert ("静态证据矛盾" in text) is (alignment == "contradicted")
+        if alignment == "contradicted":
+            assert "src/a.py" in text
+
+
 def test_merge_decision_separates_code_blockers_from_runtime_limits():
     bounded = PublicationPlanner().build(completed_task(termination_reason="budget_exhausted"))
     assert bounded.digest.merge_decision.status == "resolve_unknowns"

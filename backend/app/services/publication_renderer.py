@@ -100,7 +100,9 @@ def outcome_description(plan) -> str:
     outcome = plan.outcome
     if outcome.kind != "failed" and outcome.kind != "cancelled" \
             and outcome.historical_discussion.affects_risk:
-        return ("本轮变更范围内未新增已确认问题；但历史讨论复核确认的既有问题在当前代码中仍然存在，"
+        current = (f"本轮变更范围内发现 {outcome.confirmed_count} 项已确认问题" if outcome.confirmed_count
+                   else "本轮变更范围内未新增已确认问题")
+        return (current + "；历史讨论复核确认的既有问题在当前代码中仍然存在，"
                 "属于已核验风险，不能据此认定本次变更没有问题。")
     return OUTCOME_DESCRIPTIONS[outcome.kind]
 
@@ -518,12 +520,10 @@ def _comment_risks(plan):
                 locations.append(f"{path}:{line}" if line else path)
             suffix = "，位置：" + "、".join(dict.fromkeys(locations)) if locations else ""
             risks.append(f"作者声明“{_sentence(item.author_target, 120)}”与代码存在静态证据矛盾{suffix}。")
-        for observation in item.observations:
-            risks += [f"限制：{value}" for value in observation.get("limitations") or []]
     pending = [item for item in plan.digest.investigations if item.answer == "unresolved"]
     if pending:
         risks.append(f"{len(pending)} 项调查未得到充分答案，相关调用链结论仍需补充证据。")
-    if plan.digest.validation_state in {"failed", "unknown"}:
+    if plan.digest.validation_state == "failed":
         risks.append(_validation_sentence(plan))
     return [f"- {value}" for value in dict.fromkeys(risks)]
 
@@ -805,9 +805,9 @@ def render_technical_audit(plan, execution_record=None):
 
 
 def render_summary(plan, *, discussion_urls: dict[str, str] | None = None) -> str:
+    """GitHub 交付摘要：复用评论措辞，运行与证据明细留在内部报告。"""
     outcome = plan.outcome
     digest = plan.digest
-    label, advice = merge_heading(plan)
     lines = ["## RepoGuardian · PR Review", "", merge_verdict_line(plan), ""]
     if digest.discussion_stats:
         stats = digest.discussion_stats
@@ -819,57 +819,38 @@ def render_summary(plan, *, discussion_urls: dict[str, str] | None = None) -> st
     note = partial_review_note(plan)
     if note:
         lines += [note, ""]
-    lines += [advice, "",
-             f"- 本轮 Diff 新增已确认问题：{outcome.confirmed_count}",
-             f"- 审查目标完成：{outcome.examined_goals} / {outcome.total_goals}",
-             f"- 未决候选：{outcome.unresolved_count}", "", "### 审查范围", ""]
-    area_labels = {"head_source_ranges": "Head 变更源码区间", "base_source_ranges": "Base 删除前源码区间",
-                   "file_changes": "文件变更元数据"}
-    if digest.checked_areas:
-        lines.append("已检查：" + "、".join(area_labels[area] for area in digest.checked_areas) + "。")
-    if digest.reviewed_files:
-        lines.append("本次目标全部检查完成的文件：" + "、".join(markdown_text(path, 500)
-            for path in digest.reviewed_files[:20]) + "。")
-        if len(digest.reviewed_files) > 20:
-            lines.append(f"另有 {len(digest.reviewed_files) - 20} 个文件，完整列表见发布计划。")
-    if not digest.examined_goals:
-        lines.append("未记录已完成的审查目标；检查范围未知或尚未检查。")
-    if digest.excluded_files:
-        lines += ["", "未纳入本次审查的文件：", *[f"- {markdown_text(item.path, 500)}：{markdown_text(item.reason)}"
-                  for item in digest.excluded_files[:20]]]
-        if len(digest.excluded_files) > 20:
-            lines.append(f"另有 {len(digest.excluded_files) - 20} 个排除项，完整列表见发布计划。")
-    rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-    findings = sorted([*plan.inline_drafts, *plan.summary_findings], key=lambda item: (
-        rank[item.severity], item.anchor.file_path, item.anchor.start_line or 0, item.finding_key))
+    lines += [f"本轮 Diff 新增已确认问题：{outcome.confirmed_count}；"
+              f"约定目标已检查 {outcome.examined_goals} / {outcome.total_goals} 项。"]
+    findings = _ordered_findings(plan)
     if findings:
         lines += ["", "### 问题索引", ""]
         for index, finding in enumerate(findings, 1):
-            anchor = finding.anchor
-            location = markdown_text(anchor.file_path, 500)
-            if anchor.start_line:
-                location += f":{anchor.start_line}（{anchor.side}）"
+            location = _finding_location_text(finding)
             discussion = (discussion_urls or {}).get(finding.finding_key) if finding.placement == "inline" else None
             lines.append(f"{index}. [{finding.severity.title()}] {finding_markdown_title(finding)} — {location}"
-                         + ("（Summary）" if finding.placement == "summary" else "")
+                         + ("（详见下方）" if finding.placement == "summary" else "")
                          + (f" · [查看 Inline 讨论]({discussion})" if discussion else ""))
         for finding in plan.summary_findings:
             lines += ["", render_finding(finding)]
-    withheld_count = outcome.confirmed_count - outcome.publishable_count
+    risks = _comment_risks(plan)
+    if digest.incomplete_goals:
+        remaining = len(digest.incomplete_goals)
+        risks.append(f"- {remaining} 项约定目标未完成检查；具体范围请查看 RepoGuardian 详细报告。")
+    if digest.excluded_files:
+        risks.append(f"- {len(digest.excluded_files)} 个文件未纳入本轮审查；具体范围与原因请查看 RepoGuardian 详细报告。")
+    if outcome.unresolved_count:
+        risks.append(f"- {outcome.unresolved_count} 项候选问题尚未确认，不作为已核验缺陷。")
+    withheld_count = max(0, outcome.confirmed_count - outcome.publishable_count)
     if withheld_count > 0:
-        lines += ["", f"{withheld_count} 项已确认记录未进入发布草稿；具体扣留原因保留在内部发布计划中。"]
-    if outcome.reason_codes:
-        lines += ["", "### 仍需关注", "", *[f"- {REASON_LABELS[reason]}（{reason.value}）" for reason in outcome.reason_codes]]
-    lines += _goal_lines(digest.incomplete_goals, "未完成目标", limit=5, include_reason=False)
-    if outcome.incomplete_investigations:
-        lines += ["", f"仍有 {outcome.incomplete_investigations} 项调查未完成，需补齐证据与核验。"]
-    if digest.termination_reason and digest.termination_reason != "plan_exhausted":
-        lines += ["", f"运行终止记录：{markdown_text(digest.termination_reason, 160)}。"]
-    lines += ["", "### 验证边界", "", *_validation_lines(plan)]
-    if outcome.kind != "clean":
-        lines += ["", "此结果不应视为 Approve 或质量检查通过。"]
-    if digest.author_context_limitation:
-        lines += ["", "作者目标输入限制：" + digest.author_context_limitation]
-    lines += ["", f"审查 Commit：{markdown_text(plan.snapshot.head_sha or '未记录', 64)}。", "",
-              f"审查记录：{markdown_text(plan.review_id, 160)}。"]
+        risks.append(f"- {withheld_count} 项已确认记录未进入发布草稿；请在 RepoGuardian 中核对证据与原因。")
+    risks += _comment_history_lines(plan)
+    if risks:
+        lines += ["", "### 仍需关注", "", *dict.fromkeys(risks)]
+    if digest.author_context_limitation and not any(digest.author_context_limitation in line for line in risks):
+        lines += ["", "作者目标输入限制：" + markdown_text(digest.author_context_limitation)]
+    lines += ["", "### 下一步", "", *_comment_next_steps(plan, has_findings=bool(findings))]
+    validation = _validation_sentence(plan)
+    boundary = "" if any(validation in line for line in lines) else validation
+    lines += ["", "---", "", f"审查 Commit：`{markdown_text(plan.snapshot.head_sha or '未记录', 64)}`；"
+              + boundary + "本结果不替代 CI 与人工审批。"]
     return "\n".join(lines)
