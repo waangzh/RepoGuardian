@@ -246,6 +246,16 @@ export interface PresentationDelivery {
   actual_published: number | null;
 }
 
+export interface SummaryInputCoverage {
+  truncation_reasons: (
+    | "author_context_truncated" | "source_text_truncated" | "diff_hunk_truncated"
+    | "diff_hunk_omitted" | "diff_metadata_only" | "source_count_limited" | "input_size_limited"
+    | "review_scope_excluded" | "sensitive_or_binary_excluded" | "invalid_path_excluded"
+  )[];
+  omitted_files: number;
+  omitted_hunks: number;
+}
+
 export interface ReviewPresentation {
   schema_version: "review-presentation-v1";
   review_id: string;
@@ -262,6 +272,7 @@ export interface ReviewPresentation {
   delivery: PresentationDelivery;
   validation_state: ReviewOutcome["dynamic_validation"];
   limitations: string[];
+  summary_input_coverage?: SummaryInputCoverage | null;
 }
 
 export interface ReviewCommentCheck {

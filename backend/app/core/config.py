@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     repoguardian_issue_dedup_timeout_seconds: float = Field(default=30, ge=0.1, le=300)
     repoguardian_report_purpose_timeout_seconds: float = Field(default=15, ge=0.1, le=120)
     repoguardian_review_presentation_v1_enabled: bool = True
-    repoguardian_review_synthesis_enabled: bool = False
+    repoguardian_review_synthesis_enabled: bool = True
     repoguardian_review_synthesis_max_input_chars: int = Field(default=24_000, ge=2000, le=60_000)
     repoguardian_review_synthesis_max_tokens: int = Field(default=16_000, ge=0, le=100_000)
     repoguardian_review_synthesis_output_tokens: int = Field(default=1800, ge=256, le=4096)

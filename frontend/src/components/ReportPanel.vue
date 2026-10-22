@@ -148,7 +148,6 @@ function rereview() { cancelPending(); emit("rereview"); }
         <div v-else-if="!currentMarkdown"><EmptyState icon="report" title="当前报告尚不可用" description="请结合任务状态判断，或切换到其他报告查看历史记录。" /><button v-if="reportView === 'comment' && customSelection && reviewId" type="button" class="btn secondary" @click="previewRevision += 1">重试加载所选预览</button></div>
         <div v-else class="rd-doc">
           <p v-if="snapshotStale && reportView !== 'comment'" class="rd-notice warn"><AppIcon name="history" :size="17" /><span><strong>历史快照内容。</strong>以下正文来自旧 Head，不适用于最新提交；请重新审查后再引用。</span></p>
-          <div v-if="reportView === 'comment'" class="rd-notice"><AppIcon name="info" :size="17" /><div><strong>评论草稿不代表合并批准。</strong> 复制或导出前将核对 PR 当前 Head；过期或未知时需要明确确认限制。复制完整评论只生成文本，不会创建 GitHub 代码行讨论。</div></div>
           <p v-if="selection && reportView === 'comment'" class="rd-context-tip" role="status">包含 {{ selection.included_finding_keys.length }} 项，明确省略 {{ selection.omitted_finding_keys.length }} 项；保留 {{ selection.retained_blocking_keys.length }} 项已处理的高优先级问题。</p>
           <div :class="{ 'rd-comment': reportView === 'comment' }">
             <header v-if="reportView === 'comment'" class="rd-comment-header"><div><strong>评论正文预览</strong><small>以下是 GitHub PR 评论将呈现的核心内容</small></div><span class="badge neutral">Markdown</span></header>
