@@ -26,7 +26,11 @@ const capabilityError = ref(false);
 let controller: AbortController | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let generation = 0;
-const findings = computed(() => [...props.plan.inline_drafts, ...props.plan.summary_findings]);
+const findings = computed(() => props.plan.presentation?.findings
+  ?? [...props.plan.inline_drafts, ...props.plan.summary_findings].sort((left, right) =>
+    ["critical", "high", "medium", "low"].indexOf(left.severity) - ["critical", "high", "medium", "low"].indexOf(right.severity)
+    || (left.anchor?.file_path ?? "").localeCompare(right.anchor?.file_path ?? "")
+    || (left.anchor?.start_line ?? 0) - (right.anchor?.start_line ?? 0)));
 const summaryHtml = computed(() => DOMPurify.sanitize(marked.parse(preview.value?.summary_markdown || "", { async: false }) as string,
   { USE_PROFILES: { html: true }, FORBID_TAGS: ["style"] }));
 const canConfirm = computed(() => !!preview.value?.ready && !busy.value
@@ -116,7 +120,7 @@ const placementLabel = (placement: string) => placement === "inline" ? "代码�
       <section class="github-publication__paths" aria-label="交付方式">
         <article class="github-publication__path">
           <h3>复制评论</h3>
-          <p>只把评论正文写入剪贴板，不会写入 GitHub，也不需要发布授权。粘贴到 PR 评论框即可。</p>
+          <p>只把评论正文写入剪贴板，不会写入 GitHub，也不需要发布授权。粘贴到 PR 评论框即可；这不会创建真实的代码行讨论。</p>
           <button type="button" class="button button--secondary button--compact" :disabled="checking || !reviewComment" @click="copyCheckedComment">
             {{ checking ? '正在核对 PR 版本…' : copied ? '已复制' : '复制 PR 评论' }}
           </button>
@@ -151,7 +155,15 @@ const placementLabel = (placement: string) => placement === "inline" ? "代码�
         <section v-if="preview" aria-label="发布预检结果">
           <h3>PR 总结评论：{{ preview.summary_action === 'update' ? '将更新已有评论' : '将新建评论' }}</h3><code>审查版本 {{ preview.head_sha }}</code>
           <p>将新建 {{ preview.inline.ready }} 条代码行评论 · 已存在相同评论 {{ preview.inline.already_published }} 条 · 无法定位、将写入总结评论 {{ preview.inline.summary_fallback }} 条</p>
+          <p v-if="preview.presentation" aria-label="发布数量">
+            已确认 {{ preview.presentation.delivery.confirmed }} 项 / 可交付 {{ preview.presentation.delivery.eligible }} 项 /
+            选择 {{ preview.presentation.delivery.selected }} 项 /
+            仅在总结中反馈 {{ preview.presentation.delivery.summary_only }} 项 /
+            未选择 {{ preview.presentation.delivery.not_selected }} 项。
+          </p>
+          <p v-if="preview.presentation">{{ preview.presentation.synthesis_status === 'ready' ? '使用已冻结的模型摘要' : '使用确定性回退摘要' }}；当前是发布预览，实际成功状态与讨论链接以 GitHub 回执为准。</p>
           <article class="markdown-body" v-html="summaryHtml" />
+          <h3 v-if="preview.inline_previews.length">逐条代码意见与仅在总结中反馈的内容</h3>
           <details v-for="item in preview.inline_previews" :key="item.finding_key"><summary>{{ inlineActionLabel[item.action] }} · {{ item.location?.path || '总结评论' }}<template v-if="item.location">:{{ item.location.line }} · {{ item.location.side === 'LEFT' ? 'Base' : 'Head' }}</template></summary><pre>{{ item.body_markdown }}</pre></details>
           <p v-for="warning in preview.warnings" :key="warning">{{ publicationWarningText(warning) }}</p>
           <label v-if="preview.requires_partial_acknowledgement"><input v-model="acknowledge" type="checkbox" />我已了解审查或发布不完整，以及未选择的问题不会发布，仍确认部分发布。</label>

@@ -1,0 +1,237 @@
+import asyncio
+import json
+from copy import deepcopy
+from types import SimpleNamespace
+
+import pytest
+from langchain_core.messages import AIMessage
+from pydantic import ValidationError
+
+from app.agents.providers import OpenAICompatibleProvider
+from app.core.config import Settings
+from app.models.review import ChangedFile, DiffHunk, DiffLine
+from app.models.review_synthesis import ReviewSynthesisDraft
+from app.services.fingerprints import stable_hash
+from app.services.publication_planner import PublicationPlanner, summary_projection
+from app.services.review_synthesis_input import build_synthesis_input
+from app.services.review_synthesis_repository import SynthesisStore
+from app.services.review_synthesis_service import freeze_review_synthesis, bound_synthesis
+from app.services.review_synthesis_validator import validate_review_synthesis
+from test_phase6a_persistence import persistence as persistence
+from test_publication_planner import publishable_task
+from test_review_presentation import new_output
+
+
+def synthesis_task():
+    task = new_output(publishable_task())
+    task.task_runtime_configuration.update(provider="fixture", model="fixture")
+    task.task_runtime_configuration["output_policy"] = Settings(_env_file=None).review_output_policy()
+    task.task_runtime_configuration["output_policy"]["synthesis_enabled"] = True
+    task.changed_files = [ChangedFile(file_path="src/a.py", change_type="modified", additions=1, deletions=0,
+        hunks=[DiffHunk(old_start=7, old_length=1, new_start=7, new_length=1,
+            lines=[DiffLine(kind="added", content="return None", new_line_no=7)])])]
+    return task
+
+
+def draft_for(facts):
+    ref = next(source.id for source in facts.sources if source.kind == "diff_observation")
+    return {"change_summary": {"text": "本次 PR 调整了返回值处理。", "source_refs": [ref]},
+        "review_summary": {"text": "需要关注空返回值路径的字段读取。", "source_refs": ["finding:key-a"]},
+        "finding_summaries": [{"finding_key": "key-a", "text": "空返回值破坏调用方契约"}]}
+
+
+def stub_provider(*, change=None, error=None, delay=0):
+    calls = []
+    provider = OpenAICompatibleProvider("fixture", "https://example.invalid/v1", "fixture",
+        provider_name="fixture", retry_backoff_seconds=0, request_attempts=2)
+
+    async def invoke(messages):
+        calls.append(messages)
+        if delay:
+            await asyncio.sleep(delay)
+        if error:
+            raise error
+        facts = json.loads(messages[1].content.split("\nFact Bundle:\n", 1)[1])
+        ref = next(source["id"] for source in facts["sources"] if source["kind"] == "diff_observation")
+        result = {"change_summary": {"text": "本次 PR 调整了返回值处理。", "source_refs": [ref]},
+            "review_summary": {"text": "需要关注空返回值路径的字段读取。", "source_refs": ["finding:key-a"]},
+            "finding_summaries": [{"finding_key": "key-a", "text": "空返回值破坏调用方契约"}]}
+        if change:
+            change(result)
+        return AIMessage(content=json.dumps(result, ensure_ascii=False),
+            usage_metadata={"input_tokens": 20, "output_tokens": 30, "total_tokens": 50})
+
+    provider._build_chat_model = lambda *args: SimpleNamespace(ainvoke=invoke)
+    return provider, calls
+
+
+@pytest.mark.asyncio
+async def test_once_frozen_and_repeated_reads_never_call_model(persistence):
+    repo, _, _ = persistence
+    task = synthesis_task()
+    repo.create_task(task)
+    provider, calls = stub_provider()
+    first = await freeze_review_synthesis(task, repo, provider)
+    assert first.status == "ready"
+    assert first.budget["calls_consumed"] == 1
+    assert first.usage["actual_total_tokens"] == 50
+    for _ in range(10):
+        restored = repo.get_task(task.id)
+        plan = PublicationPlanner().build(restored)
+        assert plan.presentation.synthesis_status == "ready"
+        assert "调整了返回值处理" in plan.summary_markdown
+        assert "调整了返回值处理" in plan.review_comment_markdown
+        assert plan.presentation.verdict == plan.digest.merge_decision
+        assert plan.presentation.validation_state == "not_executed"
+        assert summary_projection(plan).presentation.findings == []
+        assert restored.model_usage_summary.overall.actual_total_tokens == 50
+        assert restored.model_usages[-1].operation == "review_synthesis_v1"
+    again = await freeze_review_synthesis(task, repo, provider)
+    assert first.fact_bundle_hash == again.fact_bundle_hash and len(calls) == 1
+    assert "synthesis" not in (task.task_runtime_report or {})
+
+
+@pytest.mark.parametrize("change", [
+    lambda value: value.update(severity="high"),
+    lambda value: value["change_summary"].update(source_refs=["nonexistent"]),
+    lambda value: value.update(finding_summaries=[{"finding_key": "injected", "text": "新问题"}]),
+    lambda value: value["change_summary"].update(text="全部测试通过，可以安全合并。"),
+    lambda value: value["change_summary"].update(text="<img src=x onerror=alert(1)> @someone"),
+    lambda value: value.update(test_changes=[{"text": "新增测试用例", "source_refs": ["finding:key-a"]}]),
+])
+def test_schema_refs_test_claims_and_injection_rejected(change):
+    task = synthesis_task()
+    plan = PublicationPlanner().build(task)
+    facts = build_synthesis_input(task, plan)
+    value = draft_for(facts)
+    change(value)
+    with pytest.raises((ValueError, ValidationError)):
+        validate_review_synthesis(facts, value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["invalid_ref", "timeout", "disabled", "budget", "transport"])
+async def test_failures_preserve_findings_and_unknown_cost(persistence, case):
+    repo, _, _ = persistence
+    task = synthesis_task()
+    policy = task.task_runtime_configuration["output_policy"]
+    if case == "timeout":
+        policy["timeout_seconds"] = 0.02
+    if case == "disabled":
+        policy["synthesis_enabled"] = False
+    if case == "budget":
+        policy["max_tokens"] = 0
+    repo.create_task(task)
+    provider, calls = stub_provider(
+        change=(lambda value: value["change_summary"].update(source_refs=["bad"])) if case == "invalid_ref" else None,
+        delay=0.2 if case == "timeout" else 0, error=ConnectionError("offline") if case == "transport" else None)
+    artifact = await freeze_review_synthesis(task, repo, provider)
+    assert artifact.status == "fallback"
+    restored = repo.get_task(task.id)
+    plan = PublicationPlanner().build(restored)
+    assert plan.outcome.confirmed_count == 1 and plan.presentation.synthesis_status == "fallback"
+    assert plan.presentation.validation_state == "not_executed"
+    assert len(calls) <= 1
+    await freeze_review_synthesis(task, repo, provider)
+    assert len(calls) <= 1
+    if case in {"timeout", "transport"} and calls:
+        assert restored.model_usages[-1].actual_total_tokens is None
+        assert restored.model_usages[-1].cost_microusd is None
+    if case == "timeout" and not calls:
+        assert not restored.model_usages
+    if case == "invalid_ref":
+        assert restored.model_usages[-1].actual_total_tokens == 50
+
+
+@pytest.mark.asyncio
+async def test_concurrent_claims_and_interrupted_intent_do_not_resend(persistence):
+    repo, _, _ = persistence
+    task = synthesis_task()
+    repo.create_task(task)
+    provider, calls = stub_provider(delay=0.02)
+    await asyncio.gather(freeze_review_synthesis(task, repo, provider),
+                         freeze_review_synthesis(task, repo, provider))
+    assert len(calls) == 1
+    store = SynthesisStore(repo, task.id)
+    assert not store.claim(bound_synthesis(repo.get_task(task.id), PublicationPlanner().build(task)))[0]
+
+
+@pytest.mark.asyncio
+async def test_snapshot_bundle_tamper_and_legacy_are_read_only_fallback(persistence):
+    repo, _, _ = persistence
+    task = synthesis_task()
+    repo.create_task(task)
+    provider, calls = stub_provider()
+    await freeze_review_synthesis(task, repo, provider)
+    restored = repo.get_task(task.id)
+    artifact = deepcopy(restored.review_synthesis)
+    artifact["head_sha"] = "d" * 40
+    restored.review_synthesis = artifact
+    assert bound_synthesis(restored, PublicationPlanner().build(task)) is None
+    restored = repo.get_task(task.id)
+    restored.changed_files[0].hunks[0].lines[0].content = "return modified"
+    assert PublicationPlanner().build(restored).presentation.synthesis_status == "fallback"
+    legacy = publishable_task()
+    assert await freeze_review_synthesis(legacy, repo, provider) is None
+    assert len(calls) == 1
+
+
+def test_input_is_bounded_excludes_sensitive_paths_and_discloses_omissions():
+    task = synthesis_task()
+    task.changed_files += [task.changed_files[0].model_copy(update={"file_path": ".env"})]
+    facts = build_synthesis_input(task, PublicationPlanner().build(task))
+    encoded = json.dumps(facts.model_dump(mode="json"), ensure_ascii=False)
+    assert '"path": ".env"' not in encoded
+    assert facts.input_truncated and facts.omitted_files == 1 and facts.omitted_hunks == 1
+    assert len(encoded) <= task.task_runtime_configuration["output_policy"]["max_input_chars"]
+    assert stable_hash(facts.model_dump(mode="json")) == stable_hash(
+        build_synthesis_input(task, PublicationPlanner().build(task)).model_dump(mode="json"))
+
+
+def test_unknown_purpose_and_duplicate_keys_are_rejected():
+    task = synthesis_task()
+    facts = build_synthesis_input(task, PublicationPlanner().build(task))
+    value = draft_for(facts)
+    value["pr_purpose"] = {"text": "Found by deep-review audit", "source_kind": "unknown", "source_refs": ["pr-description:1"]}
+    with pytest.raises(ValueError):
+        validate_review_synthesis(facts, value)
+    value = draft_for(facts)
+    value["finding_summaries"] *= 2
+    with pytest.raises(ValueError):
+        validate_review_synthesis(facts, value)
+    assert ReviewSynthesisDraft.model_validate(draft_for(facts)).pr_purpose.source_kind == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_cancel_after_dispatch_keeps_unknown_usage_and_does_not_resend(persistence):
+    repo, _, _ = persistence
+    task = synthesis_task()
+    task.task_runtime_configuration["output_policy"]["timeout_seconds"] = 5
+    repo.create_task(task)
+    provider, calls = stub_provider(delay=2)
+    generation = asyncio.create_task(freeze_review_synthesis(task, repo, provider))
+    async def dispatched():
+        while not calls:
+            await asyncio.sleep(0.005)
+    await asyncio.wait_for(dispatched(), timeout=3)
+    generation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await generation
+    restored = repo.get_task(task.id)
+    assert restored.review_synthesis["status"] == "fallback"
+    assert restored.model_usages[-1].actual_total_tokens is None
+    assert restored.review_synthesis["budget"]["unknown_reserved"] > 0
+    await freeze_review_synthesis(task, repo, provider)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("name,value", [
+    ("repoguardian_review_synthesis_max_input_chars", 100),
+    ("repoguardian_review_synthesis_max_tokens", -1),
+    ("repoguardian_review_synthesis_output_tokens", 0),
+    ("repoguardian_review_synthesis_timeout_seconds", 0),
+    ("repoguardian_review_synthesis_max_cost_microusd", -1),
+])
+def test_synthesis_configuration_rejects_invalid_limits(name, value):
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, **{name: value})

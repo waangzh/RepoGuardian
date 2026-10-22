@@ -39,10 +39,18 @@ class PublicationService:
         checked["inline"]["ready"] -= len(existing)
         checked["inline_previews"] = [{"finding_key": item.finding_key, "body_markdown": item.body_markdown,
             "location": checked["locations"].get(item.finding_key), "action": "already_published" if item.finding_key in existing
+            else "summary_only" if item.placement == "summary"
             else "summary_fallback" if item.finding_key in checked["fallback"] else "create"}
-            for item in checked["plan"].inline_drafts if item.finding_key in checked["finding_keys"]]
+            for item in sorted([*checked["plan"].inline_drafts, *checked["plan"].summary_findings],
+                key=lambda item: ({"critical": 0, "high": 1, "medium": 2, "low": 3}[item.severity],
+                    item.anchor.file_path, item.anchor.start_line or 0, item.finding_key))
+            if item.finding_key in checked["finding_keys"]]
         checked["summary_markdown"] = compose_summary(checked["plan"], {"finding_keys": checked["finding_keys"]}, checked["fallback"],
             [SimpleNamespace(kind="inline", state="published") for _ in existing], "Prepared")
+        if checked["plan"].presentation is not None:
+            from app.services.review_presentation import selected_presentation
+            checked["presentation"] = selected_presentation(checked["plan"], checked["finding_keys"],
+                checked["fallback"], already_published=len(existing))
         if len(checked["summary_markdown"].encode()) > 59_000:
             raise GitHubPublishError("publication_body_too_long")
         return checked

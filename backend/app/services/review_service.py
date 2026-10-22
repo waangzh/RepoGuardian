@@ -792,6 +792,13 @@ class ReviewService:
             self._persist(task)
             if self._repository:
                 self._repository.save_issue_lifecycle(task_id, result)
+                from app.services.review_synthesis_service import freeze_review_synthesis
+                try:
+                    await freeze_review_synthesis(task, self._repository, self._provider, lease={
+                        "job_id": job.id, "owner": job.lease_owner, "attempt": job.attempts,
+                    } if job else None)
+                except Exception:
+                    logger.warning("任务 %s 摘要不可用，保留已保存的审查事实", task_id[:8], exc_info=False)
             if task.status == TaskStatus.failed:
                 logger.error("❌ 审查任务 %s 失败结束：%s", task_id[:8], task.error)
             elif task.status == TaskStatus.completed_with_warnings:

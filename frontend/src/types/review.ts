@@ -1007,6 +1007,7 @@ export interface ReviewTask {
   model?: string | null;
   engine?: ReviewEngine; // 缺省字段的旧任务属于 legacy_units；新任务恒为 task_review_v1
   task_runtime_configuration?: Record<string, unknown> | null;
+  review_synthesis?: Record<string, unknown> | null;
   task_runtime_report?: TaskRuntimeReport | null;
   /** 增量审查冻结绑定；null 表示本轮按完整 PR 审查。 */
   incremental?: Record<string, unknown> | null;
@@ -1060,6 +1061,7 @@ export interface ReviewTask {
 }
 
 export interface TaskRuntimeReport {
+  reuse_dependencies?: Record<string, Record<string, unknown>>;
   pr_intent_context?: string | null;
   pr_intent_context_truncated?: boolean | null;
   diagnostics?: Record<string, unknown>[];

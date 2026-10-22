@@ -63,7 +63,8 @@ def summary_projection(plan: PublicationPlan) -> ReviewSummary:
             validations=digest.validations, checked_areas=digest.checked_areas,
             termination_reason=digest.termination_reason),
         review_comment_markdown=plan.review_comment_markdown, withheld_findings=plan.withheld_findings,
-        content_eligible=plan.content_eligible, blocking_reasons=plan.blocking_reasons)
+        content_eligible=plan.content_eligible, blocking_reasons=plan.blocking_reasons,
+        presentation=plan.presentation.model_copy(update={"findings": []}) if plan.presentation else None)
 
 
 class PublicationPlanner:
@@ -127,6 +128,13 @@ class PublicationPlanner:
         plan.inline_drafts.sort(key=sort_key)
         plan.summary_findings.sort(key=sort_key)
         plan.digest.merge_decision = merge_decision(plan)
+        if (task.task_runtime_configuration or {}).get("output_policy", {}).get("presentation_v1"):
+            from app.services.review_presentation import build_presentation, compact_finding
+            for finding in [*plan.inline_drafts, *plan.summary_findings]:
+                finding.legacy_body_markdown = finding.body_markdown
+                finding.body_markdown = compact_finding(finding)
+            from app.services.review_synthesis_service import bound_synthesis
+            plan.presentation = build_presentation(plan, bound_synthesis(task, plan))
         if include_markdown:
             plan.summary_markdown = render_summary(plan)
             plan.user_report_markdown = render_user_report(task, plan)

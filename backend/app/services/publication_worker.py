@@ -31,6 +31,9 @@ def compose_summary(plan, selection, fallback, items, phase):
         else:
             inline.append(finding)
     preview = plan.model_copy(update={"inline_drafts": inline, "summary_findings": summary})
+    if plan.presentation is not None:
+        from app.services.review_presentation import selected_presentation
+        preview.presentation = selected_presentation(plan, selected, fallback)
     # 仅接入已经通过远端身份对账并落库的成功回执，不猜测 URL。
     inline_keys = {finding.finding_key for finding in inline}
     receipts = {}
@@ -45,6 +48,11 @@ def compose_summary(plan, selection, fallback, items, phase):
     failed = sum(item.kind == "inline" and item.state == "failed" for item in items)
     uncertain = sum(item.kind == "inline" and item.state == "uncertain" for item in items)
     count = len(plan.inline_drafts) + len(plan.summary_findings)
+    if preview.presentation is not None:
+        summary_published = any(item.kind == "summary" and item.state == "published" for item in items)
+        preview.presentation.delivery.actual_published = (
+            delivered + (len(summary) if summary_published else 0)
+            if phase != "Prepared" and (summary_published or delivered) else None)
     return (render_summary(preview, discussion_urls=discussions) + f"\n\n### 投递状态：{phase}\n\n"
             f"- 用户选择：{len(selected)} / {count} 项；未选择：{count - len(selected)} 项\n"
             f"- 已确认投递的 Inline：{delivered}\n- Summary-only：{len(summary)}\n"
@@ -82,7 +90,11 @@ class PublicationDelivery:
             validate_comment(remote, context, review=True)
             expected = locations.get(finding.finding_key)
             if (valid_reviews.get(remote.get("pull_request_review_id")) != match[1]
-                    or remote["body"] != finding_body(finding, match[1]) or not expected
+                    or remote["body"] not in {
+                        finding_body(finding, match[1]),
+                        finding_body(finding.model_copy(update={
+                            "body_markdown": finding.legacy_body_markdown or finding.body_markdown}), match[1]),
+                    } or not expected
                     or any(remote.get(key) != value for key, value in expected.items())):
                 raise GitHubPublishError("inline_identity_conflict", uncertain=True)
             if finding.finding_key in matches:
@@ -145,7 +157,9 @@ class PublicationDelivery:
         for offset in range(0, len(pending), size):
             batch = pending[offset:offset + size]
             identity = stable_hash([attempt.id, [item.id for item in batch]])
-            payload = {"commit_id": attempt.head_sha, "event": "COMMENT", "body": "RepoGuardian verified inline findings.\n\n" + batch_marker(attempt.id, identity),
+            payload = {"commit_id": attempt.head_sha, "event": "COMMENT", "body":
+                "RepoGuardian 已提交本次快照的代码行审查意见；总体结论请查看本 PR 的 RepoGuardian Summary。\n\n"
+                + batch_marker(attempt.id, identity),
                 "comments": [{**checked["locations"][item.finding_key], "body": finding_body(by_key[item.finding_key], attempt.id)} for item in batch]}
             if any(len(comment["body"].encode()) > 60_000 for comment in payload["comments"]):
                 raise GitHubPublishError("publication_body_too_long")

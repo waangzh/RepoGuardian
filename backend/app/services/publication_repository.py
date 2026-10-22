@@ -32,7 +32,8 @@ class PublicationLease:
 
 
 def finding_fingerprint(finding):
-    return stable_hash({"anchor": finding.anchor.model_dump(mode="json"), "body": finding.body_markdown,
+    return stable_hash({"anchor": finding.anchor.model_dump(mode="json"),
+                        "body": finding.legacy_body_markdown or finding.body_markdown,
                         "severity": finding.severity})
 
 

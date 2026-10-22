@@ -74,6 +74,7 @@ def task_runtime_configuration(model=None, *, provider=None):
     resolver = getattr(provider, "resolve_request_profile", None)
     profile = resolver(selected_model) if callable(resolver) else settings.resolve_model_profile(selected_model)
     return {"provider": provider_name, "model": selected_model,
+        "output_policy": settings.review_output_policy(),
         "prompt_version": "task-review-prompt-v8",
         "discussion_contract": "pr-discussion-context-v1" if settings.repoguardian_pr_discussions_enabled else None,
         "publication_contract": "claim-publication-v1",

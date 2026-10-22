@@ -29,6 +29,7 @@ export const inlineActionLabel: Record<PublicationInlinePreview["action"], strin
   create: "将发布为代码行评论",
   already_published: "相同评论已存在，本次不重复发布",
   summary_fallback: "无法准确定位到代码行，将写入总结评论",
+  summary_only: "仅在总结评论中反馈，不创建代码行讨论",
 };
 
 /** 评论条目的中文称呼，替代 kind 的 summary/inline。 */
