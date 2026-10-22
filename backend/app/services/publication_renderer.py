@@ -516,9 +516,25 @@ def _risk_section(plan):
                      + (f":{goal.start_line}" if goal.start_line else "")
                      + (f"；{markdown_text(goal.reason)}" if goal.reason else ""))
     pending = [item for item in plan.digest.investigations if item.answer == "unresolved"]
+    if not plan.digest.investigations_known:
+        lines += ["调查状态未知；不能将缺失记录视为调查已完成。", ""]
+    elif plan.digest.investigations:
+        answered_count = len(plan.digest.investigations) - len(pending)
+        lines += [f"已记录调查 {len(plan.digest.investigations)} 项；有明确答案 {answered_count} 项；"
+                  f"未得到充分答案 {len(pending)} 项。", ""]
+    if plan.digest.execution_status and plan.digest.investigations:
+        lines += ["实际运行记录：" + markdown_text(
+            plan.digest.execution_status + " / " + (plan.digest.termination_reason or "未记录终止原因")), ""]
     for item in pending[:5]:
         items.append(f"- 未决调查：{markdown_text(item.proposition)}"
                      + (f"；{markdown_text(item.reason)}" if item.reason else "；尚未记录明确原因"))
+        items += ["  - 限制：" + markdown_text(value) for value in item.limitations]
+        if item.requested_ranges:
+            items += ["  - 请求取证范围（请求范围不代表已读取或已核验）："]
+            items += [f"    - {markdown_text(request.path or '文件未记录')}："
+                      f"{request.start_line or '未知'}–{request.end_line or '未知'}"
+                      for request in item.requested_ranges]
+            items += ["  - 建议补读上述缺失实现或补齐对应证据，再判断原调查命题；证据不足不代表代码存在缺陷。"]
     if plan.digest.unresolved_leads:
         items += [f"- 未调度线索：{markdown_text(value)}" for value in plan.digest.unresolved_leads[:5]]
     if not items:
@@ -561,14 +577,18 @@ def _next_steps(plan):
     return lines
 
 
-def _comment_risks(plan, *, include_history=True):
+def _comment_risks(plan, *, include_history=True, include_investigations=True):
     """只列影响合并判断的限制；未逐项核验的作者声明留在详细报告。
 
     已核验的历史风险在评论中有独立章节，通用限制行不再重复同一条结论；
     尚未完成的历史调查仍由待确认章节逐项呈现。
     """
+    reasons = {item.value for item in plan.outcome.reason_codes}
     risks = [value for value in plan.digest.merge_decision.limits
-             if include_history or value != REASON_LABELS["historical_discussion_unresolved"]]
+             if (include_history or value != REASON_LABELS["historical_discussion_unresolved"])
+             and (include_investigations or not (
+                 "investigation_incomplete" in reasons
+                 and value == REASON_LABELS["investigation_incomplete"]))]
     if "usage_integrity_unknown" in plan.outcome.reason_codes:
         risks.append("运行计量记录不完整：模型请求计量不完整或不一致；未知用量不能当作完整统计。"
                      "运行或计量异常本身不代表发现代码缺陷。")
@@ -584,7 +604,7 @@ def _comment_risks(plan, *, include_history=True):
             suffix = "，位置：" + "、".join(dict.fromkeys(locations)) if locations else ""
             risks.append(f"作者声明“{_sentence(item.author_target, 120)}”与代码存在静态证据矛盾{suffix}。")
     pending = [item for item in plan.digest.investigations if item.answer == "unresolved"]
-    if pending:
+    if pending and include_investigations:
         risks.append(f"{len(pending)} 项调查未得到充分答案，相关调用链结论仍需补充证据。")
     if plan.digest.validation_state == "failed":
         risks.append(_validation_sentence(plan))
@@ -738,7 +758,8 @@ def _comment_change_overview(plan, *, title="变更理解"):
         source = understanding.author_goal_source if understanding else None
         label = {"title": "作者标题，未生成目标归纳", "description": "作者描述摘录",
                  "summary": "基于作者原文的目标归纳"}.get(source, "作者声明")
-        lines += [f"**PR 目标：** {markdown_text(_sentence(author, 360))}（{label}，不代表目标已实现）", ""]
+        note = "" if source == "summary" else f"（{label}，不代表目标已实现）"
+        lines += [f"**PR 目标：** {markdown_text(_sentence(author, 360))}{note}", ""]
     if understanding and understanding.implementation_changes is not None:
         lines += [f"**实现变化：** {markdown_text(understanding.implementation_changes, 800)}", "",
                   f"**测试核对：** {markdown_text(understanding.test_observations or '尚未形成测试断言核对记录。', 800)}"
@@ -749,7 +770,7 @@ def _comment_change_overview(plan, *, title="变更理解"):
 
 
 def _comment_other_results(plan, *, omitted, retained, withheld, full, title=None, extra_lines=(),
-                          include_discussed=False):
+                          include_discussed=False, include_investigations=True):
     """只展开实际缺口；通用验证边界统一放在文末。
 
     章节标题按内容决定：确实存在未确认事项时使用“仍需确认的事项”；
@@ -758,7 +779,8 @@ def _comment_other_results(plan, *, omitted, retained, withheld, full, title=Non
     判断结果，完整版只追加明细，不改变章节是否存在。
     """
     # 已核验风险有独立章节，避免通用限制行与它重复表达同一事实。
-    risks = _comment_risks(plan, include_history=not _history_entries(plan)[0])
+    risks = _comment_risks(plan, include_history=not _history_entries(plan)[0],
+                           include_investigations=include_investigations)
     pending = _history_entries(plan)[1]
     entries = list(risks)
     if plan.digest.incomplete_goals:
@@ -998,6 +1020,9 @@ def render_technical_audit(plan, execution_record=None):
     for title, data in (("目标符合性与证据引用", [item.model_dump(mode="json") for item in plan.digest.intent_assessments]),
                         ("作者声明输入完整性", {"status": plan.digest.author_context_status,
                             "limitation": plan.digest.author_context_limitation}),
+                        ("PR 变更概述输入覆盖", plan.presentation.summary_input_coverage.model_dump(mode="json")
+                            if plan.presentation and plan.presentation.summary_input_coverage
+                            else {"status": "not_recorded"}),
                         ("问题与人工处理身份", [item.model_dump(mode="json") for item in plan.digest.findings]),
                         ("发布准入扣留记录", [item.model_dump(mode="json") for item in plan.withheld_findings]),
                         ("运行、计量与证据追踪", execution_record or {})):

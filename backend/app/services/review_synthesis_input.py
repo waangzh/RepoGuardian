@@ -14,6 +14,11 @@ def build_synthesis_input(task, plan):
     limit = min(60_000, max(2000, int(policy.get("max_input_chars", 24_000))))
     facts = ReviewSynthesisInput(review_id=task.id, head_sha=plan.snapshot.head_sha or "",
         effective_base_sha=plan.snapshot.effective_base_sha or "")
+    truncation_reasons = set()
+
+    def mark_truncated(reason):
+        facts.input_truncated = True
+        truncation_reasons.add(reason)
 
     def add(identity, kind, text):
         text = text.strip()
@@ -22,12 +27,16 @@ def build_synthesis_input(task, plan):
         source = SynthesisSource(id=identity, kind=kind, text=text[:6000])
         candidate = facts.model_copy(update={"sources": [*facts.sources, source]})
         # 保留统计/白名单的编码空间；实际请求另走 Provider 窗口与 token 准入。
-        if len(candidate.sources) > 190 or len(json.dumps(candidate.model_dump(mode="json"), ensure_ascii=False)) > limit - 512:
-            facts.input_truncated = True
+        if len(candidate.sources) > 190:
+            mark_truncated("source_count_limited")
+            return False
+        if len(json.dumps(candidate.model_dump(mode="json"), ensure_ascii=False)) > limit - 512:
+            mark_truncated("input_size_limited")
             return False
         facts.sources.append(source)
         if len(text) > 6000:
-            facts.input_truncated = True
+            mark_truncated("diff_hunk_truncated" if kind in {
+                "diff_observation", "test_source_observation"} else "source_text_truncated")
         return True
 
     for finding in [*plan.inline_drafts, *plan.summary_findings]:
@@ -42,7 +51,8 @@ def build_synthesis_input(task, plan):
     if task.pr:
         author = task.pr.title + "\n" + (task.pr.body or "")
         add("pr-description:1", "author_claim", author[:4000])
-        facts.input_truncated |= len(author) > 4000
+        if len(author) > 4000:
+            mark_truncated("author_context_truncated")
     excluded = {file.path for file in plan.digest.excluded_files}
     for file in sorted(task.changed_files, key=lambda item: item.file_path):
         try:
@@ -52,11 +62,17 @@ def build_synthesis_input(task, plan):
         except ReviewPathPolicyError:
             facts.omitted_files += 1
             facts.omitted_hunks += len(file.hunks)
+            truncation_reasons.add("invalid_path_excluded")
             continue
-        if (file.file_path in excluded or file.is_binary
-                or is_sensitive_repository_change(file.file_path, file.old_file_path)):
+        if file.file_path in excluded:
             facts.omitted_files += 1
             facts.omitted_hunks += len(file.hunks)
+            truncation_reasons.add("review_scope_excluded")
+            continue
+        if (file.is_binary or is_sensitive_repository_change(file.file_path, file.old_file_path)):
+            facts.omitted_files += 1
+            facts.omitted_hunks += len(file.hunks)
+            truncation_reasons.add("sensitive_or_binary_excluded")
             continue
         test = any(part in {"test", "tests", "__tests__"} for part in file.file_path.split("/"))
         test |= any(part in file.file_path.rsplit("/", 1)[-1] for part in (".test.", ".spec.", "test_", "_test."))
@@ -70,13 +86,17 @@ def build_synthesis_input(task, plan):
             # 不保留半个 hunk 的引用；无法完整提供就省略该 hunk。
             if len(text) > 6000 or not add(identity, kind, text):
                 facts.omitted_hunks += 1
+                truncation_reasons.add("diff_hunk_omitted")
             else:
                 included = True
         if not included:
             facts.omitted_files += 1
+            if not file.hunks:
+                truncation_reasons.add("diff_metadata_only")
     understanding = plan.digest.change_understanding
     if understanding and understanding.implementation_changes:
         add("observation:implementation", "verified_observation", understanding.implementation_changes)
     facts.input_truncated |= bool(facts.omitted_files or facts.omitted_hunks)
+    facts.truncation_reasons = sorted(truncation_reasons)
     # finding_keys 自身也计入硬性长度，过大的事实包直接降级而不发送。
     return facts

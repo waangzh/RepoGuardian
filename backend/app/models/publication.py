@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from app.models.review_plan import FindingView
+from app.models.review_synthesis import SynthesisTruncationReason
 
 
 class ReviewOutcomeKind(StrEnum):
@@ -286,6 +287,16 @@ class PresentationDelivery(BaseModel):
     actual_published: int | None = Field(default=None, ge=0)
 
 
+class SummaryInputCoverage(BaseModel):
+    truncation_reasons: list[SynthesisTruncationReason] = Field(default_factory=list)
+    omitted_files: int = Field(default=0, ge=0)
+    omitted_hunks: int = Field(default=0, ge=0)
+
+    @property
+    def limits_diff_summary(self):
+        return bool({"diff_hunk_truncated", "diff_hunk_omitted"} & set(self.truncation_reasons))
+
+
 class ReviewPresentation(BaseModel):
     """只读投影；不替代 ReviewOutcome、核验记录或发布回执。"""
 
@@ -304,6 +315,14 @@ class ReviewPresentation(BaseModel):
     delivery: PresentationDelivery
     validation_state: Literal["not_executed", "passed", "failed", "independent_results", "unknown"]
     limitations: list[str] = Field(default_factory=list)
+    summary_input_coverage: SummaryInputCoverage | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_optional_input_coverage(self, handler):
+        value = handler(self)
+        if self.summary_input_coverage is None:
+            value.pop("summary_input_coverage", None)
+        return value
 
 
 class WithheldFinding(BaseModel):

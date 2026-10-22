@@ -3,11 +3,25 @@
 from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 
 class SynthesisModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+
+
+SynthesisTruncationReason = Literal[
+    "author_context_truncated",
+    "source_text_truncated",
+    "diff_hunk_truncated",
+    "diff_hunk_omitted",
+    "diff_metadata_only",
+    "source_count_limited",
+    "input_size_limited",
+    "review_scope_excluded",
+    "sensitive_or_binary_excluded",
+    "invalid_path_excluded",
+]
 
 
 class SynthesisSource(SynthesisModel):
@@ -18,7 +32,7 @@ class SynthesisSource(SynthesisModel):
 
 
 class ReviewSynthesisInput(SynthesisModel):
-    schema_version: Literal["review-synthesis-input-v1"] = "review-synthesis-input-v1"
+    schema_version: Literal["review-synthesis-input-v2"] = "review-synthesis-input-v2"
     review_id: str
     head_sha: str
     effective_base_sha: str
@@ -28,6 +42,14 @@ class ReviewSynthesisInput(SynthesisModel):
     input_truncated: bool = False
     omitted_files: int = Field(default=0, ge=0)
     omitted_hunks: int = Field(default=0, ge=0)
+    truncation_reasons: list[SynthesisTruncationReason] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def omit_empty_truncation_reasons(self, handler):
+        value = handler(self)
+        if not self.truncation_reasons:
+            value.pop("truncation_reasons", None)
+        return value
 
 
 class CitedText(SynthesisModel):
@@ -65,9 +87,9 @@ class ReviewSynthesisDraft(SynthesisModel):
 
 class ReviewSynthesisArtifact(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    schema_version: Literal["review-synthesis-artifact-v1"] = "review-synthesis-artifact-v1"
-    prompt_version: Literal["review-synthesis-prompt-v1"] = "review-synthesis-prompt-v1"
-    source_policy_version: Literal["review-synthesis-sources-v1"] = "review-synthesis-sources-v1"
+    schema_version: Literal["review-synthesis-artifact-v1", "review-synthesis-artifact-v2"] = "review-synthesis-artifact-v2"
+    prompt_version: Literal["review-synthesis-prompt-v1", "review-synthesis-prompt-v2"] = "review-synthesis-prompt-v2"
+    source_policy_version: Literal["review-synthesis-sources-v1", "review-synthesis-sources-v2"] = "review-synthesis-sources-v2"
     review_id: str
     head_sha: str
     effective_base_sha: str
@@ -77,6 +99,9 @@ class ReviewSynthesisArtifact(BaseModel):
     status: Literal["ready", "fallback", "unavailable"] = "fallback"
     synthesis: ReviewSynthesisDraft | None = None
     input_truncated: bool = False
+    truncation_reasons: list[SynthesisTruncationReason] = Field(default_factory=list)
+    omitted_files: int = Field(default=0, ge=0)
+    omitted_hunks: int = Field(default=0, ge=0)
     failure_code: str | None = None
     usage: dict | None = None
     budget: dict = Field(default_factory=dict)
@@ -87,3 +112,14 @@ class ReviewSynthesisArtifact(BaseModel):
         if (self.status == "ready") != (self.synthesis is not None):
             raise ValueError("synthesis_status_mismatch")
         return self
+
+    @model_serializer(mode="wrap")
+    def omit_empty_coverage(self, handler):
+        value = handler(self)
+        if not self.truncation_reasons:
+            value.pop("truncation_reasons", None)
+        if not self.omitted_files:
+            value.pop("omitted_files", None)
+        if not self.omitted_hunks:
+            value.pop("omitted_hunks", None)
+        return value

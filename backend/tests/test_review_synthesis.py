@@ -10,7 +10,8 @@ from pydantic import ValidationError
 from app.agents.providers import OpenAICompatibleProvider
 from app.core.config import Settings
 from app.models.review import ChangedFile, DiffHunk, DiffLine
-from app.models.review_synthesis import ReviewSynthesisDraft
+from app.models.review import PullRequestInfo, PullRequestRef
+from app.models.review_synthesis import ReviewSynthesisArtifact, ReviewSynthesisDraft
 from app.services.fingerprints import stable_hash
 from app.services.publication_planner import PublicationPlanner, summary_projection
 from app.services.review_synthesis_input import build_synthesis_input
@@ -183,9 +184,74 @@ def test_input_is_bounded_excludes_sensitive_paths_and_discloses_omissions():
     encoded = json.dumps(facts.model_dump(mode="json"), ensure_ascii=False)
     assert '"path": ".env"' not in encoded
     assert facts.input_truncated and facts.omitted_files == 1 and facts.omitted_hunks == 1
+    assert "sensitive_or_binary_excluded" in facts.truncation_reasons
     assert len(encoded) <= task.task_runtime_configuration["output_policy"]["max_input_chars"]
     assert stable_hash(facts.model_dump(mode="json")) == stable_hash(
         build_synthesis_input(task, PublicationPlanner().build(task)).model_dump(mode="json"))
+
+
+def test_truncation_reasons_separate_author_context_diff_and_policy_exclusions():
+    task = synthesis_task()
+    task.pr = PullRequestInfo(
+        owner="o", repo="r", number=1, title="Long context", body="x" * 4500,
+        html_url="https://github.com/o/r/pull/1", clone_url="https://github.com/o/r.git",
+        base=PullRequestRef(ref="main", sha="b" * 40, repo_clone_url="https://github.com/o/r.git"),
+        head=PullRequestRef(ref="feature", sha="a" * 40, repo_clone_url="https://github.com/o/r.git"))
+    task.changed_files[0].hunks[0].lines[0].content = "x" * 6200
+    task.changed_files += [task.changed_files[0].model_copy(update={"file_path": ".env"})]
+    facts = build_synthesis_input(task, PublicationPlanner().build(task))
+    assert set(facts.truncation_reasons) == {
+        "author_context_truncated", "diff_hunk_omitted", "sensitive_or_binary_excluded"}
+    assert facts.omitted_files == 2 and facts.omitted_hunks == 2
+
+
+def test_legacy_synthesis_hash_remains_bindable_with_derived_coverage():
+    task = synthesis_task()
+    task.changed_files += [task.changed_files[0].model_copy(update={"file_path": ".env"})]
+    plan = PublicationPlanner().build(task)
+    facts = build_synthesis_input(task, plan)
+    old_facts = facts.model_dump(mode="json", exclude={"truncation_reasons"})
+    old_facts["schema_version"] = "review-synthesis-input-v1"
+    artifact = ReviewSynthesisArtifact(
+        schema_version="review-synthesis-artifact-v1",
+        prompt_version="review-synthesis-prompt-v1",
+        source_policy_version="review-synthesis-sources-v1",
+        review_id=task.id, head_sha=facts.head_sha, effective_base_sha=facts.effective_base_sha,
+        fact_bundle_hash=stable_hash(old_facts), status="fallback", input_truncated=True,
+        failure_code="disabled")
+    task.review_synthesis = artifact.model_dump(mode="json")
+    bound = bound_synthesis(task, plan)
+    assert bound is not None
+    assert bound.fact_bundle_hash == artifact.fact_bundle_hash
+    assert bound.truncation_reasons == ["sensitive_or_binary_excluded"]
+    assert bound.omitted_files == 1 and bound.omitted_hunks == 1
+
+
+@pytest.mark.parametrize("field,value", [
+    ("input_truncated", True),
+    ("truncation_reasons", ["author_context_truncated"]),
+    ("omitted_files", 99),
+    ("omitted_hunks", 99),
+])
+def test_current_synthesis_rejects_modified_coverage_metadata(field, value):
+    task = synthesis_task()
+    plan = PublicationPlanner().build(task)
+    facts = build_synthesis_input(task, plan)
+    task.review_synthesis = ReviewSynthesisArtifact(
+        review_id=task.id, head_sha=facts.head_sha, effective_base_sha=facts.effective_base_sha,
+        fact_bundle_hash=stable_hash(facts.model_dump(mode="json")),
+        input_truncated=facts.input_truncated, truncation_reasons=facts.truncation_reasons,
+        omitted_files=facts.omitted_files, omitted_hunks=facts.omitted_hunks).model_dump(mode="json")
+    task.review_synthesis[field] = value
+    assert bound_synthesis(task, plan) is None
+
+
+def test_metadata_only_change_does_not_claim_input_length_was_exceeded():
+    task = synthesis_task()
+    task.changed_files[0].hunks = []
+    facts = build_synthesis_input(task, PublicationPlanner().build(task))
+    assert facts.truncation_reasons == ["diff_metadata_only"]
+    assert facts.omitted_files == 1 and facts.omitted_hunks == 0
 
 
 def test_unknown_purpose_and_duplicate_keys_are_rejected():

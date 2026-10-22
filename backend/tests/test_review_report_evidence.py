@@ -37,8 +37,9 @@ def test_user_report_explains_actual_gap_and_action_without_embedding_summary():
     assert "缺少外层 weighted\\_posterior 实现" in user
     assert "129–158" in user and "请求范围不代表已读取或已核验" in user
     assert "补读上述缺失实现" in user and "实际运行记录：completed / plan\\_exhausted" in user
-    assert "investigation_incomplete" in summary and "termination_incomplete" not in summary
-    assert "运行可靠性：可靠" in summary
+    assert "关联调查尚未完成" in summary and "termination_incomplete" not in summary
+    assert "investigation_incomplete" in user
+    assert "运行可靠性：可靠" in user
     assert "缺少外层" not in summary
     assert plan.outcome.kind == "inconclusive" and plan.outcome.incomplete_investigations == 1
 

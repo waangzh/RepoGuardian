@@ -22,9 +22,26 @@ def bound_synthesis(task, plan):
     try:
         artifact = ReviewSynthesisArtifact.model_validate(task.review_synthesis)
         facts = build_synthesis_input(task, plan)
+        facts_hash = stable_hash(facts.model_dump(mode="json"))
+        legacy_facts = facts.model_dump(mode="json", exclude={"truncation_reasons"})
+        legacy_facts["schema_version"] = "review-synthesis-input-v1"
         if (artifact.review_id != task.id or artifact.head_sha != plan.snapshot.head_sha
                 or artifact.effective_base_sha != plan.snapshot.effective_base_sha
-                or artifact.fact_bundle_hash != stable_hash(facts.model_dump(mode="json"))):
+                or (artifact.fact_bundle_hash != facts_hash and not (
+                    artifact.source_policy_version == "review-synthesis-sources-v1"
+                    and artifact.fact_bundle_hash == stable_hash(legacy_facts)))):
+            return None
+        if artifact.fact_bundle_hash != facts_hash:
+            # 兼容旧工件哈希；覆盖范围由当前同快照事实包重新派生，不改写冻结工件。
+            artifact = artifact.model_copy(update={
+                "truncation_reasons": facts.truncation_reasons,
+                "omitted_files": facts.omitted_files,
+                "omitted_hunks": facts.omitted_hunks,
+            })
+        elif (artifact.input_truncated != facts.input_truncated
+              or artifact.truncation_reasons != facts.truncation_reasons
+              or artifact.omitted_files != facts.omitted_files
+              or artifact.omitted_hunks != facts.omitted_hunks):
             return None
         if artifact.status == "ready":
             validate_review_synthesis(facts, artifact.synthesis)
@@ -46,7 +63,9 @@ async def freeze_review_synthesis(task, repository, provider, *, lease=None):
     artifact = ReviewSynthesisArtifact(review_id=task.id, head_sha=facts.head_sha,
         effective_base_sha=facts.effective_base_sha, fact_bundle_hash=stable_hash(facts.model_dump(mode="json")),
         model=(task.task_runtime_configuration or {}).get("model", task.model),
-        input_truncated=facts.input_truncated, failure_code="generation_interrupted")
+        input_truncated=facts.input_truncated, truncation_reasons=facts.truncation_reasons,
+        omitted_files=facts.omitted_files, omitted_hunks=facts.omitted_hunks,
+        failure_code="generation_interrupted")
     store = SynthesisStore(repository, task.id, lease=lease)
     budget = None
     try:
