@@ -91,11 +91,24 @@ def task_runtime_configuration(model=None, *, provider=None):
         "request_profile": profile.profile.model_dump(mode="json")}
 
 
-def plan_runtime_goals(changed, plan):
-    """初始分母来自完整规范 diff；页和派生任务不能修改它。"""
+def plan_runtime_goals(changed, plan, reused_unit_ids=()):
+    """初始分母来自完整规范 diff；页和派生任务不能修改它。
+
+    复用 Unit 的文件在当前 Diff 中没有 hunk；为其建立文件级目标并标记来源，
+    不创建新的模型工作项。
+    """
+    reused_unit_ids = set(reused_unit_ids)
     goals = []
     owned = set()
     for unit in plan.review_units:
+        if unit.id in reused_unit_ids:
+            for path in unit.primary_files:
+                owned.add(path)
+                # 标记来源后 source_catalog 不再读取原文，也不会创建模型工作项。
+                goals.append(ReviewGoal(goal_id="reused-" + stable_hash([unit.id, path])[:32],
+                    unit_id=unit.id, kind="inspect", target_ref=path, target_kind="file_change",
+                    unsupported_reason="reused_from_previous_review"))
+            continue
         for file in changed:
             if file.file_path not in unit.primary_files:
                 continue
@@ -318,11 +331,36 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
         target._profile_override = ModelRequestProfile.model_validate(configuration["request_profile"])
     changed = [ChangedFile.model_validate(value) for value in state.get("changed_files") or []]
     plan = ReviewPlan.model_validate(state["review_plan"])
-    goals = plan_runtime_goals(changed, plan)
+    from app.services.incremental_review import (
+        carry_forward_findings, reuse_results, reused_unit_snapshots, validate_binding,
+    )
+
+    binding = validate_binding(configuration, head_sha=state.get("head_sha") or "",
+                               effective_base_sha=review_diff_base(state))
+    previous = None
+    reused_results = []
+    if binding is not None:
+        repository = context.get("coordination_repository") or state.get("_coordination_repository")
+        if repository is None:
+            raise ValueError("incremental review requires persisted previous task")
+        previous = await asyncio.to_thread(repository.get_task, binding.previous_task_id)
+        reused_results = reuse_results(binding, previous)
+        reused_units = reused_unit_snapshots(configuration)
+        expected = {item.unit_id for item in binding.reused_units}
+        if {unit.id for unit in reused_units} != expected:
+            raise ValueError("incremental_reused_units_changed")
+        plan = plan.model_copy(update={"review_units": [
+            unit for unit in plan.review_units if unit.id not in expected] + reused_units})
+    goals = plan_runtime_goals(changed, plan, reused_unit_ids=[item.review_unit_id
+                                                               for item in reused_results])
     catalog = await source_catalog(goals, spec, state["repo_path"], git,
                                    changed_files=changed if expanded_scope else None)
     steps, items = {}, []
+    reused_ids = {item.review_unit_id for item in reused_results}
     for unit in plan.review_units:
+        if unit.id in reused_ids:
+            # 未变更 Unit 已由前序任务完成；不创建新的模型工作项。
+            continue
         assigned = [goal for goal in goals if goal.unit_id == unit.id and not goal.unsupported_reason]
         for start in range(0, len(assigned), 40):
             selected = assigned[start:start + 40]
@@ -434,12 +472,37 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
             termination = "technical_failure"
     else:
         termination = "plan_exhausted"
-    report = project_task_runtime(queue, steps, goals, termination_reason=termination, budget=budget)
+    report = project_task_runtime(queue, steps, goals, termination_reason=termination, budget=budget,
+                                  reused_unit_ids=[item.review_unit_id for item in reused_results])
+    findings = report.findings
+    reused_results_payload = [item.model_dump(mode="json") for item in reused_results]
+    if binding is not None and previous is not None and report.execution_status == "completed":
+        # 前序已确认问题只做当前快照证据重定位，状态为 carried_forward；
+        # 不计入本轮已核验结论，也不改变复用 Unit 的结果记录。
+        repo_path = state["repo_path"]
+        carried = await asyncio.to_thread(
+            carry_forward_findings, previous=previous, binding=binding,
+            plan_units=plan.review_units,
+            file_loader=lambda path, side: _fixed_snapshot_text(repo_path, path, side, spec, git))
+        findings = [*findings, *carried]
+        report = report.model_copy(update={"findings": findings})
+    issues = task_runtime_issues(report)
     return ReviewState(task_runtime_report=report.model_dump(mode="json"),
         task_runtime_configuration=configuration, task_runtime_retry_unit_id=None,
-        review_issues=task_runtime_issues(report), review_unit_results=[],
+        review_issues=issues, review_unit_results=reused_results_payload,
         status=("reviewing" if discussion_store is not None and report.execution_status == "completed"
                 else report.execution_status), review_coverage=task_runtime_coverage(report, changed),
         run_budget=budget.snapshot(),
         model_usages=[usage.model_dump(mode="json") for step in steps.values() for usage in step.usages],
         step_progress=append_step(state, "task_review_runtime", "completed", "新引擎运行结束：" + termination))
+
+
+def _fixed_snapshot_text(repo_path, path, side, spec, git):
+    """只读固定快照正文；任何路径越界或读取失败都返回 None。"""
+    try:
+        validate_repository_file(repo_path, path) if side == "head" else validate_repository_base_file(
+            repo_path, path, base_sha=spec.snapshot_base_sha, tree_entries=git.get_tree_entries)
+        revision = spec.snapshot_base_sha if side == "base" else spec.snapshot_head_sha
+        return git.get_file_content_at_revision(repo_path, revision, path)
+    except Exception:
+        return None

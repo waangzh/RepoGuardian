@@ -357,6 +357,43 @@ class GitTool:
         bases = self.merge_bases(repo_path, base_sha, head_sha)
         return bases[0] if len(bases) == 1 else None
 
+    def is_ancestor(self, repo_path: str | Path, ancestor_sha: str, descendant_sha: str) -> bool:
+        """只读判断提交祖先关系；force push 或改写历史时返回 False。"""
+        _normalized_commit_sha(ancestor_sha, "ancestor")
+        _normalized_commit_sha(descendant_sha, "descendant")
+        repo_dir = self._validate_worktree(repo_path)
+        completed = subprocess.run(
+            [self._git, "-C", str(repo_dir), "merge-base", "--is-ancestor",
+             ancestor_sha, descendant_sha],
+            check=False,
+            capture_output=True,
+            timeout=self._command_timeout_seconds if self._command_timeout_seconds > 0 else None,
+            env=git_safety_environment(),
+        )
+        # 0 表示祖先；1 表示不是祖先；其他退出码是命令失败，不能降级成“不可复用”。
+        if completed.returncode == 0:
+            return True
+        if completed.returncode == 1:
+            return False
+        raise GitToolError(
+            f"Git merge-base --is-ancestor 执行失败（exit {completed.returncode}）"
+        )
+
+    def changed_paths(
+        self, repo_path: str | Path, base_sha: str, head_sha: str
+    ) -> list[str]:
+        """两个固定提交之间发生变化的路径；不含正文，不访问工作树。
+
+        使用 ``--no-renames``：重命名按“删除旧路径 + 新增新路径”计，避免
+        旧路径上的结论被误认为仍适用于新路径。
+        """
+        repo_dir = self._validate_worktree(repo_path)
+        raw = self._run(
+            [self._git, "-C", str(repo_dir), "diff", "--no-ext-diff", "--no-renames",
+             "--name-only", "-z", base_sha, head_sha]
+        )
+        return sorted({path for path in raw.split("\0") if path})
+
     def review_diff_context(
         self, repo_path: str | Path, base_sha: str | None = None, head_sha: str | None = None
     ) -> dict[str, str]:

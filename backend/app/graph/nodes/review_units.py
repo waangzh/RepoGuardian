@@ -32,11 +32,24 @@ async def review_plan_node(state: ReviewState) -> ReviewState:
         plan = apply_scope(plan, options)
         if configuration.get("initial_plan_hash") != stable_hash(plan.model_dump(mode="json")):
             raise ValueError("review_plan_stale: deterministic plan changed")
+    warnings = list(state.get("warnings") or [])
+    from app.services.incremental_review import (
+        merge_incremental_plan, reused_unit_snapshots, validate_binding,
+    )
+
+    binding = validate_binding(configuration, head_sha=state.get("head_sha") or "",
+                               effective_base_sha=review_diff_base(state))
+    if binding is not None:
+        reused = reused_unit_snapshots(configuration)
+        if {unit.id for unit in reused} != {item.unit_id for item in binding.reused_units}:
+            raise ValueError("incremental_reused_units_changed")
+        plan = merge_incremental_plan(plan, reused, binding.warnings)
+        warnings.extend(binding.warnings)
     return ReviewState(
         review_plan=plan.model_dump(mode="json"),
         review_units=[unit.model_dump(mode="json") for unit in plan.review_units],
         excluded_files=[item.model_dump(mode="json") for item in plan.excluded_files],
-        warnings=list(state.get("warnings") or []) + plan.warnings,
+        warnings=warnings + plan.warnings,
         step_progress=append_step(
             state,
             "review_plan",

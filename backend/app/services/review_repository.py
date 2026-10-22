@@ -18,6 +18,7 @@ from app.core.database import schema_is_current, sync_session
 from app.models.orm import (
     ArtifactOrm,
     HumanRequestOrm,
+    IncrementalWebhookDeliveryOrm,
     PatchIssueLinkOrm,
     PatchOrm,
     ReviewIssueOrm,
@@ -243,6 +244,73 @@ class ReviewRepository:
                 return None
             snapshot = self._load_task_snapshot(row)
             return ReviewTask.model_validate(snapshot)
+
+    def latest_task_for_pr(self, pr_url: str) -> ReviewTask | None:
+        """同一 PR 最近一条未删除任务；增量审查的候选前序任务。"""
+        with self._session_factory() as session:
+            row = session.scalar(
+                select(ReviewTaskOrm)
+                .where(ReviewTaskOrm.pr_url == pr_url, ReviewTaskOrm.deleted_at.is_(None))
+                .order_by(ReviewTaskOrm.created_at.desc())
+                .limit(1)
+            )
+            if row is None:
+                return None
+            return ReviewTask.model_validate(self._load_task_snapshot(row))
+
+    def claim_webhook_delivery(self, *, delivery_id: str, repository: str, pr_number: int,
+                               head_sha: str) -> bool:
+        """原子占用投递 ID；重复投递返回 False，由调用方重放已保存结果。"""
+        now = utcnow()
+        try:
+            with self._session_factory.begin() as session:
+                session.add(IncrementalWebhookDeliveryOrm(
+                    delivery_id=delivery_id, repository=repository, pr_number=pr_number,
+                    head_sha=head_sha, status="accepted", created_at=now, updated_at=now))
+            return True
+        except IntegrityError:
+            return False
+
+    def finish_webhook_delivery(self, delivery_id: str, *, status: str,
+                                task_id: str | None = None, reason: str | None = None) -> None:
+        with self._session_factory.begin() as session:
+            row = session.get(IncrementalWebhookDeliveryOrm, delivery_id)
+            if row is None:
+                return
+            row.status = status
+            row.task_id = task_id
+            row.reason = reason
+            row.updated_at = utcnow()
+
+    def get_webhook_delivery(self, delivery_id: str) -> dict | None:
+        with self._session_factory() as session:
+            row = session.get(IncrementalWebhookDeliveryOrm, delivery_id)
+            if row is None:
+                return None
+            return {"delivery_id": row.delivery_id, "repository": row.repository,
+                    "pr_number": row.pr_number, "head_sha": row.head_sha,
+                    "status": row.status, "task_id": row.task_id, "reason": row.reason}
+
+    def latest_completed_task_for_pr(self, pr_url: str, *, head_sha: str | None = None) -> ReviewTask | None:
+        """同一 PR 最近一条可用于增量审查的终态任务。"""
+        with self._session_factory() as session:
+            filters = [
+                ReviewTaskOrm.pr_url == pr_url,
+                ReviewTaskOrm.deleted_at.is_(None),
+                ReviewTaskOrm.status.in_([TaskStatus.completed.value,
+                                          TaskStatus.completed_with_warnings.value]),
+            ]
+            if head_sha:
+                filters.append(ReviewTaskOrm.head_sha == head_sha)
+            row = session.scalar(
+                select(ReviewTaskOrm)
+                .where(*filters)
+                .order_by(ReviewTaskOrm.created_at.desc())
+                .limit(1)
+            )
+            if row is None:
+                return None
+            return ReviewTask.model_validate(self._load_task_snapshot(row))
 
     def list_tasks(
         self, *, status: str | None = None, page: int = 1, page_size: int = 20,
