@@ -242,6 +242,34 @@ def _call_refs(node: Any, source: bytes, parser_id: str, node_type: str) -> list
     return sorted(calls.values(), key=lambda item: (item.line or 0, item.callee))
 
 
+_DOCSTRING_NODE_TYPES = {
+    "string", "string_literal", "raw_string_literal", "interpreted_string_literal",
+    "template_string", "concatenated_string",
+}
+_MAX_DOCSTRING_CHARS = 600
+
+
+def _docstring(node: Any, source: bytes) -> str | None:
+    """取首个字符串语句作为 docstring；不执行、不解析目标代码。"""
+    body = node.child_by_field_name("body")
+    if body is None:
+        return None
+    for child in body.children:
+        if child.type in {"comment", "line_comment", "block_comment"}:
+            continue
+        statement = child.children[0] if child.type == "expression_statement" and child.children else child
+        if statement.type not in _DOCSTRING_NODE_TYPES:
+            return None
+        text = _text(statement, source).strip()
+        for quote in ('"""', "'''", '"', "'", "`"):
+            if len(text) >= 2 * len(quote) and text.startswith(quote) and text.endswith(quote):
+                text = text[len(quote):-len(quote)]
+                break
+        text = " ".join(text.split())
+        return text[:_MAX_DOCSTRING_CHARS] or None
+    return None
+
+
 def _python_symbols(root: Any, source: bytes, relative_path: str, parser_id: str) -> list[SymbolRef]:
     symbols: list[SymbolRef] = []
     for node in _walk(root):
@@ -266,6 +294,7 @@ def _python_symbols(root: Any, source: bytes, relative_path: str, parser_id: str
             start_line=node.start_point[0] + 1,
             end_line=node.end_point[0] + 1,
             signature=signature,
+            docstring=_docstring(node, source),
             calls=calls,
             confidence=0.98,
             parser_id=parser_id,
@@ -287,6 +316,7 @@ def _python_symbols(root: Any, source: bytes, relative_path: str, parser_id: str
                     start_line=child.start_point[0] + 1,
                     end_line=child.end_point[0] + 1,
                     signature=f"def {method_name}{_text(method_params, source) if method_params else ''}",
+                    docstring=_docstring(child, source),
                     calls=_call_refs(child, source, parser_id, "call"),
                     confidence=0.98,
                     parser_id=parser_id,
@@ -333,6 +363,7 @@ def _ecmascript_symbols(root: Any, source: bytes, relative_path: str, parser_id:
             start_line=node.start_point[0] + 1,
             end_line=node.end_point[0] + 1,
             signature=signature,
+            docstring=_docstring(call_root, source),
             calls=_call_refs(call_root, source, parser_id, "call_expression"),
             confidence=0.96,
             parser_id=parser_id,
