@@ -161,7 +161,8 @@ class InspectTaskStep:
             request = self.protocol.prepare(pending_item, current_goals,
                 active_evidence_ids=executor.active_evidence_ids,
                 evidence_catalog=executor.evidence_catalog,
-                related_goals=[executor.goals[identity] for identity in related_ids])
+                related_goals=[executor.goals[identity] for identity in related_ids],
+                symbol_index=self.symbol_index, repository_graph=self.repository_graph)
             executor.visible_discussions = getattr(self.protocol, "visible_discussions", [])
             if self.tool_observations:
                 if executor.spec.discussion_manifest_hash:
@@ -179,7 +180,7 @@ class InspectTaskStep:
                     "correction": self.repair_errors,
                     "instruction": "Only resubmit rejected items; accepted results are stored by server.",
                 }
-                if executor.spec.prompt_version in {"task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7"}:
+                if executor.spec.prompt_version in {"task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7", "task-review-prompt-v8"}:
                     feedback.update(rejected_items=self.rejected_items,
                         accepted_target_ids=sorted(executor.projection.accepted_target_ids))
                 if any(error["reason"] == "incomplete_goal_evidence" for error in self.repair_errors):

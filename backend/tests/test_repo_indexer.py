@@ -57,6 +57,11 @@ async def test_build_symbol_index(tmp_path):
     assert "hello" in names
     assert "Greeter" in names
     assert "Greeter.greet" in names
+    # 定义预注入依赖签名与 docstring；缺失时只能退化为纯名称提示。
+    indexed = {s["symbol"]: s for s in symbols}
+    assert indexed["hello"]["signature"] == "def hello(name: str)"
+    assert indexed["hello"]["docstring"] == "Say hello."
+    assert indexed["Greeter.greet"]["signature"] == "def greet(self, name: str)"
 
 
 @pytest.mark.asyncio
@@ -117,6 +122,7 @@ async def test_symbol_index_extracts_typescript_declarations(tmp_path):
     assert ("DEFAULT_LIMIT", "constant") in indexed
     load_user = next(item for item in symbols if item["symbol"] == "loadUser")
     assert "fetchUser" in load_user["calls"]
+    assert load_user["docstring"] is None  # 无文档声明时不得编造说明文本。
     assert load_user["parser_id"].startswith("tree-sitter.typescript")
     assert load_user["confidence"] >= 0.9
     assert load_user["call_refs"][0]["simple_name"] == "fetchUser"
@@ -164,6 +170,22 @@ async def test_javascript_and_tsx_use_their_tree_sitter_grammars(tmp_path):
     assert files["view.tsx"]["parser_id"] == "tree-sitter.typescript.v1"
     assert symbols["render"]["calls"] == ["createElement"]
     assert symbols["View"]["parser_id"] == "tree-sitter.typescript.v1"
+
+
+@pytest.mark.asyncio
+async def test_go_symbol_index_carries_leading_comment_as_docstring(tmp_path):
+    (tmp_path / "main.go").write_text(
+        "package main\n"
+        "\n"
+        "// LoadUser reads a user by id.\n"
+        "func LoadUser(id string) error {\n"
+        "\treturn nil\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    symbols = {item["symbol"]: item for item in await RepoIndexer().build_symbol_index(str(tmp_path))}
+    assert symbols["LoadUser"]["docstring"] == "LoadUser reads a user by id."
 
 
 @pytest.mark.asyncio
