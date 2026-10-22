@@ -1,4 +1,5 @@
 import type { PublicationFinding, PublicationPlan, ReviewOutcome } from '../types/publication';
+import type { IncrementalPreview } from '../types/review';
 import type { FindingView } from '../types/reviewPlan';
 
 export function publicationFindingTitle(finding: PublicationFinding): string {
@@ -19,6 +20,13 @@ export const reviewStatusLabel = (value: FindingView['review_status']): string =
   confirmed: '代码问题已确认，但暂不能生成可发布评论', candidate: '候选', unresolved: '尚未确认',
   dismissed: '已排除', unknown: '未知',
 })[value] || '未知';
+
+/** 增量审查复用来源的展示文案；缺失时不展示。 */
+export function incrementalReviewLabel(value?: IncrementalPreview | null): string {
+  if (!value || value.status !== 'applied') return '';
+  return `增量审查：复用 ${value.reused_unit_count} 个未变更 Unit（${value.reused_file_count} 个文件），`
+    + `重新检查 ${value.delta_file_count} 个变化文件；前序问题需在当前快照重新核验。`;
+}
 
 export const dispositionLabel = (value: string): string => ({
   open: '重新打开', confirmed: '人工确认', ignored: '已忽略', resolved: '已处理',

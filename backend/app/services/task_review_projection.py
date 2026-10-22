@@ -79,11 +79,19 @@ def runtime_failure_summary(diagnostics, *, termination_reason=None):
     return "审查遇到技术故障（technical_failure）；未记录可分类的失败原因"
 
 
-def project_task_runtime(runtime, steps, goals, *, termination_reason, budget=None):
+def project_task_runtime(runtime, steps, goals, *, termination_reason, budget=None,
+                         reused_unit_ids=()):
+    reused_unit_ids = set(reused_unit_ids)
     outcomes = []
     for goal in goals:
         result = next((step.executor.projection.examinations.get(goal.goal_id)
                        for step in steps.values() if goal.goal_id in step.executor.projection.examinations), None)
+        if goal.unit_id in reused_unit_ids:
+            # 复用 Unit 的完整结论来自前序任务；目标视为已检查，来源记录在 Unit 结果。
+            outcomes.append({**goal.model_dump(mode="json"), "status": "examined",
+                             "reason": "reused_from_previous_review",
+                             "result_id": None, "reused": True})
+            continue
         status = "unsupported" if goal.unsupported_reason else result.disposition.value if result else "not_examined"
         outcomes.append({**goal.model_dump(mode="json"), "status": status,
                          "reason": goal.unsupported_reason or (result.reason if result else "no_accepted_examination"),
@@ -316,7 +324,9 @@ def task_runtime_summary(report: TaskRuntimeReport | dict) -> dict:
         "findings": {
             "total": len(findings),
             "active": sum(status != "dismissed" for status in finding_statuses),
-            "unknown": sum(status not in {"confirmed", "published", "candidate", "unresolved", "dismissed"} for status in finding_statuses),
+            "unknown": sum(status not in {
+                "confirmed", "published", "candidate", "unresolved", "dismissed"}
+                for status in finding_statuses),
             "confirmed": sum(status in {"confirmed", "published"} for status in finding_statuses),
             "dismissed": finding_statuses.count("dismissed"),
             "unresolved": sum(status in {"candidate", "unresolved"} for status in finding_statuses),

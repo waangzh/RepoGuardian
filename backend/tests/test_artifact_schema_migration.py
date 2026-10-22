@@ -22,7 +22,7 @@ from test_runtime_integrity_errors import runtime_payload
 
 @pytest.mark.parametrize("revision,expected", [(None, False), ("20260804_0002", False),
                                               ("20261016_0003", False), ("20261016_0004", False),
-                                              ("20261016_0005", False), ("20261017_0006", True)])
+                                              ("20261016_0005", False), ("20261017_0006", False), ("20261018_0007", True)])
 def test_schema_gate_requires_artifact_migration(tmp_path, monkeypatch, revision, expected):
     engine = create_engine(f"sqlite:///{(tmp_path / 'gate.db').as_posix()}")
     with engine.begin() as connection:
