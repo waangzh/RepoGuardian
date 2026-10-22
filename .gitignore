@@ -24,3 +24,6 @@ docs/
 /.codex/
 .pytest-*/
 .vite/
+/STATUS-LANGUAGE.md
+/pyrightconfig.json
+/PR_REVIEW_DELIVERY.md
