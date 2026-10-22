@@ -15,10 +15,11 @@ import StatusBadge from "../common/StatusBadge.vue";
 import AppSelect from "../common/AppSelect.vue";
 import { usePreferences } from "../../composables/usePreferences";
 import ReviewDepthSelector from "../review/ReviewDepthSelector.vue";
+import ReviewDepthLimitEditor from "../review/ReviewDepthLimitEditor.vue";
 import type { ReviewCapabilities } from "../../types/reviewPlan";
 const props = defineProps<{ capabilities: ReviewCapabilities | null }>();
 const emit = defineEmits<{ "settings-saved": [] }>();
-const { theme, density, defaultReviewDepth, defaultPrDiscussions } = usePreferences();
+const { theme, density, defaultReviewDepth, defaultPrDiscussions, reviewDepthPresets } = usePreferences();
 const discussionsEnabled = computed(() => defaultPrDiscussions.value === "enabled"
   && props.capabilities?.pr_discussions_available === true);
 const discussionSelectValue = computed(() => discussionsEnabled.value ? "enabled" : "disabled");
@@ -180,7 +181,14 @@ onMounted(load);
             <span v-else class="rg-preference-value">等待加载深度选项</span>
           </span>
         </summary>
-        <ReviewDepthSelector v-if="capabilities" v-model="defaultReviewDepth" class="space-top" :presets="capabilities.depth_presets" label="默认审查深度" />
+        <template v-if="capabilities">
+          <p class="field-hint">点击卡片选择默认深度；每档可分别配置资源上限，编辑后点击“保存此档”。主动切换单次方案深度时也会带入对应配置。</p>
+          <ReviewDepthSelector v-model="defaultReviewDepth" class="space-top" :presets="reviewDepthPresets(capabilities)" label="默认审查深度">
+            <template #configuration="{ preset }">
+              <ReviewDepthLimitEditor :depth="preset.id" :capabilities="capabilities" />
+            </template>
+          </ReviewDepthSelector>
+        </template>
         <p v-else>深度能力尚未加载，请刷新页面重试。</p>
       </details>
       <div class="rg-preference-row rg-discussion-preference">
