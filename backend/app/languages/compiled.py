@@ -107,6 +107,28 @@ def _calls(body: Any, source: bytes, parser_id: str, start: int) -> list[CallRef
     return sorted(calls, key=lambda call: (call.line or 0, call.callee))
 
 
+_DOCSTRING_COMMENT_TYPES = {"comment", "block_comment", "line_comment", "documentation_comment"}
+
+
+def _docstring(node: Any, source: bytes) -> str | None:
+    """紧邻声明上方且行号连续的注释块作为文档；行尾注释不归给下一个声明。"""
+    previous = node.prev_sibling
+    expected_line = node.start_point.row
+    parts: list[str] = []
+    while (previous is not None and previous.type in _DOCSTRING_COMMENT_TYPES
+           and previous.end_point.row == expected_line - 1):
+        parts.append(_text(previous, source))
+        expected_line = previous.start_point.row
+        previous = previous.prev_sibling
+    if not parts:
+        return None
+    text = " ".join(reversed(parts))
+    for prefix in ("/**", "/*", "///", "//!", "//", "#", "*"):
+        text = text.replace(prefix, " ")
+    text = " ".join(text.replace("*/", " ").split())
+    return text[:600] or None
+
+
 def _signature(node: Any, source: bytes, body: Any = None) -> str:
     end = body.start_byte if body is not None else node.end_byte
     return source[node.start_byte:end].decode("utf-8").strip().rstrip(";").rstrip()
@@ -121,6 +143,7 @@ def _symbol(node: Any, source: bytes, path: str, parser_id: str, name: str,
         symbol_id=f"{path}::{qualified}@{node.start_byte}", start_line=start,
         end_line=max(start, node.end_point.row + (1 if node.end_point.column else 0)),
         signature=signature if signature is not None else _signature(node, source, body),
+        docstring=_docstring(node, source),
         calls=_calls(body, source, parser_id, start) if node.type in _CALLABLES else [],
         confidence=0.98, parser_id=parser_id, container=container, exported=exported)
 

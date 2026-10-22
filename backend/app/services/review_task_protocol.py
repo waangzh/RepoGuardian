@@ -77,7 +77,9 @@ class TaskReviewV1Protocol:
 
     def prepare(self, work_item: ReviewWorkItem, goals: list[ReviewGoal],
                 *, active_evidence_ids: set[str], evidence_catalog: dict[str, dict],
-                related_goals: list[ReviewGoal] | None = None) -> PreparedModelRequest:
+                related_goals: list[ReviewGoal] | None = None,
+                symbol_index: list[dict] | None = None,
+                repository_graph: dict | None = None) -> PreparedModelRequest:
         goal_map = {goal.goal_id: goal for goal in goals}
         selected = [goal_map[identity].model_dump(mode="json") for identity in work_item.goal_ids
                     if identity in goal_map]
@@ -136,6 +138,19 @@ class TaskReviewV1Protocol:
             definitions = payload["response"]["one_of"][1].get("$defs", {})
             if "IntentAssessment" in definitions:
                 definitions["IntentAssessment"]["properties"].pop("author_goal_summary", None)
+        if self.spec.prompt_version == "task-review-prompt-v8" and selected:
+            from app.services.review_symbol_context import build_definition_hints
+            hints = build_definition_hints(goals=goals, active_evidence_ids=active_evidence_ids,
+                catalog=evidence_catalog, symbol_index=symbol_index or [],
+                repository_graph=repository_graph or {}, readable_files=checker.readable_files)
+            if hints:
+                # 只来自既有符号索引：不是可引用证据，也不授予额外读取权限。
+                payload["definition_hints"] = hints
+                payload["definition_hints_source"] = "static_symbol_index"
+                payload["definition_hints_trust"] = (
+                    "Retrieval hints only: signatures come from the frozen symbol index and are NOT "
+                    "citable evidence. Read the actual source with file_read before relying on any "
+                    "implementation detail; line numbers may differ from the current snapshot.")
         if self.spec.review_strategy:
             payload["review_strategy"] = self.spec.review_strategy
             payload["review_instructions"] = {
@@ -173,9 +188,9 @@ class TaskReviewV1Protocol:
             "Look for concrete regressions in correctness, security and performance with a triggering scenario. "
             "canonical_changes contains fixed diff context, not valid source evidence IDs. "
             "Only mark examined after checking the entire requested range; otherwise report blocked.")
-        if self.spec.prompt_version in {"task-review-prompt-v2", "task-review-prompt-v3", "task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7"}:
+        if self.spec.prompt_version in {"task-review-prompt-v2", "task-review-prompt-v3", "task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7", "task-review-prompt-v8"}:
             payload.pop("submit_example")
-            if self.spec.prompt_version in {"task-review-prompt-v3", "task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7"} and selected and work_item.kind.value == "inspect":
+            if self.spec.prompt_version in {"task-review-prompt-v3", "task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7", "task-review-prompt-v8"} and selected and work_item.kind.value == "inspect":
                 payload["submit_shape_example"] = {"kind": "submit", "examinations": [{
                     "target_id": selected[0]["goal_id"], "disposition": "blocked",
                     "evidence_ids": [], "reason": "<state the actual evidence gap; replace this example>"}],
@@ -186,7 +201,7 @@ class TaskReviewV1Protocol:
                     "leads": []}
             payload["prompt_version"] = self.spec.prompt_version
             payload["response"] = self.compact_schema(payload["response"])
-            if self.spec.prompt_version in {"task-review-prompt-v3", "task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7"}:
+            if self.spec.prompt_version in {"task-review-prompt-v3", "task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7", "task-review-prompt-v8"}:
                 for schema in payload["response"]["one_of"]:
                     schema["required"] = list(dict.fromkeys([*schema.get("required", []), "kind"]))
                     definitions = schema.get("$defs", {})
@@ -194,7 +209,7 @@ class TaskReviewV1Protocol:
                         if name in definitions:
                             definitions[name]["properties"][field]["enum"] = [goal.goal_id for goal in
                                 [*goals, *(related_goals or [])]]
-                    if self.spec.prompt_version in {"task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7"}:
+                    if self.spec.prompt_version in {"task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7", "task-review-prompt-v8"}:
                         for name in ("ExaminationSubmission", "CandidateSubmission", "InvestigationSubmission", "VerificationSubmission", "PublicationVerificationSubmission"):
                             if name in definitions:
                                 definitions[name]["required"] = list(dict.fromkeys([
@@ -243,13 +258,15 @@ class TaskReviewV1Protocol:
                 "Return one direct JSON object matching either read or submit schema, without transport fields or wrappers. "
                 "Never emit type=json_object or response_format. Do not change task identity, snapshot or goals. "
                 "Use actual goal/evidence IDs; diff context is not a source evidence anchor. "
+                "definition_hints, when present, are index-derived retrieval hints, not evidence: use them to "
+                "decide what to read, and never cite them or assume implementation details from them. "
                 "All explanatory fields must use Simplified Chinese; quote code verbatim.")
-            if self.spec.prompt_version in {"task-review-prompt-v3", "task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7"}:
+            if self.spec.prompt_version in {"task-review-prompt-v3", "task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7", "task-review-prompt-v8"}:
                 system += (" The top-level discriminator is exactly kind, never type: use {\"kind\":\"read\",...} "
                     "or {\"kind\":\"submit\",...}. primary_anchor and target_id must equal an actual goal_id, "
                     "never a path, line number or code fragment. Examples describe JSON structure only; "
                     "replace explanatory placeholders and omit absent candidates.")
-            if self.spec.prompt_version in {"task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7"}:
+            if self.spec.prompt_version in {"task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7", "task-review-prompt-v8"}:
                 system += " Do not emit fields outside the schema; omit optional fields instead of sending null values."
                 for schema in payload["response"]["one_of"]:
                     definition = schema.get("$defs", {}).get("ExaminationSubmission")
@@ -317,7 +334,7 @@ class TaskReviewV1Protocol:
                     "actual_behavior and limitations. supported/contradicted require evidence_ids covering the examination; "
                     "unknown paths are insufficient, unrelated targets not_applicable. Local observations never prove overall "
                     "fulfillment; defects still need independent candidate verification.")
-        if self.spec.prompt_version in {"task-review-prompt-v6", "task-review-prompt-v7"} and work_item.kind.value == "investigate":
+        if self.spec.prompt_version in {"task-review-prompt-v6", "task-review-prompt-v7", "task-review-prompt-v8"} and work_item.kind.value == "investigate":
             # 目录元数据仅用于发现补读范围，不把归档正文隐式变成可引用的活动证据。
             ranges = sorted({(value["file_path"], value["start_line"], value["end_line"])
                 for identity, value in evidence_catalog.items()
@@ -334,8 +351,9 @@ class TaskReviewV1Protocol:
                 instruction="For supported/refuted, cite all required IDs and enough visible source chunks to cover "
                     "every requested range and every material premise. If a needed implementation, caller or return-value "
                     "consumer is missing, first request it with kind=read using the existing readonly tools. "
-                    "available_source_ranges are discovery hints, NOT visible source or citable evidence; use file_read "
-                    "to obtain their text. Use symbol_info/code_search/file_find for other missing code within readable_scope. "
+                    "available_source_ranges and definition_hints are discovery hints, NOT visible source or citable "
+                    "evidence; use file_read to obtain their text. Use code_search/file_find for other missing code "
+                    "within readable_scope. "
                     "For outer(inner(...)), distinguish the inner return value from the outer result consumed by the caller; "
                     "read the outer implementation when its behavior is necessary. Do not infer the whole chain from "
                     "the inner signature alone. After a rejected/unavailable read, or if the gap or citation-capacity "

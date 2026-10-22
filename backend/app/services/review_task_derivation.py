@@ -124,7 +124,7 @@ class TaskReviewDerivation:
         goals = {**self.initial_goals, **derived_goals}
         catalog = deepcopy(self._all_evidence())
         active = {identity for identity, value in catalog.items() if value["file_path"] in item.scope_files}
-        if item.kind.value == "verify" and root.executor.spec.prompt_version in {"task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7"}:
+        if item.kind.value == "verify" and root.executor.spec.prompt_version in {"task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7", "task-review-prompt-v8"}:
             active = {*item.required_evidence_ids, *item.counter_evidence_ids}
         if item.kind.value == "investigate" and self.risk_planner_version in {"risk-planner-v2", "risk-planner-v3", "risk-planner-v4", "risk-planner-v5", "risk-planner-v6"}:
             active = set(item.required_evidence_ids)

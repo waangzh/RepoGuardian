@@ -102,7 +102,7 @@ class TaskRuntimeCheckpoint:
             "verification": projection.verification.model_dump(mode="json") if projection.verification else None,
             "invalidated_results": projection.invalidated_results,
         }
-        if executor.spec.prompt_version in {"task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7"}:
+        if executor.spec.prompt_version in {"task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7", "task-review-prompt-v8"}:
             session["rejected_items"] = step.rejected_items
         if executor.spec.discussion_manifest_hash:
             # 重放 _apply_verification 时必须以首次请求相同的可见讨论集合校验。
