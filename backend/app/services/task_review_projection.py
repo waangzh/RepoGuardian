@@ -79,11 +79,17 @@ def runtime_failure_summary(diagnostics, *, termination_reason=None):
     return "审查遇到技术故障（technical_failure）；未记录可分类的失败原因"
 
 
-def project_task_runtime(runtime, steps, goals, *, termination_reason, budget=None):
+def project_task_runtime(runtime, steps, goals, *, termination_reason, budget=None,
+                         reused_coverage=None):
+    reused_coverage = reused_coverage or {}
     outcomes = []
     for goal in goals:
         result = next((step.executor.projection.examinations.get(goal.goal_id)
                        for step in steps.values() if goal.goal_id in step.executor.projection.examinations), None)
+        if goal.goal_id in reused_coverage:
+            outcomes.append({**reused_coverage[goal.goal_id], **goal.model_dump(mode="json"),
+                             "reason": "reused_from_previous_review"})
+            continue
         status = "unsupported" if goal.unsupported_reason else result.disposition.value if result else "not_examined"
         outcomes.append({**goal.model_dump(mode="json"), "status": status,
                          "reason": goal.unsupported_reason or (result.reason if result else "no_accepted_examination"),
@@ -316,7 +322,9 @@ def task_runtime_summary(report: TaskRuntimeReport | dict) -> dict:
         "findings": {
             "total": len(findings),
             "active": sum(status != "dismissed" for status in finding_statuses),
-            "unknown": sum(status not in {"confirmed", "published", "candidate", "unresolved", "dismissed"} for status in finding_statuses),
+            "unknown": sum(status not in {
+                "confirmed", "published", "candidate", "unresolved", "dismissed"}
+                for status in finding_statuses),
             "confirmed": sum(status in {"confirmed", "published"} for status in finding_statuses),
             "dismissed": finding_statuses.count("dismissed"),
             "unresolved": sum(status in {"candidate", "unresolved"} for status in finding_statuses),

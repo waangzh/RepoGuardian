@@ -25,6 +25,7 @@ import { usePublicationPlan } from "../../composables/usePublicationPlan";
 import { runtimeReport, runtimeLabel, taskRuntimeSummary, runtimeFindingRows, filterRuntimeFindings, type RuntimeFindingFilter } from "../../utils/taskRuntimePresentation";
 import UnitReviewRecord from "./UnitReviewRecord.vue";
 import { coverageCompletionLabel, crossUnitPresentation, evidenceSnapshotBase, originalIssueUnit, unitCoverageWarning, unitFindingLabel } from "../../utils/reviewObservability";
+import { incrementalReviewLabel } from "../../utils/reportPresentation";
 
 type ReviewTab = "overview" | "review" | "checks" | "files" | "report" | "activity";
 type SeverityFilter = "all" | ReviewIssue["severity"];
@@ -99,6 +100,7 @@ const coverage = computed(() => props.task.coverage || {
 });
 const fileCoveragePercent = computed(() => Math.round(coverage.value.coverage_rate * 1000) / 10);
 const unitCoveragePercent = computed(() => Math.round(coverage.value.unit_coverage_rate * 1000) / 10);
+const incrementalLabel = computed(() => incrementalReviewLabel(props.task.run_manifest?.incremental));
 const taskRuntimeReport = computed(() => runtimeReport(props.task));
 const isTaskRuntime = computed(() => props.task.engine === "task_review_v1");
 const runtimeSummary = computed(() => taskRuntimeReport.value ? taskRuntimeSummary(taskRuntimeReport.value) : null);
@@ -662,6 +664,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
           <div v-for="operation in task.model_usage_summary.by_operation" :key="operation.key" class="operation-row"><code>{{ operation.key }}</code><i><b :style="{ width: `${operation.stats.calls / maxOperationCalls * 100}%` }" /></i><span>{{ operation.stats.calls }} 次 · {{ formatTokens(operation.stats.actual_total_tokens || operation.stats.accounted_tokens_estimate) }}</span></div>
           <h3>覆盖清单</h3>
           <dl class="manifest-coverage"><div><dt>文件覆盖率</dt><dd>{{ coverage.reviewed_files }}/{{ coverage.eligible_files }} · {{ fileCoveragePercent }}%</dd></div><div><dt>变更组覆盖率</dt><dd>{{ coverage.completed_units }}/{{ coverage.total_units }} · {{ unitCoveragePercent }}%</dd></div><div><dt>警告</dt><dd>{{ task.warnings.length }}</dd></div></dl>
+          <p v-if="incrementalLabel" class="manifest-warning"><AppIcon name="history" :size="14" />{{ incrementalLabel }}</p>
           <p v-for="warning in task.warnings" :key="warning" class="manifest-warning"><AppIcon name="alert" :size="14" />{{ warning }}</p>
         </aside>
       </div>

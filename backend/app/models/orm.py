@@ -355,6 +355,22 @@ class WorkerJobOrm(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class IncrementalWebhookDeliveryOrm(Base):
+    """pull_request synchronize 投递幂等记录；同一 delivery 只创建一次任务。"""
+    __tablename__ = "incremental_webhook_deliveries"
+    __table_args__ = (Index("ix_incremental_webhook_status", "status"),)
+
+    delivery_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    repository: Mapped[str] = mapped_column(String(512), nullable=False)
+    pr_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    head_sha: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    task_id: Mapped[str | None] = mapped_column(String(32))
+    reason: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class SideEffectOrm(Base):
     __tablename__ = "side_effects"
 

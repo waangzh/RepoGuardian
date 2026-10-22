@@ -134,14 +134,16 @@ class ReviewService:
                     dispatch=True) -> ReviewTask:
         """创建审查任务并异步启动图执行。"""
         from app.graph.nodes.task_review_runtime import task_runtime_configuration
+        frozen_configuration = (configuration or task_runtime_configuration(request.model)
+                                if request.engine == "task_review_v1" else None)
         task = ReviewTask(
             id=uuid4().hex,
             status=TaskStatus.queued,
             pr_url=str(request.pr_url),
             model=request.model,
             engine=request.engine,
-            task_runtime_configuration=(configuration or task_runtime_configuration(request.model)
-                                        if request.engine == "task_review_v1" else None),
+            task_runtime_configuration=frozen_configuration,
+            incremental=(frozen_configuration or {}).get("incremental"),
             mode=request.mode,
             generate_patches=request.generate_patches,
             validation_backend=request.validation_backend,
@@ -440,6 +442,35 @@ class ReviewService:
             await asyncio.to_thread(progress, "planning", "正在生成审查方案")
         return await self._build_preview(request, pr_url, pr, configuration, options, prepared, persist)
 
+    async def _previous_review(self, pr_url: str):
+        if not self._repository:
+            return None
+        return await asyncio.to_thread(self._repository.latest_completed_task_for_pr, pr_url)
+
+    async def _incremental_delta(self, pr, previous, effective_base: str
+                                 ) -> tuple[list[str] | None, bool, bool]:
+        """返回 (自前序 Head 以来变化的路径, 是否同内容基准, 前序 Head 是否为祖先)。
+
+        任何不确定都返回不可用，由调用方退回完整审查。GitHub compare 的
+        ``ahead`` 状态同时证明前序 Head 是当前 Head 的祖先。
+        """
+        if previous is None or previous.run_manifest is None:
+            return None, False, False
+        previous_head = previous.run_manifest.head_sha
+        if not previous_head or previous.run_manifest.effective_base_sha != effective_base:
+            return None, False, False
+        reader = getattr(self._github_tool, "compare_delta", None)
+        if not callable(reader):
+            return None, True, False
+        try:
+            delta = await asyncio.to_thread(reader, pr.owner, pr.repo, previous_head, pr.head.sha)
+        except Exception as exc:
+            logger.warning("增量比较不可用，退回完整审查：%s", type(exc).__name__)
+            return None, True, False
+        if not isinstance(delta, dict) or delta.get("status") != "ahead":
+            return None, True, False
+        return list(delta.get("files") or []), True, True
+
     async def _build_preview(self, request, pr_url, pr, configuration, options, prepared, persist):
         from app.services.review_plan import apply_scope, configure_runtime, preview_hash
         from app.services.review_input_context import build_pr_intent
@@ -450,9 +481,10 @@ class ReviewService:
         planner = DeterministicReviewPlanner()
         # Preview 与正式执行使用同一内容基准：声明 base 只保留 PR 身份。
         diff_context = prepared["diff_context"]
+        effective_base = diff_context.get("effective_base_sha") or pr.base.sha
         plan = planner.plan(
             changed_files,
-            base_sha=diff_context.get("effective_base_sha") or pr.base.sha,
+            base_sha=effective_base,
             head_sha=pr.head.sha,
             file_index=index["file_index"],
             symbol_index=index["symbol_index"],
@@ -462,14 +494,33 @@ class ReviewService:
             pr_intent_hash=build_pr_intent(pr.model_dump(mode="json"))["intent_hash"],
         )
         plan = apply_scope(plan, options)
-        snapshot = {"head_sha": pr.head.sha,
-                    "effective_base_sha": diff_context.get("effective_base_sha") or pr.base.sha,
+        snapshot = {"head_sha": pr.head.sha, "effective_base_sha": effective_base,
                     "declared_base_sha": pr.base.sha}
         plan_hash = preview_hash(options, snapshot, configuration, plan)
         frozen = configure_runtime(configuration, options, snapshot, plan_hash)
         from app.services.fingerprints import stable_hash
         frozen["initial_plan_hash"] = stable_hash(plan.model_dump(mode="json"))
         frozen["initial_plan"] = plan.model_dump(mode="json")
+        from app.services.incremental_review import plan_incremental
+
+        previous = (await self._previous_review(pr_url)
+                    if settings.repoguardian_incremental_review_enabled else None)
+        delta_paths, same_base, ancestor = await self._incremental_delta(pr, previous, effective_base)
+        decision = plan_incremental(
+            previous=previous, pr_url=pr_url, pr_info=pr.model_dump(mode="json"),
+            effective_base_sha=effective_base, new_head_sha=pr.head.sha,
+            full_changed=changed_files, full_plan_units=plan.review_units,
+            changed_since_previous=delta_paths, configuration=frozen, model=configuration["model"],
+            ancestor=ancestor, same_merge_base=same_base, repository_graph=index.get("repository_graph"))
+        incremental_preview = decision.preview
+        if decision.applicable and decision.binding is not None:
+            frozen["incremental"] = decision.binding.model_dump(mode="json")
+            frozen["incremental_units"] = [unit.model_dump(mode="json")
+                                           for unit in decision.reused_units]
+        incremental_warnings = decision.preview.warnings if decision.preview else []
+        reused_paths = {path for unit in decision.reused_units for path in unit.primary_files}
+        active_units = [unit for unit in plan.review_units
+                        if not set(unit.primary_files) <= reused_paths]
         backend = self._validation_backend_selector.select(
             request.validation_backend.value,
             request.mode,
@@ -500,16 +551,16 @@ class ReviewService:
             risk_tags=plan.risk_tags,
             planning_model_calls=sum(
                 planner.planning_model_calls(unit, changed_files)
-                for unit in plan.review_units
+                for unit in active_units
             ),
             estimated_model_calls=sum(
                 planner.estimated_model_calls(unit, changed_files)
-                for unit in plan.review_units
+                for unit in active_units
             ),
             max_model_calls=sum(
-                planner.max_model_calls(unit) for unit in plan.review_units
+                planner.max_model_calls(unit) for unit in active_units
             ),
-            estimated_tokens=sum(unit.estimated_tokens for unit in plan.review_units),
+            estimated_tokens=sum(unit.estimated_tokens for unit in active_units),
             # Repair is an independent workflow and never part of previewed
             # production Review Plane capacity.
             patch_generation_enabled=False,
@@ -518,7 +569,8 @@ class ReviewService:
                 available=capabilities.available,
                 unavailable_reason=capabilities.unavailable_reason,
             ),
-            warnings=plan.warnings,
+            incremental=incremental_preview,
+            warnings=[*plan.warnings, *incremental_warnings],
         )
         if persist:
             from app.services.preview_confirmation import freeze_confirmation
@@ -1031,6 +1083,7 @@ class ReviewService:
         task.human_request = rebuilt.human_request
         task.report_markdown = rebuilt.report_markdown
         task.task_runtime_configuration = rebuilt.task_runtime_configuration
+        task.incremental = rebuilt.incremental
         task.task_runtime_report = rebuilt.task_runtime_report
         task.pr_discussion = rebuilt.pr_discussion
         if task.status == TaskStatus.failed and task.task_runtime_report:

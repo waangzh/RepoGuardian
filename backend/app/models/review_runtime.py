@@ -468,6 +468,13 @@ class VerificationResult(VerificationSubmission):
 ReviewWorkItem.model_rebuild()
 
 
+class UnitReuseDependencies(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: Literal["incremental-dependencies-v1"] = "incremental-dependencies-v1"
+    paths: list[str]
+    repository_discovery: bool
+
+
 class TaskRuntimeReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
     engine: Literal["task_review_v1"] = "task_review_v1"
@@ -490,6 +497,7 @@ class TaskRuntimeReport(BaseModel):
     total_tokens: int | None = Field(default=None, ge=0)
     work_items: list[dict] = Field(default_factory=list)
     diagnostics: list[dict] = Field(default_factory=list)
+    reuse_dependencies: dict[str, UnitReuseDependencies] = Field(default_factory=dict)
     # 历史讨论补充阶段的独立计量；不改变上方当前 Diff 主审查的字段与完整性。
     discussion_usage: DiscussionUsage | None = None
     pr_intent_context: str | None = Field(default=None, min_length=1, max_length=4_000)
@@ -504,6 +512,8 @@ class TaskRuntimeReport(BaseModel):
             value.pop("pr_intent_context_truncated", None)
         if self.discussion_usage is None:
             value.pop("discussion_usage", None)
+        if not self.reuse_dependencies:
+            value.pop("reuse_dependencies", None)
         return value
 
 

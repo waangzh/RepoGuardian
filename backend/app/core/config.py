@@ -125,6 +125,13 @@ class Settings(BaseSettings):
 
     # ---- Review Unit Planner / 调度 ----
     repoguardian_review_unit_concurrency: int = 4
+    # 增量审查：复用同一 PR 前序完整、无待复核问题且依赖未变化的目标覆盖；默认开启，
+    # 关闭后所有任务按完整 PR 重新审查。
+    repoguardian_incremental_review_enabled: bool = True
+    # pull_request synchronize webhook 自动创建增量审查；默认关闭，需显式配置
+    # webhook secret 与允许自动审查的仓库 allowlist。
+    repoguardian_incremental_review_webhook_enabled: bool = False
+    repoguardian_incremental_review_webhook_repositories: str = ""
     repoguardian_task_review_timeout_seconds: float = Field(default=1800, ge=1, le=86_400)
     repoguardian_review_unit_small_max_changed_lines: int = 30
     repoguardian_review_unit_large_min_changed_lines: int = 400

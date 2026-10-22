@@ -98,6 +98,8 @@ class TaskRuntimeCheckpoint:
             "read_observations": step.read_observations,
             "usages": [usage.model_dump(mode="json") for usage in step.usages],
             "tool_observations": step.tool_observations,
+            "dependency_paths": sorted(step.dependency_paths),
+            "repository_discovery": step.repository_discovery,
             "investigation": projection.investigation.model_dump(mode="json") if projection.investigation else None,
             "verification": projection.verification.model_dump(mode="json") if projection.verification else None,
             "invalidated_results": projection.invalidated_results,
@@ -143,6 +145,8 @@ class TaskRuntimeCheckpoint:
         from app.models.review import ModelUsage
         step.usages = [ModelUsage.model_validate(value) for value in payload.get("usages", [])]
         step.tool_observations = payload.get("tool_observations", [])
+        step.dependency_paths = set(payload.get("dependency_paths", []))
+        step.repository_discovery = payload.get("repository_discovery", True)
 
     async def _put(self, kind, payload):
         content = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

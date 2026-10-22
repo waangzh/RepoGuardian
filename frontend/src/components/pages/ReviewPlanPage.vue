@@ -8,6 +8,7 @@ import ReviewPlanControls from '../review/ReviewPlanControls.vue';
 import type { ReviewCapabilities, ReviewPlanOptions } from '../../types/reviewPlan';
 import ReviewStepper from "../common/ReviewStepper.vue";
 import { groupingReasonText, unitSymbolSummary, unitTitle } from "../../utils/unitPresentation";
+import { incrementalReviewLabel } from "../../utils/reportPresentation";
 const props = defineProps<{ capabilities: ReviewCapabilities | null; dirty: boolean; previewing: boolean; preview: ReviewPreviewResponse; prUrl: string; model: string; models: ProviderModelInfo[]; defaultModel: string; modelsLoading: boolean; modelsError: string | null; submitting: boolean; created?: boolean }>();
 const emit = defineEmits<{ "update:model": [value: string]; submit: []; back: []; repreview: []; change: [plan: ReviewPlanOptions]; "open-created": [] }>();
 const modelOptions = computed(() => [{ value: "", label: `服务端默认${props.defaultModel ? ` · ${props.defaultModel}` : ''}` }, ...props.models.map(item => ({ value: item.id, label: item.id }))]);
@@ -20,6 +21,7 @@ const depthLabel = computed(() => {
 });
 const scopeLabel = computed(() => props.preview.effective_plan?.scope.mode === 'all'
   ? '全部可审查变更' : props.preview.effective_plan?.scope.mode === 'selected' ? '自定义文件范围' : '审查范围未知');
+const incrementalLabel = computed(() => incrementalReviewLabel(props.preview.incremental));
 const discussionLabel = computed(() => props.preview.effective_plan?.include_pr_discussions === true
   ? '已纳入历史讨论' : props.preview.effective_plan?.include_pr_discussions === false ? '未纳入历史讨论' : '以保存的配置为准');
 const resourceLabel = computed(() => {
@@ -39,6 +41,7 @@ const resourceLabel = computed(() => {
       <div class="card-header"><div><h2>{{ depthLabel }}</h2><p>{{ scopeLabel }} · {{ resourceLabel }}</p></div><AppIcon name="shield" :size="20" /></div>
       <p class="muted small">无需手动分配调用次数、Token 或运行时间。达到上限时会保留已有结果，并说明未检查的范围。</p>
       <p class="field-hint" role="status">{{ discussionLabel }}。此选择随本次方案保存。</p>
+      <p v-if="incrementalLabel" class="field-hint" role="status">{{ incrementalLabel }}</p>
       <details class="setting-section rg-plan-advanced">
         <summary class="link"><AppIcon name="settings" :size="16" />高级设置<span class="muted small"> · 深度、重点、范围、模型及资源上限</span></summary>
         <div class="space-top">

@@ -94,7 +94,7 @@ def task_runtime_configuration(model=None, *, provider=None):
 
 
 def plan_runtime_goals(changed, plan):
-    """初始分母来自完整规范 diff；页和派生任务不能修改它。"""
+    """初始分母来自完整规范 diff；复用、分页和派生任务不能修改它。"""
     goals = []
     owned = set()
     for unit in plan.review_units:
@@ -320,11 +320,43 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
         target._profile_override = ModelRequestProfile.model_validate(configuration["request_profile"])
     changed = [ChangedFile.model_validate(value) for value in state.get("changed_files") or []]
     plan = ReviewPlan.model_validate(state["review_plan"])
+    from app.services.incremental_review import (
+        reuse_coverage, reused_unit_snapshots, runtime_dependencies, validate_binding,
+    )
+
+    binding = validate_binding(configuration, head_sha=state.get("head_sha") or "",
+                               effective_base_sha=review_diff_base(state))
+    previous = None
+    reused = {}
+    reused_ids = set()
+    if binding is not None:
+        repository = context.get("coordination_repository") or state.get("_coordination_repository")
+        if repository is None:
+            raise ValueError("incremental review requires persisted previous task")
+        previous = await asyncio.to_thread(repository.get_task, binding.previous_task_id)
+        reused_units = reused_unit_snapshots(configuration)
+        expected = {item.unit_id for item in binding.reused_units}
+        if {unit.id for unit in reused_units} != expected:
+            raise ValueError("incremental_reused_units_changed")
+        plan = plan.model_copy(update={"review_units": [
+            unit for unit in plan.review_units if unit.id not in expected] + reused_units})
+        if not await asyncio.to_thread(
+                git.is_ancestor, state["repo_path"], binding.previous_head_sha, binding.new_head_sha):
+            raise ValueError("incremental_history_changed")
+        delta = await asyncio.to_thread(
+            git.changed_paths, state["repo_path"], binding.previous_head_sha, binding.new_head_sha)
+        reused = reuse_coverage(binding, previous, changed, plan.review_units,
+            delta_paths=delta, repository_graph=state.get("repository_graph"))
+        reused_ids = expected
     goals = plan_runtime_goals(changed, plan)
-    catalog = await source_catalog(goals, spec, state["repo_path"], git,
+    active_goals = [goal for goal in goals if goal.unit_id not in reused_ids]
+    catalog = await source_catalog(active_goals, spec, state["repo_path"], git,
                                    changed_files=changed if expanded_scope else None)
     steps, items = {}, []
     for unit in plan.review_units:
+        if unit.id in reused_ids:
+            # 未变更 Unit 已由前序任务完成；不创建新的模型工作项。
+            continue
         assigned = [goal for goal in goals if goal.unit_id == unit.id and not goal.unsupported_reason]
         for start in range(0, len(assigned), 40):
             selected = assigned[start:start + 40]
@@ -371,7 +403,8 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
         writer = None
     if writer:
         def progress():
-            current = project_task_runtime(queue, steps, goals, termination_reason="running", budget=budget)
+            current = project_task_runtime(queue, steps, goals, termination_reason="running",
+                                           budget=budget, reused_coverage=reused)
             writer({"kind": "task_runtime_progress", "state": {
                 "task_runtime_report": current.model_dump(mode="json"),
                 "review_coverage": task_runtime_coverage(current, changed)}})
@@ -382,7 +415,7 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
             investigations_enabled=(strategy.get("depth") != "quick" and experiment.get("investigations_enabled", True)),
             max_derived_items=DEPTHS.get(strategy.get("depth", "standard"), DEPTHS["standard"])[2],
             rule_ids={unit.id: unit.rule_ids for unit in plan.review_units},
-            risk_catalog=build_task_risk_catalog([goal for goal in goals if not goal.unsupported_reason],
+            risk_catalog=build_task_risk_catalog([goal for goal in active_goals if not goal.unsupported_reason],
                                                items, state.get("repository_graph") or {},
                                                planner_version=risk_planner_version,
                                                max_lines_per_read=configuration["max_lines_per_read"],
@@ -436,10 +469,25 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
             termination = "technical_failure"
     else:
         termination = "plan_exhausted"
-    report = project_task_runtime(queue, steps, goals, termination_reason=termination, budget=budget)
+    report = project_task_runtime(queue, steps, goals, termination_reason=termination, budget=budget,
+                                  reused_coverage=reused)
+    dependencies = runtime_dependencies(plan, steps, state.get("repository_graph"))
+    if previous is not None:
+        from app.models.review_runtime import UnitReuseDependencies
+        dependencies.update({identity: UnitReuseDependencies.model_validate(
+            previous.task_runtime_report["reuse_dependencies"][identity]) for identity in reused_ids})
+    metadata = {"reuse_dependencies": dependencies}
+    if not steps:
+        metadata.update(
+            pr_intent_context=spec.pr_intent_context,
+            pr_intent_context_truncated=spec.pr_intent_context_truncated,
+            readable_scope_hash=spec.readable_scope_hash if spec.readable_scope_files else None,
+            readable_file_count=len(spec.readable_scope_files) if spec.readable_scope_files else None)
+    report = report.model_copy(update=metadata)
+    issues = task_runtime_issues(report)
     return ReviewState(task_runtime_report=report.model_dump(mode="json"),
         task_runtime_configuration=configuration, task_runtime_retry_unit_id=None,
-        review_issues=task_runtime_issues(report), review_unit_results=[],
+        review_issues=issues, review_unit_results=[],
         status=("reviewing" if discussion_store is not None and report.execution_status == "completed"
                 else report.execution_status), review_coverage=task_runtime_coverage(report, changed),
         run_budget=budget.snapshot(),

@@ -170,6 +170,9 @@ REPOGUARDIAN_TASK_REVIEW_TIMEOUT_SECONDS=1800 # 整次运行时限，单位为�
 REPOGUARDIAN_MODEL_REQUEST_TIMEOUT_SECONDS=60 # 单次模型 HTTP 请求超时，单位为秒
 REPOGUARDIAN_MODEL_REQUEST_PROFILES={} # 按模型名覆盖单次请求窗口，默认使用自动解析
 REPOGUARDIAN_DEFAULT_VALIDATION_BACKEND=none # 默认不发起外部动态验证
+REPOGUARDIAN_INCREMENTAL_REVIEW_ENABLED=true # 复用前序未变更文件的 Unit 结论
+REPOGUARDIAN_INCREMENTAL_REVIEW_WEBHOOK_ENABLED=false # synchronize 事件自动创建增量审查
+REPOGUARDIAN_INCREMENTAL_REVIEW_WEBHOOK_REPOSITORIES= # 自动审查仓库 allowlist，如 owner/repo
 REPOGUARDIAN_GITHUB_PUBLISH_ENABLED=false # 手动发布需另配独立凭据、范围与操作口令
 REPOGUARDIAN_LANGSMITH_TRACING=false # 按需启用 LangSmith 追踪，需另配追踪凭据
 REPOGUARDIAN_LANGSMITH_INCLUDE_CONTENT=false # 启用追踪时，默认不上传代码、提示词和模型输出
@@ -187,6 +190,10 @@ REPOGUARDIAN_LANGSMITH_INCLUDE_CONTENT=false # 启用追踪时，默认不上传
 读取 PR 变更概览 → 准备仓库与索引 → 预览分组并校验保存方案 → 确认方案与 PR 快照 → 按冻结配置执行目标检查、关联调查和独立核验 → 返回结论、覆盖与限制、实际用量与报告。
 
 审查 Diff 使用 PR 的唯一 merge base 到 Head 的三点比较，避免把 Base 分支独有提交混入本次变更。无法确定唯一 merge base 时明确失败，不退化为两点比较；审查记录保留声明 Base 与实际 Diff 基准，便于追溯。
+
+同一 PR 再次审查时支持**增量审查**：当前序 Head 是当前 Head 的祖先、内容基准与审查策略一致，且 PR 描述未变化时，可复用前序完整且无待复核问题的目标覆盖记录。主审文件、关联文件、实际读取依赖或相关图关系发生变化的 Unit 会重新审查；变化路径包含已经恢复到 Base、因而不再出现在完整 PR Diff 中的文件。复用仍保留逐 hunk 覆盖分母和来源任务，不重复计算前序模型用量。前序存在问题或关联调查、使用过仓库搜索或符号发现、缺少依赖记录、本次包含历史讨论、自定义文件范围、历史改写、内容基准或审查策略变化时，会按适用范围重新检查或退回完整审查，并在预览中说明原因。前序问题不会自动沿用已确认或可发布状态。可用 `REPOGUARDIAN_INCREMENTAL_REVIEW_ENABLED=false` 关闭。
+
+配置 `REPOGUARDIAN_INCREMENTAL_REVIEW_WEBHOOK_ENABLED=true`、`REPOGUARDIAN_GITHUB_WEBHOOK_SECRET` 与仓库 allowlist 后，GitHub `pull_request synchronize` 事件会通过 `POST /api/incremental/webhook` 自动创建审查，并在满足条件时采用增量复用；同一 delivery 幂等，fork PR、草稿与已合并/关闭 PR 不触发。事件中的仓库、PR 地址和 Base/Head 必须与确认快照一致，过时事件不会审查另一个 Head；回执的 `completed` 表示任务创建完成，不代表审查完成。
 
 动态验证独立于审查流程，Review 完成时 CI 仍可能运行中。新请求使用 `review`；旧 API 模式值仅作兼容，仍按只读审查处理。
 

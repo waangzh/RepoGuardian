@@ -16,6 +16,7 @@ from pathlib import PurePosixPath
 from typing import Any, Generic, Iterator, Literal, TypeVar
 from uuid import uuid4
 from pydantic_core import PydanticCustomError
+from app.models.incremental import IncrementalPreview
 from app.models.review_plan import ReviewPlanOptions, PlanSnapshot
 
 from pydantic import (
@@ -1002,6 +1003,7 @@ class ReviewPreviewResponse(BaseModel):
     estimated_tokens: int = Field(ge=0)
     patch_generation_enabled: bool
     validation_backend: "ValidationBackendPreview"
+    incremental: "IncrementalPreview | None" = None
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -2522,6 +2524,8 @@ class ReviewRunManifest(BaseModel):
     coverage: ReviewCoverage
     coordination_metrics: CrossUnitRuntimeMetrics | None = None
     coordination_fingerprint: str | None = None
+    # 增量审查绑定（若有）；缺失表示本轮按完整 PR 审查。
+    incremental: dict | None = None
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -2586,6 +2590,8 @@ class ReviewTask(BaseModel):
     validation_backend: ValidationBackend = ValidationBackend.none
     validation_profile: str = Field(default_factory=_default_validation_profile)
     review: ReviewSummary = Field(default_factory=ReviewSummary)
+    # 增量审查冻结绑定；None 表示本轮按完整 PR 审查。
+    incremental: dict | None = None
     steps: list[TaskStep] = Field(default_factory=list)
     pr: PullRequestInfo | None = None
     changed_files: list[ChangedFile] = Field(default_factory=list)
