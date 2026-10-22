@@ -109,5 +109,9 @@ def configure_runtime(configuration, options, snapshot, plan_hash):
 
 
 def preview_hash(options, snapshot, configuration, plan):
+    # 增量绑定与复用 Unit 只影响执行输入，不改变用户方案身份；二者从
+    # 配置哈希中排除，避免“同一方案”因前序任务不同而被判为失效。
+    stable_configuration = {key: value for key, value in configuration.items()
+                            if key not in {"incremental", "incremental_units"}}
     return stable_hash({"options": options.model_dump(mode="json"), "snapshot": snapshot,
-                        "configuration": configuration, "initial_plan": plan.model_dump(mode="json")})
+                        "configuration": stable_configuration, "initial_plan": plan.model_dump(mode="json")})

@@ -125,6 +125,45 @@ class GitHubTool:
             ),
         )
 
+    def compare_delta(self, owner: str, repo: str, base_sha: str, head_sha: str) -> dict | None:
+        """同步只读比较两个固定提交；返回 status 与变化路径，不返回 patch 正文。
+
+        GitHub compare 最多返回 300 个文件；达到上限或结构不符时返回 None，
+        调用方必须退回完整审查，不能把截断列表当作完整增量。调用方应在
+        工作线程中执行，避免阻塞事件循环。
+        """
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        url = f"https://api.github.com/repos/{owner}/{repo}/compare/{base_sha}...{head_sha}"
+        try:
+            with httpx.Client(timeout=30) as client:
+                response = client.get(url, headers=headers)
+        except (httpx.TimeoutException, httpx.RequestError):
+            return None
+        if response.status_code >= 400:
+            return None
+        try:
+            payload = response.json()
+            files = payload["files"]
+            status = payload.get("status")
+            if (not isinstance(files, list) or len(files) >= 300
+                    or status not in {"ahead", "behind", "diverged", "identical"}):
+                return None
+            if any(not isinstance(item, dict) or not isinstance(item.get("filename"), str)
+                   or not item["filename"] for item in files):
+                return None
+            paths = {item["filename"] for item in files if isinstance(item, dict)
+                     and isinstance(item.get("filename"), str)}
+            paths.update(item["previous_filename"] for item in files if isinstance(item, dict)
+                         and isinstance(item.get("previous_filename"), str))
+            return {"status": status, "files": sorted(paths)}
+        except (ValueError, KeyError, TypeError):
+            return None
+
     async def fetch_diff(self, pr_url: str) -> str:
         """直接获取 PR unified diff，供无克隆、无 LLM 的 Preview 使用。"""
         owner, repo, number = parse_pr_url(pr_url)

@@ -164,6 +164,11 @@ def build_review_manifest(state: dict[str, Any], completed_at: datetime) -> Revi
     if state.get("engine") == "task_review_v1":
         coverage = ReviewCoverage.model_validate(state.get("review_coverage") or {
             "coverage_version": "task-goals-v1"})
+        if (state.get("task_runtime_configuration") or {}).get("incremental"):
+            # 复用 Unit 的文件在当前快照中未变化，沿用结论不改变完整性；
+            # 增量来源单独记录在清单的 incremental 字段与警告中。
+            coverage = coverage.model_copy(update={
+                "coordination_reason": coverage.coordination_reason or "incremental_review"})
     started_at = _as_datetime(state.get("created_at"), completed_at)
     pr = state.get("pr_info") or {}
     issues = state.get("review_issues") or []
@@ -199,6 +204,7 @@ def build_review_manifest(state: dict[str, Any], completed_at: datetime) -> Revi
         coverage=coverage,
         coordination_metrics=coordination.runtime_metrics if coordination else None,
         coordination_fingerprint=coordination.runtime_fingerprint if coordination else None,
+        incremental=((state.get("task_runtime_configuration") or {}).get("incremental")),
         warnings=list(dict.fromkeys([*(state.get("warnings") or []),
             *(warning for result in results.values() if (warning := review_unit_coverage_warning(result)))])),
     )

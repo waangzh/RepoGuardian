@@ -118,6 +118,8 @@ class InspectTaskStep:
         self.runtime = None
         self.tool_observations: list[dict] = []
         self.read_observations: dict[str, dict] = {}
+        self.dependency_paths: set[str] = set()
+        self.repository_discovery = False
         self.discussion_store = None
 
     async def advance(self) -> dict:
@@ -163,6 +165,8 @@ class InspectTaskStep:
                 evidence_catalog=executor.evidence_catalog,
                 related_goals=[executor.goals[identity] for identity in related_ids],
                 symbol_index=self.symbol_index, repository_graph=self.repository_graph)
+            if json.loads(request.prompt).get("definition_hints"):
+                self.repository_discovery = True
             executor.visible_discussions = getattr(self.protocol, "visible_discussions", [])
             if self.tool_observations:
                 if executor.spec.discussion_manifest_hash:
@@ -337,6 +341,11 @@ class InspectTaskStep:
         self.pending_read = None
         executor = self.executor
         args = read.arguments
+        if read.tool in {"file_read", "file_read_diff"}:
+            self.dependency_paths.add(args.file_path)
+        else:
+            # 搜索、目录发现和讨论可能依赖没有返回正文的输入；不能仅记录命中路径。
+            self.repository_discovery = True
         if read.tool == "discussion_read":
             if self.discussion_store is None:
                 return {"action": "tool", "status": "rejected", "reason": "discussion_context_unavailable"}

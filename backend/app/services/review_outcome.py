@@ -49,8 +49,9 @@ def derive_review_outcome(task: ReviewTask, *, publishable_count: int | None = N
 
     confirmed = sum(str(item.get("status")) in {"confirmed", "published"} for item in report.findings)
     unresolved = sum(str(item.get("status")) in {"candidate", "unresolved", "needs_human"} for item in report.findings)
-    unknown = any(str(item.get("status")) not in {"confirmed", "published", "candidate", "unresolved", "needs_human", "dismissed"}
-                  for item in report.findings)
+    unknown = any(str(item.get("status")) not in {
+        "confirmed", "published", "candidate", "unresolved", "needs_human", "dismissed"}
+        for item in report.findings)
     total = len(report.initial_scope_coverage)
     examined = sum(item.get("status") == "examined" for item in report.initial_scope_coverage)
     investigations = sum(item.get("status") != "answered" or str(item.get("answer")) not in {"supported", "refuted"}

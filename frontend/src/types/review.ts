@@ -196,6 +196,42 @@ export interface ReviewPreviewResponse {
     available: boolean;
     unavailable_reason?: string | null;
   };
+  /** 增量审查投影；status=applied 表示复用了前序未变更 Unit。 */
+  incremental?: IncrementalPreview | null;
+  warnings: string[];
+}
+
+export interface IncrementalPreview {
+  status: 'applied' | 'not_applicable';
+  binding_hash?: string | null;
+  previous_task_id?: string | null;
+  previous_head_sha?: string | null;
+  new_head_sha?: string | null;
+  review_base_sha?: string | null;
+  delta_file_count: number;
+  full_changed_file_count: number;
+  reused_unit_count: number;
+  reused_file_count: number;
+  superseded_finding_count: number;
+  reason?: string | null;
+  message?: string | null;
+  warnings: string[];
+}
+
+export interface IncrementalReviewBinding {
+  version: 'incremental-review-v1';
+  previous_task_id: string;
+  previous_head_sha: string;
+  previous_report_hash: string;
+  reused_units_hash: string;
+  review_base_sha: string;
+  effective_base_sha: string;
+  new_head_sha: string;
+  diff_hash: string;
+  delta_paths: string[];
+  delta_file_count: number;
+  pr_file_count: number;
+  reused_units: { unit_id: string; source_task_id: string }[];
   warnings: string[];
 }
 
@@ -903,6 +939,7 @@ export interface ReviewRunManifest {
   coverage: ReviewCoverage;
   coordination_metrics?: CrossUnitRuntimeMetrics | null;
   coordination_fingerprint?: string | null;
+  incremental?: IncrementalReviewBinding | null;
   warnings: string[];
 }
 
@@ -971,6 +1008,8 @@ export interface ReviewTask {
   engine?: ReviewEngine; // 缺省字段的旧任务属于 legacy_units；新任务恒为 task_review_v1
   task_runtime_configuration?: Record<string, unknown> | null;
   task_runtime_report?: TaskRuntimeReport | null;
+  /** 增量审查冻结绑定；null 表示本轮按完整 PR 审查。 */
+  incremental?: Record<string, unknown> | null;
   /** 历史讨论冻结元数据；轻量展示以摘要 digest.discussion_stats 为准。 */
   pr_discussion?: Record<string, unknown> | null;
   task_runtime_retry_unit_id?: string | null;
