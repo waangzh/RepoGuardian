@@ -39,7 +39,8 @@ def fit_context_pages(executor, step, configuration):
     """仅因 RequestFit 容量分页；不使用运行消费余额。"""
     profile = ModelRequestProfile.model_validate(configuration["request_profile"])
     request = step.protocol.prepare(executor.work_item, executor.current_goals(),
-        active_evidence_ids=executor.active_evidence_ids, evidence_catalog=executor.evidence_catalog)
+        active_evidence_ids=executor.active_evidence_ids, evidence_catalog=executor.evidence_catalog,
+        symbol_index=step.symbol_index, repository_graph=step.repository_graph)
     try:
         request.estimate(profile)
         return
@@ -51,13 +52,14 @@ def fit_context_pages(executor, step, configuration):
         catalog = deepcopy(original)
         try:
             pages = build_context_pages(executor.work_item, list(executor.goals.values()), catalog,
-                capacity_chars=capacity, chunk_evidence=executor.spec.prompt_version in {"task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7"})
+                capacity_chars=capacity, chunk_evidence=executor.spec.prompt_version in {"task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7", "task-review-prompt-v8"})
             for page in pages:
                 goals = [executor.goals[value["goal_id"]].model_copy(update={
                     "start_line": value["start_line"], "end_line": value["end_line"]}) for value in page.ranges]
                 item = executor.work_item.model_copy(update={"goal_ids": [goal.goal_id for goal in goals]})
                 step.protocol.prepare(item, goals, active_evidence_ids=set(page.evidence_ids),
-                                      evidence_catalog=catalog).estimate(profile)
+                                      evidence_catalog=catalog, symbol_index=step.symbol_index,
+                                      repository_graph=step.repository_graph).estimate(profile)
             executor.evidence_catalog = catalog
             executor.bind_pages(pages)
             return
@@ -72,7 +74,7 @@ def task_runtime_configuration(model=None, *, provider=None):
     resolver = getattr(provider, "resolve_request_profile", None)
     profile = resolver(selected_model) if callable(resolver) else settings.resolve_model_profile(selected_model)
     return {"provider": provider_name, "model": selected_model,
-        "prompt_version": "task-review-prompt-v7",
+        "prompt_version": "task-review-prompt-v8",
         "discussion_contract": "pr-discussion-context-v1" if settings.repoguardian_pr_discussions_enabled else None,
         "publication_contract": "claim-publication-v1",
         "pr_intent_contract": "pr-intent-assessment-v5",
@@ -233,7 +235,7 @@ async def source_catalog(goals, spec, root, git, changed_files=None):
                     "new_start": hunk.new_start, "new_length": hunk.new_length,
                     "lines": [line.model_dump(mode="json") for line in hunk.lines]}
                 break
-        if spec.prompt_version in {"task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7"}:
+        if spec.prompt_version in {"task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7", "task-review-prompt-v8"}:
             chunks, _ = build_context_evidence([{**value, "file": goal.target_ref}],
                                               spec.snapshot_head_sha, spec.snapshot_base_sha)
             for chunk in chunks:
