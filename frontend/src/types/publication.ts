@@ -175,6 +175,7 @@ export interface PublicationFinding {
   /** Plain text in new plans; missing on legacy plans whose title was Markdown-escaped. */
   raw_title?: string | null;
   body_markdown: string;
+  legacy_body_markdown?: string | null;
   affected_behavior: string;
   failure_scenario: string;
   recommendation: string;
@@ -202,6 +203,7 @@ export interface PublicationPlan {
   withheld_findings: WithheldFinding[];
   content_eligible: boolean;
   blocking_reasons: string[];
+  presentation?: ReviewPresentation | null;
 }
 
 export interface ReviewSummaryDigest {
@@ -230,6 +232,36 @@ export interface ReviewSummary {
   withheld_findings: WithheldFinding[];
   content_eligible: boolean;
   blocking_reasons: string[];
+  presentation?: ReviewPresentation | null;
+}
+
+export interface PresentationDelivery {
+  confirmed: number;
+  eligible: number;
+  selected: number;
+  inline_ready: number;
+  summary_only: number;
+  not_selected: number;
+  already_published: number;
+  actual_published: number | null;
+}
+
+export interface ReviewPresentation {
+  schema_version: "review-presentation-v1";
+  review_id: string;
+  snapshot: PublicationSnapshot;
+  language: "zh-CN";
+  synthesis_status: "ready" | "fallback" | "unavailable";
+  purpose_text: string | null;
+  purpose_source: "author_claim" | "code_inferred" | "unknown";
+  change_summary: string;
+  test_changes: string[];
+  review_summary: string;
+  verdict: MergeDecision;
+  findings: PublicationFinding[];
+  delivery: PresentationDelivery;
+  validation_state: ReviewOutcome["dynamic_validation"];
+  limitations: string[];
 }
 
 export interface ReviewCommentCheck {
@@ -257,7 +289,7 @@ export interface PublicationSelection {
 export interface GitHubInlineLocation { path: string; line: number; side: "LEFT" | "RIGHT" }
 export interface PublicationInlinePreview {
   finding_key: string;
-  action: "create" | "already_published" | "summary_fallback";
+  action: "create" | "already_published" | "summary_fallback" | "summary_only";
   body_markdown: string;
   location: GitHubInlineLocation | null;
 }
@@ -277,6 +309,7 @@ export interface PublicationPreflightResult {
   summary_markdown: string;
   requires_partial_acknowledgement: boolean;
   warnings: string[];
+  presentation?: ReviewPresentation | null;
 }
 export interface PublicationItem {
   id: string;

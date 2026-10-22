@@ -253,6 +253,7 @@ class PublicationFinding(BaseModel):
     anchor: PublicationAnchor
     title: str
     body_markdown: str
+    legacy_body_markdown: str | None = None
     # 新计划保留纯文本；缺失表示旧计划的 title 已经过 Markdown 转义。
     raw_title: str | None = None
     affected_behavior: str = ""
@@ -265,6 +266,44 @@ class PublicationFinding(BaseModel):
     default_selection_reason: str | None = None
     discussion_urls: list[str] = Field(default_factory=list)
     discussion_matches: list[dict] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def serialize_legacy_body(self, handler):
+        value = handler(self)
+        if self.legacy_body_markdown is None:
+            value.pop("legacy_body_markdown", None)
+        return value
+
+
+class PresentationDelivery(BaseModel):
+    confirmed: int = Field(ge=0)
+    eligible: int = Field(ge=0)
+    selected: int = Field(ge=0)
+    inline_ready: int = Field(ge=0)
+    summary_only: int = Field(ge=0)
+    not_selected: int = Field(ge=0)
+    already_published: int = Field(default=0, ge=0)
+    actual_published: int | None = Field(default=None, ge=0)
+
+
+class ReviewPresentation(BaseModel):
+    """只读投影；不替代 ReviewOutcome、核验记录或发布回执。"""
+
+    schema_version: Literal["review-presentation-v1"] = "review-presentation-v1"
+    review_id: str
+    snapshot: PublicationSnapshot
+    language: Literal["zh-CN"] = "zh-CN"
+    synthesis_status: Literal["ready", "fallback", "unavailable"] = "fallback"
+    purpose_text: str | None = None
+    purpose_source: Literal["author_claim", "code_inferred", "unknown"] = "unknown"
+    change_summary: str
+    test_changes: list[str] = Field(default_factory=list)
+    review_summary: str = ""
+    verdict: MergeDecision
+    findings: list[PublicationFinding] = Field(default_factory=list)
+    delivery: PresentationDelivery
+    validation_state: Literal["not_executed", "passed", "failed", "independent_results", "unknown"]
+    limitations: list[str] = Field(default_factory=list)
 
 
 class WithheldFinding(BaseModel):
@@ -308,6 +347,14 @@ class ReviewSummary(BaseModel):
     withheld_findings: list[WithheldFinding] = Field(default_factory=list)
     content_eligible: bool = False
     blocking_reasons: list[str] = Field(default_factory=list)
+    presentation: ReviewPresentation | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_presentation(self, handler):
+        value = handler(self)
+        if self.presentation is None:
+            value.pop("presentation", None)
+        return value
 
 
 class PublicationPlan(BaseModel):
@@ -326,6 +373,14 @@ class PublicationPlan(BaseModel):
     withheld_findings: list[WithheldFinding] = Field(default_factory=list)
     content_eligible: bool = False
     blocking_reasons: list[str] = Field(default_factory=list)
+    presentation: ReviewPresentation | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_presentation(self, handler):
+        value = handler(self)
+        if self.presentation is None:
+            value.pop("presentation", None)
+        return value
 
 
 class ReviewCommentOptions(BaseModel):
@@ -446,7 +501,7 @@ class PublicationInlineCounts(BaseModel):
 
 class PublicationInlinePreview(BaseModel):
     finding_key: str
-    action: Literal["create", "already_published", "summary_fallback"]
+    action: Literal["create", "already_published", "summary_fallback", "summary_only"]
     body_markdown: str
     location: GitHubInlineLocation | None = None
 
@@ -467,6 +522,7 @@ class PublicationPreflightResult(BaseModel):
     summary_markdown: str
     requires_partial_acknowledgement: bool
     warnings: list[str]
+    presentation: ReviewPresentation | None = None
 
 
 class PublicationAccepted(BaseModel):

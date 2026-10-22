@@ -243,7 +243,23 @@ class ReviewRepository:
             if row is None or row.deleted_at is not None:
                 return None
             snapshot = self._load_task_snapshot(row)
-            return ReviewTask.model_validate(snapshot)
+            task = ReviewTask.model_validate(snapshot)
+            from app.services.review_synthesis_repository import load_synthesis
+            task.review_synthesis = load_synthesis(session, task_id)
+            if task.review_synthesis:
+                from app.models.review import ModelUsage
+                from app.services.model_usage import summarize_model_usage
+                saved = task.review_synthesis
+                usage = saved.get("usage")
+                sent = any(item.get("sent") for item in (saved.get("budget", {}).get("attempts") or {}).values())
+                if usage or sent:
+                    observation = ModelUsage.model_validate(usage) if usage else ModelUsage(
+                        id="synthesis:" + task_id, provider=(task.task_runtime_configuration or {}).get("provider", "unknown"),
+                        model=saved.get("model") or "unknown", operation="review_synthesis_v1", latency_ms=0)
+                    if observation.id not in {item.id for item in task.model_usages}:
+                        task.model_usages.append(observation)
+                        task.model_usage_summary = summarize_model_usage(task.model_usages)
+            return task
 
     def latest_task_for_pr(self, pr_url: str) -> ReviewTask | None:
         """同一 PR 最近一条未删除任务；增量审查的候选前序任务。"""

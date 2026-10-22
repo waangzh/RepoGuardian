@@ -48,6 +48,26 @@ class Settings(BaseSettings):
     repoguardian_model_request_timeout_seconds: float = Field(default=60, ge=1, le=600)
     repoguardian_issue_dedup_timeout_seconds: float = Field(default=30, ge=0.1, le=300)
     repoguardian_report_purpose_timeout_seconds: float = Field(default=15, ge=0.1, le=120)
+    repoguardian_review_presentation_v1_enabled: bool = True
+    repoguardian_review_synthesis_enabled: bool = False
+    repoguardian_review_synthesis_max_input_chars: int = Field(default=24_000, ge=2000, le=60_000)
+    repoguardian_review_synthesis_max_tokens: int = Field(default=16_000, ge=0, le=100_000)
+    repoguardian_review_synthesis_output_tokens: int = Field(default=1800, ge=256, le=4096)
+    repoguardian_review_synthesis_timeout_seconds: float = Field(default=20, ge=0.1, le=120)
+    repoguardian_review_synthesis_max_cost_microusd: int | None = Field(default=None, ge=0)
+
+    def review_output_policy(self) -> dict:
+        """随新审查配置冻结；历史任务不因热配置启用新输出或模型调用。"""
+        return {
+            "presentation_v1": self.repoguardian_review_presentation_v1_enabled,
+            "synthesis_enabled": self.repoguardian_review_synthesis_enabled,
+            "language": "zh-CN",
+            "max_input_chars": self.repoguardian_review_synthesis_max_input_chars,
+            "max_tokens": self.repoguardian_review_synthesis_max_tokens,
+            "output_tokens": self.repoguardian_review_synthesis_output_tokens,
+            "timeout_seconds": self.repoguardian_review_synthesis_timeout_seconds,
+            "max_cost_microusd": self.repoguardian_review_synthesis_max_cost_microusd,
+        }
     # JSON: {"provider:model":{"input":0.40,"output":1.60,"cached_input":0.10}}
     # Rates are USD per one million tokens. Missing entries keep observed cost unknown.
     repoguardian_model_pricing_json: str = "{}"

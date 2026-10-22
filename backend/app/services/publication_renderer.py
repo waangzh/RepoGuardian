@@ -848,6 +848,10 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False, inc
     章节含义在所有状态下一致：结论、本次变更理解、需要处理的问题、其他建议、
     仍需确认的事项、下一步、快照与验证边界。这样不同 PR 复制出的评论遵循同一套阅读顺序。
     """
+    if plan.presentation is not None:
+        from app.services.review_presentation import render_presentation
+        return render_presentation(plan, copy=True, detail=detail, exclude_resolved=exclude_resolved,
+                                   include_discussed=include_discussed)
     included, omitted, retained = comment_selection(plan, exclude_resolved=exclude_resolved,
                                                      include_discussed=include_discussed)
     full = detail == "full"
@@ -1005,6 +1009,9 @@ def render_technical_audit(plan, execution_record=None):
 
 def render_summary(plan, *, discussion_urls: dict[str, str] | None = None) -> str:
     """GitHub 交付摘要：复用评论措辞，运行与证据明细留在内部报告。"""
+    if plan.presentation is not None:
+        from app.services.review_presentation import render_presentation
+        return render_presentation(plan, discussion_urls=discussion_urls)
     outcome = plan.outcome
     digest = plan.digest
     lines = ["## RepoGuardian · PR Review", "", merge_verdict_line(plan), ""]
