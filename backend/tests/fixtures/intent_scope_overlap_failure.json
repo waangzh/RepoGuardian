@@ -1,0 +1,635 @@
+{
+  "spec": {
+    "run_id": "015c09f412d2486286c110a6deabc01b",
+    "engine_version": "task_review_v1",
+    "snapshot_head_sha": "4d9d79bda4b176f74fd95a7cfac5ce1f61943d2c",
+    "snapshot_base_sha": "eac09777095d5a8428d7309fe79eb7d05b7b97bc",
+    "diff_manifest_hash": "d1aa987a62a8f450e2e06152376a500be82220713a28c4ab9354a2cea120a9c4",
+    "model_provider": "deepseek",
+    "model_name": "deepseek-flash",
+    "policy_version": "review-policy-v1",
+    "protocol_version": "task-review-protocol-v1",
+    "prompt_version": "task-review-prompt-v8",
+    "publication_contract": "claim-publication-v1",
+    "max_tokens": 600000,
+    "max_calls": 120,
+    "review_strategy": {
+      "depth": "standard",
+      "focus": [
+        "correctness",
+        "security",
+        "performance",
+        "compatibility"
+      ]
+    },
+    "pr_intent_context": "fix(stats): the point estimate sat outside its own interval\n\nFound by the deep-review audit (#92), reproduced before acting.\n\n`weighted_posterior` builds `point` and `[low, high]` from **two different\nestimators**, with nothing reconciling them:\n\n| | |\n|---|---|\n| `point` | weighted arithmetic mean of the raw rates (unshrunk) |\n| `low`, `high` | percentiles of `Beta(k + ½, n − k + ½)` draws |\n\n`Beta(a, b)` with `a, b > 0` has support on the **open** interval (0, 1). For an\nall-pass cluster the posterior is `Beta(n + ½, ½)`, whose 97.5th percentile is\nstrictly below 1.0 for every finite n — while the weighted mean of n/n is\nexactly 1.0. The disagreement is structural, not probabilistic:\n\n```\nweighted_posterior([(wilson(45, 45), 1.0)])\n  point = 1.0\n  high  = 0.999985944119246      <- point > high\n```\n\nThe mirror case, 0 of n, puts the point below `low`.\n\n## Widened, not re-estimated\n\nTaking `point` from the same draws — the posterior median — would also guarantee\ncoherence, but it **redefines the headline** this module documents as\n`Σ wₖ pₖ / Σ wₖ`, and would print a 45/45 cluster as 99%.\n\nClamping the bounds to contain the point only ever makes the interval *more*\nconservative, never narrower, and leaves every rendered figure identical — the\ncorrections are ~1.4e-5 against output rendered at 0 d.p.\n\n```\n45/45    100% [95–100]     (unchanged)\n0/40     0% [0–6]          (unchanged)\n38/40    95% [85–99]       (untouched — the estimators already agree)\n```\n\n## Why it survived\n\nNothing was visibly wrong: an interval that fails to contain its own point\nrenders the same as one that does. What it would break is the first downstream\n`low <= point <= high` check anyone writes — and it violates the house rule that\na number arrives with its confidence. An interval excluding its own estimate is\nnot that.\n\nTests cover the boundary cases only, since the boundary is where the estimators\nare guaranteed to disagree, plus a control asserting a mid-range interval is\n**not** clamped at all — the fix must only ever widen.\n\n**Negative control:** removing the two clamp lines fails five of the seven.\n\n## Verified\n\n767 passed, 10 skipped, ruff clean.",
+    "pr_intent_context_truncated": false,
+    "intent_assessment_contract": "structured-intent-v4"
+  },
+  "work_item": {
+    "work_item_id": "inspect-611196f0de2f78bd7be6b92934fc455a",
+    "kind": "inspect",
+    "goal_ids": [
+      "goal-5a861e97c2cc078d2b61d8ccd56bde26",
+      "goal-ef604af1fad1201dbf5ea5873b14e559"
+    ],
+    "scope_files": [
+      "src/clickllm/guard.py",
+      "src/clickllm/posttrain.py",
+      "src/clickllm/prove/equivalence.py",
+      "src/clickllm/prove/gate.py",
+      "src/clickllm/prove/judge.py",
+      "src/clickllm/prove/receipt.py",
+      "src/clickllm/prove/stats.py",
+      "tests/test_box.py",
+      "tests/test_fit.py",
+      "tests/test_gate.py",
+      "tests/test_guard.py",
+      "tests/test_posttrain.py",
+      "tests/test_receipt.py",
+      "tests/test_stats.py"
+    ],
+    "readable_scope_hash": null,
+    "state": "ready",
+    "revision": 4,
+    "attempt_count": 0,
+    "format_corrections": 0,
+    "unit_id": "ru-ed686d58abd659bc",
+    "sequence": 0,
+    "scheduling_class": "continuation",
+    "started": true,
+    "last_checked_budget_revision": -1,
+    "last_checked_obligation_revision": -1,
+    "reason": "model_response_rejected",
+    "proposition": null,
+    "related_goal_ids": [],
+    "required_evidence_ids": [],
+    "counter_evidence_ids": [],
+    "evidence_requests": [],
+    "verification_candidate": null,
+    "generation": 0,
+    "origin_work_item_id": null
+  },
+  "goals": [
+    {
+      "goal_id": "goal-5a861e97c2cc078d2b61d8ccd56bde26",
+      "unit_id": "ru-ed686d58abd659bc",
+      "kind": "inspect",
+      "target_ref": "src/clickllm/prove/stats.py",
+      "required": true,
+      "origin": "initial",
+      "target_kind": "source_range",
+      "start_line": 437,
+      "end_line": 459,
+      "unsupported_reason": null
+    },
+    {
+      "goal_id": "goal-ef604af1fad1201dbf5ea5873b14e559",
+      "unit_id": "ru-ed686d58abd659bc",
+      "kind": "inspect",
+      "target_ref": "tests/test_stats.py",
+      "required": true,
+      "origin": "initial",
+      "target_kind": "source_range",
+      "start_line": 269,
+      "end_line": 305,
+      "unsupported_reason": null
+    }
+  ],
+  "active": [
+    "evidence-4c4fa4d7c432aae7c7b97420",
+    "evidence-644f1a6f221c003f5fe4efa3",
+    "evidence-c146f820485ae3b7c91932a7",
+    "evidence-cdf100bac967b6ab884f473c"
+  ],
+  "evidence": {
+    "evidence-4c4fa4d7c432aae7c7b97420": {
+      "base_sha": "eac09777095d5a8428d7309fe79eb7d05b7b97bc",
+      "canonical_change": {
+        "goal_id": "goal-ef604af1fad1201dbf5ea5873b14e559",
+        "hunk_hash": "6278d2f8cbd692d2f3351e3bfbf4a042beae0d27d4a62df7322f00dd4b3ebf6c",
+        "hunk_id": "hunk-f24609f553c7cbe0",
+        "lines": [
+          {
+            "content": "    assert mcnemar(5, 2000).p_value < 1e-6",
+            "kind": "context",
+            "new_line_no": 269,
+            "old_line_no": 269
+          },
+          {
+            "content": "    # An even split at scale is no evidence at all.",
+            "kind": "context",
+            "new_line_no": 270,
+            "old_line_no": 270
+          },
+          {
+            "content": "    assert mcnemar(1000, 1000).p_value == pytest.approx(1.0, abs=0.05)",
+            "kind": "context",
+            "new_line_no": 271,
+            "old_line_no": 271
+          },
+          {
+            "content": "",
+            "kind": "added",
+            "new_line_no": 272,
+            "old_line_no": null
+          },
+          {
+            "content": "",
+            "kind": "added",
+            "new_line_no": 273,
+            "old_line_no": null
+          },
+          {
+            "content": "@pytest.mark.parametrize((\"passed\", \"total\"), [(45, 45), (100, 100), (1, 1), (0, 40), (0, 3)])",
+            "kind": "added",
+            "new_line_no": 274,
+            "old_line_no": null
+          },
+          {
+            "content": "def test_the_posterior_point_estimate_lies_inside_its_own_interval(passed, total):",
+            "kind": "added",
+            "new_line_no": 275,
+            "old_line_no": null
+          },
+          {
+            "content": "    \"\"\"A point outside its own interval is not a number with a confidence.",
+            "kind": "added",
+            "new_line_no": 276,
+            "old_line_no": null
+          },
+          {
+            "content": "",
+            "kind": "added",
+            "new_line_no": 277,
+            "old_line_no": null
+          },
+          {
+            "content": "    `point` is the unshrunk weighted mean, so an all-pass cluster gives exactly",
+            "kind": "added",
+            "new_line_no": 278,
+            "old_line_no": null
+          },
+          {
+            "content": "    1.0. The bounds are percentiles of `Beta(k + ½, n - k + ½)` draws, and that",
+            "kind": "added",
+            "new_line_no": 279,
+            "old_line_no": null
+          },
+          {
+            "content": "    posterior has support on the OPEN interval (0, 1) — its 97.5th percentile is",
+            "kind": "added",
+            "new_line_no": 280,
+            "old_line_no": null
+          },
+          {
+            "content": "    strictly below 1.0 for every finite n. Two estimators, nothing reconciling",
+            "kind": "added",
+            "new_line_no": 281,
+            "old_line_no": null
+          },
+          {
+            "content": "    them, so `weighted_posterior([(wilson(45, 45), 1.0)])` returned point=1.0",
+            "kind": "added",
+            "new_line_no": 282,
+            "old_line_no": null
+          },
+          {
+            "content": "    against high=0.999985944. The mirror case, 0 of n, put the point below `low`.",
+            "kind": "added",
+            "new_line_no": 283,
+            "old_line_no": null
+          },
+          {
+            "content": "",
+            "kind": "added",
+            "new_line_no": 284,
+            "old_line_no": null
+          },
+          {
+            "content": "    Invisible at the 0 d.p. these render at, which is why it survived — and",
+            "kind": "added",
+            "new_line_no": 285,
+            "old_line_no": null
+          },
+          {
+            "content": "    exactly the kind of thing a downstream `low <= point <= high` check would",
+            "kind": "added",
+            "new_line_no": 286,
+            "old_line_no": null
+          },
+          {
+            "content": "    trip over. Boundary cases only, because the boundary is where the two",
+            "kind": "added",
+            "new_line_no": 287,
+            "old_line_no": null
+          },
+          {
+            "content": "    estimators are guaranteed to disagree.",
+            "kind": "added",
+            "new_line_no": 288,
+            "old_line_no": null
+          },
+          {
+            "content": "    \"\"\"",
+            "kind": "added",
+            "new_line_no": 289,
+            "old_line_no": null
+          },
+          {
+            "content": "    iv = weighted_posterior([(wilson(passed, total), 1.0)])",
+            "kind": "added",
+            "new_line_no": 290,
+            "old_line_no": null
+          },
+          {
+            "content": "    assert iv.low <= iv.point <= iv.high, (",
+            "kind": "added",
+            "new_line_no": 291,
+            "old_line_no": null
+          },
+          {
+            "content": "        f\"{passed}/{total}: point={iv.point!r} outside [{iv.low!r}, {iv.high!r}]\"",
+            "kind": "added",
+            "new_line_no": 292,
+            "old_line_no": null
+          },
+          {
+            "content": "    )",
+            "kind": "added",
+            "new_line_no": 293,
+            "old_line_no": null
+          },
+          {
+            "content": "",
+            "kind": "added",
+            "new_line_no": 294,
+            "old_line_no": null
+          },
+          {
+            "content": "",
+            "kind": "added",
+            "new_line_no": 295,
+            "old_line_no": null
+          },
+          {
+            "content": "def test_widening_for_coherence_never_narrows_an_interval():",
+            "kind": "added",
+            "new_line_no": 296,
+            "old_line_no": null
+          },
+          {
+            "content": "    \"\"\"The negative control for the above: the fix must only ever widen.",
+            "kind": "added",
+            "new_line_no": 297,
+            "old_line_no": null
+          },
+          {
+            "content": "",
+            "kind": "added",
+            "new_line_no": 298,
+            "old_line_no": null
+          },
+          {
+            "content": "    Clamping the bounds to contain the point is safe precisely because it cannot",
+            "kind": "added",
+            "new_line_no": 299,
+            "old_line_no": null
+          },
+          {
+            "content": "    make a claim more confident. A mid-range cluster, where the two estimators",
+            "kind": "added",
+            "new_line_no": 300,
+            "old_line_no": null
+          },
+          {
+            "content": "    already agree, must come back untouched.",
+            "kind": "added",
+            "new_line_no": 301,
+            "old_line_no": null
+          },
+          {
+            "content": "    \"\"\"",
+            "kind": "added",
+            "new_line_no": 302,
+            "old_line_no": null
+          },
+          {
+            "content": "    iv = weighted_posterior([(wilson(30, 40), 1.0)])",
+            "kind": "added",
+            "new_line_no": 303,
+            "old_line_no": null
+          },
+          {
+            "content": "    assert iv.low < iv.point < iv.high, \"a mid-range interval should not be clamped at all\"",
+            "kind": "added",
+            "new_line_no": 304,
+            "old_line_no": null
+          },
+          {
+            "content": "    assert iv.low > 0.0 and iv.high < 1.0, \"clamping must not have pushed the bounds to 0/1\"",
+            "kind": "added",
+            "new_line_no": 305,
+            "old_line_no": null
+          }
+        ],
+        "new_length": 37,
+        "new_start": 269,
+        "old_length": 3,
+        "old_start": 269
+      },
+      "content": "    assert mcnemar(5, 2000).p_value < 1e-6\n    # An even split at scale is no evidence at all.\n    assert mcnemar(1000, 1000).p_value == pytest.approx(1.0, abs=0.05)\n\n\n@pytest.mark.parametrize((\"passed\", \"total\"), [(45, 45), (100, 100), (1, 1), (0, 40), (0, 3)])\ndef test_the_posterior_point_estimate_lies_inside_its_own_interval(passed, total):\n    \"\"\"A point outside its own interval is not a number with a confidence.\n\n    `point` is the unshrunk weighted mean, so an all-pass cluster gives exactly\n    1.0. The bounds are percentiles of `Beta(k + ½, n - k + ½)` draws, and that\n    posterior has support on the OPEN interval (0, 1) — its 97.5th percentile is\n    strictly below 1.0 for every finite n. Two estimators, nothing reconciling\n    them, so `weighted_posterior([(wilson(45, 45), 1.0)])` returned point=1.0\n    against high=0.999985944. The mirror case, 0 of n, put the point below `low`.\n\n    Invisible at the 0 d.p. these render at, which is why it survived — and\n    exactly the kind of thing a downstream `low <= point <= high` check would\n    trip over. Boundary cases only, because the boundary is where the two\n    estimators are guaranteed to disagree.\n    \"\"\"\n    iv = weighted_posterior([(wilson(passed, total), 1.0)])\n    assert iv.low <= iv.point <= iv.high, (\n        f\"{passed}/{total}: point={iv.point!r} outside [{iv.low!r}, {iv.high!r}]\"\n    )\n\n\ndef test_widening_for_coherence_never_narrows_an_interval():\n    \"\"\"The negative control for the above: the fix must only ever widen.\n\n    Clamping the bounds to contain the point is safe precisely because it cannot\n    make a claim more confident. A mid-range cluster, where the two estimators\n    already agree, must come back untouched.\n    \"\"\"\n    iv = weighted_posterior([(wilson(30, 40), 1.0)])\n    assert iv.low < iv.point < iv.high, \"a mid-range interval should not be clamped at all\"\n    assert iv.low > 0.0 and iv.high < 1.0, \"clamping must not have pushed the bounds to 0/1\"",
+      "content_hash": "9040e082779c2f3c71feeacdb8f2aae9f7c1341f4e681874ea9f2c367bf358ff",
+      "end_line": 305,
+      "evidence_id": "evidence-4c4fa4d7c432aae7c7b97420",
+      "file": "tests/test_stats.py",
+      "file_path": "tests/test_stats.py",
+      "head_sha": "4d9d79bda4b176f74fd95a7cfac5ce1f61943d2c",
+      "hunk_id": "goal-ef604af1fad1201dbf5ea5873b14e559",
+      "side": "head",
+      "source": "fixed_snapshot",
+      "start_line": 269
+    },
+    "evidence-644f1a6f221c003f5fe4efa3": {
+      "base_sha": "eac09777095d5a8428d7309fe79eb7d05b7b97bc",
+      "canonical_change": {
+        "goal_id": "goal-5a861e97c2cc078d2b61d8ccd56bde26",
+        "hunk_hash": "e87ec71a67341bb6615fba5baa69dff7ffe8c0ebb743d48d2db27d8aa3c87245",
+        "hunk_id": "hunk-8831dfea2edd2203",
+        "lines": [
+          {
+            "content": "    )",
+            "kind": "context",
+            "new_line_no": 437,
+            "old_line_no": 437
+          },
+          {
+            "content": "    lo = sampled[max(0, math.floor(alpha / 2 * draws))]",
+            "kind": "context",
+            "new_line_no": 438,
+            "old_line_no": 438
+          },
+          {
+            "content": "    hi = sampled[min(draws - 1, math.ceil((1 - alpha / 2) * draws) - 1)]",
+            "kind": "context",
+            "new_line_no": 439,
+            "old_line_no": 439
+          },
+          {
+            "content": "    # `point` and the bounds come from two different estimators, and at the",
+            "kind": "added",
+            "new_line_no": 440,
+            "old_line_no": null
+          },
+          {
+            "content": "    # boundary they disagree by construction. `point` is the unshrunk weighted",
+            "kind": "added",
+            "new_line_no": 441,
+            "old_line_no": null
+          },
+          {
+            "content": "    # mean, so an all-pass cluster gives exactly 1.0; the bounds are percentiles",
+            "kind": "added",
+            "new_line_no": 442,
+            "old_line_no": null
+          },
+          {
+            "content": "    # of Beta(k + ½, n - k + ½) draws, and that posterior has support on the OPEN",
+            "kind": "added",
+            "new_line_no": 443,
+            "old_line_no": null
+          },
+          {
+            "content": "    # interval (0, 1) — its 97.5th percentile is strictly below 1.0 for every",
+            "kind": "added",
+            "new_line_no": 444,
+            "old_line_no": null
+          },
+          {
+            "content": "    # finite n. So `weighted_posterior([(wilson(45, 45), 1.0)])` returned",
+            "kind": "added",
+            "new_line_no": 445,
+            "old_line_no": null
+          },
+          {
+            "content": "    # point=1.0 against high=0.999985944: a point estimate outside its own",
+            "kind": "added",
+            "new_line_no": 446,
+            "old_line_no": null
+          },
+          {
+            "content": "    # interval. The mirror case, 0 of n, put it below `low`.",
+            "kind": "added",
+            "new_line_no": 447,
+            "old_line_no": null
+          },
+          {
+            "content": "    #",
+            "kind": "added",
+            "new_line_no": 448,
+            "old_line_no": null
+          },
+          {
+            "content": "    # Widened rather than re-estimated. The alternative — taking `point` from the",
+            "kind": "added",
+            "new_line_no": 449,
+            "old_line_no": null
+          },
+          {
+            "content": "    # same draws (the posterior median) — would guarantee coherence too, but it",
+            "kind": "added",
+            "new_line_no": 450,
+            "old_line_no": null
+          },
+          {
+            "content": "    # redefines the headline this module documents as `Σ wₖ pₖ / Σ wₖ` and would",
+            "kind": "added",
+            "new_line_no": 451,
+            "old_line_no": null
+          },
+          {
+            "content": "    # print 45/45 as 99%. Widening only ever makes the interval more",
+            "kind": "added",
+            "new_line_no": 452,
+            "old_line_no": null
+          },
+          {
+            "content": "    # conservative, never narrower, and leaves every rendered figure unchanged:",
+            "kind": "added",
+            "new_line_no": 453,
+            "old_line_no": null
+          },
+          {
+            "content": "    # the corrections here are ~1.4e-5, far below the 0 d.p. these render at.",
+            "kind": "added",
+            "new_line_no": 454,
+            "old_line_no": null
+          },
+          {
+            "content": "    lo = min(lo, point)",
+            "kind": "added",
+            "new_line_no": 455,
+            "old_line_no": null
+          },
+          {
+            "content": "    hi = max(hi, point)",
+            "kind": "added",
+            "new_line_no": 456,
+            "old_line_no": null
+          },
+          {
+            "content": "    return Interval(",
+            "kind": "context",
+            "new_line_no": 457,
+            "old_line_no": 440
+          },
+          {
+            "content": "        passed=sum(i.passed for i, _ in usable),",
+            "kind": "context",
+            "new_line_no": 458,
+            "old_line_no": 441
+          },
+          {
+            "content": "        total=sum(i.total for i, _ in usable),",
+            "kind": "context",
+            "new_line_no": 459,
+            "old_line_no": 442
+          }
+        ],
+        "new_length": 23,
+        "new_start": 437,
+        "old_length": 6,
+        "old_start": 437
+      },
+      "content": "    )\n    lo = sampled[max(0, math.floor(alpha / 2 * draws))]\n    hi = sampled[min(draws - 1, math.ceil((1 - alpha / 2) * draws) - 1)]\n    # `point` and the bounds come from two different estimators, and at the\n    # boundary they disagree by construction. `point` is the unshrunk weighted\n    # mean, so an all-pass cluster gives exactly 1.0; the bounds are percentiles\n    # of Beta(k + ½, n - k + ½) draws, and that posterior has support on the OPEN\n    # interval (0, 1) — its 97.5th percentile is strictly below 1.0 for every\n    # finite n. So `weighted_posterior([(wilson(45, 45), 1.0)])` returned\n    # point=1.0 against high=0.999985944: a point estimate outside its own\n    # interval. The mirror case, 0 of n, put it below `low`.\n    #\n    # Widened rather than re-estimated. The alternative — taking `point` from the\n    # same draws (the posterior median) — would guarantee coherence too, but it\n    # redefines the headline this module documents as `Σ wₖ pₖ / Σ wₖ` and would\n    # print 45/45 as 99%. Widening only ever makes the interval more\n    # conservative, never narrower, and leaves every rendered figure unchanged:\n    # the corrections here are ~1.4e-5, far below the 0 d.p. these render at.\n    lo = min(lo, point)\n    hi = max(hi, point)\n    return Interval(\n        passed=sum(i.passed for i, _ in usable),\n        total=sum(i.total for i, _ in usable),",
+      "content_hash": "6373c825f28b4abb4c69d6b2a54f26919e733206c16d203b4b40c45a9901045a",
+      "end_line": 459,
+      "evidence_id": "evidence-644f1a6f221c003f5fe4efa3",
+      "file": "src/clickllm/prove/stats.py",
+      "file_path": "src/clickllm/prove/stats.py",
+      "head_sha": "4d9d79bda4b176f74fd95a7cfac5ce1f61943d2c",
+      "hunk_id": "goal-5a861e97c2cc078d2b61d8ccd56bde26",
+      "side": "head",
+      "source": "fixed_snapshot",
+      "start_line": 437
+    },
+    "evidence-c146f820485ae3b7c91932a7": {
+      "base_sha": "eac09777095d5a8428d7309fe79eb7d05b7b97bc",
+      "confidence": 1.0,
+      "content": "    hi = max(hi, point)\n    return Interval(\n        passed=sum(i.passed for i, _ in usable),\n        total=sum(i.total for i, _ in usable),\n        point=point,\n        low=lo,\n        high=hi,\n        method=named,\n    )\n\n\ndef family_wise_z(comparisons: int, alpha: float = 0.05) -> float:\n    \"\"\"The z a *family* of tests needs, so one cluster does not pass by luck.\n\n    Scoring twelve clusters against the same bar at 95% each gives roughly a 46%",
+      "content_hash": "b0728920cdbc721ddc7e907680e5216f6836a70736eba9e9204c277992f6d995",
+      "derived_from_evidence_id": null,
+      "distance": 0,
+      "end_line": 470,
+      "evidence_id": "evidence-c146f820485ae3b7c91932a7",
+      "file": "src/clickllm/prove/stats.py",
+      "file_path": "src/clickllm/prove/stats.py",
+      "head_sha": "4d9d79bda4b176f74fd95a7cfac5ce1f61943d2c",
+      "relevance": "direct",
+      "requested_end_line": 470,
+      "review_unit_id": "inspect-611196f0de2f78bd7be6b92934fc455a",
+      "side": "head",
+      "source": "file_read",
+      "start_line": 456,
+      "symbol": null,
+      "total_lines": 597,
+      "truncated": false,
+      "why_retrieved": "按 Review Unit 明确授权的行范围读取文件"
+    },
+    "evidence-cdf100bac967b6ab884f473c": {
+      "base_sha": "eac09777095d5a8428d7309fe79eb7d05b7b97bc",
+      "confidence": 1.0,
+      "content": "    # int/int division underflows to 0.0 rather than raising — a p-value that\n    # small IS zero to any precision that matters here.\n    return McNemar(worse, better, z, min(1.0, (2 * tail) / (1 << n)))\n\n\n# --------------------------------------------------------------------------- #\n# The weighted aggregate, and the family of tests it sits in\n# --------------------------------------------------------------------------- #\n\n\ndef weighted_posterior(\n    pairs: list[tuple[Interval, float]],\n    *,\n    draws: int = POSTERIOR_DRAWS,\n    seed: int = POSTERIOR_SEED,\n    alpha: float = 0.05,\n) -> Interval:\n    \"\"\"Simulated interval for the traffic-weighted score.\n\n    The headline verdict is ``Σ wₖ pₖ / Σ wₖ`` — a weighted sum of proportions\n    from different-sized clusters. Wilson covers a single proportion and says\n    nothing about that sum, so rendering it inside a Wilson interval would borrow\n    a method's authority for a number it never computed. Each cluster's rate is\n    drawn instead from its Jeffreys posterior ``Beta(k + ½, n - k + ½)``, the\n    weighted score is recomputed per draw, and the 2.5th and 97.5th percentiles\n    of the resulting distribution are the interval.\n\n    **Why not the plug-in bootstrap.** Resampling items within a cluster —\n    ``Binomial(n, p̂)`` — is the more familiar recipe and it collapses exactly\n    where this tool lives: at ``p̂ = 1`` every resample returns n passes, so a\n    45/45 cluster contributes zero width and the headline prints as \"75%\n    [75–75]\". That is the same confident lie the normal approximation tells at\n    the boundary, and it is the reason this module rejected Wald for Wilson in\n    the first place. The Jeffreys posterior is the boundary-respecting analogue\n    (Brown, Cai & DasGupta 2001), and it agrees with Wilson to about a point in\n    the middle of the range.\n\n    Deterministic by construction: the seed is a module constant, because a\n    receipt that reproduces bit-for-bit is worth more than a fresh random draw.\n\n    Returns:\n        An :class:`Interval` whose ``method`` names the simulation, with pooled\n        counts carried in ``passed``/``total`` for context. ``total == 0`` when\n        nothing was graded, which renders as \"?\".\n    \"\"\"\n    usable = [(i, w) for i, w in pairs if i.total > 0 and w > 0]\n    named = f\"Jeffreys posterior simulation, {draws} draws, seed {seed}\"\n    if not usable or draws < 1:\n        return Interval(0, 0, 0.0, 0.0, 1.0, named)\n\n    point = weighted_point(usable) or 0.0\n    total_w = sum(w for _, w in usable)\n    rng = random.Random(seed)\n    sampled = sorted(\n        sum(rng.betavariate(iv.passed + 0.5, iv.total - iv.passed + 0.5) * w for iv, w in usable)\n        / total_w\n        for _ in range(draws)\n    )\n    lo = sampled[max(0, math.floor(alpha / 2 * draws))]\n    hi = sampled[min(draws - 1, math.ceil((1 - alpha / 2) * draws) - 1)]\n    # `point` and the bounds come from two different estimators, and at the\n    # boundary they disagree by construction. `point` is the unshrunk weighted\n    # mean, so an all-pass cluster gives exactly 1.0; the bounds are percentiles\n    # of Beta(k + ½, n - k + ½) draws, and that posterior has support on the OPEN\n    # interval (0, 1) — its 97.5th percentile is strictly below 1.0 for every\n    # finite n. So `weighted_posterior([(wilson(45, 45), 1.0)])` returned\n    # point=1.0 against high=0.999985944: a point estimate outside its own\n    # interval. The mirror case, 0 of n, put it below `low`.\n    #\n    # Widened rather than re-estimated. The alternative — taking `point` from the\n    # same draws (the posterior median) — would guarantee coherence too, but it\n    # redefines the headline this module documents as `Σ wₖ pₖ / Σ wₖ` and would\n    # print 45/45 as 99%. Widening only ever makes the interval more\n    # conservative, never narrower, and leaves every rendered figure unchanged:\n    # the corrections here are ~1.4e-5, far below the 0 d.p. these render at.\n    lo = min(lo, point)\n",
+      "content_hash": "42096339c9f1af8ab5b245c8f01845c9e4af0d8eb449660c5839b47246aca464",
+      "derived_from_evidence_id": null,
+      "distance": 0,
+      "end_line": 455,
+      "evidence_id": "evidence-cdf100bac967b6ab884f473c",
+      "file": "src/clickllm/prove/stats.py",
+      "file_path": "src/clickllm/prove/stats.py",
+      "head_sha": "4d9d79bda4b176f74fd95a7cfac5ce1f61943d2c",
+      "relevance": "direct",
+      "requested_end_line": 470,
+      "review_unit_id": "inspect-611196f0de2f78bd7be6b92934fc455a",
+      "side": "head",
+      "source": "file_read",
+      "start_line": 380,
+      "symbol": null,
+      "total_lines": 597,
+      "truncated": false,
+      "why_retrieved": "按 Review Unit 明确授权的行范围读取文件"
+    }
+  },
+  "responses": [
+    {
+      "kind": "submit",
+      "examinations": [
+        {
+          "target_id": "goal-5a861e97c2cc078d2b61d8ccd56bde26",
+          "disposition": "examined",
+          "reason": "已检查 stats.py 437-459 行：新增的 lo=min(lo,point) 与 hi=max(hi,point) 在返回 Interval 前将点估计夹入区间，保证 low<=point<=high；point 由 weighted_point 计算，lo/hi 来自 Beta 分位数采样，边界情形（全通过/全失败）下夹取只会放宽区间。逻辑与目标一致，未发现缺陷。",
+          "evidence_ids": [
+            "evidence-cdf100bac967b6ab884f473c",
+            "evidence-644f1a6f221c003f5fe4efa3",
+            "evidence-c146f820485ae3b7c91932a7"
+          ],
+          "intent_assessments": [
+            {
+              "author_quote": "Clamping the bounds to contain the point only ever makes the interval *more* conservative, never narrower, and leaves every rendered figure identical — the corrections are ~1.4e-5 against output rendered at 0 d.p.",
+              "actual_behavior": "代码在计算 lo/hi 后执行 lo=min(lo,point)、hi=max(hi,point)，再构造 Interval，使点估计必然落在区间内，且仅放宽边界。",
+              "alignment": "supported",
+              "evidence_ids": [
+                "evidence-cdf100bac967b6ab884f473c",
+                "evidence-644f1a6f221c003f5fe4efa3"
+              ]
+            }
+          ]
+        },
+        {
+          "target_id": "goal-ef604af1fad1201dbf5ea5873b14e559",
+          "disposition": "examined",
+          "reason": "已检查 tests/test_stats.py 269-305 行：参数化测试覆盖 (45,45)、(100,100)、(1,1)、(0,40)、(0,3) 边界情形并断言 low<=point<=high；另有中段对照测试断言 30/40 不被夹取且边界不触及 0/1。测试断言与实现行为一致，未发现缺陷。",
+          "evidence_ids": [
+            "evidence-4c4fa4d7c432aae7c7b97420"
+          ],
+          "intent_assessments": [
+            {
+              "author_quote": "Tests cover the boundary cases only, since the boundary is where the estimators are guaranteed to disagree, plus a control asserting a mid-range interval is **not** clamped at all — the fix must only ever widen.",
+              "actual_behavior": "测试文件新增参数化边界用例断言 iv.low <= iv.point <= iv.high，并新增中段用例断言 iv.low < iv.point < iv.high 且 0<low、high<1。",
+              "alignment": "supported",
+              "evidence_ids": [
+                "evidence-4c4fa4d7c432aae7c7b97420"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "submit",
+      "examinations": [
+        {
+          "target_id": "goal-5a861e97c2cc078d2b61d8ccd56bde26",
+          "disposition": "examined",
+          "reason": "已检查 stats.py 437-459 行：新增的 lo=min(lo,point) 与 hi=max(hi,point) 在构造 Interval 前将点估计夹入区间，保证 low<=point<=high；point 来自 weighted_point，lo/hi 来自 Beta 分位数采样，边界情形（全通过/全失败）下夹取只会放宽区间。逻辑与目标一致，未发现缺陷。",
+          "evidence_ids": [
+            "evidence-cdf100bac967b6ab884f473c",
+            "evidence-644f1a6f221c003f5fe4efa3",
+            "evidence-c146f820485ae3b7c91932a7"
+          ],
+          "intent_assessments": [
+            {
+              "author_quote": "Clamping the bounds to contain the point only ever makes the interval *more* conservative, never narrower, and leaves every rendered figure identical — the corrections are ~1.4e-5 against output rendered at 0 d.p.",
+              "actual_behavior": "代码在计算 lo/hi 后执行 lo=min(lo,point)、hi=max(hi,point)，再构造 Interval，使点估计必然落在区间内，且仅放宽边界。",
+              "alignment": "supported",
+              "evidence_ids": [
+                "evidence-644f1a6f221c003f5fe4efa3",
+                "evidence-c146f820485ae3b7c91932a7"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

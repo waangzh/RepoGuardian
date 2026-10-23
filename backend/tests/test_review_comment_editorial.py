@@ -50,10 +50,11 @@ def test_legacy_summary_serialization_and_contract_rejection():
 
 
 def test_summary_schema_is_only_exposed_to_new_frozen_contract(tmp_path):
-    for contract in ("structured-intent-v2", "structured-intent-v3", "structured-intent-v4"):
+    for contract in ("structured-intent-v2", "structured-intent-v3", "structured-intent-v4", "structured-intent-v5"):
         step, _ = slice_with_intent(tmp_path / contract, [], contract=contract)
         schema = payload_for(step)["response"]["one_of"][1]["$defs"]["IntentAssessment"]
-        assert ("author_goal_summary" in schema["properties"]) is (contract == "structured-intent-v4")
+        assert ("author_goal_summary" in schema["properties"]) is (contract in {"structured-intent-v4", "structured-intent-v5"})
+    assert spec_for("修复空值。", "pr-intent-assessment-v6").intent_assessment_contract == "structured-intent-v5"
     assert spec_for("修复空值。", "pr-intent-assessment-v5").intent_assessment_contract == "structured-intent-v4"
     assert spec_for("修复空值。", "pr-intent-assessment-v4").intent_assessment_contract == "structured-intent-v3"
 

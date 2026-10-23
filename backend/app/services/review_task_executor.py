@@ -547,7 +547,7 @@ class ReviewTaskExecutor:
         from app.services.review_intent import matches_author_target
         if not self.spec.intent_assessment_contract:
             return "intent_contract_not_enabled"
-        if assessment.author_goal_summary and self.spec.intent_assessment_contract != "structured-intent-v4":
+        if assessment.author_goal_summary and self.spec.intent_assessment_contract not in {"structured-intent-v4", "structured-intent-v5"}:
             return "intent_summary_contract_not_enabled"
         if not matches_author_target(assessment.author_quote, targets):
             return "unknown_author_target"
@@ -568,17 +568,21 @@ class ReviewTaskExecutor:
 
         v1 冻结契约要求目标对照也覆盖整个目标区间，会把“一个小观察 + 完整检查”
         误判为非法；v2 只要求 supported/contradicted 引用的证据位于本目标范围内、
-        同文件同侧，不要求覆盖整段。未知路径仍应为 insufficient。
+        同文件同侧，不要求覆盖整段。v5 修正为每条证据与目标相交即可，
+        允许补读上下文延伸到 hunk 外；完整检查覆盖与快照/可见性校验不变。
         """
-        if self.spec.intent_assessment_contract not in {"structured-intent-v2", "structured-intent-v3", "structured-intent-v4"}:
+        if self.spec.intent_assessment_contract not in {"structured-intent-v2", "structured-intent-v3", "structured-intent-v4", "structured-intent-v5"}:
             return self._covers(goal, assessment.evidence_ids)
         side = self.goal_side(goal)
         for identity in assessment.evidence_ids:
             evidence = self.evidence_catalog.get(identity)
             if (evidence is None or evidence["file_path"] != goal.target_ref
-                    or evidence.get("side", "head") != side
-                    or evidence["start_line"] < goal.start_line
-                    or evidence["end_line"] > goal.end_line):
+                    or evidence.get("side", "head") != side):
+                return False
+            if self.spec.intent_assessment_contract == "structured-intent-v5":
+                if evidence["end_line"] < goal.start_line or evidence["start_line"] > goal.end_line:
+                    return False
+            elif evidence["start_line"] < goal.start_line or evidence["end_line"] > goal.end_line:
                 return False
         return True
 

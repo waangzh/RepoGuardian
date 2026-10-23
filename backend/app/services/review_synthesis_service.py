@@ -11,7 +11,7 @@ from app.services.fingerprints import stable_hash
 from app.services.review_run_budget import ReviewRunBudget, activate_run_budget, run_budget_phase
 from app.services.review_synthesis_input import SOURCE_POLICY_VERSION, build_synthesis_input
 from app.services.review_synthesis_repository import SynthesisStore
-from app.services.review_synthesis_validator import validate_review_synthesis
+from app.services.review_synthesis_validator import SynthesisReferenceError, validate_review_synthesis
 
 logger = logging.getLogger("RepoGuardian.Synthesis")
 
@@ -82,7 +82,7 @@ async def freeze_review_synthesis(task, repository, provider, *, lease=None):
     if not plan.content_eligible:
         return None
     facts = build_synthesis_input(task, plan)
-    artifact = ReviewSynthesisArtifact(prompt_version="review-synthesis-prompt-v6",
+    artifact = ReviewSynthesisArtifact(prompt_version="review-synthesis-prompt-v7",
         source_policy_version=SOURCE_POLICY_VERSION,
         review_id=task.id, head_sha=facts.head_sha,
         effective_base_sha=facts.effective_base_sha, fact_bundle_hash=stable_hash(facts.model_dump(mode="json")),
@@ -139,9 +139,11 @@ async def freeze_review_synthesis(task, repository, provider, *, lease=None):
         raise
     except Exception as exc:
         reason = _failure_code(exc)
-        logger.warning("摘要生成失败：review=%s failure_code=%s", task.id, reason)
+        diagnostic = exc.diagnostic if isinstance(exc, SynthesisReferenceError) else None
+        logger.warning("摘要生成失败：review=%s failure_code=%s reference_failure=%s", task.id, reason,
+                       diagnostic.model_dump(mode="json", exclude_none=True) if diagnostic else None)
         artifact = artifact.model_copy(update={"status": "fallback", "synthesis": None,
-            "failure_code": reason})
+            "failure_code": reason, "reference_failure": diagnostic})
         usage = getattr(exc, "usage", None)
         if usage:
             artifact.usage = usage.model_dump(mode="json")

@@ -209,6 +209,13 @@ class InspectTaskStep:
                         "(or one complete sentence from it) and cite visible evidence inside the examined goal "
                         "range for supported/contradicted. Use insufficient when the observation is only a "
                         "partial premise.")
+                    if executor.spec.intent_assessment_contract == "structured-intent-v5":
+                        feedback["intent_correction"] = (
+                            "Rejected intent assessment (" + ", ".join(reasons) + "): quote an exact author_target "
+                            "or one complete sentence from it. For supported/contradicted, every cited chunk must "
+                            "overlap the examined goal in the same file and side; extending beyond its boundaries "
+                            "is allowed. Cite only active, snapshot-valid evidence also included in the examination. "
+                            "Use insufficient for unverified premises; omit optional assessments when unrelated.")
                     feedback["intent_error_reasons"] = sorted({
                         error["reason"] for error in self.repair_errors
                         if isinstance(error.get("reason"), str)})
