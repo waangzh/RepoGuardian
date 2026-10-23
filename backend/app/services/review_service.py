@@ -145,7 +145,6 @@ class ReviewService:
             task_runtime_configuration=frozen_configuration,
             incremental=(frozen_configuration or {}).get("incremental"),
             mode=request.mode,
-            generate_patches=request.generate_patches,
             validation_backend=request.validation_backend,
             validation_profile=request.validation_profile,
             review={"mode": request.mode, "status": TaskStatus.queued, "completed": False},

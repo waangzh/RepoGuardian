@@ -90,8 +90,6 @@ async def get_system_diagnostics() -> SystemDiagnostics:
             and settings.repoguardian_allow_unsafe_local_execution
             else "restricted"
         ),
-        patch_max_files=settings.repoguardian_patch_max_files,
-        patch_max_changed_lines=settings.repoguardian_patch_max_changed_lines,
         retention_days=settings.repoguardian_retention_days,
         configured_secrets={
             "github": bool(settings.github_token),
@@ -116,8 +114,6 @@ async def update_system_settings(value: SystemSettingsUpdate) -> SystemDiagnosti
     """更新本地单用户可编辑配置；密钥和执行安全边界不在此接口内。"""
     updates: dict[str, object] = {}
     mapping = {
-        "patch_max_files": "repoguardian_patch_max_files",
-        "patch_max_changed_lines": "repoguardian_patch_max_changed_lines",
         "retention_days": "repoguardian_retention_days",
         "model_base_url": "openai_base_url",
         "model_name": "repoguardian_model",
@@ -129,8 +125,6 @@ async def update_system_settings(value: SystemSettingsUpdate) -> SystemDiagnosti
             continue
         changes[setting_name] = item
         env_key = {
-            "repoguardian_patch_max_files": "REPOGUARDIAN_PATCH_MAX_FILES",
-            "repoguardian_patch_max_changed_lines": "REPOGUARDIAN_PATCH_MAX_CHANGED_LINES",
             "repoguardian_retention_days": "REPOGUARDIAN_RETENTION_DAYS",
             "openai_base_url": "OPENAI_BASE_URL",
             "repoguardian_model": "REPOGUARDIAN_MODEL",

@@ -41,8 +41,6 @@ class SystemDiagnostics(BaseModel):
     artifact_directory_writable: bool
     langsmith_enabled: bool
     security_mode: Literal["restricted", "unsafe_local"]
-    patch_max_files: int
-    patch_max_changed_lines: int
     retention_days: int
     configured_secrets: dict[str, bool]
     versions: VersionDiagnostics
@@ -53,8 +51,6 @@ class SystemSettingsUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    patch_max_files: int | None = Field(default=None, ge=1, le=10)
-    patch_max_changed_lines: int | None = Field(default=None, ge=1, le=1_000)
     retention_days: int | None = Field(default=None, ge=1, le=3_650)
     model_base_url: str | None = Field(default=None, min_length=1, max_length=2_000)
     model_name: str | None = Field(default=None, min_length=1, max_length=200)

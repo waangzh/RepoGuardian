@@ -33,16 +33,12 @@ export interface SystemDiagnostics {
   artifact_directory_writable: boolean;
   langsmith_enabled: boolean;
   security_mode: "restricted" | "unsafe_local";
-  patch_max_files: number;
-  patch_max_changed_lines: number;
   retention_days: number;
   configured_secrets: Record<string, boolean>;
   versions: VersionDiagnostics;
 }
 
 export interface SystemSettingsUpdate {
-  patch_max_files?: number;
-  patch_max_changed_lines?: number;
   retention_days?: number;
   model_base_url?: string;
   model_name?: string;
