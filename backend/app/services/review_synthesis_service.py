@@ -6,12 +6,12 @@ import logging
 
 from pydantic import ValidationError
 
-from app.models.review_synthesis import GROUNDING_POLICY, ReviewSynthesisArtifact, SynthesisGrounding
+from app.models.review_synthesis import ReviewSynthesisArtifact
 from app.services.fingerprints import stable_hash
 from app.services.review_run_budget import ReviewRunBudget, activate_run_budget, run_budget_phase
 from app.services.review_synthesis_input import build_synthesis_input
 from app.services.review_synthesis_repository import SynthesisStore
-from app.services.review_synthesis_validator import validate_review_synthesis, validate_synthesis_grounding
+from app.services.review_synthesis_validator import validate_review_synthesis
 
 logger = logging.getLogger("RepoGuardian.Synthesis")
 
@@ -44,14 +44,7 @@ def bound_synthesis(task, plan):
               or artifact.omitted_hunks != facts.omitted_hunks):
             return None
         if artifact.status == "ready":
-            draft = validate_review_synthesis(facts, artifact.synthesis)
-            check = artifact.grounding
-            if (check is None or check.policy_version != GROUNDING_POLICY
-                    or check.fact_bundle_hash != facts_hash
-                    or check.draft_hash != stable_hash(draft.model_dump(mode="json"))):
-                return artifact.model_copy(update={"status": "fallback", "synthesis": None,
-                    "failure_code": "grounding_required"})
-            validate_synthesis_grounding(facts, draft, check.result)
+            validate_review_synthesis(facts, artifact.synthesis)
         return artifact
     except (ValueError, ValidationError):
         return None
@@ -67,7 +60,7 @@ async def freeze_review_synthesis(task, repository, provider, *, lease=None):
     if not plan.content_eligible:
         return None
     facts = build_synthesis_input(task, plan)
-    artifact = ReviewSynthesisArtifact(prompt_version="review-synthesis-prompt-v6",
+    artifact = ReviewSynthesisArtifact(prompt_version="review-synthesis-prompt-v5",
         review_id=task.id, head_sha=facts.head_sha,
         effective_base_sha=facts.effective_base_sha, fact_bundle_hash=stable_hash(facts.model_dump(mode="json")),
         model=(task.task_runtime_configuration or {}).get("model", task.model),
@@ -76,7 +69,6 @@ async def freeze_review_synthesis(task, repository, provider, *, lease=None):
         failure_code="generation_interrupted")
     store = SynthesisStore(repository, task.id, lease=lease)
     budget = None
-    stage = "generation"
     try:
         claimed, previous = await asyncio.to_thread(store.claim, artifact)
         if not claimed:
@@ -84,8 +76,6 @@ async def freeze_review_synthesis(task, repository, provider, *, lease=None):
             return ReviewSynthesisArtifact.model_validate(previous) if previous else None
         if not policy.get("synthesis_enabled"):
             artifact.failure_code = "disabled"
-        elif policy.get("grounding_policy") != GROUNDING_POLICY:
-            artifact.failure_code = "grounding_policy_missing"
         elif provider is None:
             artifact.failure_code = "provider_unavailable"
         elif any(getattr(provider, attribute, None) not in {None, configured}
@@ -101,7 +91,7 @@ async def freeze_review_synthesis(task, repository, provider, *, lease=None):
             artifact.failure_code = "input_budget_exhausted"
         else:
             budget = await ReviewRunBudget.load_or_create("synthesis:" + task.id,
-                max_tokens=policy.get("max_tokens", 16_000), max_calls=2,
+                max_tokens=policy.get("max_tokens", 16_000), max_calls=1,
                 max_cost_microusd=policy.get("max_cost_microusd"), store=store)
             if budget.max_tokens == 0 or budget.max_cost_microusd == 0:
                 artifact.failure_code = "budget_exhausted"
@@ -112,18 +102,8 @@ async def freeze_review_synthesis(task, repository, provider, *, lease=None):
                         async with asyncio.timeout(policy.get("timeout_seconds", 20)):
                             response = await provider.synthesize_review(facts, artifact.model,
                                 output_tokens=policy.get("output_tokens", 1800))
-                            artifact.usage = response.usage.model_dump(mode="json")
-                            draft = validate_review_synthesis(facts, response.value)
-                            # 第二次请求前保存已发生消费；取消/失租后仍能读回第一笔用量。
-                            await asyncio.to_thread(store.checkpoint, artifact)
-                            stage = "grounding"
-                            checked = await provider.check_review_synthesis(facts, draft, artifact.model,
-                                output_tokens=policy.get("output_tokens", 1800))
-                            artifact.grounding_usage = checked.usage.model_dump(mode="json")
-                            result = validate_synthesis_grounding(facts, draft, checked.value)
-                    artifact.grounding = SynthesisGrounding(
-                        draft_hash=stable_hash(draft.model_dump(mode="json")),
-                        fact_bundle_hash=artifact.fact_bundle_hash, result=result)
+                    artifact.usage = response.usage.model_dump(mode="json")
+                    draft = validate_review_synthesis(facts, response.value)
                     artifact = artifact.model_copy(update={"status": "ready",
                         "synthesis": draft, "failure_code": None})
                 finally:
@@ -135,22 +115,12 @@ async def freeze_review_synthesis(task, repository, provider, *, lease=None):
         # claim 与发送账本已落盘；停止不补发，且不把取消包装成摘要成功。
         raise
     except Exception as exc:
-        reason = str(exc)
-        grounding_errors = {"grounding_incomplete", "grounding_evidence_missing", "grounding_evidence_mismatch",
-            "grounding_source_insufficient", "grounding_unsupported", "grounding_contradicted", "grounding_out_of_scope",
-            "grounding_text_too_long"}
         artifact = artifact.model_copy(update={"status": "fallback", "synthesis": None,
-            "failure_code": reason if reason in grounding_errors else
-                ("grounding_timeout" if stage == "grounding" else "timeout") if isinstance(exc, TimeoutError) else
-                "grounding_budget_exhausted" if stage == "grounding" and getattr(exc, "admission_rejection", None) else
-                "grounding_invalid_or_unavailable" if stage == "grounding" else
+            "failure_code": "timeout" if isinstance(exc, TimeoutError) else
                 "invalid_output" if isinstance(exc, (ValueError, ValidationError)) else "provider_or_storage_error"})
         usage = getattr(exc, "usage", None)
         if usage:
-            if stage == "grounding":
-                artifact.grounding_usage = usage.model_dump(mode="json")
-            else:
-                artifact.usage = usage.model_dump(mode="json")
+            artifact.usage = usage.model_dump(mode="json")
         if budget:
             artifact.budget = budget.snapshot()
         try:

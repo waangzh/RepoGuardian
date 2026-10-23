@@ -250,21 +250,15 @@ class ReviewRepository:
                 from app.models.review import ModelUsage
                 from app.services.model_usage import summarize_model_usage
                 saved = task.review_synthesis
-                attempts = (saved.get("budget", {}).get("attempts") or {}).values()
-                for field, operation in (("usage", "review_synthesis_v1"),
-                                         ("grounding_usage", "review_synthesis_grounding_v1")):
-                    usage = saved.get(field)
-                    sent = any(item.get("sent") and item.get("operation", "review_synthesis_v1") == operation
-                               for item in attempts)
-                    if usage or sent:
-                        observation = ModelUsage.model_validate(usage) if usage else ModelUsage(
-                            id=("synthesis:" + task_id if operation == "review_synthesis_v1"
-                                else f"synthesis:{task_id}:grounding"),
-                            provider=(task.task_runtime_configuration or {}).get("provider", "unknown"),
-                            model=saved.get("model") or "unknown", operation=operation, latency_ms=0)
-                        if observation.id not in {item.id for item in task.model_usages}:
-                            task.model_usages.append(observation)
-                task.model_usage_summary = summarize_model_usage(task.model_usages)
+                usage = saved.get("usage")
+                sent = any(item.get("sent") for item in (saved.get("budget", {}).get("attempts") or {}).values())
+                if usage or sent:
+                    observation = ModelUsage.model_validate(usage) if usage else ModelUsage(
+                        id="synthesis:" + task_id, provider=(task.task_runtime_configuration or {}).get("provider", "unknown"),
+                        model=saved.get("model") or "unknown", operation="review_synthesis_v1", latency_ms=0)
+                    if observation.id not in {item.id for item in task.model_usages}:
+                        task.model_usages.append(observation)
+                        task.model_usage_summary = summarize_model_usage(task.model_usages)
             return task
 
     def latest_task_for_pr(self, pr_url: str) -> ReviewTask | None:
