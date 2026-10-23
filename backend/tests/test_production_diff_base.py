@@ -76,11 +76,11 @@ def test_declared_base_identity_is_preserved_and_content_base_reported(tmp_path:
     context = tool.review_diff_context(repo_path, base, head)
 
     assert context == {"effective_base_sha": root, "diff_policy": DIFF_POLICY,
-                       "diff_policy_version": "merge-base-v1"}
+                       "diff_policy_version": "merge-base-v2"}
     # 声明 base 自身作为起点时内容基准就是它，策略与身份仍分别记录。
     assert tool.review_diff_context(repo_path, root, head) == {
         "effective_base_sha": root, "diff_policy": DIFF_POLICY,
-        "diff_policy_version": "merge-base-v1"}
+        "diff_policy_version": "merge-base-v2"}
 
 
 def test_linear_history_content_base_equals_declared_base(tmp_path: Path) -> None:
@@ -171,11 +171,43 @@ def test_production_and_evaluation_share_one_diff_function(tmp_path: Path) -> No
     context = production.review_diff_context(production_repo, base, head)
     assert context["effective_base_sha"] == root
     assert snapshot.review_diff_context(snapshot_repo, base, head) == context
-    assert context["diff_policy_version"] == DIFF_POLICY_VERSION == "merge-base-v1"
+    assert context["diff_policy_version"] == DIFF_POLICY_VERSION == "merge-base-v2"
     # 断言与生成共用同一上下文行数常量，避免两侧策略版本漂移。
     expected = production._run(["git", "-C", str(production_repo), "diff", "--no-ext-diff",
                                 f"--unified={DIFF_CONTEXT_LINES}", root, head])
     assert expected == production_diff
+
+
+def test_u3_splits_hunks_without_losing_changed_lines(tmp_path: Path) -> None:
+    from app.tools.diff_parser import DiffParser
+    from app.tools.git_tool import DIFF_CONTEXT_LINES
+
+    source = tmp_path / "source"
+    source.mkdir()
+    _git(source, "init", "-b", "main")
+    lines = [f"value_{index} = {index}\n" for index in range(200)]
+    (source / "x.py").write_text("".join(lines), encoding="utf-8")
+    base = _commit(source, "base")
+    lines[60] = "value_60 = updated(60)\n"
+    lines[120] = "value_120 = updated(120)\n"
+    (source / "x.py").write_text("".join(lines), encoding="utf-8")
+    head = _commit(source, "head")
+    tool = GitTool(tmp_path / "workspaces", command_timeout_seconds=30)
+    effective, compact = tool.unified_diff(source, base, head)
+    wide = _git(source, "diff", "--no-ext-diff", "--unified=80", base, head)
+    compact_file, wide_file = DiffParser().parse(compact)[0], DiffParser().parse(wide + "\n")[0]
+    assert DIFF_CONTEXT_LINES == 3 and effective == base
+    assert len(compact_file.hunks) == 2 and len(wide_file.hunks) == 1
+    assert (compact_file.additions, compact_file.deletions) == (2, 2)
+
+    def changes(file):
+        return [line.model_dump(mode="json") for hunk in file.hunks
+                for line in hunk.lines if line.kind != "context"]
+
+    assert changes(compact_file) == changes(wide_file)
+    assert len(compact) < len(wide)
+    assert all(sum(line.kind == "context" for line in hunk.lines) == 6
+               for hunk in compact_file.hunks)
 
 
 def _head_and_base_repo(tmp_path: Path) -> tuple[Path, str, str]:

@@ -203,6 +203,8 @@ class OpenAICompatibleProvider(LLMProvider):
                 "change_summary 用自然的 PR 摘要语气：先说明改动对象和行为变化，再保留必要的适用条件与不变项；"
                 "通常 1 至 3 句，资料不足时不凑句，不逐行翻译代码，不固定套用开头；key_changes 最多 3 项；"
                 "若事实包标记 Diff 片段遗漏或截断，只概括已提供资料，不暗示覆盖完整 Diff；"
+                "代码来源的 retained_lines 是带双侧行号的摘录，original_range 仅表示原始范围；"
+                "omitted_context_lines 和 omitted_changed_lines 表示未提供的行数，不能推断遗漏内容。"
                 "pr_purpose 必须区分作者声称和代码推断，无明确目的填 unknown 和空文本。"
                 "每段文本必须引用给定 source_refs。"
                 "change_summary 只概括 PR 的主要行为变化，不固定附加测试变化、测试函数名或断言细节；"

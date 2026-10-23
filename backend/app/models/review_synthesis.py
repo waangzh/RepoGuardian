@@ -110,8 +110,11 @@ class ReviewSynthesisArtifact(BaseModel):
     prompt_version: Literal[
         "review-synthesis-prompt-v1", "review-synthesis-prompt-v2",
         "review-synthesis-prompt-v3", "review-synthesis-prompt-v4", "review-synthesis-prompt-v5",
+        "review-synthesis-prompt-v6",
     ] = "review-synthesis-prompt-v2"
-    source_policy_version: Literal["review-synthesis-sources-v1", "review-synthesis-sources-v2"] = "review-synthesis-sources-v2"
+    source_policy_version: Literal[
+        "review-synthesis-sources-v1", "review-synthesis-sources-v2", "review-synthesis-sources-v3",
+    ] = "review-synthesis-sources-v2"
     review_id: str
     head_sha: str
     effective_base_sha: str
