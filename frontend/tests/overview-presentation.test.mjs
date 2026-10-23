@@ -131,9 +131,10 @@ test("概览使用后端结构化理解，作者文本不能补造成代码观�
     fixture.summary.digest.merge_decision.label = "暂不能给出合并建议";
     const props = { task: fixture.task, report: null, summaryPlan: fixture.summary, summary: null, findings: [], warnings: [], terminal: true };
     const html = await renderToString(createSSRApp(Overview, props));
-    for (const text of ["存在未确认事项，需进一步核实", "真实作者目标", "真实代码观察", "尚未确认下游契约", "作者声明 · 未独立验证", "结论依据与可信边界", "本轮审查快照"]) {
+    for (const text of ["存在未确认事项，需进一步核实", "真实作者目标", "真实代码观察", "尚未确认下游契约", "结论依据与可信边界", "本轮审查快照"]) {
       assert.ok(html.includes(text), text);
     }
+    assert.ok(!html.includes("作者声明 · 未独立验证"));
     assert.ok(!html.includes("审查已通过"));
     fixture.summary.digest.change_understanding = null;
     const fallback = await renderToString(createSSRApp(Overview, props));

@@ -177,6 +177,34 @@ def test_blockers_with_failed_head_validation_share_one_combined_conclusion():
     assert plan.review_comment_markdown.index(decision.label) < plan.review_comment_markdown.index("## 需要处理的问题")
 
 
+def test_audit_source_text_never_becomes_author_goal():
+    from app.models.review import PullRequestInfo, PullRequestRef
+
+    task = publishable_task()
+    task.pr = PullRequestInfo(owner="o", repo="r", number=92,
+        title="fix(stats): keep the point estimate inside its interval",
+        body="Found by the deep-review audit (#92), reproduced before acting.",
+        html_url="https://github.com/o/r/pull/92", clone_url="https://github.com/o/r.git",
+        base=PullRequestRef(ref="main", sha="c" * 40, repo_clone_url="https://github.com/o/r.git"),
+        head=PullRequestRef(ref="fix", sha="a" * 40, repo_clone_url="https://github.com/o/r.git"))
+    task.task_runtime_report["pr_intent_context"] = task.pr.body
+    task.task_runtime_report["pr_intent_context_truncated"] = False
+    task.task_runtime_configuration = {"output_policy": {"presentation_v1": True}}
+    plan = PublicationPlanner().build(task)
+    # 概览（Digest）、详细报告与评论读取同一判定，不再把审查工具来源当作作者目标。
+    assert "Found by" not in plan.digest.change_understanding.author_goal
+    assert plan.digest.change_understanding.author_goal == "fix(stats): keep the point estimate inside its interval"
+    # 审计来源被过滤后回退到标题，且概览与评论给出同一目标。
+    assert plan.digest.change_understanding.author_goal_source == "title"
+    assert plan.presentation.purpose_text == plan.digest.change_understanding.author_goal
+    assert "Found by" not in plan.review_comment_markdown
+    # 详细报告的目标行同样不能回落到审计来源文本。
+    goal_line = next(line for line in render_user_report(task, plan).splitlines() if line.startswith("**PR 目标：**"))
+    assert "Found by" not in goal_line and "point estimate inside its interval" in goal_line
+    summary = summary_projection(plan)
+    assert "Found by" not in summary.digest.change_understanding.author_goal
+
+
 def test_clean_comment_is_brief_and_keeps_one_validation_boundary():
     task = completed_task()
     task.task_runtime_report["pr_intent_context"] = "修复空值异常。"

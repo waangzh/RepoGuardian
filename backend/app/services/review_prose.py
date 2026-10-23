@@ -2,6 +2,16 @@
 
 import re
 
+# 审查工具来源与审计说明不是作者目标；概览、报告与评论共用同一判定。
+_AUDIT_PURPOSE = re.compile(r"found by.*audit|deep.review audit|审计发现", re.I)
+_NO_AUTHOR_GOAL = "未记录明确的作者目标。"
+
+
+def author_goal_text(value: str | None) -> str:
+    """返回可展示的作者目标；哨兵与审计来源文本返回空串。"""
+    text = " ".join((value or "").split())
+    return "" if not text or text == _NO_AUTHOR_GOAL or _AUDIT_PURPOSE.search(text) else text
+
 
 def concise_text(value: str | None, limit: int = 240) -> str:
     text = " ".join((value or "").split())
