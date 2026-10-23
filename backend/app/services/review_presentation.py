@@ -3,6 +3,7 @@
 import re
 
 from app.models.publication import PresentationDelivery, ReviewPresentation, SummaryInputCoverage
+from app.services.review_prose import author_goal_text
 from app.services.publication_renderer import (
     _comment_history_risk_section, _comment_next_steps, _comment_other_results,
     _comment_risks, _finding_location_text, _ordered_findings, _sentence, _validation_sentence, _goal_lines, _human_lines,
@@ -173,14 +174,11 @@ def _fallback_summary(plan):
 
 def build_presentation(plan, synthesis=None):
     understanding = plan.digest.change_understanding
-    purpose = understanding.author_goal if understanding else None
-    if purpose and (purpose == "未记录明确的作者目标。" or re.search(
-            r"found by.*audit|deep.review audit|审计发现", purpose, re.I)):
-        purpose = None
+    purpose = (author_goal_text(understanding.author_goal) if understanding else "") or None
     summary, summary_source = _fallback_summary(plan)
     draft = synthesis.synthesis if synthesis and synthesis.status == "ready" else None
     if draft:
-        purpose = draft.pr_purpose.text or None
+        purpose = author_goal_text(draft.pr_purpose.text) or None
         summary = draft.change_summary.text
         summary_source = "model"
     findings = _ordered_findings(plan)

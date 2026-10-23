@@ -7,6 +7,7 @@ from urllib.parse import quote
 
 from app.models.publication import HistoricalFindingView, PublicationFinding, PublicationPlan
 from app.services.pr_discussion_matching import exact_duplicate_matches
+from app.services.review_prose import author_goal_text
 
 
 OUTCOME_LABELS = {"clean": "本次检查未发现需在合并前处理的问题", "findings": "发现代码证据已确认的问题",
@@ -301,7 +302,7 @@ def _author_goal(plan):
     prefix = "作者声明（未经独立验证）："
     if text.startswith(prefix):
         text = text.removeprefix(prefix).removesuffix("（作者声明的输入范围有限制，见下方说明。）")
-    return text.strip()
+    return author_goal_text(text)
 
 
 def _author_source_lines(plan):

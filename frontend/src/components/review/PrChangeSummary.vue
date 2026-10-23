@@ -27,7 +27,7 @@ watch(() => props.task.id, () => { authorOpen.value = false; });
   <section class="card card-pad rg-change-summary" :class="{ 'ov-change': compact }" aria-label="PR 变更摘要">
     <template v-if="compact">
       <dl class="ov-change__rows">
-        <div><dt><AppIcon name="file" :size="16" />作者想解决什么</dt><dd>{{ understanding?.author_goal || task.pr?.title || "未提供作者目标。" }} <span class="ov-tag">作者声明 · 未独立验证</span></dd></div>
+        <div><dt><AppIcon name="file" :size="16" />作者想解决什么</dt><dd>{{ understanding?.author_goal || task.pr?.title || "未提供作者目标。" }}</dd></div>
         <div><dt><AppIcon name="code" :size="16" />代码实际改了什么</dt><dd>{{ understanding?.actual_changes || "未提供结构化代码观察，请结合 Diff 与详细报告核对。" }} <span v-if="understanding?.actual_changes" class="ov-tag">来自静态检查</span></dd></div>
         <div><dt><AppIcon name="help" :size="16" />吻合与未确认</dt><dd>{{ understanding?.alignment || "未提供结构化契约对照，无法据此确认作者目标与全部代码行为吻合。" }}</dd></div>
       </dl>

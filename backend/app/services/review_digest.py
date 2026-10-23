@@ -10,7 +10,7 @@ from app.services.review_intent import author_targets, matched_author_targets
 from app.services.review_validation_digest import validation_digest
 from app.services.review_findings import finding_views
 from app.services.fingerprints import stable_hash
-from app.services.review_prose import concise_text
+from app.services.review_prose import author_goal_text, concise_text
 
 _EXECUTION_KEYS = (
     "execution_status", "termination_reason", "usage_integrity", "sent_calls", "settled_tokens",
@@ -104,9 +104,13 @@ def _change_understanding(digest, task, report) -> ChangeUnderstanding:
         for item in digest.intent_assessments for observation in item.observations
         if observation.get("author_goal_summary")))
     body = _first_paragraph(task.pr.body) if task.pr else ""
-    goal = " ".join(concise_text(value) for value in summaries[:2]) if summaries else body or _first_paragraph(digest.author_goal)
-    source = ("summary" if summaries else "description" if body else
-              "title" if task.pr and goal == _first_paragraph(task.pr.title) else "unknown")
+    # 审查工具来源文本不是作者目标；过滤后按摘要、描述、已保存目标、标题依次回退。
+    summary_goal = author_goal_text(" ".join(concise_text(value) for value in summaries[:2]))
+    body_goal = author_goal_text(body)
+    title_goal = author_goal_text(_first_paragraph(task.pr.title)) if task.pr else ""
+    goal = summary_goal or body_goal or author_goal_text(_first_paragraph(digest.author_goal)) or title_goal
+    source = ("summary" if summary_goal else "description" if body_goal
+              else "title" if goal and goal == title_goal else "unknown")
     # 正文只保存目标内容；输入完整性与符合性仍由 Digest 的独立字段表达。
     author_goal = goal or "未记录明确的作者目标。"
     observed_goals = [goal for goal in digest.examined_goals if goal.reason and goal.reason.strip()]
