@@ -1,6 +1,5 @@
 """发送同一份不可变请求；窗口检查与累计预算预留分别执行。"""
 
-from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import lru_cache
@@ -9,12 +8,9 @@ import json
 import logging
 from pathlib import Path
 from typing import Any
-from collections import deque
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-from app.models.review import ExecutionBudget, ModelUsage
 
 
 class RequestAdmissionError(ValueError):
@@ -196,85 +192,3 @@ class ModelContextBudget:
 
 request_budget_reserver: ContextVar[Any] = ContextVar("request_budget_reserver", default=None)
 unit_budget_snapshot: ContextVar[Any] = ContextVar("unit_budget_snapshot", default=None)
-
-
-class UnitRequestLedger:
-    def __init__(self, budget: ExecutionBudget, *, holdback: dict[str, Any] | None = None):
-        self.budget = budget
-        self.holdback = dict(holdback or {})
-        self.rejection: dict[str, Any] | None = None
-        self.reserved_tokens = 0
-        self.last_reservation = 0
-        self.settled: set[str] = set()
-        # 每次真实 attempt 各自持有预留；不能用可变的 last_reservation 结算乱序响应。
-        self._pending_reservations: deque[dict[str, Any]] = deque()
-        self.settlement_events: list[dict[str, Any]] = []
-
-    async def reserve(self, metadata: dict[str, Any]) -> None:
-        amount = metadata["reserved_tokens"]
-        held_tokens = self.holdback.get("token_usage", 0)
-        held_calls = self.holdback.get("model_calls", 0)
-        if not self.budget.can_consume(model_calls=1 + held_calls, token_usage=amount + held_tokens):
-            self.rejection = {
-                "requested_tokens": amount, "remaining_tokens": max(
-                    0, self.budget.max_token_usage - self.budget.token_usage),
-                "remaining_calls": max(0, self.budget.max_model_calls - self.budget.model_calls),
-                "holdback": self.holdback,
-                "available_tokens": max(0, self.budget.max_token_usage - self.budget.token_usage - held_tokens),
-                "transport_retry": self.reserved_tokens > 0,
-            }
-            raise RequestAdmissionError("unit_request_budget_exhausted: " + json.dumps(self.rejection))
-        # No await between check and consume: one Unit ledger has one writer.
-        self.budget = self.budget.consume(model_calls=1, token_usage=amount)
-        self.reserved_tokens += amount
-        self.last_reservation = amount
-        self._pending_reservations.append({"reserved_tokens": amount, "sent": False})
-
-    def settle(self, usage: ModelUsage | None) -> None:
-        if usage is None or usage.id in self.settled:
-            return
-        self.settled.add(usage.id)
-        reservation = self._pending_reservations.popleft() if self._pending_reservations else None
-        reserved = int((reservation or {}).get("reserved_tokens", self.last_reservation))
-        if usage.actual_total_tokens is not None:
-            # 仅结算本次有实测 usage 的尝试；未知的前次重试仍保留完整预留。
-            correction = usage.actual_total_tokens - reserved
-            self.budget = self.budget.model_copy(update={
-                "token_usage": self.budget.token_usage + correction})
-            self.settlement_events.append({
-                "usage_id": usage.id, "reserved_tokens": reserved,
-                "actual_tokens": usage.actual_total_tokens,
-                "released_tokens": max(0, -correction),
-                "overrun_tokens": max(0, correction), "status": "settled",
-            })
-            if self.budget.token_usage > self.budget.max_token_usage:
-                self.rejection = {"reason": "unit_request_budget_overrun",
-                    "actual_accounted_tokens": self.budget.token_usage,
-                    "max_token_usage": self.budget.max_token_usage}
-                error = RequestAdmissionError("unit_request_budget_overrun: " + json.dumps(self.rejection))
-                error.usage = usage
-                raise error
-
-    def release_unsent(self, *, reason: str = "not_sent") -> dict[str, Any]:
-        """仅在调用方已证明未发送时撤销一笔预留。"""
-        if not self._pending_reservations:
-            return {"released_tokens": 0, "released_calls": 0, "reason": reason}
-        reservation = self._pending_reservations.popleft()
-        amount = int(reservation["reserved_tokens"])
-        self.budget = self.budget.model_copy(update={
-            "model_calls": max(0, self.budget.model_calls - 1),
-            "token_usage": max(0, self.budget.token_usage - amount),
-        })
-        self.reserved_tokens = max(0, self.reserved_tokens - amount)
-        event = {"released_tokens": amount, "released_calls": 1, "reason": reason,
-                 "status": "released_unsent"}
-        self.settlement_events.append(event)
-        return event
-
-    @contextmanager
-    def activate(self):
-        token = request_budget_reserver.set(self.reserve)
-        try:
-            yield self
-        finally:
-            request_budget_reserver.reset(token)

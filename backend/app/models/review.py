@@ -15,7 +15,6 @@ from enum import Enum
 from pathlib import PurePosixPath
 from typing import Any, Generic, Iterator, Literal, TypeVar
 from uuid import uuid4
-from pydantic_core import PydanticCustomError
 from app.models.incremental import IncrementalPreview
 from app.models.review_plan import ReviewPlanOptions, PlanSnapshot
 
@@ -1088,77 +1087,6 @@ class EvidenceAnchor(BaseModel):
         return self
 
 
-class EvidenceAnchorInput(BaseModel):
-    """LLM 可填写的证据字段白名单。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    file_path: str
-    existing_code: str = Field(min_length=1, max_length=8_000)
-    symbol: str | None = None
-    expected_side: Literal["head", "base", "either"] = "head"
-    expected_hunk_id: str | None = None
-    branch_claim: EvidenceBranchClaim | None = None
-    context_before: list[str] = Field(default_factory=list, max_length=12)
-    context_after: list[str] = Field(default_factory=list, max_length=12)
-
-    @field_validator("file_path")
-    @classmethod
-    def validate_file_path(cls, value: str) -> str:
-        return _validate_repo_relative_path(value)
-
-
-class ReviewIssueInput(BaseModel):
-    """严格的模型输出结构；行号仅兼容读取且不会进入领域模型。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    title: str
-    category: IssueCategory
-    severity: Severity
-    confidence: float = Field(ge=0, le=1)
-    affected_behavior: str = Field(min_length=3, max_length=1_000)
-    failure_scenario: str = Field(min_length=3, max_length=2_000)
-    reasoning_summary: "AuditableReasoningSummary | None" = None
-    recommendation: str = Field(min_length=1, max_length=2_000)
-    primary_evidence: EvidenceAnchorInput
-    supporting_evidence: list[EvidenceAnchorInput] = Field(default_factory=list, max_length=12)
-    assumptions: list[str] = Field(default_factory=list, max_length=8)
-    related_tests: list[str] = Field(default_factory=list, max_length=12)
-    requires_human_confirmation: bool = False
-    auto_fix_eligible: bool = False
-    fix_risk: FixRisk = FixRisk.low
-    line_number: int | None = Field(default=None, ge=1, deprecated=True)
-    line_no: int | None = Field(default=None, ge=1, deprecated=True)
-
-    def to_issue(self, review_unit_id: str = "unassigned") -> "ReviewIssue":
-        def anchor(value: EvidenceAnchorInput) -> EvidenceAnchor:
-            return EvidenceAnchor(
-                **value.model_dump(),
-                resolution_method=EvidenceResolutionMethod.unresolved,
-            )
-
-        return ReviewIssue(
-            review_unit_id=review_unit_id,
-            title=self.title,
-            category=self.category,
-            severity=self.severity,
-            confidence=self.confidence,
-            affected_behavior=self.affected_behavior,
-            failure_scenario=self.failure_scenario,
-            reasoning_summary=self.reasoning_summary,
-            recommendation=self.recommendation,
-            primary_evidence=anchor(self.primary_evidence),
-            supporting_evidence=[anchor(item) for item in self.supporting_evidence],
-            assumptions=self.assumptions,
-            related_tests=self.related_tests,
-            requires_human_confirmation=self.requires_human_confirmation,
-            auto_fix_eligible=self.auto_fix_eligible,
-            fix_risk=self.fix_risk,
-            status=IssueStatus.candidate,
-        )
-
-
 class AuditableReasoningSummary(BaseModel):
     """面向审计者的简短因果摘要，不包含隐藏思维链。"""
 
@@ -1249,29 +1177,6 @@ class DeterministicIssueCheck(BaseModel):
     normalized_severity: Severity | None = None
 
 
-class IssueVerification(BaseModel):
-    """Verifier 的唯一合法输出；不包含新 Issue 或 primary evidence 修改。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    issue_id: str
-    decision: IssueVerificationDecision
-    reason: str = Field(min_length=1, max_length=2_000)
-    contradicting_evidence: list[EvidenceAnchor] = Field(default_factory=list, max_length=12)
-    contradicting_existing_paths: list[str] = Field(default_factory=list, max_length=12)
-    adjusted_severity: Severity | None = None
-
-
-class IssueDeduplicationDecision(BaseModel):
-    """候选重复组内的受限语义合并结论。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    canonical_issue_id: str
-    duplicate_issue_ids: list[str] = Field(default_factory=list)
-    merged_rationale: str = Field(min_length=1, max_length=2_000)
-
-
 class IssueMetrics(BaseModel):
     """Issue 筛选、验证和聚合阶段的任务级指标。"""
 
@@ -1287,20 +1192,6 @@ class IssueMetrics(BaseModel):
     severity_adjustment_count: int = Field(default=0, ge=0)
     verifier_call_count: int = Field(default=0, ge=0)
     verifier_token_count: int = Field(default=0, ge=0)
-
-
-class EvidenceLocation(BaseModel):
-    """问题证据在当前 Head 工作树中的精确位置。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    file_path: str
-    line_no: int = Field(ge=1)
-
-    @field_validator("file_path")
-    @classmethod
-    def validate_file_path(cls, value: str) -> str:
-        return _validate_repo_relative_path(value)
 
 
 class AgentAction(BaseModel):
@@ -1727,32 +1618,6 @@ class ContextSnippet(BaseModel):
     total_lines: int | None = Field(default=None, ge=0)
 
 
-class IssueVerificationBudget(BaseModel):
-    """单次 verifier 调用可见的明确只读预算。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    remaining_calls: int = Field(ge=0)
-    max_output_tokens: int = Field(default=1_200, ge=128, le=4_096)
-    max_context_chars: int = Field(default=12_000, ge=0, le=40_000)
-
-
-class IssueVerificationRequest(BaseModel):
-    """独立 verifier 的最小、不可扩张输入。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    issue: ReviewIssue
-    primary_evidence: EvidenceAnchor
-    supporting_evidence: list[EvidenceAnchor] = Field(default_factory=list, max_length=12)
-    unit_diff: str = Field(max_length=60_000)
-    readonly_context: list[ContextSnippet] = Field(default_factory=list, max_length=20)
-    known_existing_paths: list[str] = Field(default_factory=list, max_length=50)
-    evidence_complete: bool = True
-    applicable_rules: list[str] = Field(default_factory=list, max_length=20)
-    budget: IssueVerificationBudget
-
-
 class UnitEvidenceReference(BaseModel):
     """服务端生成的证据目录项，绑定当前仓库快照。"""
 
@@ -2093,33 +1958,6 @@ class CrossUnitCoordinationPlan(BaseModel):
         ids = [item.id for item in self.followups]
         if len(ids) != len(set(ids)):
             raise ValueError("followup ids must be unique")
-        return self
-
-
-class CrossUnitFollowupProposal(CrossUnitFollowupRequest):
-    """新模型输出的结构约束；历史失败计划仍用领域模型读取。"""
-
-    unit_ids: list[str] = Field(min_length=2, max_length=12)
-
-    @field_validator("unit_ids")
-    @classmethod
-    def distinct_units(cls, values: list[str]) -> list[str]:
-        if len(set(values)) < 2:
-            raise ValueError("followup must name at least two distinct Units")
-        return list(dict.fromkeys(values))
-
-
-class CrossUnitCoordinationProposal(CrossUnitCoordinationPlan):
-    followups: list[CrossUnitFollowupProposal] = Field(default_factory=list, max_length=3)
-    unresolved_questions: list[str] = Field(default_factory=list, max_length=20)
-    relationship_ids: list[str] = Field(default_factory=list, max_length=40)
-    evidence_ids: list[str] = Field(default_factory=list, max_length=40)
-    catalog_batches: list[CrossUnitCatalogBatch] = Field(default_factory=list, max_length=0)
-
-    @model_validator(mode="after")
-    def followups_require_required_decision(self) -> "CrossUnitCoordinationProposal":
-        if self.followups and self.decision != "required":
-            raise PydanticCustomError("decision_followups_conflict", "followups require a required decision")
         return self
 
 
@@ -2562,4 +2400,3 @@ class ReviewTask(BaseModel):
     @property
     def plan_hash(self) -> str | None:
         return (self.task_runtime_configuration or {}).get("plan_hash")
-

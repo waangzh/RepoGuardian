@@ -1,11 +1,10 @@
-"""确定性 PR 背景、完整源码块和可恢复的 Unit 工作记忆。"""
+"""确定性 PR 背景、权限导航和完整源码证据块。"""
 
 import hashlib
 import json
 from typing import Any
 
-from app.models.review import UnitEvidenceReference, UnitReviewSummary
-from app.services.context_assembler import assemble_context
+from app.models.review import UnitEvidenceReference
 from app.services.fingerprints import stable_hash
 
 EVIDENCE_INPUT_VERSION = "unit-evidence-chunks-v3"
@@ -30,44 +29,6 @@ def build_scope_projection(scope: Any) -> dict[str, Any]:
     }
     projection["id"] = "scope-" + stable_hash([projection, raw.get("repository_root")])[:24]
     return projection
-
-
-def question_identity(question: Any) -> str:
-    raw = question.model_dump(mode="json") if hasattr(question, "model_dump") else question
-    return raw.get("id") or "question-" + stable_hash([
-        raw["question"], sorted(set(raw.get("affected_files") or []))])[:24]
-
-
-def build_retrieval_catalog(state: dict) -> dict:
-    """按当前目标/已检索文件排序导航目录；目录只提供发现线索。"""
-    unit, plan = state.get("review_unit") or {}, state.get("unit_plan") or {}
-    primary = set(unit.get("primary_files") or [])
-    primary.update(item.get("file_path") for item in state.get("changed_files") or [])
-    relevant = set(unit.get("related_files") or [])
-    relevant.update(item.get("file") for item in state.get("context_snippets") or [])
-    symbols = set(unit.get("changed_symbols") or [])
-    symbols.update(item.get("symbol") for item in state.get("context_snippets") or [] if item.get("symbol"))
-    for hypothesis in plan.get("risk_hypotheses") or []:
-        relevant.update(hypothesis.get("affected_files") or [])
-        symbols.update(hypothesis.get("affected_symbols") or [])
-    for history in (state.get("retrieval_history") or [])[-2:]:
-        retrieval = history.get("plan") or {}
-        if not isinstance(retrieval, dict):
-            # 低层只读动作保存的是请求 fingerprint；并非 ContextRetrievalPlan。
-            continue
-        relevant.update(retrieval.get("target_files") or [])
-        symbols.update(retrieval.get("target_symbols") or [])
-
-    def rank(path):
-        return 0 if path in relevant else 1 if path in primary else 2
-
-    files = sorted({item["path"] for item in state.get("file_index") or [] if item.get("path")},
-                   key=lambda path: (rank(path), path))
-    entries = [{key: item.get(key) for key in ("file", "symbol", "type")}
-               for item in state.get("symbol_index") or []]
-    entries.sort(key=lambda item: (0 if item["symbol"] in symbols else 1,
-                                  rank(item["file"]), str(item["file"]), str(item["symbol"])))
-    return {"files": files, "symbols": entries}
 
 
 def build_pr_intent(pr: Any) -> dict[str, Any]:
@@ -182,116 +143,3 @@ def build_context_evidence(context, head_sha, base_sha):
                                "base_sha": base_sha})
             offset += len(selected)
     return chunks, evidence
-
-
-def build_working_memory(summary: UnitReviewSummary | None, record_input: dict,
-                         unit_id: str, latest_attempt: dict | None = None) -> tuple[dict, list]:
-    current = {item["id"]: item for item in record_input["evidence"]}
-    record = (summary.record or summary.last_valid_record or (
-        summary.record_history[-1] if summary.record_history and not summary.latest_attempt_snapshot else None
-    )) if summary else None
-    invalidated = bool(summary and summary.last_valid_snapshot and summary.last_valid_snapshot != input_snapshot(record_input))
-    if invalidated and record_input.get("diff_manifest"):
-        current_snapshot = input_snapshot(record_input)
-        prior = summary.last_valid_snapshot
-        # 同一完整 Manifest 内允许活动范围切换；未展示的旧证据仍按下方逻辑失效。
-        invalidated = not (prior.get("diff_manifest_hash") == current_snapshot.get("diff_manifest_hash")
-            and all(prior.get(key) == current_snapshot.get(key) for key in (
-                "head_sha", "base_sha", "input_version", "pr_intent_hash", "provider_input_protocol")))
-    stale_record = record if invalidated else None
-    if invalidated:
-        record = None
-    trusted = {item.id: item.model_dump(mode="json") for item in summary.evidence} if summary else {}
-    missing = set()
-    if stale_record:
-        missing.update(identity for key in ("target_checks", "hypothesis_checks", "contract_dependencies", "unresolved_questions")
-                       for check in getattr(stale_record, key) for identity in check.evidence_ids)
-    payload = {
-        "schema_version": "unit-working-memory-v2", "unit_id": unit_id,
-        "snapshot": record_input.get("snapshot") or {},
-        "revision": stable_hash(record.model_dump(mode="json") if record else None),
-        "trust": "prior_checks_not_correctness_proof",
-        "memory_invalidated": invalidated,
-        "latest_attempt": latest_attempt or ({"status": summary.latest_attempt_status or summary.status,
-                                              "reason": summary.latest_attempt_reason or summary.reason}
-                                             if summary else {"status": "not_executed"}),
-    }
-    if record is not None:
-        for key in ("unresolved_questions", "hypothesis_checks", "contract_dependencies", "target_checks", "file_change_checks"):
-            items = []
-            for check in getattr(record, key):
-                item = check.model_dump(mode="json")
-                if key == "file_change_checks":
-                    item["evidence_ids"] = list(dict.fromkeys([item["evidence_id"], *item["evidence_ids"]]))
-                if key == "unresolved_questions":
-                    item["id"] = question_identity(item)
-                unavailable = [identity for identity in item["evidence_ids"] if identity not in current
-                               or trusted.get(identity) != {
-                                   k: v for k, v in current[identity].items() if k != "content"}]
-                missing.update(unavailable)
-                if unavailable:
-                    item["evidence_ids"] = [i for i in item["evidence_ids"] if i not in unavailable]
-                    if "status" in item:
-                        item["status"] = "unresolved"
-                        item["reason" if "reason" in item else "assumption"] = "历史证据不能在当前快照恢复"
-                    if key == "file_change_checks":
-                        item["impact_status"] = "unresolved"
-                items.append(item)
-            payload[key] = items
-    payload["missing_evidence_ids"] = sorted(missing)
-    required = {"schema_version", "unit_id", "snapshot", "revision", "trust", "latest_attempt", "memory_invalidated"}
-    def rank(label, item):
-        if not isinstance(item, dict):
-            return (6, 0, 0)
-        status = item.get("status", "unresolved")
-        tier = {"conflicting": 0, "refuted": 1, "supported": 2, "verified": 2,
-                "unresolved": 3, "not_checked": 4, "checked": 5}.get(status, 3)
-        goal = (item.get("target") in record_input.get("targets", [])
-                or item.get("hypothesis_id") in {h["id"] for h in record_input.get("hypotheses", [])})
-        cost = len(json.dumps(item, ensure_ascii=False)) + sum(
-            len(current[identity].get("content", "")) for identity in item.get("evidence_ids", []))
-        return (tier, -int(goal), cost)
-
-    closed = {}
-    if summary and not invalidated and summary.last_valid_snapshot == input_snapshot(record_input):
-        active = {question_identity(item) for item in (record.unresolved_questions if record else [])}
-        ledger_questions = (record_input.get("coverage_ledger") or {}).get("questions", {})
-        for prior in [*summary.record_history, *([record] if record else [])]:
-            for update in prior.question_updates:
-                if update.question_id in active or (ledger_questions and
-                    ledger_questions.get(update.question_id, {}).get("status") != update.status):
-                    continue
-                if all(identity in current and trusted.get(identity) == {
-                    key: value for key, value in current[identity].items() if key != "content"
-                } for identity in update.evidence_ids):
-                    closed[update.question_id] = update.model_dump(mode="json")
-    selected, cost = [], 0
-    for update in reversed(list(closed.values())):
-        size = len(json.dumps(update, ensure_ascii=False))
-        if len(selected) < 8 and cost + size <= 1_500:
-            selected.append(update)
-            cost += size
-    if selected:
-        payload.update(closed_question_updates=selected, question_catalog_snapshot=input_snapshot(record_input))
-        required.update({"closed_question_updates", "question_catalog_snapshot"})
-    memory = json.loads(assemble_context(payload, required, 6_800 if selected else 8_000, item_priority=rank))
-    if selected:
-        memory["allowed_question_update_ids"] = list(dict.fromkeys([
-            *(item["id"] for item in memory.get("unresolved_questions", [])),
-            *(item["question_id"] for item in selected)]))
-    references = set()
-    for key in ("unresolved_questions", "hypothesis_checks", "contract_dependencies", "target_checks", "file_change_checks"):
-        for item in memory.get(key, []):
-            references.update(item["evidence_ids"])
-    restored = [current[identity] for identity in sorted(references)]
-    return memory, restored
-
-
-def input_snapshot(record_input: dict) -> dict[str, str]:
-    snapshot = dict(record_input.get("snapshot") or {})
-    snapshot["pr_intent_hash"] = str((record_input.get("pr_intent") or {}).get("intent_hash") or "")
-    snapshot["provider_input_protocol"] = str(record_input.get("input_protocol") or "canonical-evidence-v3")
-    snapshot["review_scope_hash"] = stable_hash([record_input.get("targets") or [], record_input.get("hypotheses") or []])
-    if record_input.get("diff_manifest"):
-        snapshot["diff_manifest_hash"] = str(record_input["diff_manifest"]["input_hash"])
-    return snapshot

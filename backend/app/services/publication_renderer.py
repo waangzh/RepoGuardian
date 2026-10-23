@@ -761,6 +761,8 @@ def _comment_change_overview(plan, *, title="变更理解"):
                  "summary": "基于作者原文的目标归纳"}.get(source, "作者声明")
         note = "" if source == "summary" else f"（{label}，不代表目标已实现）"
         lines += [f"**PR 目标：** {markdown_text(_sentence(author, 360))}{note}", ""]
+    if understanding and understanding.diff_summary:
+        lines += [f"**变更范围（Diff 元数据）：** {markdown_text(_sentence(understanding.diff_summary, 600))}", ""]
     if understanding and understanding.implementation_changes is not None:
         lines += [f"**实现变化：** {markdown_text(understanding.implementation_changes, 800)}", "",
                   f"**测试核对：** {markdown_text(understanding.test_observations or '尚未形成测试断言核对记录。', 800)}"
@@ -1018,6 +1020,27 @@ def render_technical_audit(plan, execution_record=None):
             record.get("diagnostics") or [], termination_reason=record.get("termination_reason"))
         lines.append(f"- 失败原因：{markdown_text(failure)}")
     lines += ["", merge_advice(plan), "", "## 验证记录", "", *_validation_lines(plan)]
+    record = execution_record or {}
+    from app.services.task_review_projection import group_relationship_leads, relationship_description
+    sections = [
+        ("未调度线索", record.get("unscheduled_leads") or []),
+        ("关系取证提示（尚未核验，不计作已完成调查）", record.get("relationship_hints") or []),
+    ]
+    sections += [(f"调查关系：{markdown_text(str(item.get('proposition') or '未命名调查'))}",
+                  item.get("relationship_leads") or [])
+                 for item in record.get("admitted_investigations") or []]
+    for title, leads in sections:
+        if not leads:
+            continue
+        lines += ["", "## " + title, ""]
+        for group in group_relationship_leads(leads):
+            lines.append(f"- {markdown_text(str(group['label']))}："
+                         f"{markdown_text(str(group['status']))} / {markdown_text(str(group['reason']))}"
+                         f"（{len(group['members'])} 条）")
+            text = "\n".join(html.escape(relationship_description(member)).replace("\n", " ").replace("\r", " ")
+                             for member in group["members"])
+            fence = "`" * max(3, max((len(value) + 1 for value in re.findall(r"`+", text)), default=3))
+            lines += ["", fence + "text", text, fence, ""]
     for title, data in (("目标符合性与证据引用", [item.model_dump(mode="json") for item in plan.digest.intent_assessments]),
                         ("作者声明输入完整性", {"status": plan.digest.author_context_status,
                             "limitation": plan.digest.author_context_limitation}),

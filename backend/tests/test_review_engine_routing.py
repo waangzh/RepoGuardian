@@ -75,13 +75,3 @@ async def test_v1_service_entry_does_not_fall_back_to_legacy_graph():
     assert task.error == "task_review_v1_production_entry_not_enabled"
     assert not task.review_unit_results
     assert any("Provider" in warning for warning in task.warnings)
-
-
-@pytest.mark.asyncio
-async def test_historical_legacy_task_retry_is_rejected():
-    """历史 legacy 任务只读：重试必须给出明确原因，不执行旧引擎代码。"""
-    service = ReviewService(None, None, None, None, None)
-    task = ReviewTask(id="legacy", pr_url="https://github.com/o/r/pull/1")
-    service._tasks[task.id] = task
-    with pytest.raises(ValueError, match="legacy_units engine is retired"):
-        await service.retry_unit(task.id, "any")

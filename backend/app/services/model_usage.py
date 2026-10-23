@@ -13,7 +13,6 @@ from app.models.review import (
     ModelUsageGroup,
     ModelUsageStats,
     ModelUsageSummary,
-    ReviewUnitComplexity,
 )
 
 
@@ -27,22 +26,6 @@ def unpack_model_call(value: T | ModelCallResult[T]) -> tuple[T, ModelUsage | No
     if isinstance(value, ModelCallResult):
         return value.value, value.usage
     return value, None
-
-
-def annotate_usage(
-    usage: ModelUsage | None,
-    *,
-    accounted_tokens_estimate: int | None = None,
-    review_unit_id: str | None = None,
-    unit_complexity: ReviewUnitComplexity | None = None,
-) -> ModelUsage | None:
-    if usage is None:
-        return None
-    return usage.model_copy(update={
-        "accounted_tokens_estimate": accounted_tokens_estimate,
-        "review_unit_id": review_unit_id,
-        "unit_complexity": unit_complexity,
-    })
 
 
 def append_usage(raw: Iterable[dict[str, Any] | ModelUsage], usage: ModelUsage | None) -> list[dict[str, Any]]:

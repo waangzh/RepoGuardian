@@ -51,7 +51,8 @@ def test_author_statement_and_actual_diff_are_kept_distinct_from_alignment():
             lines=[DiffLine(kind="added", content="def handle(value):", new_line_no=1)])])]
     plan = PublicationPlanner().build(task)
     assert "handle" in plan.user_report_markdown
-    assert "**代码观察：**" in plan.review_comment_markdown
+    assert "**实现变化：**" in plan.review_comment_markdown
+    assert "尚未形成可引用的实现行为观察" in plan.review_comment_markdown
     assert "修复空值异常" in plan.review_comment_markdown
     assert "未保存独立的目标符合性核验记录" in plan.user_report_markdown
     assert "隐藏" not in plan.user_report_markdown and "<script>" not in plan.user_report_markdown
@@ -100,7 +101,8 @@ def test_compact_change_understanding_summarizes_and_does_not_trim_defect():
     task.changed_files = [ChangedFile(file_path=f"src/file{i}.py", change_type="modified", additions=1, deletions=1)
                           for i in range(8)]
     plan = PublicationPlanner().build(task)
-    assert "共 8 个文件" in plan.review_comment_markdown
+    assert "**变更范围（Diff 元数据）：**" in plan.review_comment_markdown
+    assert "共变更 8 个文件" in plan.review_comment_markdown
     assert "src/file7" not in plan.review_comment_markdown
     assert "src/file7" in plan.user_report_markdown
     finding = plan.inline_drafts[0]

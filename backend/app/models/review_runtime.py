@@ -33,11 +33,6 @@ def _path(value: str) -> str:
     return value
 
 
-class ReviewEngine(StrEnum):
-    task_review_v1 = "task_review_v1"
-    legacy_units = "legacy_units"
-
-
 class WorkItemKind(StrEnum):
     inspect = "inspect"
     investigate = "investigate"

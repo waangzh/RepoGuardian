@@ -11,7 +11,7 @@ from langsmith import Client, tracing_context
 
 from app.agents.providers import LLMProvider
 from app.core.config import settings
-from app.graph.builder import build_review_graph
+from app.graph.review_graph import build_review_graph
 from app.graph.checkpointer import (
     delete_thread_checkpoints,
     get_checkpointer,
@@ -54,7 +54,6 @@ from app.tools.git_tool import GitTool
 from app.tools.github_tool import GitHubTool
 from app.tools.repo_indexer import RepoIndexer
 from app.tools.workspace_cleanup import cleanup_workspace
-from app.tools.command_runner import CommandExecutor
 from app.validation.selector import ValidationBackendSelector
 
 logger = logging.getLogger("RepoGuardian.Service")
@@ -105,7 +104,6 @@ class ReviewService:
         diff_parser: DiffParser,
         provider: LLMProvider,
         report_service: ReportService,
-        command_executor: CommandExecutor | None = None,
         validation_backend_selector: ValidationBackendSelector | None = None,
         repository: ReviewRepository | None = None,
         task_queue: DatabaseTaskQueue | None = None,
@@ -115,9 +113,6 @@ class ReviewService:
         self._diff_parser = diff_parser
         self._provider = provider
         self._report_service = report_service
-        # 仅保留旧构造签名兼容性；production Review Plane 不保存也不注入
-        # 任何目标仓库命令执行能力。
-        del command_executor
         self._validation_backend_selector = validation_backend_selector or ValidationBackendSelector()
         self._repository = repository
         self._task_queue = task_queue or (DatabaseTaskQueue() if repository else None)

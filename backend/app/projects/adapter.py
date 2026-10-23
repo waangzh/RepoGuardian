@@ -18,10 +18,6 @@ class ProjectValidationAdapter(Protocol):
         """只返回本适配器预注册的命令定义。"""
 
 
-ProjectAdapter = ProjectValidationAdapter
-# 向后兼容别名；新代码应使用 ProjectValidationAdapter 表达验证边界。
-
-
 class ProjectAdapterRegistry:
     """按固定顺序检测适配器，避免从外部仓库加载可执行配置。"""
 

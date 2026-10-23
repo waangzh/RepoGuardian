@@ -66,6 +66,28 @@ def test_markdown_groups_relations_without_losing_ids_locations_or_hint_uncertai
         assert fragment in markdown
 
 
+def test_relationship_audit_retains_every_member_and_escapes_untrusted_text():
+    values = [deepcopy(leads()[0]) for _ in range(8)]
+    for index, value in enumerate(values):
+        value["lead_id"] = f"lead-{index}"
+    values[-1]["relationship"]["source"] = "<script>alert(1)</script>\n```"
+    report = runtime_report().model_dump()
+    report["unscheduled_leads"] = values
+    before = deepcopy(report)
+    task = ReviewTask(id="run", engine="task_review_v1", pr_url="https://github.com/o/r/pull/1",
+                      task_runtime_report=report)
+
+    markdown = ReportService().generate(task)
+
+    assert "（8 条）" in markdown
+    for value in values:
+        assert value["lead_id"] in markdown
+    assert "<script>" not in markdown
+    assert "&lt;script&gt;" in markdown
+    assert "````text" in markdown
+    assert task.task_runtime_report == before
+
+
 async def test_relation_evidence_survives_checkpoint_restore_and_cancel(tmp_path, persistence):
     goals, items, graph = v5_graph()
     graph["edges"][0].update(resolution_status="unresolved", resolution_basis="shadowed_or_conditional_binding")

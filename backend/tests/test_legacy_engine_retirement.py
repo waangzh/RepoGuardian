@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from app.models.review import (
-    ReviewCoverage,
     ReviewRunManifest,
     ReviewTask,
     TaskStatus,
@@ -60,11 +59,6 @@ def test_legacy_run_manifest_defaults_remain_readable():
     assert manifest.coverage_version == "legacy-units-v1"
 
 
-def test_legacy_coverage_version_is_still_accepted():
-    coverage = ReviewCoverage.model_validate({"coverage_version": "legacy-units-v1"})
-    assert coverage.coverage_version == "legacy-units-v1"
-
-
 def test_legacy_report_is_rendered_from_persisted_task():
     """历史任务报告仍可生成；旧引擎专属段落不因执行器删除而丢失。"""
     task = ReviewTask.model_validate(_legacy_snapshot())
@@ -85,35 +79,14 @@ def test_legacy_task_is_readable_through_repository(persistence):
 
 
 @pytest.mark.asyncio
-async def test_legacy_task_retry_is_refused_with_explicit_reason():
-    """旧任务只读：重试必须显式拒绝，不能执行已删除的旧引擎代码。"""
-    service = ReviewService(None, None, None, None, None)
-    service._tasks["legacy-task"] = ReviewTask.model_validate(_legacy_snapshot())
-
-    with pytest.raises(ValueError, match="legacy_units engine is retired"):
-        await service.retry_unit("legacy-task", "unit-1")
-
-
-@pytest.mark.asyncio
 async def test_legacy_task_retry_refusal_precedes_runtime_report_check():
     """拒绝路径不能依赖新引擎的运行报告，否则会给出误导性错误。"""
     service = ReviewService(None, None, None, None, None)
     service._tasks["legacy-task"] = ReviewTask.model_validate(_legacy_snapshot())
     assert service.get_task("legacy-task").task_runtime_report is None
 
-    with pytest.raises(ValueError, match="historical tasks are read-only"):
+    with pytest.raises(ValueError, match="legacy_units engine is retired; historical tasks are read-only"):
         await service.retry_unit("legacy-task", "any-unit")
-
-
-def test_new_tasks_cannot_choose_the_retired_engine():
-    from pydantic import ValidationError
-
-    from app.models.review import ReviewCreateRequest, ReviewPreviewRequest
-
-    for request_type in (ReviewCreateRequest, ReviewPreviewRequest):
-        with pytest.raises(ValidationError):
-            request_type(pr_url="https://github.com/o/r/pull/1", engine="legacy_units")
-        assert request_type(pr_url="https://github.com/o/r/pull/1").engine == "task_review_v1"
 
 
 def test_production_graph_exposes_no_legacy_entry_point():

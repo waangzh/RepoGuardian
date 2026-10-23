@@ -5,7 +5,6 @@ import html
 import re
 
 from app.models.review import ReviewTask
-from app.services.task_review_projection import group_relationship_leads, relationship_description, task_runtime_summary, runtime_failure_summary
 
 
 _MODE_LABELS = {
@@ -52,106 +51,6 @@ class ReportService:
             _append_limitations(lines, task)
             _append_execution_details(lines, task)
         return "\n".join(lines)
-
-
-def _append_task_runtime_report(lines: list[str], report: dict) -> None:
-    summary = task_runtime_summary(report)
-    findings = summary["findings"]
-    investigations = summary["investigations"]
-    scope = summary["scope"]
-    lines.extend(["## 审查摘要", "",
-        f"本轮审查{('已结束' if report.get('execution_status') != 'running' else '仍在运行')}："
-        f"{findings['confirmed']} 项代码证据已确认的问题，{findings['unresolved']} 项待确认候选。",
-        f"检查范围：已检查 {scope['examined']} / {scope['total']} 个目标；"
-        f"范围缺口 {scope['incomplete']} 项。",
-        f"调查：{investigations['answered']} 项已有答案，"
-        f"{investigations['insufficient_evidence']} 项证据不足，"
-        f"{investigations['not_executed']} 项未执行。", "",
-        "代码证据已确认的问题与待确认候选分别呈现；本报告不代表所有业务路径均已验证。", ""])
-    if not scope["total"]:
-        lines.append("- 尚无可核对的范围记录，检查完整性未知。")
-    if findings["unknown"]:
-        lines.append(f"- {findings['unknown']} 项发现状态未知，原始记录保留在审计附录。")
-    if report.get("usage_integrity") != "complete":
-        lines.append(f"- 用量记录{('不一致' if report.get('usage_integrity') == 'inconsistent' else '尚不完整')}；{report.get('unknown_attempts', 0)} 次调用用量未知，已结算数不能视为完整消耗。")
-    if report.get("execution_status") == "cancelled":
-        lines.append("- 审查已由用户停止，以下仅为停止前取得的结果。")
-    if report.get("execution_status") == "failed":
-        lines.append(f"- 失败原因：{_report_text(report.get('failure_summary') or runtime_failure_summary(report.get('diagnostics') or [], termination_reason=report.get('termination_reason')))}")
-    stops = {"budget_exhausted": "预算耗尽", "deadline": "运行超时", "no_progress": "无进展停止"}
-    if report.get("termination_reason") in stops:
-        lines.append(f"- {stops[report['termination_reason']]}；执行停止不表示所有调查均已完成。")
-    lines.append("")
-
-
-def _report_text(value) -> str:
-    """Render repository/model text as literal Markdown content."""
-    return re.sub(r"([\\`*_{}\[\]|#])", r"\\\1", html.escape(" ".join(str(value or "").split()), quote=False))
-
-
-def _append_user_runtime_findings(lines: list[str], report: dict) -> None:
-    groups = (("代码证据已确认的问题", {"confirmed", "published"}), ("待确认候选", {"candidate", "unresolved"}))
-    for title, statuses in groups:
-        records = [item for item in report.get("findings", []) if item.get("status") in statuses]
-        lines.extend(["", f"## {title}", ""])
-        if not records:
-            lines.append("当前没有此类发现。")
-        for index, record in enumerate(records, 1):
-            candidate = record.get("candidate") or {}
-            issue = record.get("issue") or {}
-            published = (record.get("publication") or {}).get("published_text") or {}
-            evidence = issue.get("primary_evidence") or {}
-            lines.extend(["", f"### {index}. {_report_text(issue.get('title') or published.get('claim') or candidate.get('claim') or '未命名发现')}", ""])
-            if statuses == {"candidate", "unresolved"}:
-                lines.append("**尚未确认缺陷**：以下是待核验的候选描述。")
-            path = evidence.get("file_path")
-            line = evidence.get("resolved_start_line")
-            location = f"{path}:{line}" if path and type(line) is int and line > 0 else path
-            lines.append(f"- 位置：{_report_text(location) if location else '尚无可靠代码定位'}")
-            if evidence.get("resolved_side") or evidence.get("expected_side"):
-                lines.append(f"- 证据侧：{_report_text(evidence.get('resolved_side') or evidence.get('expected_side'))}")
-            for field, label in (("affected_behavior", "影响"), ("failure_scenario", "触发场景"), ("recommendation", "建议")):
-                value = issue.get(field) or published.get(field) or candidate.get(field)
-                if value:
-                    lines.append(f"- {label}：{_report_text(value)}")
-            reason = record.get("reason")
-            if reason:
-                readable = {"candidate_derivation_incomplete": "候选处理尚未完成，需要补充证据。",
-                            "verification_usage_unknown": "核验用量状态未知，结果尚未确认为有效结论。"}.get(reason, reason)
-                lines.append(f"- 限制：{_report_text(readable)}")
-    dismissed = sum(item.get("status") == "dismissed" for item in report.get("findings", []))
-    if dismissed:
-        lines.extend(["", f"另有 {dismissed} 项候选已排除，不计入待处理问题。", ""])
-
-
-def _append_task_runtime_findings(lines: list[str], report: dict) -> None:
-    lines.extend(["", "### 新引擎发现明细", ""])
-    for finding in report.get("findings", []):
-        lines.append(f"- [{_inline_text(str(finding.get('status', 'unresolved')))}] {_inline_text(str(finding.get('candidate', {}).get('claim', '未命名候选')))}：{_inline_text(str(finding.get('reason') or '已保留服务端证据与验证结果'))}")
-    if not report.get("findings"):
-        lines.append("- 当前没有可发布的候选发现。")
-    for field, title in (("unscheduled_leads", "未调度线索"), ("relationship_hints", "关系取证提示（尚未核验，不计作已完成调查）")):
-        if report.get(field):
-            lines.extend(["", f"### {title}", ""])
-            for group in group_relationship_leads(report[field]):
-                lines.append(f"- {_inline_text(str(group['label']))}：{_inline_text(str(group['status']))} / {_inline_text(str(group['reason']))}（{len(group['members'])} 条）")
-                for member in group["members"]:
-                    if member.get("relationship"):
-                        lines.append("  - " + html.escape(relationship_description(member)).replace("\n", " "))
-    lines.extend(["", "### 初始范围", ""])
-    for goal in report.get("initial_scope_coverage", []):
-        position = f"{goal.get('target_ref')}:{goal.get('start_line')}–{goal.get('end_line')}"
-        lines.append(f"- {_inline_text(position)}：{_inline_text(str(goal.get('status')))}；{_inline_text(str(goal.get('reason') or '未记录说明'))}")
-    if report.get("admitted_investigations"):
-        lines.extend(["", "### 已准入调查", ""])
-        for investigation in report["admitted_investigations"]:
-            lines.append(f"- {_inline_text(str(investigation.get('proposition')))}：{_inline_text(str(investigation.get('status')))} / {_inline_text(str(investigation.get('answer') or '尚无答案'))}")
-            if investigation.get("reason"):
-                lines.append("  - 结论依据：" + _inline_text(str(investigation["reason"])))
-            for limitation in investigation.get("limitations", []):
-                lines.append("  - 限制：" + _inline_text(str(limitation)))
-            for lead in investigation.get("relationship_leads", []):
-                lines.append("  - " + html.escape(relationship_description(lead)).replace("\n", " "))
 
 
 def _append_unit_review_records(lines: list[str], task: ReviewTask) -> None:
