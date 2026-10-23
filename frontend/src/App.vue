@@ -45,7 +45,6 @@ const defaultModel = ref("");
 const modelsLoading = ref(false);
 const modelsError = ref<string | null>(null);
 const mode = ref<ReviewMode>("review");
-const generatePatches = ref(false);
 const validationBackend = ref<ValidationBackend>("none");
 import type { ReviewCapabilities, ReviewPlanOptions } from './types/reviewPlan';
 const capabilities = ref<ReviewCapabilities | null>(null);
@@ -99,11 +98,10 @@ const terminalNotifiedTaskIds = new Set<string>();
 
 watch(mode, (next) => {
   if (restoringPreview) return;
-  generatePatches.value = next !== "review";
   validationBackend.value = "none";
 });
 
-watch([prUrl, mode, generatePatches, validationBackend], () => {
+watch([prUrl, mode, validationBackend], () => {
   if (restoringPreview) return;
   preview.value = null;
   cancelPreview();
@@ -167,7 +165,7 @@ async function submitReview() {
   submitting.value = true;
   reviewSection.value = "overview";
   try {
-    const created = await createReview(prUrl.value.trim(), model.value.trim(), mode.value, generatePatches.value, validationBackend.value, preview.value);
+    const created = await createReview(prUrl.value.trim(), model.value.trim(), mode.value, validationBackend.value, preview.value);
     createdTaskId.value = created.task_id;
     previewTracker.detach(true);
     trackingTaskId = created.task_id;
@@ -216,7 +214,7 @@ async function loadPreview() {
   const requestId = ++previewRequestId;
   try {
     const next = await previewTracker.start({ pr_url: prUrl.value.trim(), mode: mode.value,
-      generate_patches: generatePatches.value, validation_backend: validationBackend.value,
+      validation_backend: validationBackend.value,
       model: model.value.trim() || null, plan: draftPlan.value ?? initialReviewPlan(capabilities.value) });
     if (previewRequestId === requestId && next) applyPreviewJob(next);
   } catch (err) {
@@ -254,7 +252,6 @@ async function restorePreview() {
         prUrl.value = current.request.pr_url;
         model.value = current.request.model || '';
         mode.value = current.request.mode;
-        generatePatches.value = current.request.generate_patches;
         validationBackend.value = current.request.validation_backend;
         draftPlan.value = current.request.plan;
         await nextTick();
@@ -502,7 +499,6 @@ function startNewReview() {
   prUrl.value = "";
   model.value = "";
   mode.value = "review";
-  generatePatches.value = false;
   validationBackend.value = "none";
   rereviewContext.value = null;
   draftPlan.value = undefined;

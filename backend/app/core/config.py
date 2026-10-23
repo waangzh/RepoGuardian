@@ -158,11 +158,6 @@ class Settings(BaseSettings):
     repoguardian_review_unit_max_lines_per_read: int = 240
     repoguardian_review_unit_max_search_results: int = 12
 
-    # ---- 阶段 4 候选补丁资格与确定性大小上限 ----
-    repoguardian_patch_confidence_threshold: float = Field(default=0.8, ge=0, le=1)
-    repoguardian_patch_max_files: int = Field(default=3, ge=1, le=10)
-    repoguardian_patch_max_changed_lines: int = Field(default=80, ge=1, le=1_000)
-
     # ---- 受控命令执行 ----
     # 已从 Production Review Plane 废弃，仅保留旧开发工具/配置解析兼容性。
     # reject 和 gvisor 均不会回退到宿主机；sandbox 是旧配置值的兼容别名。

@@ -686,7 +686,6 @@ class ReviewCreateRequest(BaseModel):
     expected_effective_base_sha: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
     engine: Literal["task_review_v1"] = Field(default_factory=_default_review_engine)
     mode: ReviewMode = Field(default_factory=_default_review_mode)
-    generate_patches: bool = False
     validation_backend: ValidationBackend = Field(default_factory=_default_validation_backend)
     validation_profile: str = Field(default_factory=_default_validation_profile)
 
@@ -697,11 +696,9 @@ class ReviewCreateRequest(BaseModel):
         confirmation = [self.preview_id, self.plan_hash, self.expected_head_sha, self.expected_effective_base_sha]
         if any(confirmation) and not all(confirmation):
             raise ValueError("preview confirmation requires preview_id, plan_hash and both expected SHAs")
-        if self.generate_patches or self.validation_backend != ValidationBackend.none:
+        if self.validation_backend != ValidationBackend.none:
             raise ValueError("task_review_v1 only supports read-only inspect tasks")
         if self.mode == ReviewMode.review:
-            if self.generate_patches:
-                raise ValueError("mode=review does not allow generate_patches=true")
             self.validation_backend = ValidationBackend.none
         elif self.mode == ReviewMode.review_and_suggest:
             self.validation_backend = ValidationBackend.none
@@ -730,7 +727,6 @@ class ReviewPreviewRequest(BaseModel):
     plan: ReviewPlanOptions = Field(default_factory=ReviewPlanOptions)
     engine: Literal["task_review_v1"] = Field(default_factory=_default_review_engine)
     mode: ReviewMode = Field(default_factory=_default_review_mode)
-    generate_patches: bool = False
     validation_backend: ValidationBackend = Field(default_factory=_default_validation_backend)
     validation_profile: str = Field(default_factory=_default_validation_profile)
     model_config = ConfigDict(extra="forbid")
@@ -741,7 +737,6 @@ class ReviewPreviewRequest(BaseModel):
             pr_url=self.pr_url,
             engine=self.engine,
             mode=self.mode,
-            generate_patches=self.generate_patches,
             validation_backend=self.validation_backend,
             validation_profile=self.validation_profile,
         )
@@ -1712,82 +1707,6 @@ class PatchResult(PatchProposal):
     touched_files: list[str] = Field(default_factory=lambda: ["legacy-unknown"])
     risk: Literal["low", "medium", "high"] = "low"
     head_sha: str = "legacy-head"
-
-class PatchRelatedSymbol(BaseModel):
-    """补丁 prompt 可见的索引符号白名单。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    file: str
-    symbol: str
-    type: str
-    lines: tuple[int, int]
-    signature: str = ""
-
-    @field_validator("file")
-    @classmethod
-    def validate_file(cls, value: str) -> str:
-        return _validate_repo_relative_path(value)
-
-
-class PatchGenerationRequest(BaseModel):
-    """传给 Provider 的最小、不可扩张补丁生成输入。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    issue: ReviewIssue
-    primary_evidence: EvidenceAnchor
-    supporting_evidence: list[EvidenceAnchor] = Field(default_factory=list, max_length=12)
-    related_symbols: list[PatchRelatedSymbol] = Field(default_factory=list, max_length=12)
-    limited_context: list[ContextSnippet] = Field(default_factory=list, max_length=12)
-    allowed_files: list[str] = Field(min_length=1)
-    max_files: int = Field(ge=1, le=10)
-    max_changed_lines: int = Field(ge=1, le=1_000)
-    head_sha: str = Field(min_length=1)
-    prohibited_operations: list[str] = Field(min_length=1, max_length=20)
-
-    @field_validator("allowed_files")
-    @classmethod
-    def validate_allowed_files(cls, values: list[str]) -> list[str]:
-        return list(dict.fromkeys(_validate_repo_relative_path(value) for value in values))
-
-
-class PatchGenerationCandidate(BaseModel):
-    """LLM 可返回的补丁字段白名单；ID、状态与 Head 均由服务端写入。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    issue_ids: list[str] = Field(min_length=1, max_length=8)
-    title: str = Field(min_length=1, max_length=300)
-    rationale: str = Field(min_length=1, max_length=2_000)
-    unified_diff: str = Field(min_length=1)
-    touched_files: list[str] = Field(min_length=1, max_length=10)
-    risk: Literal["low", "medium", "high"]
-    assumptions: list[str] = Field(default_factory=list, max_length=12)
-
-    @field_validator("touched_files")
-    @classmethod
-    def validate_touched_files(cls, values: list[str]) -> list[str]:
-        return list(dict.fromkeys(_validate_repo_relative_path(value) for value in values))
-
-
-class PatchGenerationAbandon(BaseModel):
-    """无法安全修复时的显式模型输出。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    issue_ids: list[str] = Field(min_length=1, max_length=8)
-    reason: str = Field(min_length=1, max_length=2_000)
-
-
-class PatchGenerationResponse(BaseModel):
-    """Provider 对外部模型响应执行严格 schema 校验。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    patches: list[PatchGenerationCandidate] = Field(default_factory=list, max_length=20)
-    abandons: list[PatchGenerationAbandon] = Field(default_factory=list, max_length=20)
-
 
 class ContextSnippet(BaseModel):
     """代码上下文片段（CodeSearch 检索产物）。"""

@@ -5,7 +5,6 @@ export interface PreviewRequest {
   pr_url: string;
   model?: string | null;
   mode: ReviewMode;
-  generate_patches: boolean;
   validation_backend: ValidationBackend;
   plan?: ReviewPlanOptions;
 }

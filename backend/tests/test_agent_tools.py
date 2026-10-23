@@ -2,9 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from app.models.review import CommandId, PatchResult
+from app.models.review import CommandId
 from app.tools.command_runner import CommandPolicyError, LocalCommandExecutor, resolve_command_spec
-from app.tools.patch_tool import PatchTool
 
 
 def test_resolve_command_spec_rejects_unknown_command_id() -> None:
@@ -17,14 +16,6 @@ def test_resolve_command_spec_allows_registered_pytest_command() -> None:
 
     assert spec.command_id == CommandId.python_test_full
     assert "-m" in spec.argv
-
-
-@pytest.mark.asyncio
-async def test_patch_tool_rejects_empty_diff(tmp_path: Path) -> None:
-    patch = PatchResult(diff_content="")
-    result = await PatchTool().apply(tmp_path, patch)
-
-    assert result.status == "abandoned"
 
 
 @pytest.mark.asyncio

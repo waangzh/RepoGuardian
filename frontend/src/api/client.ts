@@ -150,7 +150,6 @@ export async function createReview(
   prUrl: string,
   model?: string,
   mode: ReviewMode = "review",
-  generatePatches = false,
   validationBackend: ValidationBackend = "none",
   preview?: ReviewPreviewResponse,
 ): Promise<ReviewCreateResponse> {
@@ -161,7 +160,6 @@ export async function createReview(
       pr_url: prUrl,
       model: model || null,
       mode,
-      generate_patches: generatePatches,
       validation_backend: validationBackend,
       ...(preview ? { preview_id: preview.preview_id, plan_hash: preview.plan_hash,
         expected_head_sha: preview.snapshot?.head_sha,
@@ -173,7 +171,6 @@ export async function createReview(
 export async function previewReview(
   prUrl: string,
   mode: ReviewMode = "review",
-  generatePatches = false,
   validationBackend: ValidationBackend = "none",
   signal?: AbortSignal,
   model?: string,
@@ -187,7 +184,6 @@ export async function previewReview(
       model: model || null,
       ...(plan ? { plan } : {}),
       mode,
-      generate_patches: generatePatches,
       validation_backend: validationBackend,
     }),
   });

@@ -42,8 +42,6 @@ const workspaceCleaning = ref(false);
 const workspaceMessage = ref<string | null>(null);
 const settingsSaving = ref(false);
 const settingsMessage = ref<string | null>(null);
-const patchMaxFiles = ref<number | null>(null);
-const patchMaxChangedLines = ref<number | null>(null);
 const retentionDays = ref<number | null>(null);
 const modelBaseUrl = ref("");
 const modelName = ref("");
@@ -71,8 +69,6 @@ async function load() {
   try {
     const next = await getSystemDiagnostics();
     diagnostics.value = next;
-    patchMaxFiles.value = next.patch_max_files;
-    patchMaxChangedLines.value = next.patch_max_changed_lines;
     retentionDays.value = next.retention_days;
     modelBaseUrl.value = next.model_base_url;
     modelName.value = next.default_model;
@@ -84,15 +80,12 @@ async function load() {
 }
 
 async function saveSettings() {
-  if (patchMaxFiles.value === null || patchMaxChangedLines.value === null
-      || retentionDays.value === null || !modelBaseUrl.value.trim() || !modelName.value.trim()) return;
+  if (retentionDays.value === null || !modelBaseUrl.value.trim() || !modelName.value.trim()) return;
   settingsSaving.value = true;
   settingsMessage.value = null;
   error.value = null;
   try {
     diagnostics.value = await updateSystemSettings({
-      patch_max_files: patchMaxFiles.value,
-      patch_max_changed_lines: patchMaxChangedLines.value,
       retention_days: retentionDays.value,
       model_base_url: modelBaseUrl.value.trim(),
       model_name: modelName.value.trim(),
@@ -208,10 +201,8 @@ onMounted(load);
     <section v-if="diagnostics" class="diagnostics-layout" :aria-busy="loading || settingsSaving">
       <div class="diagnostic-settings-grid">
         <article class="diagnostic-panel panel">
-          <header><span aria-hidden="true">◆</span><div><h2>安全策略</h2><p>候选补丁与记录保留边界</p></div></header>
+          <header><span aria-hidden="true">◆</span><div><h2>安全策略</h2><p>记录保留边界</p></div></header>
           <div class="settings-form">
-            <label><span>单补丁文件上限</span><input v-model.number="patchMaxFiles" type="number" min="1" max="10" /></label>
-            <label><span>单补丁变更行上限</span><input v-model.number="patchMaxChangedLines" type="number" min="1" max="1000" /></label>
             <label><span>记录保留天数</span><input v-model.number="retentionDays" type="number" min="1" max="3650" /></label>
           </div>
         </article>

@@ -18,7 +18,7 @@ def pr_fingerprint(pr):
 def request_fingerprint(request):
     value = request.model_dump(mode="json")
     return stable_hash({key: value[key] for key in (
-        "engine", "mode", "generate_patches", "validation_backend", "validation_profile")})
+        "engine", "mode", "validation_backend", "validation_profile")})
 
 
 def policy_fingerprint():

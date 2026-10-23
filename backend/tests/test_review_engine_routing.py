@@ -33,7 +33,8 @@ def test_retired_legacy_engine_is_rejected_in_configuration(monkeypatch):
 
 
 def test_task_review_v1_rejects_legacy_side_effect_options():
-    with pytest.raises(ValidationError, match="read-only"):
+    # 候选补丁已下线；旧客户端传入该字段会被 extra=forbid 拒绝。
+    with pytest.raises(ValidationError, match="generate_patches"):
         ReviewCreateRequest(pr_url="https://github.com/o/r/pull/1",
                             generate_patches=True)
     with pytest.raises(ValidationError, match="read-only"):
