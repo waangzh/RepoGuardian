@@ -82,15 +82,6 @@ class SynthesisStore:
             row.completed_at = utcnow()
             return artifact
 
-    def checkpoint(self, artifact):
-        """冻结生成用量但不接受正文；保留 started 意图，恢复不重发。"""
-        with self.sessions.begin() as session:
-            self._guard(session)
-            row = session.get(SideEffectOrm, self.key)
-            if row is None or row.status != "started" or row.result["owner"] != self.owner:
-                raise RuntimeError("synthesis_artifact_frozen")
-            row.result = {**row.result, "artifact": artifact.model_dump(mode="json")}
-
 
 def load_synthesis(session, review_id):
     row = session.get(SideEffectOrm, synthesis_key(review_id))

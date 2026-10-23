@@ -98,38 +98,12 @@ class ReviewSynthesisDraft(ReviewSynthesisOutput):
         return value
 
 
-GROUNDING_POLICY = "review-synthesis-grounding-v1"
-
-
-class SynthesisEvidence(SynthesisModel):
-    source_ref: str = Field(min_length=1, max_length=256)
-    quote: str = Field(min_length=1, max_length=1000)
-
-
-class SynthesisTextCheck(SynthesisModel):
-    field_id: str = Field(min_length=1, max_length=256)
-    verdict: Literal["supported", "unsupported", "contradicted", "out_of_scope"]
-    evidence: list[SynthesisEvidence] = Field(default_factory=list, max_length=12)
-
-
-class SynthesisGroundingOutput(SynthesisModel):
-    checks: list[SynthesisTextCheck] = Field(min_length=1, max_length=110)
-
-
-class SynthesisGrounding(SynthesisModel):
-    policy_version: Literal["review-synthesis-grounding-v1"] = GROUNDING_POLICY
-    draft_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
-    fact_bundle_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
-    result: SynthesisGroundingOutput
-
-
 class ReviewSynthesisArtifact(BaseModel):
     model_config = ConfigDict(extra="forbid")
     schema_version: Literal["review-synthesis-artifact-v1", "review-synthesis-artifact-v2"] = "review-synthesis-artifact-v2"
     prompt_version: Literal[
         "review-synthesis-prompt-v1", "review-synthesis-prompt-v2",
         "review-synthesis-prompt-v3", "review-synthesis-prompt-v4", "review-synthesis-prompt-v5",
-        "review-synthesis-prompt-v6",
     ] = "review-synthesis-prompt-v2"
     source_policy_version: Literal["review-synthesis-sources-v1", "review-synthesis-sources-v2"] = "review-synthesis-sources-v2"
     review_id: str
@@ -146,8 +120,6 @@ class ReviewSynthesisArtifact(BaseModel):
     omitted_hunks: int = Field(default=0, ge=0)
     failure_code: str | None = None
     usage: dict | None = None
-    grounding: SynthesisGrounding | None = None
-    grounding_usage: dict | None = None
     budget: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -160,9 +132,6 @@ class ReviewSynthesisArtifact(BaseModel):
     @model_serializer(mode="wrap")
     def omit_empty_coverage(self, handler):
         value = handler(self)
-        for name in ("grounding", "grounding_usage"):
-            if getattr(self, name) is None:
-                value.pop(name, None)
         if not self.truncation_reasons:
             value.pop("truncation_reasons", None)
         if not self.omitted_files:
