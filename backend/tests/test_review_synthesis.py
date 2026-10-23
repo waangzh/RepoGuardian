@@ -17,7 +17,7 @@ from app.models.review_synthesis import (
 )
 from app.services.fingerprints import stable_hash
 from app.services.publication_planner import PublicationPlanner, summary_projection
-from app.services.review_synthesis_input import build_synthesis_input
+from app.services.review_synthesis_input import SOURCE_POLICY_VERSION, build_synthesis_input
 from app.services.review_synthesis_repository import SynthesisStore
 from app.services.review_synthesis_service import freeze_review_synthesis, bound_synthesis
 from app.services.review_synthesis_validator import validate_review_synthesis
@@ -76,7 +76,8 @@ async def test_once_frozen_and_repeated_reads_never_call_model(persistence):
     provider, calls = stub_provider()
     first = await freeze_review_synthesis(task, repo, provider)
     assert first.status == "ready"
-    assert first.prompt_version == "review-synthesis-prompt-v5"
+    assert first.prompt_version == "review-synthesis-prompt-v6"
+    assert first.source_policy_version == SOURCE_POLICY_VERSION
     prompt = calls[0][1].content
     assert "示例输入" not in prompt and "示例 change_summary" not in prompt
     assert "示例 test_changes" not in prompt and prompt.count("\nFact Bundle:\n") == 1
@@ -280,7 +281,7 @@ def test_saved_test_changes_remain_readable_without_being_appended_to_new_overvi
     task = synthesis_task()
     task.changed_files.append(task.changed_files[0].model_copy(update={"file_path": "tests/test_response.py"}))
     plan = PublicationPlanner().build(task)
-    facts = build_synthesis_input(task, plan)
+    facts = build_synthesis_input(task, plan, source_policy_version="review-synthesis-sources-v2")
     draft = draft_for(facts)
     test_ref = next(source.id for source in facts.sources if source.kind == "test_source_observation")
     observation = "包含空响应处理的回归断言。"
@@ -413,7 +414,7 @@ def test_legacy_synthesis_hash_remains_bindable_with_derived_coverage():
     task = synthesis_task()
     task.changed_files += [task.changed_files[0].model_copy(update={"file_path": ".env"})]
     plan = PublicationPlanner().build(task)
-    facts = build_synthesis_input(task, plan)
+    facts = build_synthesis_input(task, plan, source_policy_version="review-synthesis-sources-v1")
     old_facts = facts.model_dump(mode="json", exclude={"truncation_reasons"})
     old_facts["schema_version"] = "review-synthesis-input-v1"
     artifact = ReviewSynthesisArtifact(
@@ -435,7 +436,7 @@ def test_legacy_synthesis_hash_remains_bindable_with_derived_coverage():
 def test_frozen_editorial_summary_remains_bindable_without_keyword_filter(prompt_version):
     task = synthesis_task()
     plan = PublicationPlanner().build(task)
-    facts = build_synthesis_input(task, plan)
+    facts = build_synthesis_input(task, plan, source_policy_version="review-synthesis-sources-v2")
     draft = draft_for(facts)
     draft["change_summary"]["text"] = "代码变更符合作者描述。"
     artifact = ReviewSynthesisArtifact(
@@ -464,6 +465,7 @@ def test_current_synthesis_rejects_modified_coverage_metadata(field, value):
     plan = PublicationPlanner().build(task)
     facts = build_synthesis_input(task, plan)
     task.review_synthesis = ReviewSynthesisArtifact(
+        source_policy_version=SOURCE_POLICY_VERSION,
         review_id=task.id, head_sha=facts.head_sha, effective_base_sha=facts.effective_base_sha,
         fact_bundle_hash=stable_hash(facts.model_dump(mode="json")),
         input_truncated=facts.input_truncated, truncation_reasons=facts.truncation_reasons,
@@ -489,6 +491,7 @@ def test_oversized_hunk_keeps_changed_lines_instead_of_dropping_the_source():
     diff = next(source for source in facts.sources if source.kind == "diff_observation")
     assert "added_value_0" in diff.text and len(diff.text) <= 6000
     assert "diff_hunk_truncated" in facts.truncation_reasons
+    assert facts.input_truncated
     assert facts.omitted_hunks == 0
 
 
