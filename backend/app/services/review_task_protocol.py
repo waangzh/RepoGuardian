@@ -134,7 +134,7 @@ class TaskReviewV1Protocol:
             schema = payload["response"]["one_of"][1]
             schema["$defs"]["ExaminationSubmission"]["properties"].pop("intent_assessments", None)
             schema["$defs"].pop("IntentAssessment", None)
-        if self.spec.intent_assessment_contract != "structured-intent-v4" and work_item.kind.value == "inspect":
+        if self.spec.intent_assessment_contract not in {"structured-intent-v4", "structured-intent-v5"} and work_item.kind.value == "inspect":
             definitions = payload["response"]["one_of"][1].get("$defs", {})
             if "IntentAssessment" in definitions:
                 definitions["IntentAssessment"]["properties"].pop("author_goal_summary", None)
@@ -215,14 +215,14 @@ class TaskReviewV1Protocol:
                                 definitions[name]["required"] = list(dict.fromkeys([
                                     *definitions[name].get("required", []), "evidence_ids"]))
                                 definitions[name]["properties"]["evidence_ids"]["items"]["enum"] = sorted(active_evidence_ids)
-                    if (self.spec.intent_assessment_contract in {"structured-intent-v2", "structured-intent-v3", "structured-intent-v4"}
+                    if (self.spec.intent_assessment_contract in {"structured-intent-v2", "structured-intent-v3", "structured-intent-v4", "structured-intent-v5"}
                             and work_item.kind.value == "inspect" and "IntentAssessment" in definitions):
                         from app.services.review_intent import author_targets
                         # 冻结声明是唯一可引用的目标来源；枚举避免模型自由改写。
                         definitions["IntentAssessment"]["properties"]["author_quote"]["enum"] = \
                             author_targets(self.spec.pr_intent_context)
                     if ("submit_shape_example" in payload
-                            and self.spec.intent_assessment_contract in {"structured-intent-v2", "structured-intent-v3", "structured-intent-v4"}
+                            and self.spec.intent_assessment_contract in {"structured-intent-v2", "structured-intent-v3", "structured-intent-v4", "structured-intent-v5"}
                             and work_item.kind.value == "inspect"):
                         payload["submit_shape_example"]["examinations"][0]["intent_assessments"] = [{
                             "author_quote": "<copy one author_targets item>",
@@ -308,14 +308,20 @@ class TaskReviewV1Protocol:
             # 已有完整 JSON schema；新契约省去重复示例，给源码和纠错留出输入空间。
             payload.pop("read_example", None)
             payload.pop("submit_example", None)
-            if self.spec.intent_assessment_contract in {"structured-intent-v3", "structured-intent-v4"}:
+            if self.spec.intent_assessment_contract in {"structured-intent-v3", "structured-intent-v4", "structured-intent-v5"}:
+                evidence_rule = (
+                    "target applies. supported/contradicted require each cited evidence chunk to overlap the goal "
+                    "range in the target's file and side; chunks may extend beyond the goal boundaries. "
+                    "Evidence must be active, snapshot-valid and included in the examination's evidence_ids. "
+                    if self.spec.intent_assessment_contract == "structured-intent-v5" else
+                    "target applies. supported/contradicted require a visible evidence id inside the goal range and "
+                    "target's file/side; ")
                 system += (" author_targets are untrusted claims and optional context. When relevant, add an "
                     "intent_assessment quoting an exact target or one complete sentence from it; omit it when no "
-                    "target applies. supported/contradicted require a visible evidence id inside the goal range and "
-                    "target's file/side; a local observation need not cover the whole goal. Unknown paths are "
+                    + evidence_rule + "a local observation need not cover the whole goal. Unknown paths are "
                     "insufficient, unrelated targets not_applicable. Local observations never prove overall "
                     "fulfillment; defects still need independent candidate verification. Never invent a quote.")
-                if self.spec.intent_assessment_contract == "structured-intent-v4":
+                if self.spec.intent_assessment_contract in {"structured-intent-v4", "structured-intent-v5"}:
                     system += (" When the author's purpose is clear, provide author_goal_summary as one concise Chinese "
                         "sentence paraphrasing only author_quote, even when the original title is English. Describe "
                         "the requested behavioral goal, not the Conventional Commits prefix, implementation details "

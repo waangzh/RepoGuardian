@@ -24,10 +24,15 @@ SynthesisTruncationReason = Literal[
 ]
 
 
+SynthesisSourceKind = Literal[
+    "author_claim", "diff_observation", "verified_observation",
+    "verified_finding", "test_source_observation", "review_boundary",
+]
+
+
 class SynthesisSource(SynthesisModel):
     id: str = Field(min_length=1, max_length=256)
-    kind: Literal["author_claim", "diff_observation", "verified_observation",
-                  "verified_finding", "test_source_observation", "review_boundary"]
+    kind: SynthesisSourceKind
     text: str = Field(min_length=1, max_length=6000)
 
 
@@ -104,6 +109,19 @@ class ReviewSynthesisDraft(ReviewSynthesisOutput):
         return value
 
 
+class SynthesisReferenceFailure(SynthesisModel):
+    field_path: str = Field(pattern=(
+        r"^(pr_purpose|change_summary|key_changes\[[0-2]\]|test_changes\[[0-2]\])"
+        r"\.source_refs\[([0-9]|1[01])\]$"
+    ))
+    reason: Literal["unknown_source", "source_kind_not_allowed"]
+    # 只保存服务端事实包中已知的 ID；未知模型字符串仅保存哈希。
+    source_ref: str | None = Field(default=None, max_length=256)
+    source_ref_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    actual_kind: SynthesisSourceKind | None = None
+    allowed_kinds: list[SynthesisSourceKind] = Field(min_length=1, max_length=3)
+
+
 class ReviewSynthesisArtifact(BaseModel):
     model_config = ConfigDict(extra="forbid")
     schema_version: Literal["review-synthesis-artifact-v1", "review-synthesis-artifact-v2"] = "review-synthesis-artifact-v2"
@@ -111,6 +129,7 @@ class ReviewSynthesisArtifact(BaseModel):
         "review-synthesis-prompt-v1", "review-synthesis-prompt-v2",
         "review-synthesis-prompt-v3", "review-synthesis-prompt-v4", "review-synthesis-prompt-v5",
         "review-synthesis-prompt-v6",
+        "review-synthesis-prompt-v7",
     ] = "review-synthesis-prompt-v2"
     source_policy_version: Literal[
         "review-synthesis-sources-v1", "review-synthesis-sources-v2", "review-synthesis-sources-v3",
@@ -128,6 +147,7 @@ class ReviewSynthesisArtifact(BaseModel):
     omitted_files: int = Field(default=0, ge=0)
     omitted_hunks: int = Field(default=0, ge=0)
     failure_code: str | None = None
+    reference_failure: SynthesisReferenceFailure | None = None
     usage: dict | None = None
     budget: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -141,6 +161,8 @@ class ReviewSynthesisArtifact(BaseModel):
     @model_serializer(mode="wrap")
     def omit_empty_coverage(self, handler):
         value = handler(self)
+        if self.reference_failure is None:
+            value.pop("reference_failure", None)
         if not self.truncation_reasons:
             value.pop("truncation_reasons", None)
         if not self.omitted_files:

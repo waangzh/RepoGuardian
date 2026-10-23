@@ -76,7 +76,7 @@ async def test_once_frozen_and_repeated_reads_never_call_model(persistence):
     provider, calls = stub_provider()
     first = await freeze_review_synthesis(task, repo, provider)
     assert first.status == "ready"
-    assert first.prompt_version == "review-synthesis-prompt-v6"
+    assert first.prompt_version == "review-synthesis-prompt-v7"
     assert first.source_policy_version == SOURCE_POLICY_VERSION
     prompt = calls[0][1].content
     assert "示例输入" not in prompt and "示例 change_summary" not in prompt

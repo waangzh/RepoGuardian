@@ -103,7 +103,7 @@ class ReviewRunSpec(BaseModel):
     review_strategy: dict = Field(default_factory=dict)
     pr_intent_context: str | None = Field(default=None, min_length=1, max_length=4_000)
     pr_intent_context_truncated: bool | None = Field(default=None, strict=True)
-    intent_assessment_contract: Literal["structured-intent-v1", "structured-intent-v2", "structured-intent-v3", "structured-intent-v4"] | None = None
+    intent_assessment_contract: Literal["structured-intent-v1", "structured-intent-v2", "structured-intent-v3", "structured-intent-v4", "structured-intent-v5"] | None = None
     discussion_manifest_hash: str | None = None
     discussion_context: list[dict] | None = None
     discussion_profile: dict | None = None
