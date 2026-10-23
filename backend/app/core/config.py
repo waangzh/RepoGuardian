@@ -61,6 +61,7 @@ class Settings(BaseSettings):
         return {
             "presentation_v1": self.repoguardian_review_presentation_v1_enabled,
             "synthesis_enabled": self.repoguardian_review_synthesis_enabled,
+            "grounding_policy": "review-synthesis-grounding-v1",
             "language": "zh-CN",
             "max_input_chars": self.repoguardian_review_synthesis_max_input_chars,
             "max_tokens": self.repoguardian_review_synthesis_max_tokens,

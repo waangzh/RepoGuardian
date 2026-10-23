@@ -44,13 +44,30 @@ def draft_for(facts):
         "finding_summaries": [{"finding_key": "key-a", "text": "空返回值破坏调用方契约"}]}
 
 
-def stub_provider(*, change=None, error=None, delay=0):
+def stub_provider(*, change=None, error=None, delay=0, check_change=None, check_error=None, check_delay=0):
     calls = []
     provider = OpenAICompatibleProvider("fixture", "https://example.invalid/v1", "fixture",
         provider_name="fixture", retry_backoff_seconds=0, request_attempts=2)
 
     async def invoke(messages):
         calls.append(messages)
+        if "\nFields:\n" in messages[1].content:
+            if check_delay:
+                await asyncio.sleep(check_delay)
+            if check_error:
+                raise check_error
+            prompt = messages[1].content
+            fields = json.loads(prompt.split("\nFields:\n", 1)[1].split("\nPurpose Kind:\n", 1)[0])
+            facts = json.loads(prompt.split("\nFact Bundle:\n", 1)[1])
+            sources = {item["id"]: item["text"] for item in facts["sources"]}
+            # 模拟独立检查结果，只验证服务协议；不充当自然语言判断器。
+            result = {"checks": [{"field_id": key, "verdict": "supported", "evidence": [
+                {"source_ref": ref, "quote": sources[ref][:1000]} for ref in field["source_refs"]]}
+                for key, field in fields.items()]}
+            if check_change:
+                check_change(result)
+            return AIMessage(content=json.dumps(result, ensure_ascii=False),
+                usage_metadata={"input_tokens": 30, "output_tokens": 40, "total_tokens": 70})
         if delay:
             await asyncio.sleep(delay)
         if error:
@@ -78,7 +95,7 @@ async def test_once_frozen_and_repeated_reads_never_call_model(persistence):
     provider, calls = stub_provider()
     first = await freeze_review_synthesis(task, repo, provider)
     assert first.status == "ready"
-    assert first.prompt_version == "review-synthesis-prompt-v5"
+    assert first.prompt_version == "review-synthesis-prompt-v6"
     prompt = calls[0][1].content
     assert "示例输入" not in prompt and "示例 change_summary" not in prompt
     assert "示例 test_changes" not in prompt and prompt.count("\nFact Bundle:\n") == 1
@@ -86,7 +103,9 @@ async def test_once_frozen_and_repeated_reads_never_call_model(persistence):
     assert "test_changes" not in schema["properties"]
     assert first.synthesis.schema_version == "review-synthesis-v2"
     assert "test_changes" not in first.model_dump(mode="json")["synthesis"]
-    assert first.budget["calls_consumed"] == 1
+    assert first.budget["calls_consumed"] == 2
+    assert first.grounding is not None
+    assert first.grounding_usage["actual_total_tokens"] == 70
     assert first.usage["actual_total_tokens"] == 50
     for _ in range(10):
         restored = repo.get_task(task.id)
@@ -97,10 +116,10 @@ async def test_once_frozen_and_repeated_reads_never_call_model(persistence):
         assert plan.presentation.verdict == plan.digest.merge_decision
         assert plan.presentation.validation_state == "not_executed"
         assert summary_projection(plan).presentation.findings == []
-        assert restored.model_usage_summary.overall.actual_total_tokens == 50
-        assert restored.model_usages[-1].operation == "review_synthesis_v1"
+        assert restored.model_usage_summary.overall.actual_total_tokens == 120
+        assert restored.model_usages[-1].operation == "review_synthesis_grounding_v1"
     again = await freeze_review_synthesis(task, repo, provider)
-    assert first.fact_bundle_hash == again.fact_bundle_hash and len(calls) == 1
+    assert first.fact_bundle_hash == again.fact_bundle_hash and len(calls) == 2
     assert "synthesis" not in (task.task_runtime_report or {})
 
 
@@ -155,18 +174,22 @@ def test_author_purpose_is_not_classified_by_audit_keywords():
 
 
 @pytest.mark.asyncio
-async def test_editorial_words_do_not_overwrite_authoritative_review_state(persistence):
+async def test_rejected_editorial_words_never_reach_delivery_or_change_authority(persistence):
     repo, _, _ = persistence
     task = synthesis_task()
     repo.create_task(task)
     before = PublicationPlanner().build(task)
-    # Deliberately misleading prose is not a structured status or a verification result.
     text = "全部测试通过，可以安全合并。"
-    provider, _ = stub_provider(change=lambda value: value["change_summary"].update(text=text))
+    provider, calls = stub_provider(change=lambda value: value["change_summary"].update(text=text),
+        check_change=lambda value: value["checks"][0].update(verdict="out_of_scope", evidence=[]))
     artifact = await freeze_review_synthesis(task, repo, provider)
-    assert artifact.status == "ready"
+    assert artifact.status == "fallback" and artifact.failure_code == "grounding_out_of_scope"
     after = PublicationPlanner().build(repo.get_task(task.id))
-    assert after.presentation.change_summary == text
+    from app.services.publication_renderer import render_summary, render_review_comment
+    for body in (render_summary(after), render_review_comment(after), render_review_comment(after, detail="full")):
+        assert text not in body
+        assert "未执行目标仓库代码、测试或构建" in body
+    assert len(calls) == 2
     assert after.outcome == before.outcome
     assert after.digest.merge_decision == before.digest.merge_decision
     assert after.presentation.validation_state == "not_executed"
@@ -254,12 +277,13 @@ def test_saved_test_changes_remain_readable_without_being_appended_to_new_overvi
     saved = artifact.model_dump(mode="json")
     task.review_synthesis = deepcopy(saved)
     bound = bound_synthesis(task, plan)
-    assert bound is not None and bound.model_dump(mode="json") == saved
-    assert bound.synthesis.test_changes[0].text == observation
+    assert bound is not None and bound.status == "fallback"
+    assert task.review_synthesis == saved
+    assert ReviewSynthesisArtifact.model_validate(saved).synthesis.test_changes[0].text == observation
     current = PublicationPlanner().build(task)
     assert current.presentation.test_changes == []
     assert observation not in current.summary_markdown
-    assert current.presentation.change_summary == draft["change_summary"]["text"]
+    assert current.presentation.change_summary != draft["change_summary"]["text"]
     assert ReviewSynthesisOutput.model_validate(
         {key: value for key, value in draft.items() if key != "test_changes"}
     ).schema_version == "review-synthesis-v2"
@@ -313,7 +337,7 @@ async def test_concurrent_claims_and_interrupted_intent_do_not_resend(persistenc
     provider, calls = stub_provider(delay=0.02)
     await asyncio.gather(freeze_review_synthesis(task, repo, provider),
                          freeze_review_synthesis(task, repo, provider))
-    assert len(calls) == 1
+    assert len(calls) == 2
     store = SynthesisStore(repo, task.id)
     assert not store.claim(bound_synthesis(repo.get_task(task.id), PublicationPlanner().build(task)))[0]
 
@@ -335,7 +359,7 @@ async def test_snapshot_bundle_tamper_and_legacy_are_read_only_fallback(persiste
     assert PublicationPlanner().build(restored).presentation.synthesis_status == "fallback"
     legacy = publishable_task()
     assert await freeze_review_synthesis(legacy, repo, provider) is None
-    assert len(calls) == 1
+    assert len(calls) == 2
 
 
 def test_input_is_bounded_excludes_sensitive_paths_and_discloses_omissions():
@@ -389,7 +413,7 @@ def test_legacy_synthesis_hash_remains_bindable_with_derived_coverage():
 
 
 @pytest.mark.parametrize("prompt_version", ["review-synthesis-prompt-v2", "review-synthesis-prompt-v3"])
-def test_frozen_editorial_summary_remains_bindable_without_keyword_filter(prompt_version):
+def test_old_unchecked_editorial_summary_is_read_only_fallback(prompt_version):
     task = synthesis_task()
     plan = PublicationPlanner().build(task)
     facts = build_synthesis_input(task, plan)
@@ -404,7 +428,9 @@ def test_frozen_editorial_summary_remains_bindable_without_keyword_filter(prompt
         omitted_files=facts.omitted_files, omitted_hunks=facts.omitted_hunks)
     task.review_synthesis = artifact.model_dump(mode="json")
     bound = bound_synthesis(task, plan)
-    assert bound is not None and bound.synthesis.change_summary.text == draft["change_summary"]["text"]
+    assert bound is not None and bound.status == "fallback"
+    assert bound.failure_code == "grounding_required"
+    assert task.review_synthesis["synthesis"]["change_summary"]["text"] == draft["change_summary"]["text"]
     assert bound.prompt_version == prompt_version
     task.review_synthesis.pop("prompt_version")
     assert bound_synthesis(task, plan).prompt_version == "review-synthesis-prompt-v2"
