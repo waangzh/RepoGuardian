@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useId } from "vue";
+import AppIcon from "../common/AppIcon.vue";
 import type { ReviewCapabilities, ReviewPlanOptions } from "../../types/reviewPlan";
 
 defineProps<{
@@ -25,7 +26,7 @@ function amount(value: number | null, unit: string) {
     <div class="option-grid">
       <div v-for="preset in presets" :key="preset.id" class="option-card review-depth-card" :class="{ selected: modelValue === preset.id, 'is-disabled': disabled }">
         <button type="button" class="review-depth-choice" :disabled="disabled" :aria-label="preset.label" :aria-pressed="modelValue === preset.id" :aria-describedby="`${id}-${preset.id}`" @click="emit('update:modelValue', preset.id)">
-          <span class="opt-head">{{ preset.label }}<span v-if="modelValue === preset.id" aria-hidden="true">✓</span></span>
+          <span class="opt-head">{{ preset.label }}<AppIcon v-if="modelValue === preset.id" name="check" :size="14" :stroke-width="2.4" aria-hidden="true" /></span>
           <span :id="`${id}-${preset.id}`" class="opt-desc">{{ descriptions[preset.id] }}</span>
           <template v-if="!$slots.configuration">
             <span class="review-depth-caption">{{ preset.customized ? '自定义资源上限' : '资源预设上限' }}</span>

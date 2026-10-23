@@ -13,7 +13,7 @@ const head = computed(() => props.plan?.snapshot.head_sha || props.task.snapshot
 <template>
   <section class="rd-context" :class="{ 'rd-context--embedded': embedded }" aria-label="当前审查快照">
     <div v-if="!embedded" class="rd-context-top">
-      <div><div class="rd-pr-path">{{ task.pr ? `${task.pr.owner} / ${task.pr.repo} · PULL REQUEST #${task.pr.number}` : `REVIEW / ${task.id}` }}</div><h2>{{ task.pr?.title || '审查任务' }}</h2></div>
+      <div><div class="rd-pr-path">{{ task.pr ? `${task.pr.owner} / ${task.pr.repo} · PR #${task.pr.number}` : `审查 ${task.id}` }}</div><h2>{{ task.pr?.title || '审查任务' }}</h2></div>
       <StatusBadge :status="task.status" />
     </div>
     <div class="rd-meta"><code>Head · {{ head?.slice(0, 12) || '未记录' }}</code><code v-if="task.pr && !embedded">{{ task.pr.base.ref }} ← {{ task.pr.head.ref }}</code><span class="badge neutral">{{ task.changed_files.length }} 个文件</span><span class="badge blue">{{ task.mode === 'review' ? '只读静态审查' : '静态审查与修复' }}</span></div>

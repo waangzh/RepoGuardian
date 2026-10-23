@@ -16,7 +16,6 @@ const situation = computed(() => reviewSituation(props.plan, { stale: props.stal
     <div v-if="situation" class="outcome-verdict" :class="situation.tone">
       <AppIcon :name="situation.icon" :size="22" />
       <div class="outcome-verdict__text">
-        <div class="eyebrow">审查结果 · 本轮快照结论</div>
         <h2>{{ situation.title }}</h2>
         <p>{{ situation.description }}</p>
         <p v-if="situation.nextStep" class="outcome-verdict__next"><strong>下一步：</strong>{{ situation.nextStep }}</p>

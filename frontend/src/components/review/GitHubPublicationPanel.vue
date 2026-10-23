@@ -115,8 +115,8 @@ const placementLabel = (placement: string) => placement === "inline" ? "代码�
 </script>
 
 <template>
-  <details class="github-publication" aria-label="GitHub 交付">
-    <summary>发布或复制到 GitHub</summary>
+  <details class="github-publication" open aria-label="GitHub 交付">
+    <summary>交付方式与服务端预检</summary>
     <div class="github-publication__body">
       <section class="github-publication__paths" aria-label="交付方式">
         <article class="github-publication__path">
@@ -184,14 +184,14 @@ const placementLabel = (placement: string) => placement === "inline" ? "代码�
 
 <style scoped>
 .github-publication { margin: 0 0 20px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); }
-.github-publication > summary { padding: 18px 24px; cursor: pointer; color: var(--primary); font-weight: 650; }
+.github-publication > summary { padding: 16px 24px; cursor: pointer; color: var(--ink); font-size: 15px; font-weight: 650; }
 .github-publication__body { padding: 0 24px 24px; display: grid; gap: 16px; min-width: 0; font-size: 14px; line-height: 1.8; }
 .github-publication__body p { margin: 0; color: var(--text-secondary); }
 .github-publication__paths { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
-.github-publication__path { display: grid; gap: 10px; align-content: start; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.github-publication__path { display: grid; gap: 10px; align-content: start; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-control); }
 .github-publication__path h3 { margin: 0; font-size: 15px; }
 .github-publication__path .button { justify-self: start; }
-.github-publication__notice { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--warning-soft, var(--surface-subtle)); color: var(--text-primary); }
+.github-publication__notice { padding: 10px 12px; border-radius: var(--radius-control); background: var(--warning-soft, var(--surface-subtle)); color: var(--warning); }
 .github-publication__credential { display: grid; gap: 8px; max-width: 480px; }
 .github-publication__credential input { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-primary); }
 fieldset { display: grid; gap: 10px; margin: 0; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
@@ -199,7 +199,7 @@ label { overflow-wrap: anywhere; } input[type=checkbox] { appearance: auto; widt
 .github-publication__actions { display: flex; flex-wrap: wrap; gap: 10px; }
 section { display: grid; gap: 12px; min-width: 0; } section h3 { margin: 0; font-size: 16px; }
 code, pre { overflow-wrap: anywhere; white-space: pre-wrap; } section pre, .github-publication__copy-preview { padding: 16px; background: var(--surface-subtle); font-size: 12px; }
-article { padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+article { padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-control); }
 .github-publication__path { padding: 16px; }
 .github-publication__dialog { width: min(520px, calc(100vw - 32px)); padding: 24px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); color: var(--text-primary); }
 .github-publication__dialog::backdrop { background: #17232980; }

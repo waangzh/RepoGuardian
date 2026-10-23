@@ -9,7 +9,7 @@ const statuses: Record<string, string> = { added: '新增', removed: '删除', m
 </script>
 <template>
   <ReviewStepper :current="0" />
-  <div class="page-head"><div><div class="eyebrow">PULL REQUEST OVERVIEW</div>
+  <div class="page-head"><div>
     <h1 tabindex="-1">{{ loading ? '正在读取 PR 概览' : overview ? overview.title : 'PR 概览暂不可用' }}</h1>
     <p class="title-sub break-anywhere">{{ overview ? `${overview.repository} · #${overview.number}` : prUrl }}</p>
   </div><span class="badge blue">零模型调用</span></div>

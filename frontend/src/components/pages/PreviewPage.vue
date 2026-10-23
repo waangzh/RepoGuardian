@@ -48,7 +48,6 @@ const elapsed = computed(() => {
   <ReviewStepper :current="0" />
   <div class="page-head">
     <div>
-      <div class="eyebrow">STEP 01 / IMPORT PULL REQUEST</div>
       <h1 tabindex="-1">{{ title }}</h1>
       <p class="title-sub break-anywhere">{{ prUrl }}</p>
       <p class="title-sub">读取 PR 信息、准备只读快照并生成审查方案；此阶段不调用模型，也不执行目标仓库代码。</p>

@@ -197,7 +197,6 @@ onMounted(load);
   <main class="workspace-main">
     <header class="workspace-heading">
       <div>
-        <p class="eyebrow">AUDIT TRAIL</p>
         <h1>审查历史</h1>
         <p>回看每个 PR 的本轮结论、执行状态与验证范围。结论仅适用于已保存的审查快照，不代表最新提交或合并批准。</p>
       </div>

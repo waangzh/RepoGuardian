@@ -145,7 +145,6 @@
 .outcome-verdict { display: flex; align-items: flex-start; gap: 12px; padding: var(--panel-padding); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); }
 .outcome-verdict .app-icon { flex-shrink: 0; margin-top: 3px; }
 .outcome-verdict__text { min-width: 0; }
-.outcome-verdict__text .eyebrow { color: var(--text-muted); }
 .outcome-verdict__text h2 { margin: 6px 0 6px; font-size: 1.25rem; }
 .outcome-verdict__text p { margin: 0; color: var(--text-secondary); font-size: .9375rem; line-height: 1.75; }
 .outcome-verdict.success { box-shadow: inset 3px 0 0 var(--success); }

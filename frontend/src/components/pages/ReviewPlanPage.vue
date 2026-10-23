@@ -42,7 +42,7 @@ const updateStage = computed(() => {
 </script>
 <template>
   <ReviewStepper :current="1" />
-  <div class="page-head"><div><div class="eyebrow">STEP 02 / REVIEW PLAN</div><h1>确认审查方案</h1><p class="title-sub">核对本次审查深度、范围与资源配置。确认后即可开始，需要时再展开高级设置。</p></div></div>
+  <div class="page-head"><div><h1>确认审查方案</h1><p class="title-sub">核对本次审查深度、范围与资源配置。确认后即可开始，需要时再展开高级设置。</p></div></div>
   <div class="split-70"><div class="section-stack">
     <section class="card card-pad"><div class="card-header"><div><h2>本次 PR 概况</h2><p class="break-anywhere">{{ prUrl }}</p></div><span class="badge success">已解析 Diff</span></div><div class="grid three"><div><small>变更文件</small><div class="plan-number">{{ preview.changed_file_count }}</div></div><div><small>新增 / 删除</small><div class="plan-number">+{{ additions }} <small>/ −{{ deletions }}</small></div></div><div><small>纳入审查</small><div class="plan-number">{{ preview.included_file_count }}</div></div></div><div class="facts"><span v-for="tag in preview.risk_tags" :key="tag" class="fact">{{ tag }}</span><span class="fact">{{ preview.excluded_files.length }} 个文件被策略排除</span></div></section>
     <section class="card card-pad">
