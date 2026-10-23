@@ -74,21 +74,37 @@ class FindingSummary(SynthesisModel):
     text: str = Field(min_length=1, max_length=240)
 
 
-class ReviewSynthesisDraft(SynthesisModel):
-    schema_version: Literal["review-synthesis-v1"] = "review-synthesis-v1"
+class ReviewSynthesisOutput(SynthesisModel):
+    schema_version: Literal["review-synthesis-v2"] = "review-synthesis-v2"
     language: Literal["zh-CN"] = "zh-CN"
     pr_purpose: SynthesisPurpose = Field(default_factory=SynthesisPurpose)
     change_summary: CitedText
     key_changes: list[CitedText] = Field(default_factory=list, max_length=3)
-    test_changes: list[CitedText] = Field(default_factory=list, max_length=3)
     finding_summaries: list[FindingSummary] = Field(default_factory=list, max_length=100)
     review_summary: CitedText = Field(default_factory=CitedText)
+
+
+class ReviewSynthesisDraft(ReviewSynthesisOutput):
+    """Read saved v1 drafts without requiring obsolete fields from new model output."""
+
+    schema_version: Literal["review-synthesis-v1", "review-synthesis-v2"] = "review-synthesis-v1"
+    test_changes: list[CitedText] = Field(default_factory=list, max_length=3)
+
+    @model_serializer(mode="wrap")
+    def serialize_legacy_test_changes(self, handler):
+        value = handler(self)
+        if self.schema_version == "review-synthesis-v2" and not self.test_changes:
+            value.pop("test_changes", None)
+        return value
 
 
 class ReviewSynthesisArtifact(BaseModel):
     model_config = ConfigDict(extra="forbid")
     schema_version: Literal["review-synthesis-artifact-v1", "review-synthesis-artifact-v2"] = "review-synthesis-artifact-v2"
-    prompt_version: Literal["review-synthesis-prompt-v1", "review-synthesis-prompt-v2"] = "review-synthesis-prompt-v2"
+    prompt_version: Literal[
+        "review-synthesis-prompt-v1", "review-synthesis-prompt-v2",
+        "review-synthesis-prompt-v3", "review-synthesis-prompt-v4", "review-synthesis-prompt-v5",
+    ] = "review-synthesis-prompt-v2"
     source_policy_version: Literal["review-synthesis-sources-v1", "review-synthesis-sources-v2"] = "review-synthesis-sources-v2"
     review_id: str
     head_sha: str

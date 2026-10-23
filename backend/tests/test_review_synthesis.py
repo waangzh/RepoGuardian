@@ -11,7 +11,10 @@ from app.agents.providers import OpenAICompatibleProvider
 from app.core.config import Settings
 from app.models.review import ChangedFile, DiffHunk, DiffLine
 from app.models.review import PullRequestInfo, PullRequestRef
-from app.models.review_synthesis import ReviewSynthesisArtifact, ReviewSynthesisDraft
+from app.models.review_synthesis import (
+    ReviewSynthesisArtifact, ReviewSynthesisDraft, ReviewSynthesisOutput,
+    ReviewSynthesisInput, SynthesisSource,
+)
 from app.services.fingerprints import stable_hash
 from app.services.publication_planner import PublicationPlanner, summary_projection
 from app.services.review_synthesis_input import build_synthesis_input
@@ -53,7 +56,8 @@ def stub_provider(*, change=None, error=None, delay=0):
         if error:
             raise error
         facts = json.loads(messages[1].content.split("\nFact Bundle:\n", 1)[1])
-        ref = next(source["id"] for source in facts["sources"] if source["kind"] == "diff_observation")
+        ref = next(source["id"] for source in facts["sources"]
+                   if source["kind"] in {"diff_observation", "test_source_observation"})
         result = {"change_summary": {"text": "本次 PR 调整了返回值处理。", "source_refs": [ref]},
             "review_summary": {"text": "需要关注空返回值路径的字段读取。", "source_refs": ["finding:key-a"]},
             "finding_summaries": [{"finding_key": "key-a", "text": "空返回值破坏调用方契约"}]}
@@ -74,6 +78,14 @@ async def test_once_frozen_and_repeated_reads_never_call_model(persistence):
     provider, calls = stub_provider()
     first = await freeze_review_synthesis(task, repo, provider)
     assert first.status == "ready"
+    assert first.prompt_version == "review-synthesis-prompt-v5"
+    prompt = calls[0][1].content
+    assert "示例输入" not in prompt and "示例 change_summary" not in prompt
+    assert "示例 test_changes" not in prompt and prompt.count("\nFact Bundle:\n") == 1
+    schema = json.loads(prompt.split("Schema:\n", 1)[1].split("\nFact Bundle:\n", 1)[0])
+    assert "test_changes" not in schema["properties"]
+    assert first.synthesis.schema_version == "review-synthesis-v2"
+    assert "test_changes" not in first.model_dump(mode="json")["synthesis"]
     assert first.budget["calls_consumed"] == 1
     assert first.usage["actual_total_tokens"] == 50
     for _ in range(10):
@@ -94,13 +106,17 @@ async def test_once_frozen_and_repeated_reads_never_call_model(persistence):
 
 @pytest.mark.parametrize("change", [
     lambda value: value.update(severity="high"),
+    lambda value: value.update(validation_state="passed"),
+    lambda value: value.update(verdict="approve"),
+    lambda value: value.update(confirmed_count=0),
     lambda value: value["change_summary"].update(source_refs=["nonexistent"]),
+    lambda value: value["change_summary"].update(source_refs=["finding:key-a"]),
+    lambda value: value["change_summary"].update(source_refs=[]),
     lambda value: value.update(finding_summaries=[{"finding_key": "injected", "text": "新问题"}]),
-    lambda value: value["change_summary"].update(text="全部测试通过，可以安全合并。"),
-    lambda value: value["change_summary"].update(text="<img src=x onerror=alert(1)> @someone"),
+    lambda value: value["change_summary"].update(text="包含不可见控制字符\u202e。"),
     lambda value: value.update(test_changes=[{"text": "新增测试用例", "source_refs": ["finding:key-a"]}]),
 ])
-def test_schema_refs_test_claims_and_injection_rejected(change):
+def test_schema_refs_finding_keys_and_control_characters_rejected(change):
     task = synthesis_task()
     plan = PublicationPlanner().build(task)
     facts = build_synthesis_input(task, plan)
@@ -108,6 +124,145 @@ def test_schema_refs_test_claims_and_injection_rejected(change):
     change(value)
     with pytest.raises((ValueError, ValidationError)):
         validate_review_synthesis(facts, value)
+
+
+@pytest.mark.parametrize("text", [
+    "测试代码包含失败响应不缓存的断言。",
+    "测试代码包含 low < point < high 的断言。",
+    "返回值 > 0 且 < 1 时保留原区间。",
+    "Tests cover failed requests, not build success.",
+    "检查失败分支，而非声明检查已通过。",
+])
+def test_normal_source_descriptions_are_not_rejected_by_keywords(text):
+    facts = ReviewSynthesisInput(review_id="offline", head_sha="a" * 40,
+        effective_base_sha="b" * 40,
+        sources=[SynthesisSource(id="source", kind="test_source_observation", text=text)])
+    value = ReviewSynthesisOutput(change_summary={"text": text, "source_refs": ["source"]})
+    before = facts.model_dump(mode="json")
+    assert validate_review_synthesis(facts, value).change_summary.text == text
+    assert facts.model_dump(mode="json") == before
+
+
+def test_author_purpose_is_not_classified_by_audit_keywords():
+    facts = ReviewSynthesisInput(review_id="offline", head_sha="a" * 40,
+        effective_base_sha="b" * 40, sources=[
+            SynthesisSource(id="author", kind="author_claim", text="Found by the deep-review audit"),
+            SynthesisSource(id="source", kind="diff_observation", text="调整返回值处理。")])
+    value = ReviewSynthesisOutput(
+        pr_purpose={"text": "Found by the deep-review audit", "source_kind": "author_claim", "source_refs": ["author"]},
+        change_summary={"text": "调整返回值处理。", "source_refs": ["source"]})
+    assert validate_review_synthesis(facts, value).pr_purpose.text == value.pr_purpose.text
+
+
+@pytest.mark.asyncio
+async def test_editorial_words_do_not_overwrite_authoritative_review_state(persistence):
+    repo, _, _ = persistence
+    task = synthesis_task()
+    repo.create_task(task)
+    before = PublicationPlanner().build(task)
+    # Deliberately misleading prose is not a structured status or a verification result.
+    text = "全部测试通过，可以安全合并。"
+    provider, _ = stub_provider(change=lambda value: value["change_summary"].update(text=text))
+    artifact = await freeze_review_synthesis(task, repo, provider)
+    assert artifact.status == "ready"
+    after = PublicationPlanner().build(repo.get_task(task.id))
+    assert after.presentation.change_summary == text
+    assert after.outcome == before.outcome
+    assert after.digest.merge_decision == before.digest.merge_decision
+    assert after.presentation.validation_state == "not_executed"
+    assert after.presentation.verdict == before.presentation.verdict
+    assert after.presentation.findings == before.presentation.findings
+
+
+@pytest.mark.asyncio
+async def test_untrusted_editorial_markup_is_encoded_at_render_boundary(persistence):
+    from app.services.publication_renderer import markdown_text, render_review_comment, render_summary
+
+    repo, _, _ = persistence
+    task = synthesis_task()
+    repo.create_task(task)
+    payload = ('<img src=x onerror=alert(1)> ![p](https://evil.invalid/x) '
+               '[open](javascript:alert(1)) @everyone https://evil.invalid low < point < high')
+
+    def add_markup(value):
+        value["change_summary"]["text"] = payload
+        value["review_summary"]["text"] = payload
+
+    provider, _ = stub_provider(change=add_markup)
+    artifact = await freeze_review_synthesis(task, repo, provider)
+    assert artifact.status == "ready"
+    plan = PublicationPlanner().build(repo.get_task(task.id))
+    expected = markdown_text(payload, 1200).replace(":", "&#58;")
+    for markdown in (render_summary(plan), render_review_comment(plan), render_review_comment(plan, detail="full")):
+        overview = markdown.split("### 本次 PR 主要变更\n\n", 1)[1].split("\n\n### 审查结果", 1)[0]
+        assert overview == expected
+        assert "<img" not in markdown and "@everyone" not in markdown
+        assert "https://evil" not in markdown and "javascript:" not in markdown
+        assert "low &lt; point &lt; high" in overview
+    assert "问题概述：" + markdown_text(payload, 600).replace(":", "&#58;") in render_review_comment(plan, detail="full")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("test_changes", [[], [{"text": "包含空响应断言。", "source_refs": ["tests"]}]])
+async def test_new_provider_output_rejects_obsolete_test_changes_field(test_changes):
+    task = synthesis_task()
+    plan = PublicationPlanner().build(task)
+    facts = build_synthesis_input(task, plan)
+    provider, calls = stub_provider(change=lambda value: value.update(test_changes=test_changes))
+    from app.agents.providers import LLMProviderError
+    with pytest.raises(LLMProviderError, match="review synthesis schema invalid"):
+        await provider.synthesize_review(facts, "fixture")
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_test_only_pr_can_use_test_sources_for_the_single_change_summary(persistence):
+    repo, _, _ = persistence
+    task = synthesis_task()
+    task.changed_files[0].file_path = "tests/test_response.py"
+    repo.create_task(task)
+    text = "补充空响应处理的回归用例。"
+    provider, _ = stub_provider(change=lambda value: value["change_summary"].update(text=text))
+    artifact = await freeze_review_synthesis(task, repo, provider)
+    assert artifact.status == "ready"
+    plan = PublicationPlanner().build(repo.get_task(task.id))
+    assert plan.presentation.change_summary == text
+    assert plan.presentation.test_changes == []
+    assert text in plan.summary_markdown
+
+
+@pytest.mark.parametrize("prompt_version", [
+    "review-synthesis-prompt-v1", "review-synthesis-prompt-v2",
+    "review-synthesis-prompt-v3", "review-synthesis-prompt-v4",
+])
+def test_saved_test_changes_remain_readable_without_being_appended_to_new_overview(prompt_version):
+    task = synthesis_task()
+    task.changed_files.append(task.changed_files[0].model_copy(update={"file_path": "tests/test_response.py"}))
+    plan = PublicationPlanner().build(task)
+    facts = build_synthesis_input(task, plan)
+    draft = draft_for(facts)
+    test_ref = next(source.id for source in facts.sources if source.kind == "test_source_observation")
+    observation = "包含空响应处理的回归断言。"
+    draft["test_changes"] = [{"text": observation, "source_refs": [test_ref]}]
+    artifact = ReviewSynthesisArtifact(
+        prompt_version=prompt_version, review_id=task.id, head_sha=facts.head_sha,
+        effective_base_sha=facts.effective_base_sha,
+        fact_bundle_hash=stable_hash(facts.model_dump(mode="json")),
+        status="ready", synthesis=ReviewSynthesisDraft.model_validate(draft),
+        input_truncated=facts.input_truncated, truncation_reasons=facts.truncation_reasons,
+        omitted_files=facts.omitted_files, omitted_hunks=facts.omitted_hunks)
+    saved = artifact.model_dump(mode="json")
+    task.review_synthesis = deepcopy(saved)
+    bound = bound_synthesis(task, plan)
+    assert bound is not None and bound.model_dump(mode="json") == saved
+    assert bound.synthesis.test_changes[0].text == observation
+    current = PublicationPlanner().build(task)
+    assert current.presentation.test_changes == []
+    assert observation not in current.summary_markdown
+    assert current.presentation.change_summary == draft["change_summary"]["text"]
+    assert ReviewSynthesisOutput.model_validate(
+        {key: value for key, value in draft.items() if key != "test_changes"}
+    ).schema_version == "review-synthesis-v2"
 
 
 @pytest.mark.asyncio
@@ -139,7 +294,13 @@ async def test_failures_preserve_findings_and_unknown_cost(persistence, case):
         assert restored.model_usages[-1].actual_total_tokens is None
         assert restored.model_usages[-1].cost_microusd is None
     if case == "timeout" and not calls:
-        assert not restored.model_usages
+        # Timeout may occur after the durable dispatch intent but before the stub is invoked.
+        sent = any(attempt.get("sent") for attempt in
+                   (restored.review_synthesis["budget"].get("attempts") or {}).values())
+        assert bool(restored.model_usages) == sent
+        if sent:
+            assert restored.model_usages[-1].actual_total_tokens is None
+            assert restored.model_usages[-1].cost_microusd is None
     if case == "invalid_ref":
         assert restored.model_usages[-1].actual_total_tokens == 50
 
@@ -225,6 +386,28 @@ def test_legacy_synthesis_hash_remains_bindable_with_derived_coverage():
     assert bound.fact_bundle_hash == artifact.fact_bundle_hash
     assert bound.truncation_reasons == ["sensitive_or_binary_excluded"]
     assert bound.omitted_files == 1 and bound.omitted_hunks == 1
+
+
+@pytest.mark.parametrize("prompt_version", ["review-synthesis-prompt-v2", "review-synthesis-prompt-v3"])
+def test_frozen_editorial_summary_remains_bindable_without_keyword_filter(prompt_version):
+    task = synthesis_task()
+    plan = PublicationPlanner().build(task)
+    facts = build_synthesis_input(task, plan)
+    draft = draft_for(facts)
+    draft["change_summary"]["text"] = "代码变更符合作者描述。"
+    artifact = ReviewSynthesisArtifact(
+        prompt_version=prompt_version,
+        review_id=task.id, head_sha=facts.head_sha, effective_base_sha=facts.effective_base_sha,
+        fact_bundle_hash=stable_hash(facts.model_dump(mode="json")),
+        status="ready", synthesis=ReviewSynthesisDraft.model_validate(draft),
+        input_truncated=facts.input_truncated, truncation_reasons=facts.truncation_reasons,
+        omitted_files=facts.omitted_files, omitted_hunks=facts.omitted_hunks)
+    task.review_synthesis = artifact.model_dump(mode="json")
+    bound = bound_synthesis(task, plan)
+    assert bound is not None and bound.synthesis.change_summary.text == draft["change_summary"]["text"]
+    assert bound.prompt_version == prompt_version
+    task.review_synthesis.pop("prompt_version")
+    assert bound_synthesis(task, plan).prompt_version == "review-synthesis-prompt-v2"
 
 
 @pytest.mark.parametrize("field,value", [

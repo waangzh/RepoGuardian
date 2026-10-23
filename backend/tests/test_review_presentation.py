@@ -126,8 +126,8 @@ def test_overview_is_one_paragraph_from_presentation_for_all_delivery_modes(synt
         overviews.append(overview)
         assert "\n" not in overview
         assert "min" in overview and "max" in overview and "避免缩窄原有范围" in overview
-        assert overview.count(tests) == 1
-        assert "不表示测试已运行" in overview
+        assert tests not in overview
+        assert "不表示测试已运行" not in overview
         assert "测试通过" not in markdown
         assert all(label not in overview for label in (
             "旧目标", "旧实现", "旧测试核对", "**PR 目标", "**实现变化", "**测试核对", "摘要来源"))
@@ -164,6 +164,35 @@ def test_fallback_uses_observations_without_promoting_missing_data(
         assert "尚缺少可概括实现变化的代码观察" in overview
 
 
+@pytest.mark.parametrize("synthesis_status", ["ready", "fallback", "unavailable"])
+@pytest.mark.parametrize("tests", [
+    "新增边界参数化测试用例。",
+    "测试文件新增边界参数化测试用例。",
+    "测试文件确认包含边界参数化用例，断言内容与作者描述一致。",
+    "未新增边界参数化测试用例；现有断言不能证明覆盖区间不收窄的场景。",
+])
+def test_overview_preserves_saved_observations_without_keyword_rewriting(synthesis_status, tests):
+    from app.models.publication import ChangeUnderstanding
+    from app.services.publication_renderer import markdown_text, render_summary
+    from app.services.review_presentation import build_presentation
+
+    plan = PublicationPlanner().build(new_output(completed_task()))
+    implementation = ("代码中 lo = min(lo, point) 与 hi = max(hi, point)"
+        "确实只放宽边界，point 保持不变，符合作者描述。")
+    plan.digest.change_understanding = ChangeUnderstanding(
+        implementation_changes=implementation, test_observations=tests)
+    plan.presentation = build_presentation(plan)
+    plan.presentation.synthesis_status = synthesis_status
+    before = plan.model_dump(mode="json")
+    markdown = render_summary(plan)
+    overview = markdown.split("### 本次 PR 主要变更\n\n", 1)[1].split("\n\n### 审查结果", 1)[0]
+    assert overview == markdown_text(implementation, 1200)
+    assert "测试源码变化" not in overview and "不表示测试已运行" not in overview
+    assert "动态验证：未执行目标仓库代码、测试或构建" in markdown
+    assert plan.digest.change_understanding.test_observations == tests
+    assert plan.model_dump(mode="json") == before
+
+
 def test_overview_does_not_repeat_test_observation_already_in_summary():
     from app.services.publication_renderer import render_summary
 
@@ -176,7 +205,7 @@ def test_overview_does_not_repeat_test_observation_already_in_summary():
     assert "测试源码变化：" not in overview
 
 
-def test_overview_keeps_test_observation_when_duplicate_is_outside_visible_excerpt():
+def test_overview_does_not_restore_test_observation_outside_visible_excerpt():
     from app.services.publication_renderer import render_summary
 
     plan = PublicationPlanner().build(new_output(completed_task()))
@@ -184,19 +213,18 @@ def test_overview_keeps_test_observation_when_duplicate_is_outside_visible_excer
     plan.presentation.change_summary = "调整区间边界。" + "补充静态实现观察。" * 70 + tests
     plan.presentation.test_changes = [tests]
     overview = render_summary(plan).split("### 本次 PR 主要变更\n\n", 1)[1].split("\n\n### 审查结果", 1)[0]
-    assert overview.count(tests) == 1
-    assert "不表示测试已运行" in overview
+    assert tests not in overview
+    assert "不表示测试已运行" not in overview
 
 
-def test_test_observation_dedup_does_not_erase_different_or_negated_claim():
+def test_overview_preserves_negation_without_appending_separate_test_observation():
     from app.services.publication_renderer import render_summary
 
     plan = PublicationPlanner().build(new_output(completed_task()))
     plan.presentation.change_summary = "未新增区间包含性测试用例。"
     plan.presentation.test_changes = ["新增区间包含性测试用例。"]
     overview = render_summary(plan).split("### 本次 PR 主要变更\n\n", 1)[1].split("\n\n### 审查结果", 1)[0]
-    assert "测试源码变化（不表示测试已运行）：新增区间包含性测试用例。" in overview
-    assert "未新增区间包含性测试用例。" in overview
+    assert overview == "未新增区间包含性测试用例。"
 
 
 def test_missing_purpose_and_observations_does_not_invent_changes():
@@ -314,6 +342,48 @@ def test_old_presentation_roundtrip_does_not_add_summary_coverage_or_change_hash
     assert stable_hash(saved) == stable_hash(ReviewPresentation.model_validate(saved).model_dump(mode="json"))
 
 
+def test_frozen_v1_plan_keeps_test_supplement_body_and_hash_for_publication_recovery():
+    from app.services.publication_renderer import render_review_comment, render_summary
+
+    plan = PublicationPlanner().build(new_output(completed_task()))
+    plan.presentation.schema_version = "review-presentation-v1"
+    plan.presentation.change_summary = "调整区间边界。"
+    tests = "新增区间包含性测试用例。"
+    plan.presentation.test_changes = [tests]
+    plan.summary_markdown = render_summary(plan)
+    plan.review_comment_markdown = render_review_comment(plan)
+    saved = plan.model_dump(mode="json")
+    restored = PublicationPlan.model_validate(deepcopy(saved))
+    assert restored.model_dump(mode="json") == saved
+    assert stable_hash(restored.model_dump(mode="json")) == stable_hash(saved)
+    expected = "调整区间边界。 测试源码变化（不表示测试已运行）：" + tests
+    assert expected in render_summary(restored)
+    assert render_summary(restored) == plan.summary_markdown
+    assert render_review_comment(restored) == plan.review_comment_markdown
+    assert expected in compose_summary(restored, {"finding_keys": []}, {}, [], "Prepared")
+
+
+def test_test_only_fallback_uses_saved_test_observation_as_the_single_summary():
+    from app.models.publication import ChangeUnderstanding
+    from app.services.publication_renderer import render_review_comment, render_user_report
+    from app.services.review_presentation import build_presentation
+
+    task = new_output(completed_task())
+    plan = PublicationPlanner().build(task)
+    observation = "补充空响应处理的回归用例。"
+    plan.digest.change_understanding = ChangeUnderstanding(
+        actual_changes=observation,
+        implementation_changes="尚未形成可引用的实现行为观察。",
+        test_observations=observation)
+    plan.presentation = build_presentation(plan)
+    markdown = render_review_comment(plan)
+    overview = markdown.split("### 本次 PR 主要变更\n\n", 1)[1].split("\n\n### 审查结果", 1)[0]
+    assert overview == observation
+    assert plan.presentation.schema_version == "review-presentation-v2"
+    assert plan.presentation.test_changes == []
+    assert observation in render_user_report(task, plan)
+
+
 def test_unknown_finding_status_is_not_promoted_to_no_confirmed_problem():
     task = new_output(completed_task(findings=[{"status": "future"}]))
     plan = PublicationPlanner().build(task)
@@ -323,7 +393,7 @@ def test_unknown_finding_status_is_not_promoted_to_no_confirmed_problem():
 
 
 @pytest.mark.parametrize("synthesis_status", ["ready", "fallback"])
-def test_overview_adds_only_whole_test_observations_within_four_sentence_target(synthesis_status):
+def test_overview_does_not_fill_remaining_sentences_with_test_observations(synthesis_status):
     from app.services.publication_renderer import render_summary
 
     plan = PublicationPlanner().build(new_output(completed_task()))
@@ -331,10 +401,10 @@ def test_overview_adds_only_whole_test_observations_within_four_sentence_target(
     plan.presentation.change_summary = "调整边界计算。保留原始下界。扩展上界以包含点估计。"
     plan.presentation.test_changes = ["新增区间包含性断言。", "增加测试入口。但没有保存对应断言观察。"]
     overview = render_summary(plan).split("### 本次 PR 主要变更\n\n", 1)[1].split("\n\n### 审查结果", 1)[0]
-    assert overview.count("。") == 4
-    assert "新增区间包含性断言。" in overview
+    assert overview.count("。") == 3
+    assert "新增区间包含性断言。" not in overview
     assert "增加测试入口" not in overview
-    assert "不表示测试已运行" in overview
+    assert "不表示测试已运行" not in overview
 
 
 def test_four_sentence_summary_does_not_grow_with_supplementary_test_observations():

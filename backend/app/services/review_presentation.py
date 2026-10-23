@@ -31,6 +31,12 @@ def _overview_sentences(text):
     return [part for part in re.split(r"(?<=[。！？])\s*|(?<=[.!?])\s+", text) if part.strip()]
 
 
+def _editorial_markdown(presentation, text, limit=2000):
+    rendered = markdown_text(text, limit)
+    # Preserve literal URLs without letting GFM create model-supplied links.
+    return rendered.replace(":", "&#58;") if presentation.schema_version == "review-presentation-v2" else rendered
+
+
 def _change_overview(presentation):
     """只从投影选取已有观察；缺少观察时不把作者目标改写成实现事实。"""
     summary = _observation_text(presentation.change_summary)
@@ -38,7 +44,8 @@ def _change_overview(presentation):
         summary = _sentence(summary, 600)
     seen = {part.strip().rstrip("。；; .") for part in _overview_sentences(summary)}
     tests = []
-    for value in presentation.test_changes:
+    # Frozen v1 plans retain their original body for publication recovery.
+    for value in presentation.test_changes if presentation.schema_version == "review-presentation-v1" else []:
         text = _observation_text(value)
         key = text.rstrip("。；; .")
         if key and key not in seen:
@@ -66,7 +73,7 @@ def _change_overview(presentation):
         if selected:
             text = " ".join(selected)
             parts.append(f"测试源码变化（不表示测试已运行）：{text}")
-    return markdown_text(" ".join(parts), 1200)
+    return _editorial_markdown(presentation, " ".join(parts), 1200)
 
 
 def _investigation_view(item):
@@ -137,16 +144,16 @@ def build_presentation(plan, synthesis=None):
             r"found by.*audit|deep.review audit|审计发现", purpose, re.I)):
         purpose = None
     test_observation = _observation_text(understanding.test_observations) if understanding else ""
-    test_changes = [test_observation] if test_observation else []
     summary = _observation_text(understanding.implementation_changes) if understanding else ""
     if not summary and understanding and (
-            understanding.implementation_changes is None or not test_changes):
+            understanding.implementation_changes is None or not test_observation):
         summary = _observation_text(understanding.actual_changes)
+    if not summary:
+        summary = test_observation
     draft = synthesis.synthesis if synthesis and synthesis.status == "ready" else None
     if draft:
         purpose = draft.pr_purpose.text or None
         summary = draft.change_summary.text
-        test_changes = [item.text for item in draft.test_changes]
     findings = _ordered_findings(plan)
     limitations = list(dict.fromkeys(_comment_risks(plan, include_investigations=False)))
     input_coverage = None
@@ -156,12 +163,12 @@ def build_presentation(plan, synthesis=None):
             omitted_files=synthesis.omitted_files,
             omitted_hunks=synthesis.omitted_hunks)
     return ReviewPresentation(
-        review_id=plan.review_id, snapshot=plan.snapshot,
+        schema_version="review-presentation-v2", review_id=plan.review_id, snapshot=plan.snapshot,
         synthesis_status=synthesis.status if synthesis else "fallback",
         purpose_text=purpose,
         purpose_source=draft.pr_purpose.source_kind if draft else "author_claim" if purpose else "unknown",
         change_summary=summary or "未保存足以概括主要变更的代码观察，请结合固定快照 Diff 人工核对。",
-        test_changes=test_changes, review_summary=draft.review_summary.text if draft else "",
+        review_summary=draft.review_summary.text if draft else "",
         verdict=plan.digest.merge_decision, findings=findings,
         delivery=PresentationDelivery(confirmed=plan.outcome.confirmed_count, eligible=len(findings),
             selected=len(findings), inline_ready=len(plan.inline_drafts),
@@ -209,7 +216,7 @@ def render_presentation(plan, *, copy=False, detail="compact", exclude_resolved=
         lines += [f"本轮已确认 {delivery.confirmed} 项；具备发布资格 {delivery.eligible} 项；"
                   f"本次包含 {count} 项；未包含 {delivery.eligible - count} 项。", ""]
         if presentation.review_summary and findings:
-            lines += [f"问题概述：{markdown_text(presentation.review_summary, 600)}", ""]
+            lines += [f"问题概述：{_editorial_markdown(presentation, presentation.review_summary, 600)}", ""]
     for finding in findings:
         if copy or finding.placement == "summary":
             lines += [finding.body_markdown, "", finding_location(plan, finding), ""]
