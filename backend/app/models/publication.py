@@ -300,7 +300,7 @@ class SummaryInputCoverage(BaseModel):
 class ReviewPresentation(BaseModel):
     """只读投影；不替代 ReviewOutcome、核验记录或发布回执。"""
 
-    schema_version: Literal["review-presentation-v1"] = "review-presentation-v1"
+    schema_version: Literal["review-presentation-v1", "review-presentation-v2"] = "review-presentation-v1"
     review_id: str
     snapshot: PublicationSnapshot
     language: Literal["zh-CN"] = "zh-CN"

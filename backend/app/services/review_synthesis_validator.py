@@ -1,26 +1,13 @@
-"""拒绝越权字段、未知来源、测试/合并断言和未核验问题；不声称证明自然语言语义。"""
+"""校验摘要结构、来源与白名单；不通过词句匹配推断自然语言语义。"""
 
-import re
 import unicodedata
 
-from app.models.review_synthesis import ReviewSynthesisDraft
-
-
-_AUTHORITY = re.compile(
-    r"\bP[0-3]\b|\b(?:critical|high|medium|low)\s+(?:severity|priority)\b|"
-    r"(?:测试|CI|构建|检查).{0,12}(?:通过|成功|失败)|"
-    r"(?:tests?|CI|build|checks?).{0,20}(?:pass(?:ed)?|fail(?:ed)?|succeed)|"
-    r"(?:安全|可以|允许|建议|应当|禁止|不要|无需).{0,8}合并|"
-    r"(?:safe to merge|approve|request.changes|merge decision)|"
-    r"(?:全部|所有).{0,8}(?:修复|解决|核验|验证)|"
-    r"(?:confirmed|已确认|发现)\s*\d+\s*(?:issues?|findings?|项|个)|"
-    r"无(?:缺陷|风险)|没有(?:缺陷|风险)|未发现.{0,8}问题",
-    re.I,
-)
-_UNSAFE = re.compile(r"<|>|https?://|javascript:|data:|@\w|!\[|\]\(|```", re.I)
+from app.models.review_synthesis import ReviewSynthesisDraft, ReviewSynthesisOutput
 
 
 def validate_review_synthesis(facts, value):
+    if isinstance(value, ReviewSynthesisOutput):
+        value = value.model_dump(mode="json")
     draft = ReviewSynthesisDraft.model_validate(value)
     if draft.language != facts.language:
         raise ValueError("synthesis_language_mismatch")
@@ -30,9 +17,8 @@ def validate_review_synthesis(facts, value):
         raise ValueError("synthesis_finding_not_allowed")
 
     def validate_text(text):
-        if (_AUTHORITY.search(text) or _UNSAFE.search(text)
-                or any(unicodedata.category(char).startswith("C") for char in text)):
-            raise ValueError("synthesis_unsafe_assertion")
+        if any(unicodedata.category(char).startswith("C") for char in text):
+            raise ValueError("synthesis_control_character_not_allowed")
 
     def cited(item, kinds):
         validate_text(item.text)
@@ -46,8 +32,6 @@ def validate_review_synthesis(facts, value):
             raise ValueError("synthesis_unknown_purpose_has_claim")
     else:
         cited(purpose, {"author_claim"} if purpose.source_kind == "author_claim" else observed)
-        if re.search(r"found by.*audit|deep.review audit", purpose.text, re.I):
-            raise ValueError("synthesis_background_is_not_purpose")
     if not draft.change_summary.text.strip():
         raise ValueError("synthesis_change_summary_missing")
     cited(draft.change_summary, observed)

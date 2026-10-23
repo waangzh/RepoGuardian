@@ -257,7 +257,7 @@ export interface SummaryInputCoverage {
 }
 
 export interface ReviewPresentation {
-  schema_version: "review-presentation-v1";
+  schema_version: "review-presentation-v1" | "review-presentation-v2";
   review_id: string;
   snapshot: PublicationSnapshot;
   language: "zh-CN";

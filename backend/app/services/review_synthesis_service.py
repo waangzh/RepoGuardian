@@ -60,7 +60,8 @@ async def freeze_review_synthesis(task, repository, provider, *, lease=None):
     if not plan.content_eligible:
         return None
     facts = build_synthesis_input(task, plan)
-    artifact = ReviewSynthesisArtifact(review_id=task.id, head_sha=facts.head_sha,
+    artifact = ReviewSynthesisArtifact(prompt_version="review-synthesis-prompt-v5",
+        review_id=task.id, head_sha=facts.head_sha,
         effective_base_sha=facts.effective_base_sha, fact_bundle_hash=stable_hash(facts.model_dump(mode="json")),
         model=(task.task_runtime_configuration or {}).get("model", task.model),
         input_truncated=facts.input_truncated, truncation_reasons=facts.truncation_reasons,
