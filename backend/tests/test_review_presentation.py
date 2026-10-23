@@ -145,7 +145,7 @@ def test_overview_is_one_paragraph_from_presentation_for_all_delivery_modes(synt
     (None, "旧记录保存的局部实现观察。", None, "旧记录保存的局部实现观察。", "测试源码变化"),
     (None, "未保存可归纳的实际变更。", None, "作者目标为：调整区间边界。", "测试源码变化"),
 ])
-def test_fallback_uses_observations_without_promoting_missing_data(
+def test_fallback_does_not_promote_unchecked_observations(
         implementation, actual, tests, expected, absent):
     from app.models.publication import ChangeUnderstanding
     from app.services.publication_renderer import render_summary
@@ -157,8 +157,9 @@ def test_fallback_uses_observations_without_promoting_missing_data(
         actual_changes=actual, test_observations=tests)
     plan.presentation = build_presentation(plan)
     overview = render_summary(plan).split("### 本次 PR 主要变更\n\n", 1)[1].split("\n\n### 审查结果", 1)[0]
-    assert expected in overview
-    assert absent not in overview
+    assert "可靠摘要" in overview and "当前快照 Diff" in overview
+    assert "作者目标为" not in overview
+    assert plan.digest.change_understanding.implementation_changes == implementation
     assert "目标已实现" not in overview and "测试通过" not in overview
     if not plan.presentation.change_summary or plan.presentation.change_summary.startswith("未保存足以"):
         assert "尚缺少可概括实现变化的代码观察" in overview
@@ -171,9 +172,9 @@ def test_fallback_uses_observations_without_promoting_missing_data(
     "测试文件确认包含边界参数化用例，断言内容与作者描述一致。",
     "未新增边界参数化测试用例；现有断言不能证明覆盖区间不收窄的场景。",
 ])
-def test_overview_preserves_saved_observations_without_keyword_rewriting(synthesis_status, tests):
+def test_unchecked_observations_stay_in_digest_without_keyword_rewriting(synthesis_status, tests):
     from app.models.publication import ChangeUnderstanding
-    from app.services.publication_renderer import markdown_text, render_summary
+    from app.services.publication_renderer import render_summary
     from app.services.review_presentation import build_presentation
 
     plan = PublicationPlanner().build(new_output(completed_task()))
@@ -186,7 +187,8 @@ def test_overview_preserves_saved_observations_without_keyword_rewriting(synthes
     before = plan.model_dump(mode="json")
     markdown = render_summary(plan)
     overview = markdown.split("### 本次 PR 主要变更\n\n", 1)[1].split("\n\n### 审查结果", 1)[0]
-    assert overview == markdown_text(implementation, 1200)
+    assert implementation not in overview and "可靠摘要" in overview
+    assert plan.digest.change_understanding.implementation_changes == implementation
     assert "测试源码变化" not in overview and "不表示测试已运行" not in overview
     assert "动态验证：未执行目标仓库代码、测试或构建" in markdown
     assert plan.digest.change_understanding.test_observations == tests
@@ -363,7 +365,7 @@ def test_frozen_v1_plan_keeps_test_supplement_body_and_hash_for_publication_reco
     assert expected in compose_summary(restored, {"finding_keys": []}, {}, [], "Prepared")
 
 
-def test_test_only_fallback_uses_saved_test_observation_as_the_single_summary():
+def test_test_only_fallback_keeps_unchecked_observation_in_detailed_report():
     from app.models.publication import ChangeUnderstanding
     from app.services.publication_renderer import render_review_comment, render_user_report
     from app.services.review_presentation import build_presentation
@@ -378,7 +380,7 @@ def test_test_only_fallback_uses_saved_test_observation_as_the_single_summary():
     plan.presentation = build_presentation(plan)
     markdown = render_review_comment(plan)
     overview = markdown.split("### 本次 PR 主要变更\n\n", 1)[1].split("\n\n### 审查结果", 1)[0]
-    assert overview == observation
+    assert observation not in overview and "可靠摘要" in overview
     assert plan.presentation.schema_version == "review-presentation-v2"
     assert plan.presentation.test_changes == []
     assert observation in render_user_report(task, plan)

@@ -138,18 +138,9 @@ def compact_finding(finding):
 
 
 def build_presentation(plan, synthesis=None):
-    understanding = plan.digest.change_understanding
-    purpose = understanding.author_goal if understanding else None
-    if purpose and (purpose == "未记录明确的作者目标。" or re.search(
-            r"found by.*audit|deep.review audit|审计发现", purpose, re.I)):
-        purpose = None
-    test_observation = _observation_text(understanding.test_observations) if understanding else ""
-    summary = _observation_text(understanding.implementation_changes) if understanding else ""
-    if not summary and understanding and (
-            understanding.implementation_changes is None or not test_observation):
-        summary = _observation_text(understanding.actual_changes)
-    if not summary:
-        summary = test_observation
+    # 原始观察与作者声明保留在 Digest；未经语义检查不自动进入对外摘要。
+    purpose = None
+    summary = "未形成足以概括主要行为变化的可靠摘要，请结合当前快照 Diff 核对。"
     draft = synthesis.synthesis if synthesis and synthesis.status == "ready" else None
     if draft:
         purpose = draft.pr_purpose.text or None
@@ -166,7 +157,7 @@ def build_presentation(plan, synthesis=None):
         schema_version="review-presentation-v2", review_id=plan.review_id, snapshot=plan.snapshot,
         synthesis_status=synthesis.status if synthesis else "fallback",
         purpose_text=purpose,
-        purpose_source=draft.pr_purpose.source_kind if draft else "author_claim" if purpose else "unknown",
+        purpose_source=draft.pr_purpose.source_kind if draft else "unknown",
         change_summary=summary or "未保存足以概括主要变更的代码观察，请结合固定快照 Diff 人工核对。",
         review_summary=draft.review_summary.text if draft else "",
         verdict=plan.digest.merge_decision, findings=findings,
