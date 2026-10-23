@@ -6,10 +6,11 @@ import AppIcon from "../common/AppIcon.vue";
 import AppSelect from "../common/AppSelect.vue";
 import ReviewPlanControls from '../review/ReviewPlanControls.vue';
 import type { ReviewCapabilities, ReviewPlanOptions } from '../../types/reviewPlan';
+import type { PreviewJob } from '../../types/previewJob';
 import ReviewStepper from "../common/ReviewStepper.vue";
 import { groupingReasonText, unitSymbolSummary, unitTitle } from "../../utils/unitPresentation";
 import { incrementalReviewLabel } from "../../utils/reportPresentation";
-const props = defineProps<{ capabilities: ReviewCapabilities | null; dirty: boolean; previewing: boolean; preview: ReviewPreviewResponse; prUrl: string; model: string; models: ProviderModelInfo[]; defaultModel: string; modelsLoading: boolean; modelsError: string | null; submitting: boolean; created?: boolean }>();
+const props = defineProps<{ capabilities: ReviewCapabilities | null; dirty: boolean; previewing: boolean; preview: ReviewPreviewResponse; prUrl: string; model: string; models: ProviderModelInfo[]; defaultModel: string; modelsLoading: boolean; modelsError: string | null; submitting: boolean; created?: boolean; previewJob?: PreviewJob | null }>();
 const emit = defineEmits<{ "update:model": [value: string]; submit: []; back: []; repreview: []; change: [plan: ReviewPlanOptions]; "open-created": [] }>();
 const modelOptions = computed(() => [{ value: "", label: `服务端默认${props.defaultModel ? ` · ${props.defaultModel}` : ''}` }, ...props.models.map(item => ({ value: item.id, label: item.id }))]);
 const additions = computed(() => props.preview.changed_files.reduce((sum, file) => sum + file.additions, 0));
@@ -31,6 +32,13 @@ const resourceLabel = computed(() => {
   return (Object.keys(preset.limits) as (keyof typeof preset.limits)[]).every(key => plan.limits[key] === preset.limits[key])
     ? '服务端资源预设' : '自定义资源上限';
 });
+// 重新校验时页面不切换，就地展示服务端真实阶段，避免长时间无反馈。
+const updateStage = computed(() => {
+  const stages = props.previewJob?.stages;
+  const stage = stages && stages.length ? stages[stages.length - 1] : null;
+  if (!stage) return '正在重新获取 PR 快照并生成方案…';
+  return typeof stage.percent === 'number' ? `${stage.message} · ${stage.percent}%` : stage.message;
+});
 </script>
 <template>
   <ReviewStepper :current="1" />
@@ -51,5 +59,5 @@ const resourceLabel = computed(() => {
         </div>
       </details>
     </section>
-  </div><aside class="plan-aside"><section class="card card-pad" :aria-busy="submitting"><div class="card-header"><div><h2>方案摘要</h2><p>当前接口支持的真实执行配置</p></div><AppIcon name="settings" /></div><div v-for="item in [['审查方式', `${depthLabel} · 只读`], ['主审范围', `${preview.included_file_count} / ${preview.changed_file_count} 个文件`], ['资源配置', resourceLabel]]" :key="item[0]" class="aside-stat"><span class="muted">{{ item[0] }}</span><strong class="break-anywhere">{{ item[1] }}</strong></div><div class="notice space-top"><AppIcon name="info" /><div>方案与 Base/Head 快照已绑定，版本或策略变化将要求重新预览。初始分组估算不代表最终调用数或费用。</div></div><p v-for="warning in preview.warnings" :key="warning" class="small input-error">{{ warning }}</p><div v-if="created" class="notice" role="status" aria-live="polite"><AppIcon name="info" :size="16" /><div><strong>审查任务已创建</strong><p>任务已进入队列，但状态读取失败。 <button type="button" class="link" @click="emit('open-created')">打开该任务</button></p></div></div><div v-else-if="submitting" class="notice" role="status" aria-live="polite"><AppIcon name="clock" :size="16" /><div><strong>正在创建审查任务</strong><p>正在校验 PR 快照与方案版本，完成后会自动进入审查进度。</p></div></div><div v-if="submitting && !created" class="progress rg-indeterminate" role="progressbar" aria-label="正在创建审查任务"><span style="width:35%" /></div><div class="plan-cta"><button type="button" class="btn secondary" :disabled="submitting || previewing" @click="emit('repreview')">{{ previewing ? '校验中…' : '校验并保存方案' }}</button><p v-if="dirty" class="input-error">配置已变化，请先校验并保存方案。</p><button type="button" class="btn primary" :disabled="submitting || previewing || dirty || !preview.preview_id || !capabilities" @click="emit('submit')"><AppIcon :name="submitting ? 'clock' : 'play'" :size="16" />{{ submitting ? '正在创建审查任务…' : '开始 AI 审查' }}</button><button type="button" class="btn secondary" :disabled="submitting" @click="emit('back')">返回修改 PR 链接</button></div></section></aside></div>
+  </div><aside class="plan-aside"><section class="card card-pad" :aria-busy="submitting"><div class="card-header"><div><h2>方案摘要</h2><p>当前接口支持的真实执行配置</p></div><AppIcon name="settings" /></div><div v-for="item in [['审查方式', `${depthLabel} · 只读`], ['主审范围', `${preview.included_file_count} / ${preview.changed_file_count} 个文件`], ['资源配置', resourceLabel]]" :key="item[0]" class="aside-stat"><span class="muted">{{ item[0] }}</span><strong class="break-anywhere">{{ item[1] }}</strong></div><div class="notice space-top"><AppIcon name="info" /><div>方案与 Base/Head 快照已绑定，版本或策略变化将要求重新预览。初始分组估算不代表最终调用数或费用。</div></div><p v-for="warning in preview.warnings" :key="warning" class="small input-error">{{ warning }}</p><div v-if="created" class="notice" role="status" aria-live="polite"><AppIcon name="info" :size="16" /><div><strong>审查任务已创建</strong><p>任务已进入队列，但状态读取失败。 <button type="button" class="link" @click="emit('open-created')">打开该任务</button></p></div></div><div v-else-if="submitting" class="notice" role="status" aria-live="polite"><AppIcon name="clock" :size="16" /><div><strong>正在创建审查任务</strong><p>正在校验 PR 快照与方案版本，完成后会自动进入审查进度。</p></div></div><div v-if="submitting && !created" class="progress rg-indeterminate" role="progressbar" aria-label="正在创建审查任务"><span style="width:35%" /></div><div class="plan-cta"><button type="button" class="btn secondary" :disabled="submitting || previewing" @click="emit('repreview')">{{ previewing ? '更新中…' : '更新方案' }}</button><p v-if="previewing" class="field-hint" role="status" aria-live="polite">{{ updateStage }}</p><p v-if="dirty" class="input-error">配置已变化，请先更新方案。</p><button type="button" class="btn primary" :disabled="submitting || previewing || dirty || !preview.preview_id || !capabilities" @click="emit('submit')"><AppIcon :name="submitting ? 'clock' : 'play'" :size="16" />{{ submitting ? '正在创建审查任务…' : '开始 AI 审查' }}</button><button type="button" class="btn secondary" :disabled="submitting" @click="emit('back')">返回修改 PR 链接</button></div></section></aside></div>
 </template>
