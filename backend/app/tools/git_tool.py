@@ -25,8 +25,8 @@ logger = logging.getLogger("RepoGuardian.GitTool")
 # 生产、Preview、CLI 与评测共用的 Diff 策略：内容基准取唯一 merge base，
 # PR 声明 base 只保留身份用途。修改命令或上下文行数时必须同步该版本号。
 DIFF_POLICY = "merge_base"
-DIFF_POLICY_VERSION = "merge-base-v1"
-DIFF_CONTEXT_LINES = 80
+DIFF_POLICY_VERSION = "merge-base-v2"
+DIFF_CONTEXT_LINES = 3
 
 _GIT_PROGRESS_RE = re.compile(
     r"(?:remote:\s*)?"

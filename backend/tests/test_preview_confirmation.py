@@ -79,7 +79,8 @@ async def test_legacy_or_corrupt_preview_is_rejected_locally_without_work(plan_s
     assert service._repository.get_preview(preview.preview_id)["consumed_task_id"] is None and queue_size(service) == 0
 
 
-@pytest.mark.parametrize("change", ["threshold", "rule_version", "tool_version", "diff_version", "price", "runtime", "server_limits"])
+@pytest.mark.parametrize("change", ["threshold", "rule_version", "tool_version", "diff_version",
+                                  "diff_context", "price", "runtime", "server_limits"])
 async def test_current_configuration_changes_require_repreview_without_github(plan_service, monkeypatch, change):
     service, *_ = plan_service
     preview = await service.preview(REQUEST)
@@ -92,6 +93,8 @@ async def test_current_configuration_changes_require_repreview_without_github(pl
         monkeypatch.setattr(settings, "repoguardian_tool_schema_version", "changed")
     elif change == "diff_version":
         monkeypatch.setattr("app.tools.git_tool.DIFF_POLICY_VERSION", "changed")
+    elif change == "diff_context":
+        monkeypatch.setattr("app.tools.git_tool.DIFF_CONTEXT_LINES", 80)
     elif change == "price":
         monkeypatch.setattr(settings, "repoguardian_model_pricing_json", '{"changed": {}}')
     elif change == "server_limits":

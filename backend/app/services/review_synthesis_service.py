@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from app.models.review_synthesis import ReviewSynthesisArtifact
 from app.services.fingerprints import stable_hash
 from app.services.review_run_budget import ReviewRunBudget, activate_run_budget, run_budget_phase
-from app.services.review_synthesis_input import build_synthesis_input
+from app.services.review_synthesis_input import SOURCE_POLICY_VERSION, build_synthesis_input
 from app.services.review_synthesis_repository import SynthesisStore
 from app.services.review_synthesis_validator import validate_review_synthesis
 
@@ -38,7 +38,7 @@ def bound_synthesis(task, plan):
         return None
     try:
         artifact = ReviewSynthesisArtifact.model_validate(task.review_synthesis)
-        facts = build_synthesis_input(task, plan)
+        facts = build_synthesis_input(task, plan, source_policy_version=artifact.source_policy_version)
         facts_hash = stable_hash(facts.model_dump(mode="json"))
         legacy_facts = facts.model_dump(mode="json", exclude={"truncation_reasons"})
         legacy_facts["schema_version"] = "review-synthesis-input-v1"
@@ -62,6 +62,11 @@ def bound_synthesis(task, plan):
             return None
         if artifact.status == "ready":
             validate_review_synthesis(facts, artifact.synthesis)
+        if (artifact.source_policy_version != SOURCE_POLICY_VERSION
+                and "diff_hunk_truncated" in facts.truncation_reasons
+                and not artifact.input_truncated):
+            # 原规则校验通过后仅修正展示提示；冻结记录及其哈希保持原样。
+            artifact = artifact.model_copy(update={"input_truncated": True})
         return artifact
     except (ValueError, ValidationError):
         return None
@@ -77,7 +82,8 @@ async def freeze_review_synthesis(task, repository, provider, *, lease=None):
     if not plan.content_eligible:
         return None
     facts = build_synthesis_input(task, plan)
-    artifact = ReviewSynthesisArtifact(prompt_version="review-synthesis-prompt-v5",
+    artifact = ReviewSynthesisArtifact(prompt_version="review-synthesis-prompt-v6",
+        source_policy_version=SOURCE_POLICY_VERSION,
         review_id=task.id, head_sha=facts.head_sha,
         effective_base_sha=facts.effective_base_sha, fact_bundle_hash=stable_hash(facts.model_dump(mode="json")),
         model=(task.task_runtime_configuration or {}).get("model", task.model),
