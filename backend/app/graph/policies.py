@@ -11,11 +11,3 @@ def get_execution_budget(state: dict[str, Any]) -> ExecutionBudget:
     if isinstance(value, ExecutionBudget):
         return value
     return ExecutionBudget.model_validate(value or {})
-
-
-def consume_budget(state: dict[str, Any], **amounts: int) -> ExecutionBudget | None:
-    """原子检查并消耗预算；超限时返回 None。"""
-    budget = get_execution_budget(state)
-    if not budget.can_consume(**amounts):
-        return None
-    return budget.consume(**amounts)

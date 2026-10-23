@@ -18,14 +18,14 @@ AGENTS.md
 CLAUDE.md
 .claude
 .zvec-grep
-docs/
+# Preserve existing local drafts; other docs are tracked normally.
+/docs/PR Review 输出与交付体系改造方案.md
+/docs/review-output.md
 /.trellis
 /.agents/
 /.codex/
 .pytest-*/
 .vite/
-/STATUS-LANGUAGE.md
 /pyrightconfig.json
-/PR_REVIEW_DELIVERY.md
 
 .taste-skill/

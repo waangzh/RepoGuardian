@@ -9,6 +9,7 @@ from app.evaluation.runtime_baseline import (
     quality_summary,
     reconcile_wire_usage,
 )
+from app.evaluation.runtime_baseline_cli import build_baseline
 
 
 def _result():
@@ -61,6 +62,30 @@ def _task_result():
             "claim": "候选", "primary_anchor": "g1", "evidence_ids": ["e1"],
             "affected_behavior": "行为改变", "failure_scenario": "输入触发", "recommendation": "修复"}]} )}],
     }
+
+
+@pytest.mark.parametrize("engines", [
+    [None], ["task_review_v1"], [None, "task_review_v1"],
+])
+def test_baseline_preserves_sample_engine_identity(tmp_path, engines):
+    paths = []
+    expected = [engine or "legacy_units" for engine in engines]
+    for index, engine in enumerate(engines):
+        result = _task_result() if engine == "task_review_v1" else _result()
+        result["sample"]["instance_id"] = f"sample-{index}"
+        path = tmp_path / f"{index}.json"
+        path.write_text(json.dumps(result), encoding="utf-8")
+        paths.append(path)
+
+    report, packets, mapping = build_baseline(paths)
+
+    assert report["engine"] == (expected[0] if len(set(expected)) == 1 else "mixed")
+    assert [sample["engine"] for sample in report["samples"]] == expected
+    assert len(packets) == len(mapping) == engines.count("task_review_v1")
+    if "task_review_v1" in engines:
+        assert report["actual_total_tokens"] is None
+    else:
+        assert report["actual_total_tokens"] == 10
 
 
 def test_task_runtime_candidate_packets_are_extracted_without_pipeline_terminal_state():

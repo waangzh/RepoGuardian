@@ -1,13 +1,12 @@
 """LangGraph SQLite checkpointer 的进程生命周期管理。
 
 业务状态由 SQLAlchemy 数据库负责，LangGraph saver 专门保存节点级恢复状态。每个 task 使用稳定
-``thread_id``，独立调用的 Unit 图使用派生 thread，避免根图重置 namespace 后共享状态。
+``thread_id``，历史 Unit 派生 thread 仍由保留期维护流程清理。
 """
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import inspect
 import logging
 from dataclasses import dataclass
@@ -21,7 +20,6 @@ from pydantic import BaseModel
 
 import app.models.review as review_models
 from app.core.config import settings
-from app.services.fingerprints import DIAGNOSIS_INPUT_VERSION
 
 _checkpointer: AsyncSqliteSaver | None = None
 _connection: aiosqlite.Connection | None = None
@@ -116,19 +114,6 @@ async def list_checkpoint_thread_ids() -> list[str]:
     return list(dict.fromkeys(str(row[0]).split(":unit:", 1)[0] for row in rows))
 
 
-async def checkpoint_storage_stats() -> CheckpointStorageStats:
-    """读取 checkpoint SQLite 的页使用情况。"""
-    checkpointer = await get_checkpointer()
-    assert _connection is not None
-    async with checkpointer.lock:
-        values: list[int] = []
-        for pragma in ("page_size", "page_count", "freelist_count"):
-            async with _connection.execute(f"PRAGMA {pragma}") as cursor:
-                row = await cursor.fetchone()
-                values.append(int(row[0]) if row else 0)
-    return CheckpointStorageStats(*values)
-
-
 async def compact_checkpoints_if_needed(
     *, min_reclaim_bytes: int, min_reclaim_ratio: float
 ) -> bool:
@@ -165,14 +150,3 @@ def review_thread_config(task_id: str, *, checkpoint_id: str | None = None) -> d
     if checkpoint_id:
         configurable["checkpoint_id"] = checkpoint_id
     return {"configurable": configurable}
-
-
-def unit_thread_config(task_id: str, unit_id: str) -> dict:
-    # 独立 ainvoke 的根图会清空 checkpoint_ns；隔离必须建立在 thread_id 上。
-    identity = hashlib.sha256(f"{unit_id}:{DIAGNOSIS_INPUT_VERSION}".encode()).hexdigest()
-    return {
-        "configurable": {
-            "thread_id": f"{task_id}:unit:{identity}",
-            "checkpoint_ns": "",
-        }
-    }

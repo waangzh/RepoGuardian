@@ -79,34 +79,6 @@ def patch_fingerprint(
     }), diff_hash
 
 
-def unit_execution_fingerprint(unit_fp: str, state: dict, provider: Any, input_mode: str) -> str:
-    """即使 plan 来自旧 checkpoint，也绑定本次实际模型、配置和输入版本。"""
-    from app.core.config import settings
-    from app.review.diff_base import review_diff_base
-    from app.services.review_input_context import build_pr_intent
-
-    model = state.get("model") or getattr(provider, "_default_model", settings.repoguardian_model)
-    profiles = getattr(provider, "_model_profiles", settings.repoguardian_model_request_profiles)
-    profile = profiles.get(model, getattr(provider, "_request_profile", settings.repoguardian_model_request_profile))
-    resolver = getattr(provider, "resolve_request_profile", None)
-    resolved = resolver(model) if callable(resolver) else settings.resolve_model_profile(model)
-    if callable(resolver):
-        profile = resolved.profile
-    return stable_hash({
-        "unit_fp": unit_fp, "input_version": DIAGNOSIS_INPUT_VERSION, "input_mode": input_mode,
-        # 指纹绑定实际审查内容基准，与证据快照的 review_diff_base 口径一致。
-        "head_sha": state.get("head_sha"), "base_sha": review_diff_base(state),
-        "pr_intent": build_pr_intent(state.get("pr_info"))["intent_hash"], "model": model,
-        "provider": getattr(provider, "_provider_name", settings.repoguardian_provider),
-        "provider_type": f"{type(provider).__module__}.{type(provider).__qualname__}",
-        "endpoint": getattr(provider, "_base_url", settings.openai_base_url),
-        "profile": profile.model_dump(mode="json"), "prompt": settings.repoguardian_prompt_version,
-        "context_budget_version": CONTEXT_BUDGET_VERSION, "model_profile_source": resolved.source,
-        "rules": settings.repoguardian_rule_version, "tools": settings.repoguardian_tool_schema_version,
-        "policy": settings.repoguardian_review_policy_version,
-    })
-
-
 def validation_fingerprint(
     *, patch_hash: str, backend: str, validation_profile: str, environment_fingerprint: str
 ) -> str:

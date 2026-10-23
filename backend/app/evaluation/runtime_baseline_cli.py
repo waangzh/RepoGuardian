@@ -1,4 +1,4 @@
-"""从指定 r9 产物生成本地计量与盲审包；不运行审查图或模型。"""
+"""从指定审查产物生成本地计量与盲审包；不运行审查图或模型。"""
 
 from __future__ import annotations
 
@@ -29,7 +29,8 @@ def build_baseline(paths: list[Path]) -> tuple[dict, list[dict], list[dict]]:
         packets.extend(blind)
         mapping.extend(sources)
         samples.append({
-            "sample_id": identity, "artifact_sha256": hashlib.sha256(raw).hexdigest(),
+            "sample_id": identity, "engine": result.get("engine") or "legacy_units",
+            "artifact_sha256": hashlib.sha256(raw).hexdigest(),
             "snapshot": {key: (result.get("snapshot") or {}).get(key) for key in (
                 "verified_head", "verified_base", "diff_policy", "diff_sha256",
             )},
@@ -39,8 +40,10 @@ def build_baseline(paths: list[Path]) -> tuple[dict, list[dict], list[dict]]:
         })
     if not samples:
         raise ValueError("baseline requires explicit sample artifacts")
+    engines = {sample["engine"] for sample in samples}
     report = {
-        "version": "review-runtime-baseline-v1", "engine": "legacy_units",
+        "version": "review-runtime-baseline-v1",
+        "engine": next(iter(engines)) if len(engines) == 1 else "mixed",
         "evaluation_kind": "offline_artifact_audit",
         "quality_gate": "pending_independent_adjudication",
         "samples": samples,

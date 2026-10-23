@@ -35,21 +35,3 @@ def branch_error(source: str | None, start: int, end: int, claim, *, fragment=Fa
     if claim:
         return None if (condition, claim.arm) in scopes else "branch_claim_mismatch"
     return "branch_claim_required" if scopes else None
-
-
-def counterevidence_branch_error(source: str, anchor) -> str | None:
-    """反证必须能在同一段已显示正文中唯一定位，不能跨片段拼接上下文。"""
-    matches, offset = [], 0
-    while (index := source.find(anchor.existing_code, offset)) >= 0:
-        start = source[:index].count("\n") + 1
-        end = start + anchor.existing_code.count("\n")
-        lines = source.splitlines()
-        before = lines[max(0, start - 1 - len(anchor.context_before)):start - 1]
-        after = lines[end:end + len(anchor.context_after)]
-        if ((not anchor.context_before or before == anchor.context_before)
-                and (not anchor.context_after or after == anchor.context_after)):
-            matches.append((start, end))
-        offset = index + len(anchor.existing_code)
-    if len(matches) != 1:
-        return "branch_claim_ambiguous"
-    return branch_error(source, *matches[0], anchor.branch_claim, fragment=True)

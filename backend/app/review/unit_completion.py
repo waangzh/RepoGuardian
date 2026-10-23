@@ -41,43 +41,6 @@ def batch_execution_status(batch: UnitDiffBatch) -> str:
     return batch.status
 
 
-def batch_target_coverage(batch: UnitDiffBatch) -> str:
-    """只判断当前批次负责的 hunk/目标，不判断整个父 Unit 是否完成。"""
-    result = batch.result
-    if result is None:
-        return "unknown"
-    coverage = review_unit_input_coverage(result)
-    if coverage is not None and coverage.target_coverage == "unknown":
-        return "unknown"
-    if result.diff_manifest is not None and result.coverage_ledger is not None:
-        from app.services.unit_coverage import coverage_gaps
-
-        active = (
-            result.active_evidence_set
-            if result.diff_manifest.review_unit_id != result.review_unit_id
-            else None
-        )
-        if coverage_gaps(result.diff_manifest, result.coverage_ledger, active, result.plan):
-            return "partial"
-    return "complete" if coverage is None or coverage.target_coverage == "complete" else "partial"
-
-
-def batch_contract_coverage(batch: UnitDiffBatch) -> str:
-    """根据批次最近有效记录判断未决问题/依赖，不推断跨批次证据。"""
-    result = batch.result
-    if result is None:
-        return "unknown"
-    summary = result.review_summary
-    record = summary.record or summary.last_valid_record
-    if record is None:
-        return "unknown"
-    if record.unresolved_questions or any(
-        dependency.status != "verified" for dependency in record.contract_dependencies
-    ):
-        return "pending"
-    return "complete"
-
-
 def review_unit_input_coverage(result: ReviewUnitResult) -> UnitInputCoverage | None:
     """仅识别明确的降级标记；旧记录和显式 legacy 的 unknown 不等于降级。"""
     if result.input_coverage is not None:
@@ -101,22 +64,6 @@ def is_review_unit_execution_complete(result: ReviewUnitResult) -> bool:
     return (
         result.status == ReviewUnitStatus.completed
         and result.terminal_reason in _COMPLETE_TERMINAL_REASONS
-    )
-
-
-def has_unresolved_contracts(result: ReviewUnitResult) -> bool:
-    coverage = review_unit_input_coverage(result)
-    return bool(
-        coverage
-        and coverage.contract_verification_status in {"unresolved", "conflicting"}
-    )
-
-
-def is_review_unit_execution_complete_with_warnings(result: ReviewUnitResult) -> bool:
-    """执行已完成，但仍有未决契约；不等于严格完成或可复用。"""
-    return (
-        is_review_unit_execution_complete(result)
-        and result.unit_completion_status == "complete_with_unresolved_contracts"
     )
 
 
