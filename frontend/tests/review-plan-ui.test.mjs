@@ -23,10 +23,31 @@ test('高级设置默认折叠并保留冻结限额，修改后不能直接创�
     assert.match(html, /快速初筛 · 只读/);
     assert.match(html, /全部可审查变更/);
     assert.match(html, /aria-label="执行模型"/);
-    assert.match(html, /配置已变化，请先校验并保存方案/);
+    assert.match(html, /配置已变化，请先更新方案/);
     assert.match(html, /<button[^>]*disabled[^>]*>(?:(?!<\/button>)[\s\S])*开始 AI 审查/);
     assert.doesNotMatch(html, /预览估算仍使用服务端默认模型/);
     assert.doesNotMatch(html, /费用上限|费用留空|缺少价格|USD/);
+  } finally { await server.close(); }
+});
+
+test('重新校验方案时就地展示服务端真实阶段，不跳转页面', async () => {
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: 'custom' });
+  try {
+    const { default: component } = await server.ssrLoadModule('/src/components/pages/ReviewPlanPage.vue');
+    const limits = { max_model_calls: 12, max_tokens: 60000, max_cost_microusd: null, timeout_seconds: 60 };
+    const html = await renderToString(createSSRApp(component, {
+      preview: { preview_id:'saved', effective_plan:{ version:'review-plan-v1', depth:'standard', focus:['security'], scope:{mode:'all',primary_files:[]}, limits }, changed_files:[], review_units:[], excluded_files:[], risk_tags:[], warnings:[], included_file_count:0, changed_file_count:0 },
+      capabilities: { depth_presets:[{id:'standard',label:'标准审查',limits}], focus_categories:['security'], scope_selection_supported:true, limits:{defaults:limits,maxima:limits} },
+      prUrl:'https://github.com/o/r/pull/1', model:'', models:[], defaultModel:'fixture', modelsLoading:false, modelsError:null,
+      submitting:false, dirty:true, previewing:true,
+      previewJob: { id:'a'.repeat(32), request:{pr_url:'https://github.com/o/r/pull/1',mode:'review',generate_patches:false,validation_backend:'none'},
+        status:'running', stages:[{phase:'clone',message:'正在克隆仓库',started_at:'2026-01-01T00:00:00Z',finished_at:null,percent:42,operation:'clone'}],
+        cache_hit:false, created_at:'2026-01-01T00:00:00Z', updated_at:'2026-01-01T00:00:00Z', completed_at:null, error:null, result:null, consumed_task_id:null },
+    }));
+    assert.match(html, /正在克隆仓库 · 42%/);
+    assert.match(html, /<button[^>]*disabled[^>]*>更新中…/);
+    assert.match(html, /配置已变化，请先更新方案/);
+    assert.doesNotMatch(html, /校验并保存方案/);
   } finally { await server.close(); }
 });
 
