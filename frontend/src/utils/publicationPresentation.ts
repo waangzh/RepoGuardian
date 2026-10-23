@@ -2,7 +2,7 @@
  * 发布流程的用户语言映射：协议值只用于判定，界面不直接展示内部术语。
  * 后端字段与状态枚举保持原样，翻译仅发生在展示层。
  */
-import type { PublicationItem, PublicationState, PublicationInlinePreview } from "../types/publication";
+import type { PublicationItem, PublicationState, PublicationInlinePreview, ReviewPresentation } from "../types/publication";
 
 export const publicationStateLabel: Record<PublicationState, string> = {
   queued: "已加入发布队列",
@@ -35,6 +35,16 @@ export const inlineActionLabel: Record<PublicationInlinePreview["action"], strin
 /** 评论条目的中文称呼，替代 kind 的 summary/inline。 */
 export function publicationItemKindLabel(kind: PublicationItem["kind"]) {
   return kind === "summary" ? "PR 总结评论" : "代码行评论";
+}
+
+/** 概述来源说明；来源缺失的旧计划只说明“已冻结摘要”，不声称确定性。 */
+export function summarySourceLabel(source: ReviewPresentation["summary_source"]) {
+  if (!source) return "使用已冻结的摘要";
+  return {
+    model: "使用已冻结的模型摘要",
+    metadata: "使用确定性变更元数据",
+    unavailable: "没有足够资料生成变更概述",
+  }[source];
 }
 
 const errorLabels: Record<string, string> = {

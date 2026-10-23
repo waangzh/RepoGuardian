@@ -39,7 +39,8 @@ def validate_review_synthesis(facts, value):
         cited(item, observed)
     for item in draft.test_changes:
         cited(item, {"test_source_observation"})
-    cited(draft.review_summary, {"verified_finding", "review_boundary"})
+    # review_summary 仅为旧工件保留读取；新输出不再生成，也不进入交付。
+    validate_text(draft.review_summary.text)
     for item in draft.finding_summaries:
         validate_text(item.text)
         # 问题核心主张始终展示权威原文；编辑性摘要不进入 Finding、严重度或去重身份。

@@ -134,44 +134,38 @@ def test_overview_is_one_paragraph_from_presentation_for_all_delivery_modes(synt
     assert len(set(overviews)) == 1
 
 
-@pytest.mark.parametrize(("implementation", "actual", "tests", "expected", "absent"), [
-    ("区间边界使用最小值与最大值扩展。", "", "尚未形成可引用的测试断言核对记录。",
-     "区间边界使用最小值与最大值扩展。", "测试源码变化"),
-    ("尚未形成可引用的实现行为观察。", "", "补充区间包含性断言。",
-     "补充区间包含性断言。", "尚未形成可引用的实现行为观察。"),
-    ("尚未形成可引用的实现行为观察；以上仅为变更元数据。",
-     "本次 Diff 共 2 个文件；尚未形成可引用的局部行为观察，以上仅为变更元数据。",
-     "尚未形成可引用的测试断言核对记录。", "以上仅为变更元数据。", "测试源码变化"),
-    (None, "旧记录保存的局部实现观察。", None, "旧记录保存的局部实现观察。", "测试源码变化"),
-    (None, "未保存可归纳的实际变更。", None, "作者目标为：调整区间边界。", "测试源码变化"),
+@pytest.mark.parametrize(("diff_summary", "expected", "absent"), [
+    ("本次 PR 共变更 2 个文件（+3 / -1），主要集中在 src（2 个文件）。",
+     "本次 PR 共变更 2 个文件", "审查阶段观察"),
+    (None, "尚缺少可概括实现变化的代码观察", "审查阶段观察"),
 ])
-def test_fallback_uses_observations_without_promoting_missing_data(
-        implementation, actual, tests, expected, absent):
+def test_fallback_uses_deterministic_diff_metadata(diff_summary, expected, absent):
     from app.models.publication import ChangeUnderstanding
     from app.services.publication_renderer import render_summary
     from app.services.review_presentation import build_presentation
 
     plan = PublicationPlanner().build(new_output(completed_task()))
     plan.digest.change_understanding = ChangeUnderstanding(
-        author_goal="调整区间边界。", implementation_changes=implementation,
-        actual_changes=actual, test_observations=tests)
+        author_goal="调整区间边界。", diff_summary=diff_summary,
+        implementation_changes="代码中 lo = min(lo, point)，符合作者描述。",
+        actual_changes="未保存可归纳的实际变更。",
+        test_observations="补充区间包含性断言。")
     plan.presentation = build_presentation(plan)
     overview = render_summary(plan).split("### 本次 PR 主要变更\n\n", 1)[1].split("\n\n### 审查结果", 1)[0]
     assert expected in overview
     assert absent not in overview
+    # 审查阶段的模型散文不进入对外摘要。
+    assert "符合作者描述" not in overview and "补充区间包含性断言" not in overview
     assert "目标已实现" not in overview and "测试通过" not in overview
-    if not plan.presentation.change_summary or plan.presentation.change_summary.startswith("未保存足以"):
-        assert "尚缺少可概括实现变化的代码观察" in overview
 
 
-@pytest.mark.parametrize("synthesis_status", ["ready", "fallback", "unavailable"])
 @pytest.mark.parametrize("tests", [
     "新增边界参数化测试用例。",
     "测试文件新增边界参数化测试用例。",
     "测试文件确认包含边界参数化用例，断言内容与作者描述一致。",
     "未新增边界参数化测试用例；现有断言不能证明覆盖区间不收窄的场景。",
 ])
-def test_overview_preserves_saved_observations_without_keyword_rewriting(synthesis_status, tests):
+def test_ready_summary_preserves_saved_observations_without_keyword_rewriting(tests):
     from app.models.publication import ChangeUnderstanding
     from app.services.publication_renderer import markdown_text, render_summary
     from app.services.review_presentation import build_presentation
@@ -180,9 +174,11 @@ def test_overview_preserves_saved_observations_without_keyword_rewriting(synthes
     implementation = ("代码中 lo = min(lo, point) 与 hi = max(hi, point)"
         "确实只放宽边界，point 保持不变，符合作者描述。")
     plan.digest.change_understanding = ChangeUnderstanding(
-        implementation_changes=implementation, test_observations=tests)
+        implementation_changes="不应进入对外摘要的审查阶段观察。", test_observations=tests)
     plan.presentation = build_presentation(plan)
-    plan.presentation.synthesis_status = synthesis_status
+    plan.presentation.change_summary = implementation
+    plan.presentation.synthesis_status = "ready"
+    plan.presentation.summary_source = "model"
     before = plan.model_dump(mode="json")
     markdown = render_summary(plan)
     overview = markdown.split("### 本次 PR 主要变更\n\n", 1)[1].split("\n\n### 审查结果", 1)[0]
@@ -259,7 +255,8 @@ def test_summary_coverage_warns_only_for_diff_that_limits_the_summary():
     plan.presentation = build_presentation(plan, artifact)
     markdown = render_summary(plan)
     audit = render_technical_audit(plan, {})
-    assert "变更概述仅覆盖已纳入的 Diff 片段" not in markdown
+    # 覆盖披露只取决于事实包截断，不因摘要来源是回退而消失。
+    assert "变更概述仅覆盖已纳入的 Diff 片段" in markdown
     plan.presentation.synthesis_status = "ready"
     markdown = render_summary(plan)
     assert "变更概述仅覆盖已纳入的 Diff 片段" in markdown
@@ -363,7 +360,7 @@ def test_frozen_v1_plan_keeps_test_supplement_body_and_hash_for_publication_reco
     assert expected in compose_summary(restored, {"finding_keys": []}, {}, [], "Prepared")
 
 
-def test_test_only_fallback_uses_saved_test_observation_as_the_single_summary():
+def test_test_only_fallback_does_not_use_model_prose_as_the_summary():
     from app.models.publication import ChangeUnderstanding
     from app.services.publication_renderer import render_review_comment, render_user_report
     from app.services.review_presentation import build_presentation
@@ -372,15 +369,16 @@ def test_test_only_fallback_uses_saved_test_observation_as_the_single_summary():
     plan = PublicationPlanner().build(task)
     observation = "补充空响应处理的回归用例。"
     plan.digest.change_understanding = ChangeUnderstanding(
-        actual_changes=observation,
-        implementation_changes="尚未形成可引用的实现行为观察。",
-        test_observations=observation)
+        actual_changes=observation, implementation_changes=None, test_observations=observation)
     plan.presentation = build_presentation(plan)
     markdown = render_review_comment(plan)
     overview = markdown.split("### 本次 PR 主要变更\n\n", 1)[1].split("\n\n### 审查结果", 1)[0]
-    assert overview == observation
+    assert plan.presentation.summary_source == "unavailable"
+    assert observation not in overview
+    assert "尚缺少可概括实现变化的代码观察" in overview
     assert plan.presentation.schema_version == "review-presentation-v2"
     assert plan.presentation.test_changes == []
+    # 原始观察仍保留在详细报告中供审计。
     assert observation in render_user_report(task, plan)
 
 

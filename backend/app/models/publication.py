@@ -185,13 +185,15 @@ class ChangeUnderstanding(BaseModel):
     actual_changes: str = "未保存可归纳的实际变更。"
     alignment: str = "未保存逐目标的符合性核验记录，不能由覆盖率推断作者目标已经实现。"
     author_goal_source: Literal["summary", "description", "title", "unknown"] | None = None
+    # 仅由冻结 Diff 元数据生成的概述；不含审查阶段的模型散文。
+    diff_summary: str | None = None
     implementation_changes: str | None = None
     test_observations: str | None = None
 
     @model_serializer(mode="wrap")
     def serialize_editorial_fields(self, handler):
         value = handler(self)
-        for key in ("author_goal_source", "implementation_changes", "test_observations"):
+        for key in ("author_goal_source", "diff_summary", "implementation_changes", "test_observations"):
             if getattr(self, key) is None:
                 value.pop(key, None)
         return value
@@ -305,6 +307,8 @@ class ReviewPresentation(BaseModel):
     snapshot: PublicationSnapshot
     language: Literal["zh-CN"] = "zh-CN"
     synthesis_status: Literal["ready", "fallback", "unavailable"] = "fallback"
+    # 概述来源：已冻结模型摘要、确定性变更元数据或不可用；旧计划缺失该字段。
+    summary_source: Literal["model", "metadata", "unavailable"] | None = None
     purpose_text: str | None = None
     purpose_source: Literal["author_claim", "code_inferred", "unknown"] = "unknown"
     change_summary: str
@@ -322,6 +326,9 @@ class ReviewPresentation(BaseModel):
         value = handler(self)
         if self.summary_input_coverage is None:
             value.pop("summary_input_coverage", None)
+        # 旧冻结计划没有来源标记；缺失不补写，保持正文与计划哈希不变。
+        if self.summary_source is None:
+            value.pop("summary_source", None)
         return value
 
 

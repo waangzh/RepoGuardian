@@ -71,6 +71,7 @@ export interface ChangeUnderstanding {
   actual_changes: string;
   alignment: string;
   author_goal_source?: "summary" | "description" | "title" | "unknown" | null;
+  diff_summary?: string | null;
   implementation_changes?: string | null;
   test_observations?: string | null;
 }
@@ -262,6 +263,7 @@ export interface ReviewPresentation {
   snapshot: PublicationSnapshot;
   language: "zh-CN";
   synthesis_status: "ready" | "fallback" | "unavailable";
+  summary_source?: "model" | "metadata" | "unavailable" | null;
   purpose_text: string | null;
   purpose_source: "author_claim" | "code_inferred" | "unknown";
   change_summary: string;

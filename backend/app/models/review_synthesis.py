@@ -75,13 +75,14 @@ class FindingSummary(SynthesisModel):
 
 
 class ReviewSynthesisOutput(SynthesisModel):
+    """编辑器只写变更描述；问题结论由已核验 Finding 确定性渲染。"""
+
     schema_version: Literal["review-synthesis-v2"] = "review-synthesis-v2"
     language: Literal["zh-CN"] = "zh-CN"
     pr_purpose: SynthesisPurpose = Field(default_factory=SynthesisPurpose)
     change_summary: CitedText
     key_changes: list[CitedText] = Field(default_factory=list, max_length=3)
     finding_summaries: list[FindingSummary] = Field(default_factory=list, max_length=100)
-    review_summary: CitedText = Field(default_factory=CitedText)
 
 
 class ReviewSynthesisDraft(ReviewSynthesisOutput):
@@ -89,12 +90,17 @@ class ReviewSynthesisDraft(ReviewSynthesisOutput):
 
     schema_version: Literal["review-synthesis-v1", "review-synthesis-v2"] = "review-synthesis-v1"
     test_changes: list[CitedText] = Field(default_factory=list, max_length=3)
+    # 旧工件保存过模型改写的问题概述；新输出不再请求该字段，也不再用于交付。
+    review_summary: CitedText = Field(default_factory=CitedText)
 
     @model_serializer(mode="wrap")
     def serialize_legacy_test_changes(self, handler):
         value = handler(self)
-        if self.schema_version == "review-synthesis-v2" and not self.test_changes:
-            value.pop("test_changes", None)
+        if self.schema_version == "review-synthesis-v2":
+            if not self.test_changes:
+                value.pop("test_changes", None)
+            if not self.review_summary.text.strip():
+                value.pop("review_summary", None)
         return value
 
 
