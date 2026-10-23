@@ -15,6 +15,23 @@ from app.services.review_synthesis_validator import validate_review_synthesis
 
 logger = logging.getLogger("RepoGuardian.Synthesis")
 
+# 校验器的固定错误码；只接受白名单，避免把异常文本或模型数据写进工件。
+_VALIDATION_CODES = {
+    "synthesis_language_mismatch", "synthesis_finding_not_allowed",
+    "synthesis_control_character_not_allowed", "synthesis_reference_not_allowed",
+    "synthesis_unknown_purpose_has_claim", "synthesis_change_summary_missing",
+}
+
+
+def _failure_code(exc):
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    if isinstance(exc, ValueError) and str(exc) in _VALIDATION_CODES:
+        return str(exc)
+    if isinstance(exc, (ValueError, ValidationError)):
+        return "invalid_output"
+    return "provider_or_storage_error"
+
 
 def bound_synthesis(task, plan):
     if not task.review_synthesis:
@@ -115,9 +132,10 @@ async def freeze_review_synthesis(task, repository, provider, *, lease=None):
         # claim 与发送账本已落盘；停止不补发，且不把取消包装成摘要成功。
         raise
     except Exception as exc:
+        reason = _failure_code(exc)
+        logger.warning("摘要生成失败：review=%s failure_code=%s", task.id, reason)
         artifact = artifact.model_copy(update={"status": "fallback", "synthesis": None,
-            "failure_code": "timeout" if isinstance(exc, TimeoutError) else
-                "invalid_output" if isinstance(exc, (ValueError, ValidationError)) else "provider_or_storage_error"})
+            "failure_code": reason})
         usage = getattr(exc, "usage", None)
         if usage:
             artifact.usage = usage.model_dump(mode="json")

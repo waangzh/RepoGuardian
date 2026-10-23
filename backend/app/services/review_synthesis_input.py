@@ -9,6 +9,47 @@ from app.review.tool_scope import (
 from app.services.fingerprints import stable_hash
 
 
+HUNK_TEXT_LIMIT = 6000
+
+
+def _hunk_text(hunk, path, change_type, lines):
+    raw = hunk.model_copy(update={"lines": lines}).model_dump(mode="json")
+    return json.dumps({"path": path, "change_type": change_type, "hunk": raw}, ensure_ascii=False)
+
+
+def _context_radius_lines(lines, radius):
+    """保留改动行及其 radius 范围内的上下文。"""
+    keep = set()
+    for index, line in enumerate(lines):
+        if line.kind != "context":
+            keep.update(range(max(0, index - radius), min(len(lines), index + radius + 1)))
+    return [line for index, line in enumerate(lines) if index in keep]
+
+
+def _trimmed_hunk_text(hunk, path, change_type):
+    """超长 hunk 先减少上下文，再按改动行前缀截断；返回 (text, truncated)。
+
+    整段丢弃会让模型没有任何可引用的 diff，摘要必然失败。
+    """
+    full = _hunk_text(hunk, path, change_type, hunk.lines)
+    if len(full) <= HUNK_TEXT_LIMIT:
+        return full, False
+    for radius in (3, 1, 0):
+        lines = _context_radius_lines(hunk.lines, radius)
+        text = _hunk_text(hunk, path, change_type, lines)
+        if len(text) <= HUNK_TEXT_LIMIT:
+            return text, True
+    changed = [line for line in hunk.lines if line.kind != "context"]
+    low, high = 0, len(changed)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if len(_hunk_text(hunk, path, change_type, changed[:middle])) <= HUNK_TEXT_LIMIT:
+            low = middle
+        else:
+            high = middle - 1
+    return (_hunk_text(hunk, path, change_type, changed[:low]) if low else ""), True
+
+
 def build_synthesis_input(task, plan):
     policy = (task.task_runtime_configuration or {}).get("output_policy") or {}
     limit = min(60_000, max(2000, int(policy.get("max_input_chars", 24_000))))
@@ -81,14 +122,15 @@ def build_synthesis_input(task, plan):
         for index, hunk in enumerate(file.hunks):
             raw = hunk.model_dump(mode="json")
             identity = "diff:" + stable_hash([facts.head_sha, facts.effective_base_sha, file.file_path, index, raw])
-            text = json.dumps({"path": file.file_path, "change_type": file.change_type,
-                "hunk": raw}, ensure_ascii=False)
-            # 不保留半个 hunk 的引用；无法完整提供就省略该 hunk。
-            if len(text) > 6000 or not add(identity, kind, text):
+            text, trimmed = _trimmed_hunk_text(hunk, file.file_path, file.change_type)
+            # 超长 hunk 裁剪后仍无可用改动行时才省略。
+            if not text or not add(identity, kind, text):
                 facts.omitted_hunks += 1
                 truncation_reasons.add("diff_hunk_omitted")
             else:
                 included = True
+                if trimmed:
+                    truncation_reasons.add("diff_hunk_truncated")
         if not included:
             facts.omitted_files += 1
             if not file.hunks:

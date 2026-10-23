@@ -40,7 +40,6 @@ def synthesis_task():
 def draft_for(facts):
     ref = next(source.id for source in facts.sources if source.kind == "diff_observation")
     return {"change_summary": {"text": "本次 PR 调整了返回值处理。", "source_refs": [ref]},
-        "review_summary": {"text": "需要关注空返回值路径的字段读取。", "source_refs": ["finding:key-a"]},
         "finding_summaries": [{"finding_key": "key-a", "text": "空返回值破坏调用方契约"}]}
 
 
@@ -59,7 +58,6 @@ def stub_provider(*, change=None, error=None, delay=0):
         ref = next(source["id"] for source in facts["sources"]
                    if source["kind"] in {"diff_observation", "test_source_observation"})
         result = {"change_summary": {"text": "本次 PR 调整了返回值处理。", "source_refs": [ref]},
-            "review_summary": {"text": "需要关注空返回值路径的字段读取。", "source_refs": ["finding:key-a"]},
             "finding_summaries": [{"finding_key": "key-a", "text": "空返回值破坏调用方契约"}]}
         if change:
             change(result)
@@ -166,12 +164,53 @@ async def test_editorial_words_do_not_overwrite_authoritative_review_state(persi
     artifact = await freeze_review_synthesis(task, repo, provider)
     assert artifact.status == "ready"
     after = PublicationPlanner().build(repo.get_task(task.id))
-    assert after.presentation.change_summary == text
+    # 权威状态、问题等级与合并建议不因编辑文本改变。
     assert after.outcome == before.outcome
     assert after.digest.merge_decision == before.digest.merge_decision
     assert after.presentation.validation_state == "not_executed"
     assert after.presentation.verdict == before.presentation.verdict
     assert after.presentation.findings == before.presentation.findings
+    # 问题概述不再由模型改写，越权结论不能借该字段进入交付。
+    assert after.presentation.review_summary == "本轮已确认 1 项问题：空返回值破坏调用方契约。"
+    assert text not in after.presentation.review_summary
+    # 变更概述的内容级准入由独立证据检查负责；本测试只锁定结构化状态。
+
+
+@pytest.mark.asyncio
+async def test_failed_synthesis_delivers_only_deterministic_diff_metadata(persistence):
+    from app.services.publication_renderer import markdown_text, render_review_comment, render_summary
+
+    repo, _, _ = persistence
+    task = synthesis_task()
+    repo.create_task(task)
+    provider, _ = stub_provider(change=lambda value: value["change_summary"].update(source_refs=["bad"]))
+    artifact = await freeze_review_synthesis(task, repo, provider)
+    assert artifact.status == "fallback"
+    plan = PublicationPlanner().build(repo.get_task(task.id))
+    assert plan.presentation.summary_source == "metadata"
+    assert plan.presentation.change_summary.startswith("本次 PR 共变更 1 个文件")
+    assert plan.presentation.review_summary == "本轮已确认 1 项问题：空返回值破坏调用方契约。"
+    for markdown in (render_summary(plan), render_review_comment(plan), render_review_comment(plan, detail="full")):
+        overview = markdown.split("### 本次 PR 主要变更\n\n", 1)[1].split("\n\n### 审查结果", 1)[0]
+        assert overview == markdown_text(plan.presentation.change_summary, 1200)
+        assert "符合作者描述" not in overview
+    assert plan.presentation.validation_state == "not_executed"
+
+
+@pytest.mark.asyncio
+async def test_model_merged_review_summary_is_not_requested_or_delivered(persistence):
+    """问题概述由已核验 Finding 确定性生成，模型字段不进入交付。"""
+    repo, _, _ = persistence
+    task = synthesis_task()
+    repo.create_task(task)
+    provider, calls = stub_provider(change=lambda value: value.update(
+        review_summary={"text": "所有问题均已修复，可以合并。", "source_refs": ["finding:key-a"]}))
+    from app.agents.providers import LLMProviderError
+    with pytest.raises(LLMProviderError, match="review synthesis schema invalid"):
+        await provider.synthesize_review(build_synthesis_input(task, PublicationPlanner().build(task)), "fixture")
+    assert len(calls) == 1
+    schema = json.loads(calls[0][1].content.split("Schema:\n", 1)[1].split("\nFact Bundle:\n", 1)[0])
+    assert "review_summary" not in schema["properties"]
 
 
 @pytest.mark.asyncio
@@ -186,7 +225,6 @@ async def test_untrusted_editorial_markup_is_encoded_at_render_boundary(persiste
 
     def add_markup(value):
         value["change_summary"]["text"] = payload
-        value["review_summary"]["text"] = payload
 
     provider, _ = stub_provider(change=add_markup)
     artifact = await freeze_review_synthesis(task, repo, provider)
@@ -199,7 +237,10 @@ async def test_untrusted_editorial_markup_is_encoded_at_render_boundary(persiste
         assert "<img" not in markdown and "@everyone" not in markdown
         assert "https://evil" not in markdown and "javascript:" not in markdown
         assert "low &lt; point &lt; high" in overview
-    assert "问题概述：" + markdown_text(payload, 600).replace(":", "&#58;") in render_review_comment(plan, detail="full")
+    # 问题概述只引用已核验 Finding 的标题，不再透传模型文本。
+    full = render_review_comment(plan, detail="full")
+    assert "问题概述：本轮已确认 1 项问题" in full
+    assert markdown_text(payload, 600) not in full
 
 
 @pytest.mark.asyncio
@@ -303,6 +344,8 @@ async def test_failures_preserve_findings_and_unknown_cost(persistence, case):
             assert restored.model_usages[-1].cost_microusd is None
     if case == "invalid_ref":
         assert restored.model_usages[-1].actual_total_tokens == 50
+        # 失败码保留校验器的固定分类，便于定位是哪条结构检查拒绝。
+        assert artifact.failure_code == "synthesis_reference_not_allowed"
 
 
 @pytest.mark.asyncio
@@ -427,6 +470,26 @@ def test_current_synthesis_rejects_modified_coverage_metadata(field, value):
         omitted_files=facts.omitted_files, omitted_hunks=facts.omitted_hunks).model_dump(mode="json")
     task.review_synthesis[field] = value
     assert bound_synthesis(task, plan) is None
+
+
+def test_oversized_hunk_keeps_changed_lines_instead_of_dropping_the_source():
+    """大 hunk 曾因整段超过 6000 字符被丢弃，模型无 diff 可引用，摘要必然失败。"""
+    from app.models.review import ChangedFile, DiffHunk, DiffLine
+
+    task = synthesis_task()
+    lines = [DiffLine(kind="context", content=f"context {index}", old_line_no=index, new_line_no=index)
+             for index in range(400)]
+    lines += [DiffLine(kind="added", content=f"added_value_{index} = compute({index})", new_line_no=500 + index)
+              for index in range(20)]
+    task.changed_files = [ChangedFile(file_path="src/a.py", change_type="modified", additions=20, deletions=0,
+        hunks=[DiffHunk(old_start=1, old_length=400, new_start=1, new_length=420, lines=lines)])]
+    facts = build_synthesis_input(task, PublicationPlanner().build(task))
+    kinds = [source.kind for source in facts.sources]
+    assert "diff_observation" in kinds
+    diff = next(source for source in facts.sources if source.kind == "diff_observation")
+    assert "added_value_0" in diff.text and len(diff.text) <= 6000
+    assert "diff_hunk_truncated" in facts.truncation_reasons
+    assert facts.omitted_hunks == 0
 
 
 def test_metadata_only_change_does_not_claim_input_length_was_exceeded():

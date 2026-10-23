@@ -37,11 +37,22 @@ def _editorial_markdown(presentation, text, limit=2000):
     return rendered.replace(":", "&#58;") if presentation.schema_version == "review-presentation-v2" else rendered
 
 
+def _trim_summary(text, limit=600):
+    """按整句保留到上限，避免只剩首句而丢掉条件或否定。"""
+    if len(text) <= limit:
+        return text
+    kept = ""
+    for part in _overview_sentences(text):
+        if len(kept) + len(part) > limit:
+            break
+        kept += part
+    return kept or _sentence(text, limit)
+
+
 def _change_overview(presentation):
     """只从投影选取已有观察；缺少观察时不把作者目标改写成实现事实。"""
     summary = _observation_text(presentation.change_summary)
-    if len(summary) > 600:
-        summary = _sentence(summary, 600)
+    summary = _trim_summary(summary)
     seen = {part.strip().rstrip("。；; .") for part in _overview_sentences(summary)}
     tests = []
     # Frozen v1 plans retain their original body for publication recovery.
@@ -137,23 +148,41 @@ def compact_finding(finding):
             f"**建议：** {markdown_text(finding.recommendation)}")
 
 
+def _review_summary(plan):
+    """问题概述由已核验问题确定性生成，模型不再改写问题结论。"""
+    findings = _ordered_findings(plan)
+    if not findings:
+        return ""
+    titles = "；".join((item.raw_title or item.title)[:120] for item in findings[:3])
+    more = f" 等 {len(findings)} 项" if len(findings) > 3 else ""
+    return f"本轮已确认 {len(findings)} 项问题：{titles}{more}。"
+
+
+def _fallback_summary(plan):
+    """回退只用冻结 Diff 派生的确定性变更范围。
+
+    审查阶段的模型散文仍保留在 Digest 与详细报告中供审计，
+    但不作为对外 PR 摘要，避免未经约束的结论进入交付。
+    """
+    understanding = plan.digest.change_understanding
+    diff_summary = _observation_text(understanding.diff_summary) if understanding else ""
+    if diff_summary:
+        return diff_summary, "metadata"
+    return "未保存足以概括主要变更的代码观察，请结合固定快照 Diff 人工核对。", "unavailable"
+
+
 def build_presentation(plan, synthesis=None):
     understanding = plan.digest.change_understanding
     purpose = understanding.author_goal if understanding else None
     if purpose and (purpose == "未记录明确的作者目标。" or re.search(
             r"found by.*audit|deep.review audit|审计发现", purpose, re.I)):
         purpose = None
-    test_observation = _observation_text(understanding.test_observations) if understanding else ""
-    summary = _observation_text(understanding.implementation_changes) if understanding else ""
-    if not summary and understanding and (
-            understanding.implementation_changes is None or not test_observation):
-        summary = _observation_text(understanding.actual_changes)
-    if not summary:
-        summary = test_observation
+    summary, summary_source = _fallback_summary(plan)
     draft = synthesis.synthesis if synthesis and synthesis.status == "ready" else None
     if draft:
         purpose = draft.pr_purpose.text or None
         summary = draft.change_summary.text
+        summary_source = "model"
     findings = _ordered_findings(plan)
     limitations = list(dict.fromkeys(_comment_risks(plan, include_investigations=False)))
     input_coverage = None
@@ -165,10 +194,12 @@ def build_presentation(plan, synthesis=None):
     return ReviewPresentation(
         schema_version="review-presentation-v2", review_id=plan.review_id, snapshot=plan.snapshot,
         synthesis_status=synthesis.status if synthesis else "fallback",
+        summary_source=summary_source,
         purpose_text=purpose,
         purpose_source=draft.pr_purpose.source_kind if draft else "author_claim" if purpose else "unknown",
         change_summary=summary or "未保存足以概括主要变更的代码观察，请结合固定快照 Diff 人工核对。",
-        review_summary=draft.review_summary.text if draft else "",
+        # 问题概述只由确定性 finding 生成；编辑摘要不再改写问题结论。
+        review_summary=_review_summary(plan),
         verdict=plan.digest.merge_decision, findings=findings,
         delivery=PresentationDelivery(confirmed=plan.outcome.confirmed_count, eligible=len(findings),
             selected=len(findings), inline_ready=len(plan.inline_drafts),
@@ -263,7 +294,8 @@ def render_presentation(plan, *, copy=False, detail="compact", exclude_resolved=
         if len(pending) > 5:
             lines += [f"- 另有 {len(pending) - 5} 项待核实事项；完整命题、证据与请求范围见内部技术审计记录。", ""]
     coverage = presentation.summary_input_coverage
-    if presentation.synthesis_status == "ready" and coverage and coverage.limits_diff_summary:
+    # 覆盖披露只取决于事实包是否截断，不因摘要来源变化而消失。
+    if coverage and coverage.limits_diff_summary:
         lines += ["变更概述仅覆盖已纳入的 Diff 片段；这不表示静态审查范围不完整。", ""]
     if detail == "full":
         advice = presentation.verdict.advice

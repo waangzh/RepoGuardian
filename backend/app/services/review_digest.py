@@ -71,6 +71,34 @@ def _module_summary(paths: list[str]) -> str:
     return "、".join(f"{name}（{count} 个文件）" for name, count in ranked)
 
 
+def _diff_observation(task, paths) -> str:
+    """只从冻结的 Diff 元数据归纳变更范围，不解释代码行为。"""
+    additions = sum(file.additions for file in task.changed_files)
+    deletions = sum(file.deletions for file in task.changed_files)
+    kinds = {kind: sum(file.change_type == kind for file in task.changed_files)
+             for kind in ("added", "deleted", "modified", "renamed")}
+    kind_text = "、".join(f"{label} {count}" for label, count in (
+        ("新增", kinds["added"]), ("删除", kinds["deleted"]), ("修改", kinds["modified"]), ("重命名", kinds["renamed"])) if count)
+    text = f"本次 PR 共变更 {len(paths)} 个文件（+{additions} / -{deletions}）"
+    if kind_text:
+        text += f"，其中{kind_text}"
+    text += f"，主要集中在 {_module_summary(paths)}"
+    names = set()
+    for file in task.changed_files:
+        for hunk in file.hunks:
+            for line in hunk.lines:
+                if line.kind not in {"added", "deleted"}:
+                    continue
+                match = re.match(
+                    r"\s*(?:(?:export|async|public|private|static)\s+)*(?:def|class|function|const|let|interface|type)\s+([\w$]+)",
+                    line.content)
+                if match:
+                    names.add(match.group(1))
+    if names:
+        text += "；变更声明包括 " + "、".join(sorted(names)[:8])
+    return text + "。"
+
+
 def _change_understanding(digest, task, report) -> ChangeUnderstanding:
     summaries = list(dict.fromkeys(observation["author_goal_summary"]
         for item in digest.intent_assessments for observation in item.observations
@@ -105,28 +133,16 @@ def _change_understanding(digest, task, report) -> ChangeUnderstanding:
     for path, behavior in observed:
         is_test = bool(re.search(r"(^|/)(tests?|__tests__|specs?)(/|$)|(^|/)test_|_test\.|[.]test[.]|[.]spec[.]", path, re.I))
         (tests if is_test else implementation).append(concise_text(behavior, 280))
+    # 旧字段保留哨兵文本供历史评论兼容；新的对外摘要只使用 diff_summary。
     implementation_text = " ".join(dict.fromkeys(implementation[:2])) or "尚未形成可引用的实现行为观察。"
     test_text = " ".join(dict.fromkeys(tests[:2])) or "尚未形成可引用的测试断言核对记录。"
+    diff_summary = _diff_observation(task, paths) if paths else None
     if observed:
         actual = (f"根据已绑定证据的局部检查，代码行为表现为：{implementation_text}"
                   + (f" 测试静态核对：{test_text}" if tests else "")
                   + (f"本次 Diff {stats}。" if paths else ""))
-    elif paths:
-        symbols = set()
-        for file in task.changed_files:
-            for hunk in file.hunks:
-                for line in hunk.lines:
-                    if line.kind not in {"added", "deleted"}:
-                        continue
-                    match = re.match(
-                        r"\s*(?:(?:export|async|public|private|static)\s+)*(?:def|class|function|const|let|interface|type)\s+([\w$]+)",
-                        line.content)
-                    if match:
-                        symbols.add(match.group(1))
-        names = "、".join(sorted(symbols)[:8])
-        actual = (f"本次 Diff {stats}，主要集中在 {_module_summary(paths)}"
-                  + (f"；变更声明包括 {names}。" if names else "。")
-                  + " 尚未形成可引用的局部行为观察，以上仅为变更元数据。")
+    elif diff_summary:
+        actual = diff_summary + " 尚未形成可引用的局部行为观察，以上仅为变更元数据。"
     else:
         actual = "未保存变更明细，无法归纳实际修改。"
     if not observed:
@@ -154,7 +170,8 @@ def _change_understanding(digest, task, report) -> ChangeUnderstanding:
     else:
         alignment = "未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。"
     return ChangeUnderstanding(author_goal=author_goal, actual_changes=actual, alignment=alignment,
-        author_goal_source=source, implementation_changes=implementation_text, test_observations=test_text)
+        author_goal_source=source, diff_summary=diff_summary,
+        implementation_changes=implementation_text, test_observations=test_text)
 
 
 def enrich_review_digest(digest, task, report, dispositions):

@@ -7,7 +7,8 @@ import type { PublicationCapability } from "../../types/operations";
 import { getPublicationCapability, preflightPublication, createPublication, getPublications, getPublication, retryPublication } from "../../api/client";
 import { publicationFindingTitle } from "../../utils/reportPresentation";
 import { publicationErrorText, publicationItemKindLabel, publicationItemStateLabel,
-  publicationStateLabel, publicationWarningText, inlineActionLabel } from "../../utils/publicationPresentation";
+  publicationStateLabel, publicationWarningText, inlineActionLabel,
+  summarySourceLabel } from "../../utils/publicationPresentation";
 import { useReviewCommentCopy } from "../../composables/useReviewCommentCopy";
 
 const props = defineProps<{ reviewId: string; plan: PublicationPlan; capability?: PublicationCapability | null }>();
@@ -161,7 +162,7 @@ const placementLabel = (placement: string) => placement === "inline" ? "代码�
             仅在总结中反馈 {{ preview.presentation.delivery.summary_only }} 项 /
             未选择 {{ preview.presentation.delivery.not_selected }} 项。
           </p>
-          <p v-if="preview.presentation">{{ preview.presentation.synthesis_status === 'ready' ? '使用已冻结的模型摘要' : '使用确定性回退摘要' }}；当前是发布预览，实际成功状态与讨论链接以 GitHub 回执为准。</p>
+          <p v-if="preview.presentation">{{ summarySourceLabel(preview.presentation.summary_source) }}；当前是发布预览，实际成功状态与讨论链接以 GitHub 回执为准。</p>
           <article class="markdown-body" v-html="summaryHtml" />
           <h3 v-if="preview.inline_previews.length">逐条代码意见与仅在总结中反馈的内容</h3>
           <details v-for="item in preview.inline_previews" :key="item.finding_key"><summary>{{ inlineActionLabel[item.action] }} · {{ item.location?.path || '总结评论' }}<template v-if="item.location">:{{ item.location.line }} · {{ item.location.side === 'LEFT' ? 'Base' : 'Head' }}</template></summary><pre>{{ item.body_markdown }}</pre></details>
