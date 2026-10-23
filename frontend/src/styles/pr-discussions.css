@@ -1,29 +1,25 @@
 /* Prototype tokens are restricted to PR discussion content. */
 .pd {
-  --pd-bg: #f5f7fb; --pd-card: #fff; --pd-ink: #14233d; --pd-text: #273951;
-  --pd-muted: #52657f; --pd-line: #e0e7f0; --pd-blue: #355cf6; --pd-blue-lite: #eef2ff;
-  --pd-teal: #087f70; --pd-teal-lite: #e8f7f2; --pd-amber: #a9600c; --pd-amber-lite: #fff5e6;
-  --pd-red: #c54146; --pd-red-lite: #fff0f1; --pd-subtle: #f8faff;
-  color: var(--pd-ink); font-size: 14px; line-height: 1.58; min-width: 0; overflow-wrap: anywhere;
-}
-[data-theme="dark"] .pd {
   --pd-bg: var(--bg); --pd-card: var(--surface); --pd-ink: var(--ink); --pd-text: var(--ink);
   --pd-muted: var(--muted); --pd-line: var(--line); --pd-blue: var(--primary); --pd-blue-lite: var(--blueWash);
-  --pd-teal: var(--success); --pd-teal-lite: var(--successWash); --pd-amber: var(--amber);
-  --pd-amber-lite: var(--amberWash); --pd-red: var(--danger); --pd-red-lite: var(--dangerWash); --pd-subtle: var(--surface2);
+  --pd-teal: var(--success); --pd-teal-lite: var(--successWash); --pd-amber: var(--amber); --pd-amber-lite: var(--amberWash);
+  --pd-red: var(--danger); --pd-red-lite: var(--dangerWash); --pd-subtle: var(--surface2);
+  color: var(--pd-ink); font-size: 14px; line-height: 1.65; min-width: 0; overflow-wrap: anywhere;
 }
 .pd *, .pd *::before, .pd *::after { box-sizing: border-box; }
 .pd :is(h1, h2, h3, p, pre) { margin: 0; }
 .pd button, .pd input, .pd a { font: inherit; }
-.pd :is(button, a, input, summary, [tabindex]):focus-visible { outline: 3px solid #a8b7ff; outline-offset: 3px; }
+.pd :is(button, a, input, summary, [tabindex]):focus-visible { outline: 3px solid rgba(50,94,235,.35); outline-offset: 2px; }
+/* 标题由脚本聚焦以便屏幕阅读器定位，不需要在视觉上显示焦点环。 */
+.pd :is(h1, h2)[tabindex="-1"]:focus { outline: none; }
 .pd .app-icon { flex-shrink: 0; }
-.pd-panel { min-width: 0; background: var(--pd-card); border: 1px solid var(--pd-line); border-radius: 13px; box-shadow: 0 3px 16px rgb(25 46 77 / 3.5%); }
+.pd-panel { min-width: 0; background: var(--pd-card); border: 1px solid var(--pd-line); border-radius: var(--radius); }
 .pd .pd-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .pd .pd-space { justify-content: space-between; }
-.pd .pd-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 36px; padding: 7px 11px; border: 1px solid var(--pd-line); border-radius: 9px; background: var(--pd-card); color: var(--pd-text); font-size: 12px; font-weight: 700; line-height: 1.5; text-decoration: none; cursor: pointer; }
-.pd .pd-btn:hover:not(:disabled) { background: var(--pd-subtle); border-color: #b8c7e9; }
-.pd .pd-btn.primary { color: #fff; background: var(--pd-blue); border-color: var(--pd-blue); box-shadow: 0 4px 12px rgb(53 92 246 / 16%); }
-.pd .pd-btn.primary:hover { filter: brightness(.94); }
+.pd .pd-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 34px; padding: 6px 11px; border: 1px solid var(--pd-line); border-radius: var(--radius-control); background: var(--pd-card); color: var(--pd-text); font-size: 12px; font-weight: 700; line-height: 1.5; text-decoration: none; cursor: pointer; }
+.pd .pd-btn:hover:not(:disabled) { background: var(--pd-subtle); border-color: var(--line2); }
+.pd .pd-btn.primary { color: #fff; background: var(--pd-blue); border-color: var(--pd-blue); }
+.pd .pd-btn.primary:hover:not(:disabled) { background: var(--primary-hover); border-color: var(--primary-hover); }
 .pd .pd-btn.ghost { border-color: transparent; background: transparent; color: var(--pd-muted); }
 .pd button:disabled { opacity: .46; cursor: not-allowed; }
 .pd-pill { display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; border-radius: 6px; background: var(--pd-subtle); color: var(--pd-muted); font-size: 12px; font-weight: 700; line-height: 1.4; }
@@ -34,7 +30,7 @@
 .pd-pill.red { color: var(--pd-red); background: var(--pd-red-lite); }
 .pd-summary { padding: 23px 24px; }
 .pd .pd-module-head { display: flex; justify-content: space-between; align-items: center; gap: 15px; }
-.pd-boxicon { display: grid; place-items: center; flex: 0 0 39px; width: 39px; height: 39px; border-radius: 11px; color: var(--pd-blue); background: var(--pd-blue-lite); }
+.pd-boxicon { display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; border-radius: var(--radius-control); color: var(--pd-blue); background: var(--pd-blue-lite); }
 .pd.pd-summary h2 { font-size: 17px; letter-spacing: -.25px; }
 .pd.pd-summary .pd-module-head p { color: var(--pd-muted); font-size: 12px; margin-top: 4px; }
 .pd-summary-grid { display: grid; grid-template-columns: 1.2fr .85fr 1fr; gap: 14px; margin-top: 17px; }
@@ -54,14 +50,14 @@
 .pd-limits summary { cursor: pointer; }
 .pd-workbench { padding: 3px 0 8px; }
 .pd-workhead { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 18px; margin-bottom: 18px; }
-.pd.pd-workbench h1 { font-size: 23px; letter-spacing: -.5px; line-height: 1.5; }
+.pd.pd-workbench h1 { font-size: 22px; letter-spacing: -.02em; line-height: 1.4; }
 .pd-workhead > div > p { margin-top: 7px; font-size: 13px; color: var(--pd-muted); }
 .pd-breadcrumb { margin-bottom: 12px; font-size: 12px; color: var(--pd-muted); }
 .pd .pd-breadcrumb .pd-btn { padding-left: 0; }
 .pd-topstats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .pd-topstat { padding: 15px 18px; }
-.pd-caps { display: flex; gap: 7px; align-items: center; font-size: 12px; font-weight: 700; color: var(--pd-muted); }
-.pd-topstat b { display: block; margin-top: 8px; font-size: 25px; line-height: 1.3; }
+.pd-caps { display: flex; gap: 7px; align-items: center; font-size: 12px; font-weight: 600; color: var(--pd-muted); }
+.pd-topstat b { display: block; margin-top: 6px; font-size: 24px; line-height: 1.3; font-variant-numeric: tabular-nums; }
 .pd-topstat p { margin-top: 3px; font-size: 12px; color: var(--pd-muted); }
 .pd-board { display: grid; grid-template-columns: minmax(260px, .86fr) minmax(0, 1.5fr); gap: 16px; align-items: start; }
 .pd-threads { overflow: hidden; }

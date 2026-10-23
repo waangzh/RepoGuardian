@@ -115,7 +115,7 @@ test('预览页把失败与连接中断留在步骤 1 并提供重试出口', as
       stages: [{ phase: 'clone', message: '正在克隆仓库', started_at: new Date(Date.now() - 9000).toISOString(), finished_at: null, percent: 40, operation: 'receiving_objects' }] };
     const html = await renderToString(createSSRApp(Page, { job: failed, tracking: false, connectionError: '',
       prUrl: request.pr_url, model: '', defaultModel: 'fixture' }));
-    assert.match(html, /STEP 01 \/ IMPORT PULL REQUEST/);
+    assert.match(html, /导入 PR/);
     assert.match(html, /审查方案未准备完成/);
     assert.match(html, /仓库准备失败/);
     assert.match(html, /重新准备审查方案/);

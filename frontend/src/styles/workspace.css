@@ -19,14 +19,14 @@
   --purple-soft: var(--violetWash);
   --radius-md: 13px;
   --shadow-card: var(--shadow);
-  --nav-width: 216px;
+  --nav-width: 224px;
   --page-gutter: 24px;
   --page-top: 24px;
-  --page-bottom: 48px;
+  --page-bottom: 40px;
   --section-gap: 24px;
   --panel-gap: 16px;
   --panel-padding: 20px;
-  --control-height: 40px;
+  --control-height: 36px;
 }
 body { font-family: var(--font-sans); background: var(--bg); color: var(--ink); font-size: 1rem; line-height: 1.65; }
 button, input, select, textarea { font-family: inherit; }
@@ -36,8 +36,8 @@ button { color: inherit; }
 .rg-app .sidebar {
   height: 100dvh;
   font-family: var(--font-sans);
-  --nav-caption: #627088;
-  --nav-text: #68758a;
+  --nav-caption: var(--muted);
+  --nav-text: var(--muted);
   --nav-hover-text: #263e66;
   --nav-hover-bg: #f5f8ff;
   --nav-active-text: #3d61ec;
@@ -64,13 +64,14 @@ button { color: inherit; }
 .rg-app .side-link.active { color: var(--nav-active-text); background: var(--nav-active-bg); }
 .rg-app .nav-divider { margin: 16px 12px; }
 .rg-app .nav-subheading { margin-top: 12px; font-size: 12px; }
-.rg-app .topbar { min-height: 64px; height: auto; padding: 12px var(--page-gutter); }
-.rg-app .main { display: block; min-width: 0; }
-.rg-app .page { width: 100%; max-width: calc(var(--contentmax) + 2 * var(--page-gutter)); padding: var(--page-top) var(--page-gutter) var(--page-bottom); }
+.rg-app .topbar { min-height: 48px; height: 48px; padding: 0 var(--page-gutter); }
+.rg-app .main { display: flex; flex-direction: column; min-width: 0; background: var(--frame); }
+/* 白色纸面：内容与侧栏/顶栏之间只靠一层色调差和 1px 边分隔，不使用阴影。 */
+.rg-app .page { width: auto; max-width: none; margin: 0 8px 8px 0; padding: var(--page-top) var(--page-gutter) var(--page-bottom); background: var(--surface); border: 1px solid var(--line); border-radius: 16px; min-height: calc(100dvh - 48px - 8px); }
 .rg-app h1 { font-size: 1.5rem; font-weight: 700; line-height: 1.4; letter-spacing: 0; }
 .rg-app h2 { font-size: 1.125rem; line-height: 1.5; letter-spacing: 0; }
 .rg-app h3 { font-size: 1rem; line-height: 1.5; }
-.rg-app .workspace-main { display: block; width: 100%; max-width: calc(var(--contentmax) + 2 * var(--page-gutter)); padding: var(--page-top) var(--page-gutter) var(--page-bottom); margin: 0 auto; min-width: 0; }
+.rg-app .workspace-main { display: block; flex: 1; width: auto; max-width: none; padding: var(--page-top) var(--page-gutter) var(--page-bottom); margin: 0 8px 8px 0; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; }
 .rg-app :is(.page-head,.workspace-heading,.pr-title) { gap: 16px; margin-bottom: var(--section-gap); }
 .rg-app .workspace-heading h1 { font-size: 1.5rem; color: var(--ink); }
 .rg-app .workspace-heading > div > p:last-child { color: var(--muted); font-size: .875rem; }
@@ -83,19 +84,19 @@ button { color: inherit; }
 .rg-app .space-bottom { margin-bottom: var(--section-gap); }
 .rg-app .divider { margin-block: var(--section-gap); }
 .rg-app .stepper { margin-bottom: var(--section-gap); flex-wrap: wrap; row-gap: 12px; }
-.rg-app .hero-import { padding: 28px 32px; border-radius: 14px; }
-.rg-app .hero-import h1 { font-size: 1.875rem; }
-.rg-app .hero-import p { margin: 12px 0 24px; }
-.rg-app .hero-input { gap: 12px; }
-.rg-app .hero-input :is(.input,.btn) { min-height: 48px; height: auto; }
+.rg-app .hero-import { padding: 28px 32px; border-radius: var(--radius); }
+.rg-app .hero-import h1 { font-size: 1.75rem; }
+.rg-app .hero-import p { margin: 10px 0 20px; }
+.rg-app .hero-input { gap: 10px; }
+.rg-app .hero-input :is(.input,.btn) { min-height: 44px; height: auto; }
 .rg-app .hero-input .input { min-width: 0; }
-.rg-app .hero-meta { gap: 16px; margin-top: 16px; }
+.rg-app .hero-meta { gap: 16px; margin-top: 14px; }
 .rg-app .step-cards { margin-top: var(--panel-gap); }
 .rg-app .step-card h3 { margin: 12px 0 8px; }
 .rg-app .summary-banner { padding: var(--panel-padding); }
 .rg-app .kpi { padding: 16px; }
 .rg-app .subnav { margin-bottom: var(--section-gap); }
-.rg-app .subnav button { min-height: var(--control-height); padding: 10px 16px; }
+.rg-app .subnav button { min-height: 44px; padding: 10px 14px; }
 .rg-app :is(.input,.select,input:not([type='checkbox']):not([type='radio']):not([type='range']),select,.app-select__trigger) { min-height: var(--control-height); padding: 8px 12px; font-size: .875rem; border-radius: 8px; }
 .rg-app .textarea { padding: 12px; font-size: .875rem; }
 .rg-app :is(.btn,.button) { min-height: var(--control-height); padding: 8px 16px; font-size: .875rem; line-height: 1.4; }
@@ -115,7 +116,7 @@ button { color: inherit; }
 .rg-app .rg-table :is(th,td) { padding: 12px; }
 .rg-app .rg-preference-row { padding-block: 16px; gap: 16px; }
 .rg-app .report-document { padding: 24px; }
-.rg-app .panel, .rg-app .diagnostic-panel { background: var(--surface); color: var(--ink); border-color: var(--line); box-shadow: var(--shadow); }
+.rg-app .panel, .rg-app .diagnostic-panel { background: var(--surface); color: var(--ink); border-color: var(--line); }
 .rg-app .app-footer { color: var(--faint); margin-top: 30px; }
 .rg-app .app-footer i { background: var(--primary); }
 .rg-app .button { border-radius: 8px; }
@@ -131,6 +132,9 @@ button { color: inherit; }
 .rg-app .status-badge[data-tone='info'] { background: var(--blueWash); color: var(--primary); }
 .rg-app .status-badge[data-tone='purple'] { background: var(--violetWash); color: var(--violet); }
 .break-anywhere { overflow-wrap: anywhere; }
+/* 程序化聚焦用于屏幕阅读器定位，不为静态标题绘制焦点环。 */
+.rg-app :is(h1, h2, section, div)[tabindex='-1']:focus { outline: none; }
+.rg-app :is(h1, h2, section, div)[tabindex='-1']:focus-visible { outline: 3px solid rgba(50, 94, 235, .35); outline-offset: 2px; }
 .top-status { font-size: .8125rem; color: var(--muted); }
 .recent-identity { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .input-error { color: var(--danger); font-size: .8125rem; margin-top: 10px; overflow-wrap: anywhere; }
@@ -145,7 +149,8 @@ button { color: inherit; }
 .rg-app .kpi .number { font-size: 28px; line-height: 1.25; margin: 8px 0 4px; }
 .rg-app .kpi .number small { font-size: 1rem; }
 .rg-app .kpi .rg-number-small { font-size: 24px; }
-.rg-app .subnav { overflow-x: auto; }
+.rg-app .subnav { overflow-x: auto; scrollbar-width: none; }
+.rg-app .subnav::-webkit-scrollbar { display: none; }
 .rg-app .subnav button { flex-shrink: 0; }
 .rg-app .subnav .tab-group { display: flex; flex-shrink: 0; align-items: center; gap: 4px; padding-left: 6px; border-left: 1px solid var(--line); }
 .rg-app .subnav .tab-group button { font-weight: 620; }
@@ -161,18 +166,21 @@ button { color: inherit; }
 .rg-pr-original > summary { cursor: pointer; }
 .rg-pr-original__body { max-height: 360px; overflow: auto; padding: 16px 0 0; color: var(--ink); }
 .rg-pr-original__body :is(pre,table) { max-width: 100%; overflow: auto; }
-.rg-findings { display: grid; grid-template-columns: minmax(230px,.85fr) minmax(320px,1.35fr) minmax(280px,1.05fr); gap: 15px; align-items: start; }
+/* 列表 / 代码证据 / 结论三栏：列表列收窄，证据列获得主要宽度。 */
+.rg-findings { display: grid; grid-template-columns: minmax(240px,.8fr) minmax(360px,1.5fr) minmax(300px,1.1fr); gap: var(--panel-gap); align-items: start; }
+/* 没有发现时列表占满整行，不留两列空面板。 */
+.rg-findings.is-empty { grid-template-columns: minmax(0,1fr); }
 .rg-findings > * { min-width: 0; }
-.rg-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
-.rg-filters .select { min-width: 0; padding: 7px; font-size: .8125rem; flex: 1; }
+.rg-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.rg-filters .select { min-width: 0; padding: 6px 8px; font-size: .8125rem; flex: 1 1 130px; }
 /* 来源筛选：当前选中项必须有可见状态，不能只靠 aria-pressed。 */
 .rg-filters .btn.soft[aria-pressed="true"] { background: var(--primary); color: #fff; }
 .rg-filters .btn.soft[aria-pressed="true"]:hover { background: var(--primary); }
 .rg-history-evidence p { font-size: .8125rem; line-height: 1.8; }
 .rg-history-evidence > p + p { margin-top: 12px; }
-.rg-finding-row { display: grid; gap: 8px; width: 100%; padding: 13px; background: var(--surface); border: 1px solid var(--line); border-radius: 9px; text-align: left; color: var(--ink); margin-top: 8px; }
-.rg-finding-row:hover { border-color: var(--line2); }
-.rg-finding-row.active { border-color: var(--primary); box-shadow: inset 3px 0 var(--primary); background: var(--blueWash); }
+.rg-finding-row { display: grid; gap: 6px; width: 100%; padding: 11px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-control); text-align: left; color: var(--ink); margin-top: 6px; }
+.rg-finding-row:hover { background: var(--surface2); border-color: var(--line2); }
+.rg-finding-row.active { border-color: var(--primary); background: var(--blueWash); }
 .rg-finding-row strong { font-size: .8125rem; }
 .rg-finding-row code { color: var(--muted); font-size: .8125rem; overflow-wrap: anywhere; }
 .rg-evidence > h3 { margin: 14px 0 8px; }
@@ -259,12 +267,13 @@ button { color: inherit; }
   .rg-file-tree-row { min-height: 44px; }
   .rg-app .rg-file-nav .rg-file-search input.input { min-height: 44px; }
 }
-.rg-table-wrap { overflow-x: auto; margin-top: 18px; }
-.rg-table { width: 100%; border-collapse: collapse; text-align: left; font-size: .8125rem; }
-.rg-table th { background: var(--surface2); color: var(--muted); font-size: .8125rem; font-weight: 650; }
-.rg-table th, .rg-table td { padding: 15px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.rg-table-wrap { overflow-x: auto; margin-top: 14px; }
+.rg-table { width: 100%; border-collapse: collapse; text-align: left; font-size: .875rem; }
+.rg-table th { background: transparent; color: var(--muted); font-size: .8125rem; font-weight: 600; }
+.rg-table th, .rg-table td { padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.rg-table tbody tr:last-child td { border-bottom: 0; }
 .rg-table td { min-width: 135px; overflow-wrap: anywhere; }
-.rg-table td:first-child { min-width: 230px; }
+.rg-table td:first-child { min-width: 210px; }
 .rg-table code { font-size: .8125rem; }
 .rg-disclosure-title { cursor: pointer; font-weight: 650; font-size: 1rem; }
 .rg-facts { margin: 0; }
@@ -280,7 +289,7 @@ button { color: inherit; }
 .rg-error-dialog h2 { margin: 0; font-size: 1.0625rem; }
 .rg-error-dialog p { margin: 6px 0 0; color: var(--text-secondary); font-size: .875rem; line-height: 1.7; overflow-wrap: anywhere; }
 .rg-error-dialog__actions { display: flex; justify-content: flex-end; margin-top: 20px; }
-dialog::backdrop { background: rgba(12,22,45,.45); backdrop-filter: blur(3px); }
+dialog::backdrop { background: rgba(12,22,45,.45); }
 .rg-indeterminate > span { animation: rg-progress 1.8s ease-in-out infinite alternate; }
 @keyframes rg-progress { from { transform: translateX(-30%); } to { transform: translateX(200%); } }
 .rg-preferences { margin-bottom: 24px; }
@@ -333,10 +342,15 @@ dialog::backdrop { background: rgba(12,22,45,.45); backdrop-filter: blur(3px); }
   .rg-app .side-scroll { padding-inline: 8px; }
   .rg-app .grid.twoone, .rg-app .split-70 { grid-template-columns: minmax(0,1fr); }
   .rg-app .plan-aside { position: static; }
+  /* 平板宽度下标题与操作按钮分两行，避免标题被挤成四行。 */
+  .rg-app .pr-title { flex-direction: column; gap: 14px; }
+  .rg-app .head-actions { width: 100%; }
   .top-status { display: none; }
 }
 @media (max-width: 740px) {
-  .rg-app { --page-gutter: 16px; --page-top: 20px; --page-bottom: 32px; --panel-padding: 16px; --control-height: 44px; }
+  .rg-app { --page-gutter: 16px; --page-top: 18px; --page-bottom: 32px; --panel-padding: 16px; --control-height: 44px; }
+  /* 手机上纸面占满屏幕：框与纸面之间的 8px 留白会让内容两侧不对齐。 */
+  .rg-app .page, .rg-app .workspace-main { margin: 0; border: 0; border-radius: 0; min-height: calc(100dvh - 48px); }
   .rg-app h1 { font-size: 1.375rem; }
   .rg-app .hero-import { padding: 24px 20px; }
   .rg-app .hero-import h1 { font-size: 1.625rem; }
@@ -358,6 +372,8 @@ dialog::backdrop { background: rgba(12,22,45,.45); backdrop-filter: blur(3px); }
   .rg-findings, .rg-files-layout { grid-template-columns: minmax(0,1fr); }
   .rg-evidence { grid-column: auto; }
   .rg-finding-list { max-height: 430px; overflow: auto; }
+  /* 空态没有列表内容，不保留内部滚动区域。 */
+  .rg-findings.is-empty .rg-finding-list { max-height: none; overflow: visible; }
   .rg-file-nav { max-height: 370px; overflow: auto; }
   .rg-app .workspace-toolbar { flex-wrap: wrap; }
   .rg-history-search { flex-basis: 100%; }

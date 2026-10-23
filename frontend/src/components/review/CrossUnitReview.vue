@@ -32,7 +32,7 @@ const orphanResults = computed(() => results.value.filter((item) => !plan.value?
 
 <template>
   <section class="cross-review" aria-label="跨 Unit 协作解释">
-    <header class="cross-heading"><div><span class="section-kicker">跨组检查</span><h2>为什么补查，实际查到了什么</h2><p>筛查决定是否需要检查；补查产生的候选仍需证据解析、策略检查和独立验证。</p></div></header>
+    <header class="cross-heading"><div><h2>为什么补查，实际查到了什么</h2><p>筛查决定是否需要检查；补查产生的候选仍需证据解析、策略检查和独立验证。</p></div></header>
     <div class="cross-layout">
       <article class="risk-explanation">
         <div class="cross-statuses"><div><small>确定性筛查判定</small><StatusBadge :status="presentation.decisionTone" :label="presentation.decisionLabel" /></div><div><small>协调执行状态</small><StatusBadge :status="presentation.executionTone" :label="presentation.executionLabel" /></div></div>

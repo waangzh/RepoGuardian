@@ -23,7 +23,7 @@ onMounted(async () => {
 <template>
   <ReviewStepper :current="0" />
   <section class="hero-import">
-    <div class="eyebrow">从 PR 链接到审查交付</div><h1>粘贴 GitHub PR 链接，<br />获取风险分析与审查结论。</h1>
+    <h1>粘贴 GitHub PR 链接，<br />获取风险分析与审查结论。</h1>
     <p>确认审查方案后，获取代码风险分析、详细审查报告和可直接复制的 PR 评论。代码证据、历史讨论与检查限制随结果一并呈现。</p>
     <form @submit.prevent="valid && !loading && !busy && emit('preview')">
       <label class="field-label" for="pr-url">GitHub Pull Request 链接</label>

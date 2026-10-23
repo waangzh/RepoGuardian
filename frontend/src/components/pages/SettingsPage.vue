@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import AppIcon from "../common/AppIcon.vue";
 import {
   cleanupExpiredWorkspaces,
   getSystemDiagnostics,
@@ -155,7 +156,6 @@ onMounted(load);
   <main class="workspace-main">
     <header class="workspace-heading">
       <div>
-        <p class="eyebrow">SYSTEM OPERATIONS</p>
         <h1>系统设置</h1>
         <p>检查运行环境、策略版本与配置状态，并维护本机产生的临时审查工作区。</p>
       </div>
@@ -201,14 +201,14 @@ onMounted(load);
     <section v-if="diagnostics" class="diagnostics-layout" :aria-busy="loading || settingsSaving">
       <div class="diagnostic-settings-grid">
         <article class="diagnostic-panel panel">
-          <header><span aria-hidden="true">◆</span><div><h2>安全策略</h2><p>记录保留边界</p></div></header>
+          <header><AppIcon name="shield" :size="18" /><div><h2>安全策略</h2><p>记录保留边界</p></div></header>
           <div class="settings-form">
             <label><span>记录保留天数</span><input v-model.number="retentionDays" type="number" min="1" max="3650" /></label>
           </div>
         </article>
 
         <article class="diagnostic-panel panel">
-          <header><span aria-hidden="true">◈</span><div><h2>模型配置</h2><p>使用 OpenAI-compatible 接口；API Key 仍由后端环境配置管理</p></div></header>
+          <header><AppIcon name="settings" :size="18" /><div><h2>模型配置</h2><p>使用 OpenAI-compatible 接口；API Key 仍由后端环境配置管理</p></div></header>
           <div class="settings-form">
             <label><span>模型服务 URL</span><input v-model="modelBaseUrl" type="url" inputmode="url" placeholder="https://api.openai.com/v1" /></label>
             <label><span>默认模型名称</span><input v-model="modelName" type="text" placeholder="gpt-4.1-mini" /></label>
@@ -223,7 +223,7 @@ onMounted(load);
       </article>
 
       <article class="diagnostic-panel diagnostic-panel--wide">
-        <header><span aria-hidden="true">◎</span><div><h2>运行状态</h2><p>服务、数据库与产物目录</p></div></header>
+        <header><AppIcon name="activity" :size="18" /><div><h2>运行状态</h2><p>服务、数据库与产物目录</p></div></header>
         <dl class="diagnostic-list">
           <div><dt>后台 Worker</dt><dd><StatusBadge :status="diagnostics.worker_status === 'running' ? 'running' : 'pending'" :label="diagnostics.worker_status === 'running' ? '运行中' : '空闲'" /></dd></div>
           <div><dt>数据库 Schema</dt><dd><StatusBadge :status="diagnostics.database_schema_current ? 'passed' : 'failed'" :label="diagnostics.database_schema_current ? '最新' : '需要迁移'" /></dd></div>
@@ -233,7 +233,7 @@ onMounted(load);
       </article>
 
       <article class="diagnostic-panel diagnostic-panel--wide workspace-maintenance panel">
-        <header><span aria-hidden="true">↻</span><div><h2>临时工作区</h2><p>仅扫描并清理超过安全保留期限的非活动 clone</p></div></header>
+        <header><AppIcon name="history" :size="18" /><div><h2>临时工作区</h2><p>仅扫描并清理超过安全保留期限的非活动 clone</p></div></header>
         <div class="workspace-maintenance__body">
           <div class="workspace-maintenance__copy">
             <strong>{{ workspacePreview ? `${workspacePreview.eligible} 个可清理` : "等待安全扫描" }}</strong>

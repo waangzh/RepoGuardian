@@ -15,7 +15,7 @@ export function parseCommentPreview(markdown: string) {
   const title = first?.type === 'paragraph' || first?.type === 'heading' ? first.text : '';
   const verdict = meaningful[1];
   const match = verdict?.type === 'paragraph'
-    ? /^(✅|⚠️?|❓|❌|⏹)\s*(结论[：:].+)$/u.exec(verdict.text.trim()) : null;
+    ? /^(✅|⚠️?|❓|❌|⏹)\s*(结论[：:].+)$/u.exec(verdict.text.trim()) : null; // taste-skill-ignore: 解析后端已生成的 Markdown 结论行，不是界面图标
   if (title !== 'RepoGuardian · PR Code Review' || !match) return null;
 
   const sections: CommentPreviewSection[] = [];
@@ -75,5 +75,5 @@ export function parseCommentPreview(markdown: string) {
       section.findingCount = count;
     }
   }
-  return { title, conclusion: match[2]!, positive: match[1] === '✅', preamble: preamble.trim(), sections, snapshot: snapshot.trim() };
+  return { title, conclusion: match[2]!, positive: match[1] === '✅', preamble: preamble.trim(), sections, snapshot: snapshot.trim() }; // taste-skill-ignore: 同上，比对后端 Markdown 中的结论符号
 }

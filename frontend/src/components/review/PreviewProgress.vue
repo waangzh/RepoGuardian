@@ -81,7 +81,7 @@ function stageText(stage: PreviewStage) {
       <div class="card-header"><div><h2>准备步骤</h2><p>来自服务端保存的真实进度</p></div><span class="muted small">{{ job.stages.length }} 个阶段</span></div>
       <div class="timeline">
         <div v-for="(stage, index) in job.stages" :key="`${stage.phase}-${index}`" class="timeline-row" :class="{ current: stageStatus(stage, index) === 'running', interrupted: stageStatus(stage, index) === 'failed', cancelled: stageStatus(stage, index) === 'cancelled' }">
-          <span class="timeline-dot">{{ stage.finished_at ? '✓' : index + 1 }}</span>
+          <span class="timeline-dot"><AppIcon v-if="stage.finished_at" name="check" :size="13" :stroke-width="2.4" /><template v-else>{{ index + 1 }}</template></span>
           <div class="timeline-body"><strong>{{ stageText(stage) }}</strong><span class="time">{{ stageTime(stage) }}</span></div>
           <StatusBadge :status="stageStatus(stage, index)" />
         </div>
