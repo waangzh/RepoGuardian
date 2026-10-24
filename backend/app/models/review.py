@@ -679,6 +679,7 @@ class ReviewCreateRequest(BaseModel):
     """POST /api/reviews 请求体。"""
     pr_url: HttpUrl
     model: str | None = None
+    force_full_review: bool = False
     preview_id: str | None = Field(default=None, min_length=1, max_length=64)
     plan_hash: str | None = Field(default=None, min_length=64, max_length=64)
     expected_head_sha: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
@@ -724,6 +725,7 @@ class ReviewPreviewRequest(BaseModel):
     pr_url: HttpUrl
     model: str | None = Field(default=None, min_length=1, max_length=200)
     reuse_review_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+    force_full_review: bool = False
     plan: ReviewPlanOptions = Field(default_factory=ReviewPlanOptions)
     engine: Literal["task_review_v1"] = Field(default_factory=_default_review_engine)
     mode: ReviewMode = Field(default_factory=_default_review_mode)
@@ -733,6 +735,8 @@ class ReviewPreviewRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_product_policy(self) -> "ReviewPreviewRequest":
+        if self.force_full_review and self.reuse_review_id:
+            raise ValueError("full review cannot specify a reuse source")
         normalized = ReviewCreateRequest(
             pr_url=self.pr_url,
             engine=self.engine,
@@ -978,6 +982,9 @@ class ReviewPlan(BaseModel):
 
 
 class ReviewPreviewResponse(BaseModel):
+    force_full_review: bool = False
+    continuation: dict | None = None
+    existing_review_id: str | None = None
     preview_id: str | None = None
     plan_hash: str | None = None
     snapshot: PlanSnapshot | None = None

@@ -76,7 +76,7 @@ def task_runtime_configuration(model=None, *, provider=None):
     return {"provider": provider_name, "model": selected_model,
         "output_policy": settings.review_output_policy(),
         "prompt_version": "task-review-prompt-v8",
-        "stability_contract": "review-stability-v1",
+        "stability_contract": "review-stability-v2",
         "discussion_contract": "pr-discussion-context-v1" if settings.repoguardian_pr_discussions_enabled else None,
         "publication_contract": "claim-publication-v1",
         "pr_intent_contract": "pr-intent-assessment-v6",
@@ -449,9 +449,12 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
             remaining = min(remaining, remaining_review_seconds(configuration, state["created_at"]))
         retry_id = state.get("task_runtime_retry_unit_id")
         if retry_id:
-            if not any(item.unit_id == retry_id for item in items):
+            from app.services.review_continuation import ALL_PENDING
+            all_pending = retry_id == ALL_PENDING and spec.stability_contract == "review-stability-v2"
+            if not all_pending and not any(item.unit_id == retry_id for item in items):
                 raise KeyError(retry_id)
-            await queue.retry_unit(retry_id, steps)
+            for identity in (sorted({item.unit_id for item in items}) if all_pending else [retry_id]):
+                await queue.retry_unit(identity, steps)
         try:
             if remaining <= 0:
                 if all(item.state.value == "completed" for item in queue._items.values()):
@@ -489,14 +492,21 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
     metadata = {"reuse_dependencies": dependencies}
     if binding is not None and binding.previous_head_sha == binding.new_head_sha:
         def reused_records(name):
+            reused_goals = {key for key, value in reused.items() if value.get("unit_id") in reused_ids}
             return [{**deepcopy(item), "reused_from_task_id": previous.id,
-                     "reused_from_head_sha": binding.previous_head_sha}
+                     "reused_from_head_sha": binding.previous_head_sha,
+                     **({"origin_review_id": item.get("origin_review_id", previous.id)} if name == "findings" else {})}
                     for item in previous.task_runtime_report.get(name, [])
                     if item.get("unit_id") in reused_ids
+                    or (name == "findings" and (item.get("candidate") or {}).get("primary_anchor") in reused_goals)
+                    or (name == "findings" and (not steps
+                        or (item.get("issue") or {}).get("review_unit_id") in reused_ids))
                     or (name == "relationship_hints" and not steps)]
         metadata["admitted_investigations"] = [
             *report.admitted_investigations, *reused_records("admitted_investigations")]
         metadata["relationship_hints"] = [*report.relationship_hints, *reused_records("relationship_hints")]
+        if configuration.get("stability_contract") == "review-stability-v2":
+            metadata["findings"] = [*report.findings, *reused_records("findings")]
     if not steps:
         metadata.update(
             pr_intent_context=spec.pr_intent_context,

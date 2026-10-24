@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { getReviewCapabilities, cancelReview, createReview, deleteReview, getAvailableModels, getReport, getReview, retryReviewUnit, subscribeToEvents } from "./api/client";
+import { getReviewCapabilities, cancelReview, createReview, deleteReview, getAvailableModels, getReport, getReview, resumeReview, retryReviewUnit, subscribeToEvents } from "./api/client";
 import { hasSavedPreview, usePreviewJob } from './composables/usePreviewJob';
 import PreviewPage from './components/pages/PreviewPage.vue';
 import QuickPreviewPage from './components/pages/QuickPreviewPage.vue';
@@ -40,6 +40,7 @@ watch([activePage, reviewSection], () => { mobileOpen.value = false; });
 function navigateReview(section: ReviewSection) { activePage.value = 'dashboard'; reviewSection.value = section; mobileOpen.value = false; }
 const prUrl = ref("");
 const model = ref("");
+const forceFullReview = ref(false);
 const models = ref<ProviderModelInfo[]>([]);
 const defaultModel = ref("");
 const modelsLoading = ref(false);
@@ -54,6 +55,7 @@ let reviewInputGeneration = 0;
 const planDirty = ref(false);
 let restoringPreview = false;
 watch(model, () => { if (!restoringPreview) { planDirty.value = true; cancelPreview(); } });
+watch(forceFullReview, () => { if (!restoringPreview) { planDirty.value = true; cancelPreview(); } });
 watch(prUrl, () => { if (!restoringPreview) { draftPlan.value = undefined; rereviewContext.value = null; planDirty.value = true; } });
 const preview = ref<ReviewPreviewResponse | null>(null);
 function changePlan(plan: ReviewPlanOptions) { draftPlan.value = plan; planDirty.value = true; }
@@ -215,7 +217,8 @@ async function loadPreview() {
   try {
     const next = await previewTracker.start({ pr_url: prUrl.value.trim(), mode: mode.value,
       validation_backend: validationBackend.value,
-      model: model.value.trim() || null, plan: draftPlan.value ?? initialReviewPlan(capabilities.value) });
+      model: model.value.trim() || null, force_full_review: forceFullReview.value,
+      plan: draftPlan.value ?? initialReviewPlan(capabilities.value) });
     if (previewRequestId === requestId && next) applyPreviewJob(next);
   } catch (err) {
     if (previewRequestId !== requestId) return;
@@ -251,6 +254,7 @@ async function restorePreview() {
       try {
         prUrl.value = current.request.pr_url;
         model.value = current.request.model || '';
+        forceFullReview.value = current.request.force_full_review ?? false;
         mode.value = current.request.mode;
         validationBackend.value = current.request.validation_backend;
         draftPlan.value = current.request.plan;
@@ -284,6 +288,11 @@ function backToInput() {
 
 async function retryUnit(unitId: string) {
   if (!task.value) return;
+  if (task.value.task_runtime_configuration?.stability_contract === 'review-stability-v2') {
+    await rereviewCurrentPr();
+    if (!task.value && rereviewContext.value) await loadPreview();
+    return;
+  }
   retryingUnitId.value = unitId;
   error.value = null;
   try {
@@ -294,6 +303,23 @@ async function retryUnit(unitId: string) {
   } finally {
     retryingUnitId.value = null;
   }
+}
+
+async function continueReview() {
+  const plan = preview.value;
+  const source = plan?.continuation;
+  if (!plan || !source?.can_resume || submitting.value || previewing.value || planDirty.value) return;
+  submitting.value = true;
+  error.value = null;
+  try {
+    await resumeReview(source.review_id, prUrl.value.trim(), plan);
+    createdTaskId.value = source.review_id;
+    previewTracker.detach(true);
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('方案已失效')) planDirty.value = true;
+    error.value = err instanceof Error ? err.message : '继续审查失败，请更新方案。';
+  } finally { submitting.value = false; }
+  if (createdTaskId.value === source.review_id) await openHistoricalReview(source.review_id);
 }
 
 async function openHistoricalReview(taskId: string) {
@@ -498,6 +524,7 @@ function startNewReview() {
   error.value = null;
   prUrl.value = "";
   model.value = "";
+  forceFullReview.value = false;
   mode.value = "review";
   validationBackend.value = "none";
   rereviewContext.value = null;
@@ -595,7 +622,7 @@ onBeforeUnmount(() => {
       <AppHeader :title="pageTitle" :status-text="statusText" :menu-open="mobileOpen" @menu="mobileOpen = !mobileOpen" />
       <main v-if="activePage === 'dashboard'" id="workspace-content" class="page">
         <ReviewWorkspace v-if="task" :key="task.id" :task="task" :report="report" :section="reviewSection" :status-text="statusText" :duration="taskDuration" :cancelling="cancelling" :retrying-unit-id="retryingUnitId" @navigate="navigateReview" @cancel="cancelCurrentReview" @create="startNewReview" @rereview="rereviewCurrentPr" @retry="retryUnit" />
-        <ReviewPlanPage v-else-if="preview" v-model:model="model" :preview="preview" :capabilities="capabilities" :dirty="planDirty" :previewing="previewing" @change="changePlan" @repreview="loadPreview" :pr-url="prUrl" :models="models" :default-model="defaultModel" :models-loading="modelsLoading" :models-error="modelsError" :submitting="submitting || Boolean(createdTaskId && !task)" :created="Boolean(createdTaskId && !task && !submitting)" :preview-job="previewJob" @submit="submitReview" @back="backToInput" @open-created="createdTaskId && openHistoricalReview(createdTaskId)" />
+        <ReviewPlanPage v-else-if="preview" v-model:model="model" v-model:force-full-review="forceFullReview" @resume="continueReview" @open-existing="openHistoricalReview($event)" :preview="preview" :capabilities="capabilities" :dirty="planDirty" :previewing="previewing" @change="changePlan" @repreview="loadPreview" :pr-url="prUrl" :models="models" :default-model="defaultModel" :models-loading="modelsLoading" :models-error="modelsError" :submitting="submitting || Boolean(createdTaskId && !task)" :created="Boolean(createdTaskId && !task && !submitting)" :preview-job="previewJob" @submit="submitReview" @back="backToInput" @open-created="createdTaskId && openHistoricalReview(createdTaskId)" />
         <section v-else-if="opening" class="card card-pad workspace-loading" role="status" aria-live="polite">正在打开审查记录…</section>
         <QuickPreviewPage v-else-if="quickOverview || quickLoading || quickError" :overview="quickOverview" :loading="quickLoading" :error="quickError" :pr-url="prUrl" @prepare="loadPreview" @retry="loadQuickPreview" @back="backToInput" />
         <PreviewPage v-else-if="previewStage" :job="previewJob" :tracking="previewing" :connection-error="previewConnectionError" :pr-url="prUrl" :model="model" :default-model="defaultModel" @resume="restorePreview" @cancel="cancelPreviewJob" @retry="loadPreview" @back="backToInput" />

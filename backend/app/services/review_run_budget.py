@@ -98,9 +98,15 @@ class ObligationRecord:
     state: ObligationState = ObligationState.ACTIVE
     created_revision: int = 0
     converted_attempt_id: str | None = None
+    call_budget: int = 0
 
 
 def _dump(value: Any) -> Any:
+    if isinstance(value, ObligationRecord):
+        result = _dump(asdict(value))
+        if not value.call_budget:
+            result.pop("call_budget", None)
+        return result
     if isinstance(value, (AttemptState, ObligationState)):
         return value.value
     if hasattr(value, "model_dump"):
@@ -152,14 +158,18 @@ class ReviewRunBudget:
 
     def available(self, *, obligation_id: str | None = None) -> dict[str, int]:
         own = 0
+        own_calls = 0
         if obligation_id and self.obligations.get(obligation_id):
             obligation = self.obligations[obligation_id]
             if obligation.state == ObligationState.ACTIVE:
                 own = obligation.token_budget
+                own_calls = obligation.call_budget
         return {
             "tokens": max(0, self.max_tokens - self.settled_actual - self.in_flight_reserved
                            - self.unknown_reserved - self.protected_obligations + own),
-            "calls": max(0, self.max_calls - self.calls_consumed),
+            "calls": max(0, self.max_calls - self.calls_consumed - sum(
+                item.call_budget for item in self.obligations.values()
+                if item.state == ObligationState.ACTIVE) + own_calls),
         }
 
     def _persist_payload(self) -> dict[str, Any]:
@@ -227,7 +237,20 @@ class ReviewRunBudget:
                       phase: str = "primary") -> AttemptRecord:
         if estimated_tokens < 0 or output_tokens < 0 or (estimated_cost_microusd is not None and estimated_cost_microusd < 0):
             raise ValueError("request reservation must not be negative")
+        barrier = getattr(self, "round_barrier", None)
+        if barrier and task_id in barrier.admitted and barrier.admitted[task_id].is_set():
+            # Transport retries cannot race another work item's first admission.
+            await barrier.before_settlement()
+            await barrier.application_turn(task_id)
         async with self._mutation():
+            closing = None
+            if obligation_id is None and task_id:
+                closing = next((item for item in self.obligations.values()
+                    if item.owner_task_id == task_id and item.reason == "initial_inspect_closing"
+                    and item.state == ObligationState.ACTIVE), None)
+                free = self.available()
+                if closing and (free["calls"] < 1 or free["tokens"] < estimated_tokens):
+                    obligation_id = closing.obligation_id
             if not self.enforce:
                 available = self.available(obligation_id=obligation_id)
             else:
@@ -247,6 +270,9 @@ class ReviewRunBudget:
                     "available_cost_microusd": max(0, self.max_cost_microusd - self.cost_settled_microusd - self.cost_reserved_microusd),
                 })
             attempt_id = uuid4().hex
+            if closing and obligation_id == closing.obligation_id:
+                closing.state = ObligationState.CONVERTED
+                closing.converted_attempt_id = attempt_id
             record = AttemptRecord(
                 attempt_id=attempt_id, request_id=request_id, run_id=self.run_id,
                 task_id=task_id, operation=operation,
@@ -280,6 +306,11 @@ class ReviewRunBudget:
         if ((actual_tokens is not None and actual_tokens < 0)
                 or (cost_microusd is not None and cost_microusd < 0)):
             raise ValueError("actual usage must not be negative")
+        barrier = getattr(self, "round_barrier", None)
+        owner = self._get(attempt_id).task_id
+        if barrier and owner in barrier.admitted and not asyncio.current_task().cancelling():
+            await barrier.before_settlement()
+            await barrier.application_turn(owner)
         async with self._mutation():
             record = self._get(attempt_id)
             if record.settled:
@@ -358,20 +389,28 @@ class ReviewRunBudget:
             record.state = AttemptState.RELEASED
             record.settled = True
             record.settled_at = datetime.now(timezone.utc).isoformat()
+            for obligation in self.obligations.values():
+                if (obligation.reason == "initial_inspect_closing"
+                        and obligation.state == ObligationState.CONVERTED
+                        and obligation.converted_attempt_id == attempt_id):
+                    obligation.state = ObligationState.ACTIVE
+                    obligation.converted_attempt_id = None
             self.revision += 1
             await self._persist()
             return copy.deepcopy(record)
 
     async def create_obligation(self, *, owner_task_id: str, token_budget: int,
-                                reason: str, request_hash: str | None = None) -> ObligationRecord:
-        if token_budget < 0:
+                                reason: str, request_hash: str | None = None,
+                                call_budget: int = 0) -> ObligationRecord:
+        if token_budget < 0 or call_budget < 0:
             raise ValueError("obligation token budget must not be negative")
         async with self._mutation():
-            if token_budget > self.available()["tokens"]:
+            if token_budget > self.available()["tokens"] or call_budget > self.available()["calls"]:
                 raise RunBudgetError("run_budget_obligation_rejected", details={
                     "requested_tokens": token_budget, **self.available()})
             item = ObligationRecord(uuid4().hex, self.run_id, owner_task_id, reason,
-                                    token_budget, request_hash, created_revision=self.revision)
+                                    token_budget, request_hash, created_revision=self.revision,
+                                    call_budget=call_budget)
             self.obligations[item.obligation_id] = item
             self.revision += 1
             await self._persist()

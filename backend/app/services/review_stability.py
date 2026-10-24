@@ -45,12 +45,83 @@ def inspection_requests(executor, symbol_index, graph, max_lines):
     own, _ = source_requests(definitions, executor.readable_files, max_lines)
     ids = {symbol.get("symbol_id") or symbol.get("id")
            or f"{symbol.get('file')}::{symbol.get('symbol')}" for symbol in definitions}
+    modern = executor.spec.stability_contract == "review-stability-v2"
     targets = {edge.get("target") for edge in graph.get("edges", [])
-               if resolved_call(edge) and edge.get("source") in ids}
+               if edge.get("source") in ids and (resolved_call(edge)
+                   or (modern and edge.get("type") == "calls"))}
     related = [symbol for symbol in graph.get("symbols", []) if symbol.get("id") in targets]
     extra, _ = source_requests(related, executor.readable_files, max_lines,
                                limit=max(0, MAX_PREPARATORY_READS - len(own)))
-    return [request.model_dump(mode="json") for request in [*own, *extra]]
+    result = [*own, *extra]
+    if modern:
+        # Header/import context is visible source only; unique-name edges stay hints.
+        headers = [{"file": goal.target_ref, "start_line": 1, "end_line": min(40, max_lines)}
+                   for goal in goals if not goal.base_side]
+        additions, _ = source_requests(headers, executor.readable_files, max_lines,
+            limit=max(0, MAX_PREPARATORY_READS - len(result)))
+        result.extend(additions)
+    return [request.model_dump(mode="json") for request in result]
+
+
+def one_hop_consumers(source):
+    """Syntax hints for straight-line x = producer(); consumer(x), never bindings."""
+    import ast
+    import textwrap
+    if len(source) > 128_000:
+        return set()
+    try:
+        tree = ast.parse(textwrap.dedent(source))
+    except (SyntaxError, ValueError, RecursionError):
+        return set()
+    functions = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    if len(functions) != 1:
+        return set()
+    if any(isinstance(node, (ast.Global, ast.Nonlocal)) for node in ast.walk(functions[0])):
+        return set()
+    body = functions[0].body
+    # Do not follow branches, loops, nested scopes, repeated writes or shadowed aliases.
+    stores = {}
+    for node in ast.walk(functions[0]):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            stores[node.id] = stores.get(node.id, 0) + 1
+    result = set()
+    for index, statement in enumerate(body):
+        if not (isinstance(statement, ast.Assign) and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name) and isinstance(statement.value, ast.Call)):
+            continue
+        name = statement.targets[0].id
+        if stores.get(name) != 1:
+            continue
+        for later in body[index + 1:]:
+            if not isinstance(later, (ast.Assign, ast.Expr, ast.Return)):
+                break
+            for call in (node for node in ast.walk(later) if isinstance(node, ast.Call)):
+                if isinstance(call.func, ast.Name) and any(isinstance(node, ast.Name) and node.id == name
+                        for argument in [*call.args, *(item.value for item in call.keywords)]
+                        for node in ast.walk(argument)):
+                    result.add(call.func.id)
+    return result
+
+
+def auxiliary_requests(executor, graph, path, source, max_lines):
+    if not path.endswith(".py"):
+        return []
+    symbols = {symbol.get("id"): symbol for symbol in graph.get("symbols", [])}
+    selected = []
+    lines = source.splitlines()
+    for identity, caller in sorted(symbols.items()):
+        if caller.get("file") != path:
+            continue
+        own, overflow = source_requests([caller], executor.readable_files, max_lines)
+        if not own or overflow or not all(covered(executor, request) for request in own):
+            continue
+        names = one_hop_consumers("\n".join(lines[caller["start_line"] - 1:caller["end_line"]]))
+        for edge in graph.get("edges", []):
+            if (edge.get("source") == identity and edge.get("type") == "calls"
+                    and edge.get("call_expression") in names and edge.get("target") in symbols):
+                selected.append(symbols[edge["target"]])
+    requests, _ = source_requests(selected, executor.readable_files, max_lines)
+    return [request.model_dump(mode="json") for request in requests]
 
 
 def resolved_call(edge):

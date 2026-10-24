@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 
-test('默认重审不复用同快照结果，只有显式来源才传递复用标识', async () => {
+test('客户端默认由服务端选择同输入来源，显式来源仍传递复用标识', async () => {
   const server = await createServer({ server: { middlewareMode: true, hmr: false },
     optimizeDeps: { noDiscovery: true, entries: [], include: [] }, appType: 'custom' });
   const original = globalThis.fetch;

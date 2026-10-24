@@ -37,6 +37,11 @@ def strict_candidate_key(candidate, goal, catalog, spec, scope):
     if spec.publication_contract != "legacy":
         value.update(recommendation=candidate.recommendation.strip(), severity=candidate.severity.value,
                      publication_contract=spec.publication_contract)
+    if spec.stability_contract == "review-stability-v2":
+        # Exact claims only; citation/request ordering cannot manufacture another defect.
+        for key in ("evidence", "evidence_requests"):
+            unique = {stable_hash(item): item for item in value[key]}
+            value[key] = [unique[identity] for identity in sorted(unique)]
     return stable_hash(value)
 
 

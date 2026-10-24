@@ -5,6 +5,7 @@ export interface PreviewRequest {
   pr_url: string;
   model?: string | null;
   reuse_review_id?: string | null;
+  force_full_review?: boolean;
   mode: ReviewMode;
   validation_backend: ValidationBackend;
   plan?: ReviewPlanOptions;

@@ -15,6 +15,31 @@ class EvidenceIdentityConflict(ValueError):
     """同一证据身份绑定了不一致的源码或快照。"""
 
 
+class FrozenRound:
+    """Reserve in queue order, settle after admission, apply in queue order."""
+
+    def __init__(self, items):
+        self.order = [item.work_item_id for item in items]
+        self.admitted = {key: asyncio.Event() for key in self.order}
+        self.finished = {key: asyncio.Event() for key in self.order}
+
+    async def admission_turn(self, identity):
+        index = self.order.index(identity)
+        if index:
+            await self.admitted[self.order[index - 1]].wait()
+
+    def admit(self, identity):
+        self.admitted[identity].set()
+
+    async def before_settlement(self):
+        await asyncio.gather(*(event.wait() for event in self.admitted.values()))
+
+    async def application_turn(self, identity):
+        index = self.order.index(identity)
+        if index:
+            await self.finished[self.order[index - 1]].wait()
+
+
 class TaskReviewRuntime:
     """唯一工作队列；Unit 公平轮转，每个任务一次只推进一个动作。"""
 
@@ -109,9 +134,9 @@ class TaskReviewRuntime:
         return [item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
                 for item in sorted(self._items.values(), key=lambda value: value.work_item_id)]
 
-    async def advance_one(self, steps: dict[str, Any]) -> dict[str, Any] | None:
+    async def advance_one(self, steps: dict[str, Any], *, claimed=None, barrier=None) -> dict[str, Any] | None:
         """领取后持久化，工具/模型推进后保存结果，再更新队列。"""
-        item = self.claim_next()
+        item = claimed if claimed is not None else self.claim_next()
         if item is None:
             return None
         step = steps.get(item.work_item_id)
@@ -119,6 +144,7 @@ class TaskReviewRuntime:
             self.finish(item.work_item_id, state="failed")
             raise ValueError("work_item_executor_binding_mismatch")
         step.runtime = self
+        step.round_barrier = barrier
         try:
             remaining = None
             if self.unit_timeout_seconds is not None:
@@ -140,6 +166,9 @@ class TaskReviewRuntime:
             else:
                 observation = await step.advance()
         except ExperimentalUnitDeadline:
+            if barrier:
+                barrier.admit(item.work_item_id)
+                await barrier.application_turn(item.work_item_id)
             self.finish(item.work_item_id, state="cancelled")
             item.reason = "experiment_unit_deadline"
             if self.checkpoint is not None:
@@ -150,6 +179,9 @@ class TaskReviewRuntime:
             # lease lost 不允许再尝试写回；合法恢复者负责在途请求对账。
             raise
         except Exception as exc:
+            if barrier:
+                barrier.admit(item.work_item_id)
+                await barrier.application_turn(item.work_item_id)
             rejection = getattr(exc, "admission_rejection", {})
             if rejection.get("kind") == "budget" and rejection.get("can_defer"):
                 item.last_checked_budget_revision = step.budget.revision
@@ -167,6 +199,9 @@ class TaskReviewRuntime:
             if self.checkpoint is not None and not self.checkpoint.invalidated:
                 await self.checkpoint.persist()
             raise
+        if barrier:
+            barrier.admit(item.work_item_id)
+            await barrier.application_turn(item.work_item_id)
         pending = bool(step.executor.projection.pending_target_ids)
         if self.cancelled:
             state = "cancelled"
@@ -178,6 +213,9 @@ class TaskReviewRuntime:
             state = "waiting_evidence"
             item.reason = next(error["reason"] for error in observation["errors"]
                                if error.get("reason") in {"repeated_read_no_progress", "finalization_requires_submit"})
+        elif observation.get("guarded_unresolved") == "citation_coverage_incomplete" and not pending:
+            state = "completed"
+            item.reason = "citation_coverage_incomplete"
         elif observation.get("errors") or pending:
             state = "failed"
             # 纠错机会已用尽仍被拒绝：区分“模型输出未通过验收”和执行故障。
@@ -187,7 +225,13 @@ class TaskReviewRuntime:
         if state == "ready":
             item.scheduling_class = "continuation"
         self.finish(item.work_item_id, state=state)
-        if self.derivation is not None and not self.cancelled:
+        if (getattr(getattr(step.executor, "spec", None), "stability_contract", None)
+                == "review-stability-v2" and state in {"completed", "failed", "cancelled"}):
+            for obligation in list(step.budget.obligations.values()):
+                if (obligation.owner_task_id == item.work_item_id
+                        and obligation.reason == "initial_inspect_closing" and obligation.state.value == "active"):
+                    await step.budget.release_obligation(obligation.obligation_id, abandoned=state != "completed")
+        if self.derivation is not None and not self.cancelled and barrier is None:
             self.derivation.refresh()
         if self.checkpoint is not None:
             await self.checkpoint.persist()
@@ -223,7 +267,37 @@ class TaskReviewRuntime:
         budget = next(iter(budgets.values()))
         self.wake_deferred(budget.revision)
         count = min(len(self.ready()), self.concurrency - len(self._running))
-        results = await asyncio.gather(*(self.advance_one(steps) for _ in range(count)), return_exceptions=True)
+        stable = any(getattr(getattr(step.executor, "spec", None), "stability_contract", None)
+                     == "review-stability-v2" for step in steps.values())
+        if stable:
+            for item in sorted(self._items.values(), key=lambda value: (value.sequence, value.work_item_id)):
+                if item.state.value == "ready":
+                    await steps[item.work_item_id].protect_closing()
+            # Freeze membership before any network completion can derive new work.
+            items = [self.claim_next() for _ in range(count)]
+            barrier = FrozenRound(items)
+            budget.round_barrier = barrier
+
+            async def advance(item):
+                identity = item.work_item_id
+                try:
+                    await barrier.admission_turn(identity)
+                    return await self.advance_one(steps, claimed=item, barrier=barrier)
+                finally:
+                    barrier.admit(identity)
+                    barrier.finished[identity].set()
+                    steps[identity].round_barrier = None
+
+            try:
+                results = await asyncio.gather(*(advance(item) for item in items), return_exceptions=True)
+            finally:
+                budget.round_barrier = None
+            if self.derivation is not None and not self.cancelled:
+                self.derivation.refresh()
+            if self.checkpoint is not None:
+                await self.checkpoint.persist()
+        else:
+            results = await asyncio.gather(*(self.advance_one(steps) for _ in range(count)), return_exceptions=True)
         for result in results:
             if isinstance(result, asyncio.CancelledError):
                 raise result
