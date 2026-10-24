@@ -103,6 +103,7 @@ class ReviewRunSpec(BaseModel):
     discussion_context: list[dict] | None = None
     discussion_profile: dict | None = None
     discussion_recheck: bool | None = None
+    stability_contract: Literal["review-stability-v1"] | None = None
 
     @model_serializer(mode="wrap")
     def serialize_strategy(self, handler):
@@ -115,6 +116,8 @@ class ReviewRunSpec(BaseModel):
             value.pop("pr_intent_context_truncated", None)
         if self.intent_assessment_contract is None:
             value.pop("intent_assessment_contract", None)
+        if self.stability_contract is None:
+            value.pop("stability_contract", None)
         for key in ("discussion_manifest_hash", "discussion_context", "discussion_profile", "discussion_recheck"):
             if getattr(self, key) is None:
                 value.pop(key, None)
@@ -293,6 +296,14 @@ class InvestigationSubmission(BaseModel):
     evidence_ids: list[str] = Field(default_factory=list, max_length=20)
     limitations: list[str] = Field(default_factory=list, max_length=20)
     reason: str = Field(min_length=1, max_length=2_000)
+    missing_evidence: list[RuntimeReadArguments] = Field(default_factory=list, max_length=4)
+
+    @model_serializer(mode="wrap")
+    def serialize_missing_evidence(self, handler):
+        value = handler(self)
+        if not self.missing_evidence:
+            value.pop("missing_evidence", None)
+        return value
 
 
 class DiscussionInvestigationSubmission(InvestigationSubmission):

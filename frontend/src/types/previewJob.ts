@@ -4,6 +4,7 @@ import type { ReviewPlanOptions } from './reviewPlan';
 export interface PreviewRequest {
   pr_url: string;
   model?: string | null;
+  reuse_review_id?: string | null;
   mode: ReviewMode;
   validation_backend: ValidationBackend;
   plan?: ReviewPlanOptions;

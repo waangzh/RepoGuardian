@@ -137,7 +137,7 @@ async def test_unknown_planner_version_rejected_before_any_dispatch(production_i
 
 
 def test_new_task_configuration_freezes_v5_and_call_resolution():
-    assert task_runtime_configuration()["risk_planner_version"] == "risk-planner-v6"
+    assert task_runtime_configuration()["risk_planner_version"] == "risk-planner-v7"
     assert task_runtime_configuration()["call_resolution_version"] == "import-evidence-v5"
 
 

@@ -109,6 +109,8 @@ class TaskRuntimeCheckpoint:
         if executor.spec.discussion_manifest_hash:
             # 重放 _apply_verification 时必须以首次请求相同的可见讨论集合校验。
             session["visible_discussions"] = getattr(executor, "visible_discussions", [])
+        if executor.spec.stability_contract:
+            session["stability"] = deepcopy(step.stability)
         return session
 
     @staticmethod
@@ -147,6 +149,10 @@ class TaskRuntimeCheckpoint:
         step.tool_observations = payload.get("tool_observations", [])
         step.dependency_paths = set(payload.get("dependency_paths", []))
         step.repository_discovery = payload.get("repository_discovery", True)
+        if executor.spec.stability_contract:
+            if not isinstance(payload.get("stability"), dict):
+                raise ValueError("stability_checkpoint_missing")
+            step.stability = deepcopy(payload["stability"])
 
     async def _put(self, kind, payload):
         content = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -400,6 +406,11 @@ class TaskRuntimeCheckpoint:
             if (step.pending_read or step.repair_errors or step.last_observation.get("page_advanced")
                     or step.last_observation.get("action") == "tool"):
                 state = "ready"
+            elif (step.executor.spec.stability_contract and any(
+                    error.get("reason") == "finalization_requires_submit"
+                    for error in step.last_observation.get("errors", []))):
+                state = "waiting_evidence"
+                item.reason = "finalization_requires_submit"
             elif not pending:
                 state = "completed"
             elif not calls or self.budget.attempts[calls[-1]["attempt_id"]].state == AttemptState.RELEASED:

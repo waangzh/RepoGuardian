@@ -76,11 +76,12 @@ def task_runtime_configuration(model=None, *, provider=None):
     return {"provider": provider_name, "model": selected_model,
         "output_policy": settings.review_output_policy(),
         "prompt_version": "task-review-prompt-v8",
+        "stability_contract": "review-stability-v1",
         "discussion_contract": "pr-discussion-context-v1" if settings.repoguardian_pr_discussions_enabled else None,
         "publication_contract": "claim-publication-v1",
         "pr_intent_contract": "pr-intent-assessment-v6",
         # 新任务冻结具体关系规划；历史手工配置缺省为 legacy，恢复时不能静默换规划器。
-        "risk_planner_version": "risk-planner-v6",
+        "risk_planner_version": "risk-planner-v7",
         "call_resolution_version": "import-evidence-v5",
         "readable_scope_version": "repository-tracked-v1",
         "endpoint": getattr(provider, "_base_url", settings.openai_base_url),
@@ -177,6 +178,7 @@ def frozen_runtime_spec(state, configuration, budget, *, readable_files=()):
         policy_version=configuration["policy_version"], max_tokens=budget.max_tokens, max_calls=budget.max_calls,
         prompt_version=configuration.get("prompt_version", "task-review-prompt-v1"),
         publication_contract=configuration.get("publication_contract", "legacy"),
+        stability_contract=configuration.get("stability_contract"),
         readable_scope_files=tuple(sorted(readable_files)),
         **discussion_fields, pr_intent_context=intent_context,
         pr_intent_context_truncated=intent_truncated,
@@ -258,9 +260,10 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
     if not configuration:
         raise ValueError("task runtime frozen configuration missing")
     risk_planner_version = configuration.get("risk_planner_version", "legacy")
-    if risk_planner_version not in {"legacy", "risk-planner-v2", "risk-planner-v3", "risk-planner-v4", "risk-planner-v5", "risk-planner-v6"}:
+    if risk_planner_version not in {"legacy", "risk-planner-v2", "risk-planner-v3", "risk-planner-v4", "risk-planner-v5", "risk-planner-v6", "risk-planner-v7"}:
         raise ValueError("unsupported risk planner version")
-    expected_resolution = {"risk-planner-v5": "import-evidence-v4", "risk-planner-v6": "import-evidence-v5"}
+    expected_resolution = {"risk-planner-v5": "import-evidence-v4", "risk-planner-v6": "import-evidence-v5",
+                           "risk-planner-v7": "import-evidence-v5"}
     if (risk_planner_version in expected_resolution
             and configuration.get("call_resolution_version") != expected_resolution[risk_planner_version]):
         raise ValueError("risk planner call resolution version mismatch")
@@ -324,6 +327,7 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
     plan = ReviewPlan.model_validate(state["review_plan"])
     from app.services.incremental_review import (
         reuse_coverage, reused_unit_snapshots, runtime_dependencies, validate_binding,
+        same_snapshot_configuration_matches,
     )
 
     binding = validate_binding(configuration, head_sha=state.get("head_sha") or "",
@@ -336,6 +340,10 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
         if repository is None:
             raise ValueError("incremental review requires persisted previous task")
         previous = await asyncio.to_thread(repository.get_task, binding.previous_task_id)
+        if (binding.previous_head_sha == binding.new_head_sha
+                and (previous is None or not same_snapshot_configuration_matches(
+                    previous.task_runtime_configuration, configuration))):
+            raise ValueError("same_snapshot_configuration_changed")
         reused_units = reused_unit_snapshots(configuration)
         expected = {item.unit_id for item in binding.reused_units}
         if {unit.id for unit in reused_units} != expected:
@@ -479,6 +487,16 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
         dependencies.update({identity: UnitReuseDependencies.model_validate(
             previous.task_runtime_report["reuse_dependencies"][identity]) for identity in reused_ids})
     metadata = {"reuse_dependencies": dependencies}
+    if binding is not None and binding.previous_head_sha == binding.new_head_sha:
+        def reused_records(name):
+            return [{**deepcopy(item), "reused_from_task_id": previous.id,
+                     "reused_from_head_sha": binding.previous_head_sha}
+                    for item in previous.task_runtime_report.get(name, [])
+                    if item.get("unit_id") in reused_ids
+                    or (name == "relationship_hints" and not steps)]
+        metadata["admitted_investigations"] = [
+            *report.admitted_investigations, *reused_records("admitted_investigations")]
+        metadata["relationship_hints"] = [*report.relationship_hints, *reused_records("relationship_hints")]
     if not steps:
         metadata.update(
             pr_intent_context=spec.pr_intent_context,

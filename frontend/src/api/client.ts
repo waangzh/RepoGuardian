@@ -175,6 +175,7 @@ export async function previewReview(
   signal?: AbortSignal,
   model?: string,
   plan?: ReviewPlanOptions,
+  reuseReviewId?: string,
 ): Promise<ReviewPreviewResponse> {
   return request<ReviewPreviewResponse>("/api/reviews/preview", {
     method: "POST",
@@ -182,6 +183,7 @@ export async function previewReview(
     body: JSON.stringify({
       pr_url: prUrl,
       model: model || null,
+      ...(reuseReviewId ? { reuse_review_id: reuseReviewId } : {}),
       ...(plan ? { plan } : {}),
       mode,
       validation_backend: validationBackend,

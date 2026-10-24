@@ -48,7 +48,7 @@ class TaskReviewDerivation:
                  investigations_enabled=True, risk_planner_version="legacy"):
         if not steps or not 1 <= max_derived_items <= 1_000:
             raise ValueError("invalid derived task configuration")
-        if risk_planner_version not in {"legacy", "risk-planner-v2", "risk-planner-v3", "risk-planner-v4", "risk-planner-v5", "risk-planner-v6"}:
+        if risk_planner_version not in {"legacy", "risk-planner-v2", "risk-planner-v3", "risk-planner-v4", "risk-planner-v5", "risk-planner-v6", "risk-planner-v7"}:
             raise ValueError("unsupported risk planner version")
         self.runtime, self.steps = runtime, steps
         self.initial_ids = set(steps)
@@ -126,7 +126,7 @@ class TaskReviewDerivation:
         active = {identity for identity, value in catalog.items() if value["file_path"] in item.scope_files}
         if item.kind.value == "verify" and root.executor.spec.prompt_version in {"task-review-prompt-v4", "task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7", "task-review-prompt-v8"}:
             active = {*item.required_evidence_ids, *item.counter_evidence_ids}
-        if item.kind.value == "investigate" and self.risk_planner_version in {"risk-planner-v2", "risk-planner-v3", "risk-planner-v4", "risk-planner-v5", "risk-planner-v6"}:
+        if item.kind.value == "investigate" and self.risk_planner_version in {"risk-planner-v2", "risk-planner-v3", "risk-planner-v4", "risk-planner-v5", "risk-planner-v6", "risk-planner-v7"}:
             active = set(item.required_evidence_ids)
         executor = ReviewTaskExecutor(root.executor.spec, item, list(goals.values()),
             active_evidence_ids=active, evidence_catalog=catalog, request_id="not-dispatched")
@@ -339,7 +339,7 @@ class TaskReviewDerivation:
         catalog = self._all_evidence()
         required = sorted(identity for identity, value in catalog.items()
                           if value["file_path"] in {target.target_ref for target in targets})
-        if self.risk_planner_version in {"risk-planner-v2", "risk-planner-v3", "risk-planner-v4", "risk-planner-v5", "risk-planner-v6"}:
+        if self.risk_planner_version in {"risk-planner-v2", "risk-planner-v3", "risk-planner-v4", "risk-planner-v5", "risk-planner-v6", "risk-planner-v7"}:
             requested = {identity for identity, value in catalog.items()
                 if any(value["file_path"] == request.file_path and value.get("side", "head") == "head"
                     and value["start_line"] <= request.end_line and value["end_line"] >= request.start_line
@@ -611,17 +611,18 @@ def build_task_risk_catalog(goals, work_items, repository_graph, *, planner_vers
         if goal.origin == "initial" and goal.target_kind in {"source_range", "base_source_range"}:
             by_path.setdefault(goal.target_ref, []).append(goal)
     output = {}
-    if planner_version not in {"legacy", "risk-planner-v2", "risk-planner-v3", "risk-planner-v4", "risk-planner-v5", "risk-planner-v6"}:
+    if planner_version not in {"legacy", "risk-planner-v2", "risk-planner-v3", "risk-planner-v4", "risk-planner-v5", "risk-planner-v6", "risk-planner-v7"}:
         raise ValueError("unsupported risk planner version")
     if planner_version == "legacy":
         return _build_legacy_risk_catalog(repository_graph, by_path, owners)
-    expected_resolution = {"risk-planner-v5": "import-evidence-v4", "risk-planner-v6": "import-evidence-v5"}
+    expected_resolution = {"risk-planner-v5": "import-evidence-v4", "risk-planner-v6": "import-evidence-v5",
+                           "risk-planner-v7": "import-evidence-v5"}
     if (planner_version in expected_resolution and
             repository_graph.get("metadata", {}).get("call_resolution_version") != expected_resolution[planner_version]):
         raise ValueError("risk planner repository graph version mismatch")
     if not 1 <= max_lines_per_read <= 2_000:
         raise ValueError("invalid risk planner read limit")
-    single_changed_side = planner_version in {"risk-planner-v3", "risk-planner-v4", "risk-planner-v5", "risk-planner-v6"}
+    single_changed_side = planner_version in {"risk-planner-v3", "risk-planner-v4", "risk-planner-v5", "risk-planner-v6", "risk-planner-v7"}
 
     symbols = {}
     for value in repository_graph.get("symbols", []):
@@ -665,7 +666,7 @@ def build_task_risk_catalog(goals, work_items, repository_graph, *, planner_vers
             "resolution_basis": edge.get("resolution_basis"),
             "relationship_level": edge.get("relationship_level"),
             "call_sites": edge.get("call_sites", [])}
-        if planner_version in {"risk-planner-v5", "risk-planner-v6"} and (edge["type"] != "calls" or edge.get("relationship_level") == "search_hint"):
+        if planner_version in {"risk-planner-v5", "risk-planner-v6", "risk-planner-v7"} and (edge["type"] != "calls" or edge.get("relationship_level") == "search_hint"):
             related = sorted(goal.goal_id for path in (source, target) for goal in by_path.get(path, []))
             key = "relationship-hint-" + stable_hash([relationship, related])[:32]
             output[key] = {"id": key, "hint": True, "related_goal_ids": related,
@@ -674,8 +675,8 @@ def build_task_risk_catalog(goals, work_items, repository_graph, *, planner_vers
             continue
         missing_changed_binding = not (callers or callees) if single_changed_side else not callers or not callees
         accepted_basis = ({"python_lexical_import", "qualified_import_module"}
-                          if planner_version in {"risk-planner-v5", "risk-planner-v6"} else {"qualified_import_module"})
-        unresolved_call = (planner_version in {"risk-planner-v4", "risk-planner-v5", "risk-planner-v6"} and edge["type"] == "calls"
+                          if planner_version in {"risk-planner-v5", "risk-planner-v6", "risk-planner-v7"} else {"qualified_import_module"})
+        unresolved_call = (planner_version in {"risk-planner-v4", "risk-planner-v5", "risk-planner-v6", "risk-planner-v7"} and edge["type"] == "calls"
                            and (edge.get("resolution_status") != "resolved"
                                 or edge.get("resolution_basis") not in accepted_basis))
         if (edge["type"] != "calls" or not source_symbol or not target_symbol
@@ -694,7 +695,7 @@ def build_task_risk_catalog(goals, work_items, repository_graph, *, planner_vers
             related = sorted(goal.goal_id for goal in changed)
             key = "risk-unbound-" + stable_hash([edge.get("type"), edge.get("source"), edge.get("target"),
                                                related, planner_version])[:32]
-            if planner_version in {"risk-planner-v5", "risk-planner-v6"}:
+            if planner_version in {"risk-planner-v5", "risk-planner-v6", "risk-planner-v7"}:
                 key = "risk-unbound-" + stable_hash([relationship, related, planner_version])[:32]
             output[key] = {"id": key, "origin_work_item_id": origin,
                     "related_goal_ids": related,
@@ -703,9 +704,13 @@ def build_task_risk_catalog(goals, work_items, repository_graph, *, planner_vers
                         if unresolved_call else "relationship_not_bound_to_symbols"),
                     "relationship_evidence": {key: edge.get(key) for key in
                         ("resolution_status", "resolution_basis", "call_expression")}}
-            if planner_version in {"risk-planner-v5", "risk-planner-v6"}:
+            if planner_version in {"risk-planner-v5", "risk-planner-v6", "risk-planner-v7"}:
                 output[key]["relationship"] = relationship
                 output[key]["proposition"] = f"待核验调用：{edge.get('source')} → {edge.get('target')}"
+            if planner_version == "risk-planner-v7":
+                # A name/binding hint is not an admitted semantic obligation.
+                output[key].pop("not_scheduled_reason")
+                output[key]["hint"] = True
             continue
         bindings = ([sorted([*callers, *callees], key=lambda goal: goal.goal_id)] if single_changed_side else
                     [[caller, callee] for caller in callers for callee in callees if caller.unit_id != callee.unit_id])
@@ -721,7 +726,19 @@ def build_task_risk_catalog(goals, work_items, repository_graph, *, planner_vers
             key = "risk-" + stable_hash([related, edge.get("type"), source_symbol["id"],
                                        target_symbol["id"], proposition])[:32]
             requests = []
+            capacity_exceeded = False
+            unavailable_source = False
+            if planner_version == "risk-planner-v7":
+                from app.services.review_stability import companion_definitions, source_requests
+                definitions = [source_symbol, target_symbol, *companion_definitions(edge, repository_graph, symbols)]
+                allowed = {symbol["file"] for symbol in definitions}
+                unavailable_source = any(is_sensitive_repository_path(symbol["file"])
+                                         or not valid_range(symbol) for symbol in definitions)
+                prepared, capacity_exceeded = source_requests(definitions, allowed, max_lines_per_read, limit=20)
+                requests = [request.model_dump(mode="json") for request in prepared]
             for symbol in (source_symbol, target_symbol):
+                if planner_version == "risk-planner-v7":
+                    break
                 for start in range(symbol["start_line"], symbol["end_line"] + 1, max_lines_per_read):
                     requests.append(RuntimeReadArguments(file_path=symbol["file"], start_line=start,
                         end_line=min(symbol["end_line"], start + max_lines_per_read - 1)).model_dump(mode="json"))
@@ -729,14 +746,15 @@ def build_task_risk_catalog(goals, work_items, repository_graph, *, planner_vers
                         break
                 if len(requests) > 20:
                     break
-            reason = ("necessary_evidence_capacity_exceeded" if len(requests) > 20 else
+            reason = ("no_legal_evidence_path" if unavailable_source else
+                      "necessary_evidence_capacity_exceeded" if len(requests) > 20 or capacity_exceeded else
                       "origin_work_item_missing" if origin_goal.goal_id not in owners else
                       "relationship_target_capacity_exceeded" if len(related) > 40 else
                       "relationship_proposition_capacity_exceeded" if len(proposition) > 2_000 else None)
             output[key] = {"id": key, "origin_work_item_id": owners.get(origin_goal.goal_id),
                 "related_goal_ids": related, "proposition": proposition,
                 "evidence_requests": requests if not reason else [], "not_scheduled_reason": reason}
-            if planner_version in {"risk-planner-v5", "risk-planner-v6"}:
+            if planner_version in {"risk-planner-v5", "risk-planner-v6", "risk-planner-v7"}:
                 output[key]["relationship"] = relationship
     _append_dangling_references(output, dangling_references, by_path, owners)
     return [output[key] for key in sorted(output)]

@@ -723,6 +723,7 @@ class ReviewPreviewRequest(BaseModel):
 
     pr_url: HttpUrl
     model: str | None = Field(default=None, min_length=1, max_length=200)
+    reuse_review_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
     plan: ReviewPlanOptions = Field(default_factory=ReviewPlanOptions)
     engine: Literal["task_review_v1"] = Field(default_factory=_default_review_engine)
     mode: ReviewMode = Field(default_factory=_default_review_mode)
