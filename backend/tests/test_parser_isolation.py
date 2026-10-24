@@ -14,10 +14,12 @@ from app.tools.repo_indexer import RepoIndexer
 
 @pytest.fixture(autouse=True)
 def quarantine(tmp_path, monkeypatch):
+    isolation.close_parser_workers()
     directory = tmp_path / "quarantine"
     monkeypatch.setattr(isolation, "_failure_directory", lambda: directory)
     isolation._RECENT_FAILURES.clear()
     yield directory
+    isolation.close_parser_workers()
     isolation._RECENT_FAILURES.clear()
 
 
@@ -173,7 +175,15 @@ def test_invalid_worker_results_downgrade(tmp_path, monkeypatch, fault):
     elif fault == "level":
         raw["level"] = 0
     payload = b"invalid" if fault == "json" else json.dumps(raw).encode()
-    monkeypatch.setattr(isolation, "_run_worker", lambda *args: payload)
+    worker_script(
+        tmp_path, monkeypatch,
+        "import json, struct, sys\n"
+        "size=struct.unpack('!I', sys.stdin.buffer.read(4))[0]\n"
+        "request=json.loads(sys.stdin.buffer.read(size))\n"
+        f"payload={payload!r}\n"
+        "sys.stdout.buffer.write(struct.pack('!I', len(payload))"
+        "+request['request_id'].encode('ascii')+payload)\n",
+    )
     result = analyze(path)
     assert result.level == AnalysisLevel.heuristic
     assert "invalid_response" in result.diagnostics[0]
@@ -324,3 +334,131 @@ def test_parser_version_changes_confirmation_policy(monkeypatch):
     original = confirmation.policy_fingerprint()
     monkeypatch.setattr(isolation, "parser_fingerprint", lambda: "other-parser")
     assert confirmation.policy_fingerprint() != original
+
+
+def test_persistent_worker_reuses_process_and_keeps_file_identity(tmp_path, monkeypatch):
+    processes = []
+    original = subprocess.Popen
+
+    def spawn(*args, **kwargs):
+        process = original(*args, **kwargs)
+        processes.append(process)
+        assert args[0][1] == "-I" and args[0][-1] == "--persistent"
+        assert kwargs["cwd"] == isolation._SERVER_ROOT
+        assert not {"PYTHONPATH", "API_KEY"} & kwargs["env"].keys()
+        return process
+
+    monkeypatch.setattr(isolation.subprocess, "Popen", spawn)
+    for i in range(4):
+        path = source_file(tmp_path, f"lib{i}.rs")
+        result = analyze(path)
+        assert result.level == AnalysisLevel.semantic, result.diagnostics
+        assert result.symbols[0].file == path.name
+    assert len(processes) == 1
+    assert processes[0].poll() is None
+    isolation.close_parser_workers()
+    assert processes[0].poll() is not None
+
+
+def test_workers_recycle_after_request_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(isolation, "MAX_WORKER_REQUESTS", 2)
+    processes = []
+    original = subprocess.Popen
+
+    def spawn(*args, **kwargs):
+        process = original(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(isolation.subprocess, "Popen", spawn)
+    for i in range(3):
+        assert analyze(source_file(tmp_path, f"lib{i}.rs")).level == AnalysisLevel.semantic
+    assert len(processes) == 2
+    assert processes[0].poll() is not None
+    assert processes[1].poll() is None
+
+
+@pytest.mark.parametrize("fault", ["identity", "truncated", "blocked_stdin"])
+def test_bad_stream_or_blocked_stdin_is_reaped_and_next_file_recovers(
+    tmp_path, monkeypatch, fault,
+):
+    original_worker = isolation._WORKER
+    path = source_file(tmp_path)
+    if fault == "identity":
+        body = "import struct, sys\nsys.stdout.buffer.write(struct.pack('!I', 2)+b'x'*32+b'{}')\n"
+    elif fault == "truncated":
+        body = "import sys\nsys.stdout.buffer.write(b'xx')\n"
+    else:
+        body = "import time\ntime.sleep(30)\n"
+        path.write_text("//" + "x" * 512000, encoding="utf-8")
+        monkeypatch.setattr(isolation, "PARSER_TIMEOUT_SECONDS", 0.2)
+    worker_script(tmp_path, monkeypatch, body)
+    result = analyze(path)
+    assert result.level == AnalysisLevel.heuristic
+    expected = {"identity": "invalid_response", "truncated": "process_exit",
+                "blocked_stdin": "timeout"}[fault]
+    assert expected in result.diagnostics[0]
+    assert not [thread for thread in threading.enumerate() if thread.name == "parser-io"]
+    monkeypatch.setattr(isolation, "_WORKER", original_worker)
+    monkeypatch.setattr(isolation, "PARSER_TIMEOUT_SECONDS", 15.0)
+    assert analyze(source_file(tmp_path, "next.rs")).level == AnalysisLevel.semantic
+
+
+def test_concurrent_parsing_uses_at_most_two_processes(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    processes = []
+    original = subprocess.Popen
+
+    def spawn(*args, **kwargs):
+        process = original(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(isolation.subprocess, "Popen", spawn)
+    paths = [source_file(tmp_path, f"file{i}.rs") for i in range(6)]
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(analyze, paths))
+    assert 1 <= len(processes) <= 2
+    assert all(result.level == AnalysisLevel.semantic for result in results)
+    assert [result.symbols[0].file for result in results] == [path.name for path in paths]
+
+
+def test_cancellation_while_waiting_for_worker_slot_does_not_quarantine(
+    tmp_path, quarantine,
+):
+    path = source_file(tmp_path)
+    cancel = threading.Event()
+    isolation._SLOTS.acquire()
+    isolation._SLOTS.acquire()
+    timer = threading.Timer(0.2, cancel.set)
+    timer.start()
+    try:
+        with pytest.raises(isolation.ParserCancelled):
+            analyze(path, cancel_event=cancel)
+    finally:
+        isolation._SLOTS.release()
+        isolation._SLOTS.release()
+        timer.cancel()
+        timer.join()
+    assert not list(quarantine.glob("*.json"))
+
+
+def test_shutdown_during_worker_creation_does_not_leave_process_in_pool(
+    tmp_path, monkeypatch, quarantine,
+):
+    original = subprocess.Popen
+    processes = []
+
+    def spawn(*args, **kwargs):
+        process = original(*args, **kwargs)
+        processes.append(process)
+        isolation.close_parser_workers()
+        return process
+
+    monkeypatch.setattr(isolation.subprocess, "Popen", spawn)
+    with pytest.raises(isolation.ParserCancelled):
+        analyze(source_file(tmp_path))
+    assert len(processes) == 1 and processes[0].poll() is not None
+    assert not isolation._WORKERS and not isolation._IDLE_WORKERS
+    assert not list(quarantine.glob("*.json"))

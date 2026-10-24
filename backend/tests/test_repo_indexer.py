@@ -21,6 +21,48 @@ async def test_build_file_index_on_test_dir(tmp_path):
     assert "tests/test_main.py" in paths
 
 
+async def test_large_index_analyzes_each_code_file_once_without_caching_documents(
+    tmp_path, monkeypatch,
+):
+    from collections import Counter
+    from app.languages.base import AnalysisLevel, FileAnalysis, SymbolRef
+    from app.languages.registry import default_language_registry
+
+    for i in range(520):
+        (tmp_path / f"a{i:04}.md").write_text("# document", encoding="utf-8")
+    for i in range(600):
+        (tmp_path / f"z{i:04}.py").write_text("def entry(): pass\n", encoding="utf-8")
+    calls = Counter()
+
+    def analyze(path, relative_path, **kwargs):
+        calls[relative_path] += 1
+        assert path.suffix == ".py"
+        return FileAnalysis(
+            language_id="python", level=AnalysisLevel.semantic, parser_id="tree-sitter.python.v1",
+            symbols=[SymbolRef(file=relative_path, name="entry", kind="function",
+                               start_line=1, end_line=1, confidence=0.98,
+                               parser_id="tree-sitter.python.v1")],
+        )
+
+    monkeypatch.setattr(default_language_registry, "analyze", analyze)
+    result = await RepoIndexer().execute(repo_path=str(tmp_path))
+    assert len(calls) == 600 and set(calls.values()) == {1}
+    assert len(result["file_index"]) == 1120
+    assert len(result["symbol_index"]) == 600
+    documents = [item for item in result["file_index"] if item["language"] == "unknown"]
+    assert len(documents) == 520
+    assert all(item["analysis_level"] == 0 and item["imports"] == [] for item in documents)
+
+
+async def test_combined_index_matches_standalone_file_and_symbol_scans(tmp_path):
+    (tmp_path / "main.py").write_text("import math\ndef entry(x): return math.sqrt(x)\n")
+    (tmp_path / "readme.md").write_text("# Readme")
+    combined = await RepoIndexer().execute(repo_path=str(tmp_path))
+    standalone = RepoIndexer()
+    assert combined["file_index"] == await standalone.build_file_index(str(tmp_path))
+    assert combined["symbol_index"] == await standalone.build_symbol_index(str(tmp_path))
+
+
 @pytest.mark.asyncio
 async def test_detect_project_meta(tmp_path):
     (tmp_path / "app").mkdir()

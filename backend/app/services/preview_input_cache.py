@@ -14,7 +14,7 @@ from app.tools.git_tool import DIFF_CONTEXT_LINES, DIFF_POLICY_VERSION
 from app.languages.isolation import parser_fingerprint
 
 logger = logging.getLogger("RepoGuardian.PreviewCache")
-INDEX_CACHE_VERSION = "preview-input-v6"
+INDEX_CACHE_VERSION = "preview-input-v7"
 MAX_BYTES = 32 * 1024 * 1024
 MAX_RAW_BYTES = 512 * 1024 * 1024
 MAX_ENTRIES = 4
