@@ -267,7 +267,7 @@ class ReviewTaskExecutor:
         self.active_evidence_ids = set(self.pages[self.page_index].evidence_ids)
         return True
 
-    def parse_and_apply(self, raw: Any) -> ParsedRuntimeResponse:
+    def parse_and_apply(self, raw: Any, *, retry_fields: set[str] | None = None) -> ParsedRuntimeResponse:
         parsed = self.parser.parse(raw, task_kind=self.work_item.kind.value,
                                    publication_contract=self.spec.publication_contract,
                                    discussions_enabled=self.spec.discussion_manifest_hash is not None,
@@ -286,11 +286,11 @@ class ReviewTaskExecutor:
         if isinstance(parsed.response, VerificationSubmitResponse):
             self._apply_verification(getattr(parsed.response, "verification", None), parsed.errors)
             if isinstance(parsed.response, PublicationVerificationSubmitResponse):
-                self._apply_submit(parsed.response, parsed.errors, parsed.item_indices)
+                self._apply_submit(parsed.response, parsed.errors, parsed.item_indices, retry_fields=retry_fields)
         else:
             if isinstance(parsed.response, InvestigationSubmitResponse):
                 self._apply_investigation(getattr(parsed.response, "investigation", None), parsed.errors)
-            self._apply_submit(parsed.response, parsed.errors, parsed.item_indices)
+            self._apply_submit(parsed.response, parsed.errors, parsed.item_indices, retry_fields=retry_fields)
         return parsed
 
     def investigation_citation_readiness(self):
@@ -316,6 +316,33 @@ class ReviewTaskExecutor:
             return {"status": "citation_capacity_exceeded", "citation_ids": None}
         error = self.evidence_error(sorted(selected))
         return {"status": error or "ready", "citation_ids": None if error else sorted(selected)}
+
+    def goal_citation_gaps(self, goal, cited_ids):
+        cited_ids = [value for value in cited_ids if isinstance(value, str)] if isinstance(cited_ids, list) else []
+        side = self.goal_side(goal)
+        visible = sorted(identity for identity in self.active_evidence_ids
+            if self.evidence_catalog[identity]["file_path"] == goal.target_ref
+            and self.evidence_catalog[identity].get("side", "head") == side)
+        cited = sorted(set(cited_ids) & set(visible))
+        valid = self.evidence_error(visible) is None and self._covers(goal, visible)
+        cursor, gaps = goal.start_line, []
+        for start, end in sorted((self.evidence_catalog[e]["start_line"], self.evidence_catalog[e]["end_line"])
+                                 for e in cited):
+            if end < cursor or start > goal.end_line:
+                continue
+            if start > cursor:
+                gaps.append((cursor, min(start - 1, goal.end_line)))
+            cursor = max(cursor, end + 1)
+        if cursor <= goal.end_line:
+            gaps.append((cursor, goal.end_line))
+        return {"target_id": goal.goal_id, "file_path": goal.target_ref, "side": side,
+            "status": "ready" if valid else "source_not_ready",
+            "visible_evidence_ids": visible if valid else [],
+            "out_of_scope_citation_count": len(set(cited_ids) - set(visible)),
+            "uncovered_ranges": [{"start_line": start, "end_line": end,
+                "visible_evidence_ids": [identity for identity in visible if valid
+                    and self.evidence_catalog[identity]["start_line"] <= end
+                    and self.evidence_catalog[identity]["end_line"] >= start]} for start, end in gaps]}
 
     def investigation_citation_gaps(self, cited_ids):
         readiness = self.investigation_citation_readiness()
@@ -432,7 +459,8 @@ class ReviewTaskExecutor:
         self.projection.pending_target_ids.clear()
 
     def _apply_submit(self, response: RuntimeSubmitResponse,
-                      errors: list[RuntimeParseError], item_indices: dict[str, list[int]]) -> None:
+                      errors: list[RuntimeParseError], item_indices: dict[str, list[int]],
+                      *, retry_fields: set[str] | None = None) -> None:
         grouped = {}
         for item in getattr(response, "examinations", []):
             grouped.setdefault(item.target_id, []).append(item)
@@ -504,6 +532,8 @@ class ReviewTaskExecutor:
             self.projection.pending_target_ids.discard(target_id)
             self.projection.accepted_target_ids.add(target_id)
         for index, item in enumerate(response.candidates):
+            if retry_fields is not None and "candidates" not in retry_fields:
+                continue
             index = item_indices.get("candidates", list(range(len(response.candidates))))[index]
             if item.primary_anchor not in self.goals:
                 errors.append(RuntimeParseError("candidates", index, "unknown_primary_anchor"))
@@ -526,6 +556,8 @@ class ReviewTaskExecutor:
                 evidence_requests=item.evidence_requests,
             )
         for index, item in enumerate(getattr(response, "leads", [])):
+            if retry_fields is not None and "leads" not in retry_fields:
+                continue
             index = item_indices.get("leads", list(range(len(response.leads))))[index]
             if set(item.related_target_ids) - set(self.goals):
                 errors.append(RuntimeParseError("leads", index, "unknown_related_target"))

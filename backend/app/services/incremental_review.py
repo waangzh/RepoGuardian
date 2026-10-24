@@ -80,12 +80,14 @@ def _report(task: ReviewTask) -> TaskRuntimeReport | None:
         return None
 
 
-def _report_reuse_reason(report: TaskRuntimeReport | None, *, same_snapshot=False) -> str | None:
+def _report_reuse_reason(report: TaskRuntimeReport | None, *, same_snapshot=False,
+                         allow_findings=False) -> str | None:
     if (report is None or report.execution_status != "completed"
             or report.termination_reason != "plan_exhausted" or not report.scope_complete
             or report.usage_integrity != "complete" or report.unknown_attempts):
         return "previous_review_incomplete"
-    if any(item.get("status") != "dismissed" for item in report.findings):
+    allowed = {"dismissed", "confirmed"} if same_snapshot and allow_findings else {"dismissed"}
+    if any(item.get("status") not in allowed for item in report.findings):
         return "previous_findings_require_reverification"
     if same_snapshot:
         if (any(item.get("status") != "answered" or item.get("answer") not in {"supported", "refuted"}
@@ -141,9 +143,17 @@ def reusable_units(
     same_snapshot=False,
 ) -> list[ReviewUnit]:
     """复用当前运行时的完整覆盖；旧结果或不完整依赖一律不作成功缓存。"""
-    report = _report(previous)
-    if _report_reuse_reason(report, same_snapshot=same_snapshot):
+    if previous.status.value not in {"completed", "completed_with_warnings"}:
         return []
+    report = _report(previous)
+    allow_findings = same_snapshot and (previous.task_runtime_configuration or {}).get("stability_contract") == "review-stability-v2"
+    if _report_reuse_reason(report, same_snapshot=same_snapshot, allow_findings=allow_findings):
+        return []
+    if allow_findings:
+        from app.services.review_publication import publication_issue
+        if any(publication_issue(previous, item)[0] is None for item in report.findings
+               if item.get("status") == "confirmed"):
+            return []
     current_paths = {item.file_path for item in full_changed}
     reusable: list[ReviewUnit] = []
     for unit in previous.review_units:
@@ -235,7 +245,10 @@ def plan_incremental(
 ) -> IncrementalDecision:
     """创建任务前完成全部可复用判定；任何不确定都退回完整审查。"""
 
-    if not settings.repoguardian_incremental_review_enabled:
+    same_snapshot = bool(previous and previous.run_manifest and previous.run_manifest.head_sha == new_head_sha)
+    automatic_snapshot = (same_snapshot and allow_same_snapshot
+                          and configuration.get("stability_contract") == "review-stability-v2")
+    if not settings.repoguardian_incremental_review_enabled and not automatic_snapshot:
         return _not_applicable("incremental_review_disabled", full_changed)
     plan_scope = ((configuration.get("effective_plan") or {}).get("scope") or {})
     if plan_scope.get("mode", "all") != "all":
@@ -258,10 +271,11 @@ def plan_incremental(
         return _not_applicable("previous_review_units_missing", full_changed)
     same_snapshot = manifest.head_sha == new_head_sha
     if same_snapshot and (
-            not allow_same_snapshot or configuration.get("stability_contract") != "review-stability-v1"
-            or (previous.task_runtime_configuration or {}).get("stability_contract") != "review-stability-v1"):
+            not allow_same_snapshot or configuration.get("stability_contract") not in {"review-stability-v1", "review-stability-v2"}
+            or (previous.task_runtime_configuration or {}).get("stability_contract") != configuration.get("stability_contract")):
         return _not_applicable("same_head", full_changed)
-    reason = _report_reuse_reason(_report(previous), same_snapshot=same_snapshot)
+    reason = _report_reuse_reason(_report(previous), same_snapshot=same_snapshot,
+        allow_findings=automatic_snapshot)
     if reason:
         return _not_applicable(reason, full_changed)
     if (configuration.get("effective_plan") or {}).get("include_pr_discussions"):
@@ -302,7 +316,7 @@ def plan_incremental(
         "其余 Unit 及依赖受影响的范围重新检查。",
     ]
     if same_snapshot:
-        warnings = [f"同快照复用：沿用显式选择的任务 {previous.id[:8]} 中 {len(reusable)} 个已完整审查 Unit；"
+        warnings = [f"同快照复用：沿用来源任务 {previous.id[:8]} 中 {len(reusable)} 个已完整审查 Unit；"
                     "未重新执行这些范围的模型审查。"]
     binding = IncrementalReviewBinding(
         previous_task_id=previous.id, previous_head_sha=manifest.head_sha,
@@ -402,7 +416,7 @@ def reuse_coverage(binding: IncrementalReviewBinding, previous: ReviewTask | Non
         raise ValueError("incremental_delta_changed")
     same_snapshot = binding.previous_head_sha == binding.new_head_sha
     if same_snapshot and (
-            (previous.task_runtime_configuration or {}).get("stability_contract") != "review-stability-v1"
+            (previous.task_runtime_configuration or {}).get("stability_contract") not in {"review-stability-v1", "review-stability-v2"}
             or delta_paths or stable_hash([item.model_dump(mode="json") for item in previous.changed_files])
             != stable_hash([item.model_dump(mode="json") for item in full_changed])):
         raise ValueError("same_snapshot_input_changed")

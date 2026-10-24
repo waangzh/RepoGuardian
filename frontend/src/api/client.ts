@@ -161,6 +161,7 @@ export async function createReview(
       model: model || null,
       mode,
       validation_backend: validationBackend,
+      force_full_review: preview?.force_full_review ?? false,
       ...(preview ? { preview_id: preview.preview_id, plan_hash: preview.plan_hash,
         expected_head_sha: preview.snapshot?.head_sha,
         expected_effective_base_sha: preview.snapshot?.effective_base_sha } : {}),
@@ -193,6 +194,15 @@ export async function previewReview(
 
 export async function getReview(taskId: string): Promise<ReviewTask> {
   return request<ReviewTask>(`/api/reviews/${taskId}`);
+}
+
+export async function resumeReview(taskId: string, prUrl: string, preview: ReviewPreviewResponse): Promise<TaskRuntimeRetryResult> {
+  return request<TaskRuntimeRetryResult>(`/api/reviews/${encodeURIComponent(taskId)}/resume`, {
+    method: 'POST', body: JSON.stringify({ pr_url: prUrl, preview_id: preview.preview_id,
+      plan_hash: preview.plan_hash, expected_head_sha: preview.snapshot?.head_sha,
+      expected_effective_base_sha: preview.snapshot?.effective_base_sha,
+      mode: preview.mode, validation_backend: preview.validation_backend.name }),
+  });
 }
 
 export async function listReviews(options: {

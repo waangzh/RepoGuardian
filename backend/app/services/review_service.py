@@ -505,6 +505,35 @@ class ReviewService:
         else:
             previous = (await self._previous_review(pr_url)
                         if settings.repoguardian_incremental_review_enabled else None)
+        continuation_preview = None
+        saved_result_id = None
+        if configuration.get("stability_contract") == "review-stability-v2" and self._repository:
+            from app.services.incremental_review import same_snapshot_configuration_matches
+            if request.force_full_review:
+                previous = None
+            elif not requested_source:
+                candidates = await asyncio.to_thread(self._repository.recent_tasks_for_snapshot, pr_url, pr.head.sha)
+                matching = next((item for item in candidates if same_snapshot_configuration_matches(
+                    item.task_runtime_configuration, frozen)), None)
+                if matching:
+                    previous = matching
+            from app.services.preview_confirmation import pr_fingerprint
+            if previous and previous.pr and pr_fingerprint(previous.pr) == pr_fingerprint(pr):
+                if same_snapshot_configuration_matches(previous.task_runtime_configuration, frozen):
+                    from app.services.incremental_review import reusable_units
+                    from app.services.fingerprints import stable_hash
+                    if (stable_hash([item.model_dump(mode="json") for item in previous.changed_files])
+                            == stable_hash([item.model_dump(mode="json") for item in changed_files])
+                            and len(reusable_units(previous, changed_files, set(), plan.review_units,
+                                index.get("repository_graph"), same_snapshot=True)) == len(plan.review_units)
+                            and plan.review_units):
+                        saved_result_id = previous.id
+                    from app.services.review_continuation import continuation
+                    checkpoint = await asyncio.to_thread(self._repository.load_task_review_runtime, previous.id)
+                    ledger = await asyncio.to_thread(self._repository.load_run_budget, previous.id)
+                    candidate = continuation(previous, checkpoint, ledger)
+                    if candidate["reason"] != "no_retryable_gap":
+                        continuation_preview = candidate
         delta_paths, same_base, ancestor = await self._incremental_delta(pr, previous, effective_base)
         decision = plan_incremental(
             previous=previous, pr_url=pr_url, pr_info=pr.model_dump(mode="json"),
@@ -512,7 +541,8 @@ class ReviewService:
             full_changed=changed_files, full_plan_units=plan.review_units,
             changed_since_previous=delta_paths, configuration=frozen, model=configuration["model"],
             ancestor=ancestor, same_merge_base=same_base, repository_graph=index.get("repository_graph"),
-            allow_same_snapshot=bool(requested_source))
+            allow_same_snapshot=bool(requested_source) or (
+                not request.force_full_review and configuration.get("stability_contract") == "review-stability-v2"))
         incremental_preview = decision.preview
         if decision.applicable and decision.binding is not None:
             frozen["incremental"] = decision.binding.model_dump(mode="json")
@@ -540,6 +570,9 @@ class ReviewService:
             total_files=len(index["file_index"]),
         ))
         response = ReviewPreviewResponse(
+            force_full_review=request.force_full_review,
+            continuation=continuation_preview if not decision.applicable and not saved_result_id else None,
+            existing_review_id=saved_result_id,
             preview_id=uuid4().hex, plan_hash=plan_hash, snapshot=snapshot,
             effective_plan=options, expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
             mode=request.mode,
@@ -1128,7 +1161,48 @@ class ReviewService:
         run_task.cancel()
         return True
 
-    async def retry_unit(self, task_id: str, unit_id: str) -> TaskRuntimeRetryResult:
+    async def resume_review(self, task_id: str, request: ReviewCreateRequest) -> TaskRuntimeRetryResult:
+        """Use a fresh confirmed preview to resume the original frozen ledger."""
+        from app.services.preview_confirmation import validate_confirmation, pr_fingerprint
+        from app.services.incremental_review import same_snapshot_configuration_matches
+        from app.services.review_continuation import ALL_PENDING
+        if not self._repository or not request.preview_id or request.force_full_review:
+            raise ValueError("review_plan_repreview_required")
+        record = await asyncio.to_thread(self._repository.get_preview, request.preview_id)
+        if not record or record.get("pr_url") != str(request.pr_url):
+            raise ValueError("review_plan_stale")
+        preview = ReviewPreviewResponse.model_validate(record["response"])
+        choice = preview.continuation or {}
+        if (choice.get("review_id") != task_id or not choice.get("can_resume")
+                or preview.plan_hash != request.plan_hash
+                or preview.snapshot is None or preview.snapshot.head_sha != request.expected_head_sha
+                or preview.snapshot.effective_base_sha != request.expected_effective_base_sha):
+            raise ValueError("review_plan_stale")
+        if record.get("consumed_task_id") == task_id:
+            task = await asyncio.to_thread(self.get_task, task_id)
+            if not task or not task.task_runtime_report:
+                raise ValueError("review_plan_stale")
+            return TaskRuntimeRetryResult(unit_id=ALL_PENDING, requeued_work_item_ids=[],
+                task_runtime_report=TaskRuntimeReport.model_validate(task.task_runtime_report))
+        if record.get("consumed_task_id"):
+            raise ValueError("review_plan_stale")
+        expiry = preview.expires_at
+        if expiry is None or expiry.replace(tzinfo=timezone.utc) <= datetime.now(timezone.utc):
+            raise ValueError("review_plan_expired")
+        configuration, expected_pr = validate_confirmation(record, request)
+        task = await asyncio.to_thread(self.get_task, task_id)
+        if task is None:
+            raise KeyError(task_id)
+        current_pr = await self._github_tool.fetch_pr(str(request.pr_url))
+        if (not task.pr or pr_fingerprint(current_pr) != expected_pr
+                or pr_fingerprint(task.pr) != expected_pr
+                or not same_snapshot_configuration_matches(task.task_runtime_configuration, configuration)):
+            raise ValueError("review_plan_stale")
+        validate_confirmation(record, request)
+        return await self.retry_unit(task_id, ALL_PENDING, validated_snapshot=True, resume_preview_id=request.preview_id)
+
+    async def retry_unit(self, task_id: str, unit_id: str, *, validated_snapshot=False,
+                         resume_preview_id=None) -> TaskRuntimeRetryResult:
         """只重排显式的未决缺口；旧引擎任务只读，不能重试。"""
         task = self.get_task(task_id)
         if task is None:
@@ -1139,37 +1213,53 @@ class ReviewService:
             raise ValueError("task_review_v1 runtime report is missing")
         report = TaskRuntimeReport.model_validate(task.task_runtime_report)
         known_units = {item.get("unit_id") for item in report.work_items}
-        if unit_id not in known_units:
+        from app.services.review_continuation import ALL_PENDING
+        all_pending = (unit_id == ALL_PENDING and
+            (task.task_runtime_configuration or {}).get("stability_contract") == "review-stability-v2")
+        if unit_id not in known_units and not all_pending:
             raise KeyError(unit_id)
         if task.status not in {TaskStatus.completed, TaskStatus.completed_with_warnings,
                                TaskStatus.failed}:
             raise ValueError("task runtime must be terminal before retrying a unit")
         if self._repository is None:
             raise ValueError("task runtime retry requires persisted fixed runtime")
+        if (task.task_runtime_configuration or {}).get("stability_contract") == "review-stability-v2":
+            if not validated_snapshot:
+                raise ValueError("请重新预览并使用继续未完成审查入口，核对当前快照与原资源余额。")
+            from app.services.review_continuation import continuation
+            checkpoint = await asyncio.to_thread(self._repository.load_task_review_runtime, task.id)
+            ledger = await asyncio.to_thread(self._repository.load_run_budget, task.id)
+            eligibility = continuation(task, checkpoint, ledger)
+            if not eligibility["can_resume"]:
+                raise ValueError("review_resume_unavailable:" + eligibility["reason"])
         gaps = {item["goal_id"] for item in report.initial_scope_coverage
-                if item.get("unit_id") == unit_id and item.get("status") in {"blocked", "not_examined"}}
+                if (all_pending or item.get("unit_id") == unit_id) and item.get("status") in {"blocked", "not_examined"}}
         investigations = ({item["work_item_id"] for item in report.admitted_investigations
-                           if item.get("unit_id") == unit_id and (item.get("status") != "answered"
+                           if (all_pending or item.get("unit_id") == unit_id) and (item.get("status") != "answered"
                                or item.get("answer") not in {"supported", "refuted"})}
                           if (task.task_runtime_configuration or {}).get("stability_contract") else set())
         requeued = [item["work_item_id"] for item in report.work_items
-                    if item.get("unit_id") == unit_id and item.get("state") != "unknown"
+                    if (all_pending or item.get("unit_id") == unit_id) and item.get("state") not in {"unknown", "result_missing"}
                     and (gaps.intersection(item.get("goal_ids", []))
-                         or item["work_item_id"] in investigations)]
+                         or item["work_item_id"] in investigations
+                         or (all_pending and item.get("retryable_gap") is True))]
         if not requeued:
             return TaskRuntimeRetryResult(unit_id=unit_id, requeued_work_item_ids=[], task_runtime_report=report)
+        previous_updated_at = task.updated_at
         task.task_runtime_retry_unit_id = unit_id
         task.status = TaskStatus.queued
         task.phase = ReviewPhase.prepare
         task.error = None
         task.warnings.append("task runtime retry only requeued explicit pending/blocked gaps")
         self._touch(task)
-        self._persist(task)
         if self._repository and self._task_queue:
-            self._task_queue.enqueue(task_id=task.id,
-                idempotency_key=f"review:{task.id}:task-runtime-retry:{unit_id}:{task.updated_at.timestamp()}")
+            await asyncio.to_thread(self._repository.save_task, task,
+                retry_updated_at=previous_updated_at,
+                consume_preview_id=resume_preview_id,
+                enqueue_key=f"review:{task.id}:task-runtime-retry:{unit_id}:{previous_updated_at.timestamp()}")
             self._ensure_worker_started()
         else:
+            await asyncio.to_thread(self._persist, task)
             self._run_tasks[task.id] = asyncio.create_task(self._run_graph(task.id))
         return TaskRuntimeRetryResult(unit_id=unit_id, requeued_work_item_ids=requeued,
                                       task_runtime_report=report)

@@ -182,7 +182,8 @@ class ReviewRepository:
                                                 payload=value, updated_at=utcnow()))
 
     def save_task(self, task: ReviewTask, *, checkpoint_id: str | None = None,
-                  lease: dict | None = None) -> None:
+                  lease: dict | None = None, retry_updated_at=None, enqueue_key=None,
+                  consume_preview_id=None) -> None:
         now = utcnow()
         with self._session_factory.begin() as session:
             live = lock_live_review(session, task.id)
@@ -190,7 +191,24 @@ class ReviewRepository:
             if row is None:
                 raise KeyError(task.id)
             if not live:
+                if enqueue_key:
+                    raise ValueError("review_resume_stale")
                 return
+            if retry_updated_at is not None and (
+                    row.status not in {"completed", "completed_with_warnings", "failed"}
+                    or row.updated_at.replace(tzinfo=timezone.utc) != retry_updated_at.replace(tzinfo=timezone.utc)):
+                raise ValueError("review_resume_stale")
+            if enqueue_key and session.scalar(select(WorkerJobOrm.id).where(
+                    WorkerJobOrm.task_id == task.id, WorkerJobOrm.status == "leased",
+                    WorkerJobOrm.lease_until > now).limit(1)):
+                raise ValueError("review_job_active")
+            if consume_preview_id:
+                claimed = session.execute(update(ReviewPreviewOrm).where(
+                    ReviewPreviewOrm.id == consume_preview_id,
+                    ReviewPreviewOrm.consumed_task_id.is_(None),
+                    ReviewPreviewOrm.expires_at > now).values(consumed_task_id=task.id))
+                if claimed.rowcount != 1:
+                    raise ValueError("review_plan_stale_or_consumed")
             if lease:
                 job = session.get(WorkerJobOrm, lease["job_id"])
                 if (job is None or job.task_id != task.id or job.status != "leased"
@@ -236,6 +254,10 @@ class ReviewRepository:
             self._sync_issues(session, row, task)
             self._sync_patches(session, row, task)
             self._sync_validations(session, row, task)
+            if enqueue_key:
+                from app.services.task_queue import DatabaseTaskQueue
+                DatabaseTaskQueue(self._session_factory).enqueue(task_id=task.id,
+                    idempotency_key=enqueue_key, session=session)
 
     def get_task(self, task_id: str) -> ReviewTask | None:
         with self._session_factory() as session:
@@ -327,6 +349,16 @@ class ReviewRepository:
             if row is None:
                 return None
             return ReviewTask.model_validate(self._load_task_snapshot(row))
+
+    def recent_tasks_for_snapshot(self, pr_url: str, head_sha: str) -> list[ReviewTask]:
+        with self._session_factory() as session:
+            rows = session.scalars(select(ReviewTaskOrm).where(
+                ReviewTaskOrm.pr_url == pr_url, ReviewTaskOrm.head_sha == head_sha,
+                ReviewTaskOrm.deleted_at.is_(None), ReviewTaskOrm.status.in_([
+                    TaskStatus.completed.value, TaskStatus.completed_with_warnings.value,
+                    TaskStatus.failed.value, TaskStatus.cancelled.value]))
+                .order_by(ReviewTaskOrm.created_at.desc(), ReviewTaskOrm.id.desc()).limit(20))
+            return [ReviewTask.model_validate(self._load_task_snapshot(row)) for row in rows]
 
     def list_tasks(
         self, *, status: str | None = None, page: int = 1, page_size: int = 20,

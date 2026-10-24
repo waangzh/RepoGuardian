@@ -47,3 +47,26 @@
 - 首轮测试暴露解析器升级遗漏请求 schema 字面量，已同步修正并通过上述回归；未放宽生产拒绝条件。
 
 既有 pytest 缓存目录权限警告与 Vite 大 bundle 提示仍保留。未运行全量后端测试、真实模型审查或真实浏览器交互。本轮验证完成，已获用户授权进行本地提交；未推送或发布，未修改业务数据库和历史结论。
+
+## 系统性稳定化实施
+
+- [x] v2 精确主检查覆盖反馈、纠错分量隔离与调查未决交付。
+- [x] 完整同输入发现复用、默认来源选择与全新审查选项。
+- [x] 缺口恢复资格与界面入口，保留原期限、预算和未知状态。
+- [x] 冻结轮次、确定性应用与派生、收尾调用/Token 保护及账本恢复。
+- [x] 辅助一跳变量和多语言上下文预装载，不放宽必引实现。
+- [x] 失败、取消、预算、重放、同输入正负结果、前端状态与公开契约回归。
+- [x] Ruff、前端测试/构建、最终 diff 与规范同步；验证结束后用户授权本地提交，不推送。
+
+### 系统性稳定化实际验证
+
+- 最终后端组合组：`test_review_systemic_stability`、`test_review_continuation`、`test_review_citation_recovery`、`test_review_stability`、`test_task_runtime_p2/p3/p4`、`test_incremental_review`、`test_preview_confirmation`、`test_api_contract`，225 项通过。
+- 传输失败顺序修正后的预算与边界组：系统性稳定化、续查、运行预算、Provider 预算、预算持久化与取消，61 项通过；与最终组合组存在重叠，不累加。
+- 延迟反转同时覆盖正常响应与一次传输失败后的重试，比较最终队列、候选状态、收敛模式、调用与实际 Tokens；保护恢复、未知消费和取消均有回归。生产复用覆盖初始与派生锚点的 confirmed finding，验证问题及核验/发布依据没有丢失。
+- 续查覆盖凭据一次消费、重复请求、Head/PR 背景变化、入队失败事务回滚、原预算不重置、期限/调用/费用/未知请求拒绝，以及最新取消记录不被旧完整结果掩盖。
+- 前端 `npm test`：188 项通过；最后交互入口和错误提示调整后，`node --test --test-concurrency=1 tests/review-stability-ui.test.mjs tests/review-plan-ui.test.mjs tests/preview-jobs.test.mjs tests/review-restart.test.mjs tests/github-errors.test.mjs`：15 项通过；最终 `npm run build` 通过。
+- 最终 `uv run ruff check .`、`git diff --check` 通过。Trellis 规范同步了 v2 的证据未决、冻结轮次、预算保护、同输入复用及续查契约。
+
+没有运行全量后端测试、真实模型、多次独立生成一致性评测或真实浏览器交互；前端验证为请求、SSR、状态测试与类型构建。没有修改业务数据库、历史结论或目标仓库，没有推送或发布评论。既有 pytest 缓存目录权限警告、前端并行测试 WebSocket 端口提示和 Vite 大 bundle 提示保留，测试与构建退出成功。
+
+验证完成，已获用户授权进行本地提交。静态一跳和多语言源码准备仍为有界辅助提示，不代表编译器绑定或完整数据流分析；收尾保护按当时请求估算，不保证实际请求增长后仍可准入。

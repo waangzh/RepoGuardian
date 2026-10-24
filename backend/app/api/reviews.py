@@ -233,6 +233,28 @@ async def retry_review_unit(task_id: str, unit_id: str) -> ReviewUnitResult | Ta
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
 
 
+@router.post("/{task_id}/resume", response_model=TaskRuntimeRetryResult)
+async def resume_review(task_id: str, request: ReviewCreateRequest) -> TaskRuntimeRetryResult:
+    try:
+        return await get_review_service().resume_review(task_id, request)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Review not found") from None
+    except GitHubToolError as exc:
+        raise HTTPException(status_code=exc.api_status, detail=exc.public_detail()) from None
+    except ValueError as exc:
+        if str(exc).startswith("review_resume_unavailable:"):
+            reason = str(exc).partition(":")[2]
+            message = {"deadline": "原审查期限已到，请更新方案并发起全新审查。",
+                "budget_exhausted": "原调用、Token 或费用额度已用尽，请发起全新审查。",
+                "unknown_attempts": "原审查存在待对账的请求，当前不能继续。",
+                "cancelled": "原审查已取消，请发起全新审查。",
+                "checkpoint_missing": "原审查恢复记录不完整，当前不能继续。",
+                "no_retryable_gap": "原记录没有可继续执行的证据缺口。"}.get(reason, "原审查暂不满足续查条件。")
+            raise HTTPException(status_code=409, detail={"code": "review_resume_unavailable",
+                "reason": reason, "message": message}) from None
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+
+
 @router.get("/{task_id}/units/{unit_id}", response_model=ReviewUnitDetail)
 async def get_review_unit(task_id: str, unit_id: str) -> ReviewUnitDetail:
     detail = get_review_service().get_unit_detail(task_id, unit_id)

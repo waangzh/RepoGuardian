@@ -172,6 +172,13 @@ export interface ReviewUnit {
 }
 
 export interface ReviewPreviewResponse {
+  force_full_review?: boolean;
+  existing_review_id?: string | null;
+  continuation?: {
+    review_id: string; can_resume: boolean; unit_ids: string[]; reason: string;
+    calls_consumed?: number; tokens_consumed?: number; max_calls?: number; max_tokens?: number;
+    remaining_seconds?: number;
+  } | null;
   preview_id?: string | null;
   plan_hash?: string | null;
   snapshot?: PlanSnapshot | null;

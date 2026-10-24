@@ -169,7 +169,8 @@ def test_same_snapshot_reuse_rejects_uncertain_or_changed_inputs(change):
     assert not incremental.plan_incremental(**values, allow_same_snapshot=True).applicable
 
 
-async def test_same_snapshot_runtime_reuses_coverage_without_new_model_calls(production_input, persistence):
+@pytest.mark.parametrize("with_finding", [False, "initial", "derived"])
+async def test_same_snapshot_runtime_reuses_coverage_without_new_model_calls(production_input, persistence, with_finding):
     from copy import deepcopy
     from app.graph.nodes.task_review_runtime import task_review_runtime_node
     from app.models.review import ReviewUnit as Unit
@@ -182,7 +183,8 @@ async def test_same_snapshot_runtime_reuses_coverage_without_new_model_calls(pro
     state["pr_info"] = deepcopy(PR_INFO)
     state["pr_info"]["base"]["sha"] = state["base_sha"]
     state["pr_info"]["head"]["sha"] = state["head_sha"]
-    state["task_runtime_configuration"]["stability_contract"] = "review-stability-v1"
+    state["task_runtime_configuration"]["stability_contract"] = (
+        "review-stability-v2" if with_finding else "review-stability-v1")
     state.update(_provider=provider, _coordination_repository=repository)
     repository.create_task(ReviewTask(id=state["task_id"], pr_url=state["pr_url"],
         engine="task_review_v1", task_runtime_configuration=state["task_runtime_configuration"]))
@@ -194,6 +196,26 @@ async def test_same_snapshot_runtime_reuses_coverage_without_new_model_calls(pro
         task_runtime_configuration=state["task_runtime_configuration"],
         task_runtime_report=first["task_runtime_report"],
         run_manifest=build_review_manifest({**state, **first}, datetime.now(timezone.utc)))
+    if with_finding:
+        from types import SimpleNamespace
+        from app.models.review_runtime import Candidate, VerificationResult
+        from app.services.review_publication import publication_view, verification_subject_hash, publication_issue
+        from test_publication_planner import publishable_task
+        record = deepcopy(publishable_task().task_runtime_report["findings"][0])
+        record["candidate"]["primary_anchor"] = ("derived-source" if with_finding == "derived" else
+            previous.task_runtime_report["initial_scope_coverage"][0]["goal_id"])
+        candidate = Candidate.model_validate(record["candidate"])
+        spec = SimpleNamespace(snapshot_head_sha=state["head_sha"], snapshot_base_sha=state["base_sha"])
+        record["verification"].update(snapshot_head_sha=state["head_sha"],
+            subject_hash=verification_subject_hash(candidate, spec))
+        record["publication"] = publication_view(candidate, VerificationResult.model_validate(record["verification"]),
+            spec, usage_known=True)
+        issue = record["issue"]
+        issue["review_unit_id"] = previous.review_units[0].id
+        issue["primary_evidence"].update(file_path="a.py", existing_code="return 2", resolved_start_line=2, resolved_end_line=2)
+        issue["resolved_location"].update(file_path="a.py", start_line=2, end_line=2)
+        previous.task_runtime_report["findings"] = [record]
+        assert publication_issue(previous, record)[0] is not None
     repository.save_task(previous)
     configuration = deepcopy(state["task_runtime_configuration"])
     decision = incremental.plan_incremental(
@@ -213,6 +235,13 @@ async def test_same_snapshot_runtime_reuses_coverage_without_new_model_calls(pro
     assert output["task_runtime_report"]["scope_complete"]
     assert all(goal["reused_from_task_id"] == previous.id
                for goal in output["task_runtime_report"]["initial_scope_coverage"])
+    if with_finding:
+        findings = output["task_runtime_report"]["findings"]
+        assert len(findings) == 1 and findings[0]["status"] == "confirmed"
+        assert findings[0]["origin_review_id"] == previous.id
+        assert findings[0]["publication"] == previous.task_runtime_report["findings"][0]["publication"]
+        current_task = previous.model_copy(update={"id": current["task_id"], "task_runtime_report": output["task_runtime_report"]})
+        assert publication_issue(current_task, findings[0])[0] is not None
     invalid = deepcopy(configuration)
     invalid["deadline_seconds"] += 1
     rejected = {**state, "task_id": "c" * 32, "task_runtime_configuration": invalid}

@@ -103,7 +103,7 @@ class ReviewRunSpec(BaseModel):
     discussion_context: list[dict] | None = None
     discussion_profile: dict | None = None
     discussion_recheck: bool | None = None
-    stability_contract: Literal["review-stability-v1"] | None = None
+    stability_contract: Literal["review-stability-v1", "review-stability-v2"] | None = None
 
     @model_serializer(mode="wrap")
     def serialize_strategy(self, handler):

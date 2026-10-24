@@ -124,6 +124,34 @@ class InspectTaskStep:
         self.stability = {"prepared": False, "source_requests": [], "attempted_reads": [],
                           "recovery_rounds": 0, "finalizing": False}
 
+    async def protect_closing(self):
+        executor = self.executor
+        if (executor.spec.stability_contract != "review-stability-v2"
+                or executor.work_item.kind.value != "inspect" or executor.work_item.generation
+                or self.stability.get("closing_protection") or not executor.current_goals()):
+            return
+        existing = next((item for item in self.budget.obligations.values()
+            if item.owner_task_id == executor.work_item.work_item_id
+            and item.reason == "initial_inspect_closing"), None)
+        if existing:
+            self.stability["closing_protection"] = existing.obligation_id
+            return
+        from app.services.model_request_budgeter import ModelRequestProfile
+        from app.services.review_run_budget import RunBudgetError
+        request = self.protocol.prepare(executor.work_item, executor.current_goals(),
+            active_evidence_ids=executor.active_evidence_ids, evidence_catalog=executor.evidence_catalog)
+        profile = self.provider.resolve_request_profile(executor.spec.model_name).profile
+        amount = request.estimate(ModelRequestProfile.model_validate(profile))["reserved_tokens"]
+        try:
+            protected = await self.budget.create_obligation(owner_task_id=executor.work_item.work_item_id,
+                reason="initial_inspect_closing", token_budget=amount, call_budget=1)
+        except RunBudgetError as exc:
+            if str(exc) != "run_budget_obligation_rejected":
+                raise
+            self.stability["closing_protection"] = "budget_unavailable"
+        else:
+            self.stability["closing_protection"] = protected.obligation_id
+
     def _prepare_source_read(self):
         from app.models.review_runtime import RuntimeReadArguments
         from app.services.review_stability import covered, inspection_requests, request_key
@@ -135,13 +163,19 @@ class InspectTaskStep:
                     executor, self.symbol_index, self.repository_graph, self.scope.max_lines_per_read)
         requests = (executor.work_item.evidence_requests if executor.work_item.kind.value == "investigate"
                     else [RuntimeReadArguments.model_validate(raw) for raw in self.stability["source_requests"]])
+        if executor.spec.stability_contract == "review-stability-v2":
+            requests = [*requests, *(RuntimeReadArguments.model_validate(raw)
+                for raw in self.stability.get("auxiliary_requests", []))]
         for request in requests:
             key = list(request_key(request))
             if key in self.stability["attempted_reads"] or covered(executor, request):
                 continue
             self.stability["attempted_reads"].append(key)
             self.pending_read = RuntimeReadResponse(
-                tool="file_read", arguments=request, purpose="准备当前判断必需的固定快照源码")
+                tool="file_read", arguments=request, purpose=(
+                    "准备固定快照源码上下文；语法关联仅供参考，不证明绑定"
+                    if executor.spec.stability_contract == "review-stability-v2"
+                    else "准备当前判断必需的固定快照源码"))
             return
 
     def _recover_investigation(self):
@@ -239,7 +273,10 @@ class InspectTaskStep:
                 if executor.spec.prompt_version in {"task-review-prompt-v5", "task-review-prompt-v6", "task-review-prompt-v7", "task-review-prompt-v8"}:
                     feedback.update(rejected_items=self.rejected_items,
                         accepted_target_ids=sorted(executor.projection.accepted_target_ids))
-                if any(error["reason"] == "incomplete_goal_evidence" for error in self.repair_errors):
+                coverage_errors = {"incomplete_goal_evidence"}
+                if executor.spec.stability_contract == "review-stability-v2":
+                    coverage_errors.add("intent_evidence_scope_mismatch")
+                if any(error["reason"] in coverage_errors for error in self.repair_errors):
                     feedback["examination_evidence_requirements"] = [{
                         "target_id": goal.goal_id, "file_path": goal.target_ref,
                         "start_line": goal.start_line, "end_line": goal.end_line,
@@ -250,6 +287,13 @@ class InspectTaskStep:
                                 and executor.evidence_catalog[identity].get("side", "head")
                                 == executor.goal_side(goal))]
                     } for goal in current_goals]
+                    if executor.spec.stability_contract == "review-stability-v2":
+                        submissions = {value["item"].get("target_id"): value["item"]
+                            for value in self.rejected_items if value["item_type"] == "examinations"
+                            and isinstance(value.get("item"), dict)}
+                        feedback["goal_coverage_correction"] = [executor.goal_citation_gaps(
+                            goal, submissions[goal.goal_id].get("evidence_ids", []))
+                            for goal in current_goals if goal.goal_id in submissions]
                 if executor.spec.stability_contract and any(
                         error["reason"] == "incomplete_investigation_evidence" for error in self.repair_errors):
                     rejected = next((value["item"] for value in self.rejected_items
@@ -313,6 +357,9 @@ class InspectTaskStep:
                 executor.attempt_id = attempt.attempt_id
                 if self.checkpoint is not None:
                     await self.checkpoint.bind_attempt(self, attempt, admission)
+                barrier = getattr(self, "round_barrier", None)
+                if barrier:
+                    barrier.admit(executor.work_item.work_item_id)
 
             async def guard(attempt):
                 if self.checkpoint is not None:
@@ -350,6 +397,9 @@ class InspectTaskStep:
             # Provider has settled usage before JSON parse, including malformed responses.
             self.last_response = result.value
             self.usages.append(result.usage)
+            barrier = getattr(self, "round_barrier", None)
+            if barrier:
+                await barrier.application_turn(executor.work_item.work_item_id)
             self.repair_errors = []
             observation = self.apply_response(result.value)
             if self.checkpoint is not None:
@@ -378,7 +428,10 @@ class InspectTaskStep:
                     "pending_goals": sorted(executor.projection.pending_target_ids),
                     "correction_pending": False, "page_advanced": False}
                 return self.last_observation
-        parsed = executor.parse_and_apply(raw)
+        retry_fields = (set(self.stability["correction_fields"])
+            if executor.spec.stability_contract == "review-stability-v2"
+            and "correction_fields" in self.stability else None)
+        parsed = executor.parse_and_apply(raw, retry_fields=retry_fields)
         if executor.spec.stability_contract:
             self._recover_investigation()
         if isinstance(parsed.response, (RuntimeReadResponse, DiscussionRuntimeReadResponse)) and not parsed.errors:
@@ -410,12 +463,41 @@ class InspectTaskStep:
         if schema_errors and executor.work_item.format_corrections < 1:
             executor.work_item.format_corrections += 1
             self.repair_errors = schema_errors
+            if executor.spec.stability_contract == "review-stability-v2":
+                fields = {error["item_type"] for error in schema_errors}
+                if not fields & {"top_level", "submit"}:
+                    self.stability["correction_fields"] = sorted(fields)
+        guarded = False
+        if (executor.spec.stability_contract == "review-stability-v2"
+                and executor.work_item.kind.value == "investigate"
+                and not executor.spec.discussion_recheck and not self.repair_errors
+                and parsed.errors and all(error.reason == "incomplete_investigation_evidence"
+                                          for error in parsed.errors)
+                and executor.investigation_citation_readiness()["status"] == "ready"):
+            from app.models.review_runtime import InvestigationResult
+            executor.projection.invalidated_results.append({"kind": "investigation",
+                "reason": "citation_coverage_incomplete", "source": "server_guard",
+                "request_id": executor.request_id, "attempt_id": executor.attempt_id,
+                "result": parsed.response.investigation.model_dump(mode="json")})
+            executor.projection.investigation = InvestigationResult(
+                answer="insufficient_evidence", evidence_ids=[], reason="citation_coverage_incomplete",
+                limitations=["调查引用未覆盖全部必要源码；原判断未通过验收，仍需核实。"],
+                work_item_id=executor.work_item.work_item_id, proposition=executor.work_item.proposition,
+                request_id=executor.request_id, attempt_id=executor.attempt_id,
+                snapshot_head_sha=executor.spec.snapshot_head_sha)
+            executor.projection.pending_target_ids.clear()
+            guarded = True
+        if (executor.spec.stability_contract == "review-stability-v2" and not self.repair_errors
+                and parsed.response is not None and parsed.response.kind == "submit"):
+            self.stability.pop("correction_fields", None)
         self.rejected_items = self._rejected_items(raw, schema_errors) if self.repair_errors else []
         page_advanced = executor.advance_page() if not self.repair_errors else False
         self.last_observation = {"action": "model", "errors": [asdict(error) for error in parsed.errors],
                 "response_kind": parsed.response.kind if parsed.response is not None else None,
                 "pending_goals": sorted(executor.projection.pending_target_ids),
                 "correction_pending": bool(self.repair_errors), "page_advanced": page_advanced}
+        if guarded:
+            self.last_observation["guarded_unresolved"] = "citation_coverage_incomplete"
         return self.last_observation
 
     def _rejected_items(self, raw, errors) -> list[dict]:
@@ -490,6 +572,13 @@ class InspectTaskStep:
                 **{key: previous[key] for key in ("hunk_id", "canonical_change") if key in previous}}
         visible = {item["evidence_id"] for item in canonical}
         executor.active_evidence_ids.update(visible)
+        if executor.spec.stability_contract == "review-stability-v2":
+            from app.services.review_stability import auxiliary_requests, MAX_PREPARATORY_READS
+            auxiliary = self.stability.setdefault("auxiliary_requests", [])
+            for raw in auxiliary_requests(executor, self.repository_graph, args.file_path,
+                                          content, self.scope.max_lines_per_read):
+                if raw not in auxiliary and len(auxiliary) < MAX_PREPARATORY_READS:
+                    auxiliary.append(raw)
         return {"action": "tool", "status": "completed", "evidence_ids": sorted(visible)}
 
     async def _other_read(self, read):

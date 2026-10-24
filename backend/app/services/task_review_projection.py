@@ -140,6 +140,19 @@ def project_task_runtime(runtime, steps, goals, *, termination_reason, budget=No
                  else "running" if termination_reason == "running" else "completed")
     spec = next(iter(steps.values())).executor.spec if steps else None
     diagnostics = _rejection_diagnostics(runtime, steps, termination_reason)
+    work_items = []
+    for item in runtime.snapshot():
+        step = steps[item["work_item_id"]]
+        record = {**item, "last_observation": step.last_observation,
+                  "tool_observations": step.tool_observations}
+        if spec and spec.stability_contract == "review-stability-v2":
+            projection = step.executor.projection
+            record["retryable_gap"] = item["state"] not in {"unknown", "result_missing"} and bool(
+                projection.pending_target_ids or any(result.disposition.value == "blocked"
+                    for result in projection.examinations.values())
+                or (projection.investigation is not None
+                    and projection.investigation.answer.value == "insufficient_evidence"))
+        work_items.append(record)
     return TaskRuntimeReport(execution_status=execution, termination_reason=termination_reason,
         pr_intent_context=spec.pr_intent_context if spec else None,
         pr_intent_context_truncated=spec.pr_intent_context_truncated if spec else None,
@@ -155,9 +168,7 @@ def project_task_runtime(runtime, steps, goals, *, termination_reason, budget=No
         sent_calls=sum(attempt.sent for attempt in attempts), settled_tokens=budget.settled_actual if budget else 0,
         unknown_attempts=len(unknown), total_tokens=budget.settled_actual if budget and integrity == "complete" else None,
         diagnostics=diagnostics,
-        work_items=[{**item, "last_observation": steps[item["work_item_id"]].last_observation,
-                     "tool_observations": steps[item["work_item_id"]].tool_observations}
-                    for item in runtime.snapshot()])
+        work_items=work_items)
 
 
 _PROVIDER_FIELDS = {"category", "error_type", "attempts", "status_code", "cause_types"}
@@ -366,5 +377,5 @@ def task_runtime_issues(report):
             continue  # 无完整 Issue 的候选仍保留在新报告 findings 中。
         issue = ReviewIssue.model_validate(record["issue"])
         output.append(issue.model_copy(update={"status": IssueStatus(record["status"]),
-            "unresolved_reason": record.get("reason"), "source_issue_ids": record["source_candidate_ids"]}).model_dump(mode="json"))
+            "unresolved_reason": record.get("reason"), "source_issue_ids": record.get("source_candidate_ids", [])}).model_dump(mode="json"))
     return output
