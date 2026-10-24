@@ -27,7 +27,7 @@ def build_repository_graph(
     call_resolution_version: str = "import-evidence-v3",
 ) -> dict[str, Any]:
     """Build a serializable graph without granting any additional file access."""
-    if call_resolution_version not in {"import-evidence-v3", "import-evidence-v4", "import-evidence-v5"}:
+    if call_resolution_version not in {"import-evidence-v3", "import-evidence-v4", "import-evidence-v5", "import-evidence-v6"}:
         raise ValueError("unsupported call resolution version")
     files = {str(item["path"]): item for item in file_index if item.get("path")}
     symbols = [item for item in symbol_index if item.get("file") in files]
@@ -67,10 +67,10 @@ def build_repository_graph(
         for call_ref in call_refs:
             call = str(call_ref.get("callee", ""))
             simple = str(call_ref.get("simple_name") or call.rsplit(".", 1)[-1])
-            if call_resolution_version in {"import-evidence-v4", "import-evidence-v5"} and caller_language == "python":
+            if call_resolution_version in {"import-evidence-v4", "import-evidence-v5", "import-evidence-v6"} and caller_language == "python":
                 if call_ref.get("scope_start_line") != caller.get("start_line"):
                     continue  # 嵌套函数的调用不能归属外层定义。
-                modern = call_resolution_version == "import-evidence-v5"
+                modern = call_resolution_version in {"import-evidence-v5", "import-evidence-v6"}
                 target, bound, reason = _python_call_target(call_ref, caller, files, symbols, lookup,
                                                            submodules=modern)
                 if target is not None:
@@ -90,7 +90,9 @@ def build_repository_graph(
                         relationship_level=("symbol" if (target is not None if modern else call_ref.get("import_binding")
                             and reason != "import_module_external_or_missing") else "search_hint"),
                         call_expression=call, call_sites=[{"line": call_ref.get("line"),
-                            "expression": call, "import_binding": call_ref.get("import_binding")}]))
+                            "expression": call, "import_binding": call_ref.get("import_binding"),
+                            **({"call_range": call_ref.get("call_range")}
+                               if call_resolution_version == "import-evidence-v6" else {})}]))
                 continue
             candidates = {
                 _symbol_id(item): item
@@ -503,7 +505,8 @@ def _dedupe_edges(edges: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if key in best and "call_sites" in edge:
             previous = best[key]
             previous["call_sites"].extend(site for site in edge["call_sites"] if site not in previous["call_sites"])
-            previous["call_sites"].sort(key=lambda site: (site.get("line") or 0, site["expression"]))
+            previous["call_sites"].sort(key=lambda site: (
+                site.get("line") or 0, site["expression"], site.get("call_range") or ()))
             if edge.get("resolution_status") != "resolved":
                 previous.update(resolution_status="unresolved", resolution_basis=edge["resolution_basis"])
             continue

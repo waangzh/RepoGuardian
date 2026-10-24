@@ -42,6 +42,8 @@ class CallRef(BaseModel):
     import_binding: ImportRef | None = None
     binding_reason: str | None = None
     scope_start_line: int | None = None
+    # One-based lines, zero-based UTF-8 byte columns; the end is exclusive.
+    call_range: tuple[int, int, int, int] | None = None
 
 
 class SymbolRef(BaseModel):

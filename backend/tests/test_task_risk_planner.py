@@ -137,8 +137,8 @@ async def test_unknown_planner_version_rejected_before_any_dispatch(production_i
 
 
 def test_new_task_configuration_freezes_v5_and_call_resolution():
-    assert task_runtime_configuration()["risk_planner_version"] == "risk-planner-v7"
-    assert task_runtime_configuration()["call_resolution_version"] == "import-evidence-v5"
+    assert task_runtime_configuration()["risk_planner_version"] == "risk-planner-v8"
+    assert task_runtime_configuration()["call_resolution_version"] == "import-evidence-v6"
 
 
 @pytest.mark.parametrize("changed_side", ["caller", "callee", "both"])
@@ -187,7 +187,8 @@ def test_v3_unchanged_endpoint_cannot_expand_frozen_permissions(tmp_path, target
     assert report.unscheduled_leads[0]["reason"] == "no_legal_evidence_path"
 
 
-@pytest.mark.parametrize("version", ["risk-planner-v3", "risk-planner-v5", "risk-planner-v6"])
+@pytest.mark.parametrize("version", ["risk-planner-v3", "risk-planner-v5", "risk-planner-v6",
+                                     "risk-planner-v7", "risk-planner-v8"])
 async def test_production_v3_reads_unchanged_caller_and_preserves_coverage_on_restore(production_input, persistence, version):
     state, provider, _ = production_input
     root = Path(state["repo_path"])
@@ -212,9 +213,10 @@ async def test_production_v3_reads_unchanged_caller_and_preserves_coverage_on_re
         {"id": "b.py::other", "file": "b.py", "start_line": 1, "end_line": 2}],
         "edges": [{"type": "calls", "source": "a.py::answer", "target": "b.py::other"}]}
     state["task_runtime_configuration"].update(risk_planner_version=version, prompt_version="task-review-prompt-v5")
-    if version in {"risk-planner-v5", "risk-planner-v6"}:
+    if version in {"risk-planner-v5", "risk-planner-v6", "risk-planner-v7", "risk-planner-v8"}:
         from app.tools.repo_indexer import RepoIndexer
-        resolution = "import-evidence-v5" if version == "risk-planner-v6" else "import-evidence-v4"
+        resolution = {"risk-planner-v5": "import-evidence-v4", "risk-planner-v6": "import-evidence-v5",
+                      "risk-planner-v7": "import-evidence-v5", "risk-planner-v8": "import-evidence-v6"}[version]
         indexed = await RepoIndexer().execute(repo_path=str(root), call_resolution_version=resolution)
         state["repository_graph"] = indexed["repository_graph"]
         state["task_runtime_configuration"]["call_resolution_version"] = resolution
@@ -250,7 +252,7 @@ async def test_production_v3_reads_unchanged_caller_and_preserves_coverage_on_re
     restored = (await task_review_runtime_node(state))["task_runtime_report"]
     assert len(calls) == 2 and restored["settled_tokens"] == 30
     assert restored["initial_scope_coverage"] == report["initial_scope_coverage"]
-    if version in {"risk-planner-v5", "risk-planner-v6"}:
+    if version in {"risk-planner-v5", "risk-planner-v6", "risk-planner-v7", "risk-planner-v8"}:
         relations = report["admitted_investigations"][0]["relationship_leads"]
         assert relations[0]["relationship"]["source"] == "a.py::answer"
         assert relations[0]["relationship"]["target"] == "b.py::other"
