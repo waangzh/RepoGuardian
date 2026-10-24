@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from app.languages.registry import default_language_registry
-from app.languages.base import FileAnalysis
+from app.languages.base import AnalysisLevel, FileAnalysis
 from app.languages.isolation import ParserCancelled
 from app.tools.base import BaseTool
 from app.review.tool_scope import ReviewPathPolicyError, validate_repository_file
@@ -64,15 +64,15 @@ class RepoIndexer(BaseTool):
 
     def __init__(self):
         self._cancel_event = threading.Event()
-        self._analyses: dict[tuple, FileAnalysis] | None = None
+        self._symbol_index: list[dict[str, Any]] | None = None
 
     async def execute(self, **kwargs: Any) -> dict[str, Any]:
         self._cancel_event = kwargs.get("cancel_event") or threading.Event()
-        self._analyses = {}
+        self._symbol_index = []
         try:
             return await self._execute(**kwargs)
         finally:
-            self._analyses = None
+            self._symbol_index = None
 
     async def _execute(self, **kwargs: Any) -> dict[str, Any]:
         """执行完整扫描，返回三层索引。"""
@@ -110,20 +110,8 @@ class RepoIndexer(BaseTool):
     def _analyze(self, file_path: Path, relative_path: str) -> FileAnalysis:
         if self._cancel_event.is_set():
             raise ParserCancelled()
-        try:
-            stat = file_path.stat()
-        except OSError:
-            return default_language_registry.analyze(
-                file_path, relative_path, cancel_event=self._cancel_event)
-        key = (file_path, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
-        cache = self._analyses
-        if cache is not None and key in cache:
-            return cache[key]
-        analysis = default_language_registry.analyze(
+        return default_language_registry.analyze(
             file_path, relative_path, cancel_event=self._cancel_event)
-        if cache is not None and len(cache) < 512:
-            cache[key] = analysis
-        return analysis
 
     def _build_file_index_sync(self, repo_path: str) -> list[dict[str, Any]]:
         """遍历仓库目录，构建文件级索引（路径、语言、大小、导入）。"""
@@ -139,6 +127,8 @@ class RepoIndexer(BaseTool):
                 continue
             dirnames[:] = sorted(d for d in dirnames if d not in _IGNORED_DIRS)
             for filename in sorted(filenames):
+                if self._cancel_event.is_set():
+                    raise ParserCancelled()
                 if filename in _IGNORED_FILES:
                     continue
                 file_path_obj = Path(dirpath) / filename
@@ -154,7 +144,14 @@ class RepoIndexer(BaseTool):
                     size = stat.st_size
                 except OSError:
                     size = 0
-                analysis = self._analyze(file_path_obj, rel_path)
+                analysis = (
+                    self._analyze(file_path_obj, rel_path)
+                    if _detect_language(filename) != "unknown"
+                    else FileAnalysis(language_id="unknown", level=AnalysisLevel.text,
+                                      parser_id="text.v1")
+                )
+                if self._symbol_index is not None:
+                    self._symbol_index.extend(symbol.to_index_entry() for symbol in analysis.symbols)
                 language = analysis.language_id
                 index.append({
                     "path": rel_path,
@@ -170,6 +167,8 @@ class RepoIndexer(BaseTool):
         return sorted(index, key=lambda f: f["path"])
 
     async def build_symbol_index(self, repo_path: str) -> list[dict[str, Any]]:
+        if self._symbol_index is not None:
+            return self._symbol_index
         try:
             return await asyncio.to_thread(self._build_symbol_index_sync, repo_path)
         except asyncio.CancelledError:

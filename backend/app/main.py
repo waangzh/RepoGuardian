@@ -13,6 +13,7 @@ from app.api.incremental import router as incremental_router
 from app.api.project_ci import router as project_ci_router
 from app.api.system import router as system_router
 from app.graph.checkpointer import close_checkpointer
+from app.languages.isolation import close_parser_workers
 from app.services.maintenance_service import MaintenanceService
 from app.validation.project_ci import get_project_ci_service
 
@@ -56,6 +57,7 @@ async def lifespan(_app: FastAPI):
             service._worker.stop()
         if service._worker_task:
             await service._worker_task
+        await asyncio.to_thread(close_parser_workers)
         await close_checkpointer()
 
 # ---------------------------------------------------------------------------
