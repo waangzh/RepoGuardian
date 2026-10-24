@@ -14,6 +14,7 @@ from app.graph.checkpointer import (
     list_checkpoint_thread_ids,
 )
 from app.services.review_repository import ReviewRepository
+from app.services.prepared_workspaces import PreparedWorkspaces
 from app.tools.workspace_cleanup import reap_orphaned_workspaces
 
 logger = logging.getLogger("RepoGuardian.Maintenance")
@@ -67,6 +68,11 @@ class MaintenanceService:
 
         workspace_ttl = workspace_ttl_seconds()
         try:
+            prepared_removed = await asyncio.to_thread(PreparedWorkspaces(self._repository).maintain)
+        except Exception:
+            prepared_removed = 0
+            logger.warning("准备工作区回收失败", exc_info=True)
+        try:
             async with workspace_cleanup_lock:
                 workspace_result = await asyncio.to_thread(
                     reap_orphaned_workspaces,
@@ -96,16 +102,18 @@ class MaintenanceService:
                 removed_workspaces,
                 failed_workspaces,
                 compacted,
+                prepared_removed,
             )
         ):
             logger.info(
                 "维护完成: checkpoint_threads=%d "
-                "tasks_expired=%d workspaces_removed=%d workspaces_failed=%d compacted=%s",
+                "tasks_expired=%d workspaces_removed=%d workspaces_failed=%d compacted=%s prepared_removed=%d",
                 checkpoint_gc_attempts,
                 expired_tasks,
                 removed_workspaces,
                 failed_workspaces,
                 compacted,
+                prepared_removed,
             )
 
     async def run_forever(self) -> None:

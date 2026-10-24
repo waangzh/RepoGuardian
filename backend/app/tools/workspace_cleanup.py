@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 logger = logging.getLogger("RepoGuardian.WorkspaceCleanup")
+PREPARED_WORKSPACE_PREFIX = ".prepared-"
 
 
 @dataclass(frozen=True)
@@ -166,6 +167,10 @@ def _classify_workspaces(
         if not child.is_dir() or child.is_symlink():
             continue
         scanned += 1
+        # Prepared repositories have their own durable registry, TTL and cross-process guard.
+        if child.name.startswith(PREPARED_WORKSPACE_PREFIX):
+            skipped_active += 1
+            continue
         resolved = child.resolve()
         if resolved in active:
             skipped_active += 1
