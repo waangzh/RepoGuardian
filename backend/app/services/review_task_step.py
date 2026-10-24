@@ -250,6 +250,19 @@ class InspectTaskStep:
                                 and executor.evidence_catalog[identity].get("side", "head")
                                 == executor.goal_side(goal))]
                     } for goal in current_goals]
+                if executor.spec.stability_contract and any(
+                        error["reason"] == "incomplete_investigation_evidence" for error in self.repair_errors):
+                    rejected = next((value["item"] for value in self.rejected_items
+                                     if value["item_type"] == "investigation"), None)
+                    cited = rejected.get("evidence_ids", []) if isinstance(rejected, dict) else []
+                    feedback["investigation_citation_correction"] = {
+                        **executor.investigation_citation_gaps(cited),
+                        "instruction": "Your submitted citations do not cover the listed required source. "
+                            "Re-examine those visible chunks against this proposition before resubmitting. "
+                            "For supported/refuted, cite every required ID and cover each requested range. "
+                            "citation_ids is one complete valid set, not proof that the answer is correct. "
+                            "Do not merely append IDs without checking their source. If a material premise "
+                            "remains unverified, submit insufficient_evidence with the exact limitation."}
                 if executor.spec.intent_assessment_contract and any(
                         "intent" in error["reason"] or error["reason"] == "unknown_author_target"
                         for error in self.repair_errors):

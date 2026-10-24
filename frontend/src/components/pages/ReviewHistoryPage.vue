@@ -171,6 +171,8 @@ function executionLimit(task: ReviewTask) {
   if (summary.scope.incomplete) parts.push(`${summary.scope.incomplete} 项检查未完成`);
   if (summary.investigations.insufficient_evidence) parts.push(`${summary.investigations.insufficient_evidence} 项调查证据不足`);
   if (summary.investigations.not_executed) parts.push(`${summary.investigations.not_executed} 项调查未执行`);
+  if (summary.investigations.failed) parts.push(`${summary.investigations.failed} 项调查失败`);
+  if (summary.investigations.incomplete) parts.push(`${summary.investigations.incomplete} 项调查已开始但未完成`);
   if (summary.findings.unknown) parts.push(`${summary.findings.unknown} 项发现状态未知`);
   if (summary.usage.integrity !== "complete") parts.push("模型用量记录不完整");
   if (["budget_exhausted", "deadline", "no_progress"].includes(report.termination_reason)) parts.push(runtimeLabel(report.termination_reason));

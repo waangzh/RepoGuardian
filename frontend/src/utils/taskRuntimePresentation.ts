@@ -4,6 +4,7 @@ const statusLabels: Record<string, string> = {
   not_scheduled: "未调度", duplicate: "重复线索", hint: "取证提示",
   examined: "已检查", blocked: "证据阻塞", not_examined: "尚未检查", unsupported: "不支持检查",
   answered: "已有答案", insufficient_evidence: "证据不足", not_executed: "未执行",
+  incomplete: "已执行，尚未完成",
   confirmed: "代码证据已确认", dismissed: "已驳回", candidate: "待验证候选", unresolved: "未确认",
   supported: "支持命题", refuted: "反驳命题", complete: "完整", unknown: "未知", inconsistent: "不一致",
   plan_exhausted: "计划处理结束", budget_exhausted: "预算耗尽", deadline: "运行超时",
@@ -15,7 +16,7 @@ const statusLabels: Record<string, string> = {
 export interface TaskRuntimeSummary {
   execution: { status: string; termination_reason: string; scope_complete: boolean };
   findings: { total: number; active: number; unknown: number; confirmed: number; dismissed: number; unresolved: number; without_issue: number; publishable: number };
-  investigations: { total: number; answered: number; insufficient_evidence: number; not_executed: number };
+  investigations: { total: number; answered: number; insufficient_evidence: number; not_executed: number; failed: number; incomplete: number };
   scope: { total: number; examined: number; incomplete: number; blocked: number; unsupported: number; not_examined: number };
   usage: { integrity: string; unknown_attempts: number };
 }
@@ -43,6 +44,8 @@ export function taskRuntimeSummary(report: TaskRuntimeReport): TaskRuntimeSummar
       answered: investigations.filter(item => status(item) === "answered").length,
       insufficient_evidence: investigations.filter(item => status(item) === "insufficient_evidence").length,
       not_executed: investigations.filter(item => status(item) === "not_executed").length,
+      failed: investigations.filter(item => status(item) === "failed").length,
+      incomplete: investigations.filter(item => status(item) === "incomplete").length,
     },
     scope: {
       total: scopes.length,
@@ -120,7 +123,10 @@ export function runtimeWarnings(report: TaskRuntimeReport): string[] {
   const investigations = summary.investigations;
   if (investigations.insufficient_evidence) warnings.push(`${investigations.insufficient_evidence} 项调查证据不足，需要补充确认。`);
   if (investigations.not_executed) warnings.push(`${investigations.not_executed} 项调查尚未执行。`);
-  const unknownInvestigations = investigations.total - investigations.answered - investigations.insufficient_evidence - investigations.not_executed;
+  if (investigations.failed) warnings.push(`${investigations.failed} 项调查已执行，但未通过验收或执行失败。`);
+  if (investigations.incomplete) warnings.push(`${investigations.incomplete} 项调查已开始，尚未取得验收结果。`);
+  const unknownInvestigations = investigations.total - investigations.answered - investigations.insufficient_evidence
+    - investigations.not_executed - investigations.failed - investigations.incomplete;
   if (unknownInvestigations) warnings.push(`${unknownInvestigations} 项调查状态未知。`);
   if (summary.findings.unknown) warnings.push(`${summary.findings.unknown} 项发现状态未知，已保留原始记录。`);
   if (report.usage_integrity !== "complete") warnings.push(report.usage_integrity === "inconsistent"

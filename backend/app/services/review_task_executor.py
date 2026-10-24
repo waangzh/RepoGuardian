@@ -317,6 +317,29 @@ class ReviewTaskExecutor:
         error = self.evidence_error(sorted(selected))
         return {"status": error or "ready", "citation_ids": None if error else sorted(selected)}
 
+    def investigation_citation_gaps(self, cited_ids):
+        readiness = self.investigation_citation_readiness()
+        if readiness["status"] != "ready":
+            return readiness
+        cited = sorted(set(cited_ids) & self.active_evidence_ids)
+        if self.evidence_error(cited):
+            return {"status": "invalid_submitted_evidence", "citation_ids": None}
+        uncovered = []
+        for request in self.work_item.evidence_requests:
+            goal = self.goals[self.work_item.goal_ids[0]].model_copy(update={
+                "target_ref": request.file_path, "start_line": request.start_line,
+                "end_line": request.end_line, "target_kind": "source_range"})
+            if not self._covers(goal, cited):
+                uncovered.append({**request.model_dump(mode="json"), "visible_evidence_ids": [
+                    identity for identity in readiness["citation_ids"]
+                    if self.evidence_catalog[identity]["file_path"] == request.file_path
+                    and self.evidence_catalog[identity].get("side", "head") == "head"
+                    and self.evidence_catalog[identity]["start_line"] <= request.end_line
+                    and self.evidence_catalog[identity]["end_line"] >= request.start_line]})
+        return {**readiness,
+            "missing_required_evidence_ids": sorted(set(self.work_item.required_evidence_ids) - set(cited)),
+            "uncovered_source_ranges": uncovered}
+
     def _apply_investigation(self, item, errors):
         if item is None:
             return

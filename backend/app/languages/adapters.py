@@ -221,7 +221,7 @@ def _text(node: Any, source: bytes) -> str:
 
 
 def _call_refs(node: Any, source: bytes, parser_id: str, node_type: str) -> list[CallRef]:
-    calls: dict[tuple[str, int], CallRef] = {}
+    calls: dict[tuple, CallRef] = {}
     for child in _walk(node):
         if child.type != node_type:
             continue
@@ -232,14 +232,17 @@ def _call_refs(node: Any, source: bytes, parser_id: str, node_type: str) -> list
         if not callee:
             continue
         line = child.start_point[0] + 1
-        calls[(callee, line)] = CallRef(
+        key = (callee, line, child.start_point[1]) if node_type == "call" else (callee, line)
+        calls[key] = CallRef(
             callee=callee,
             simple_name=callee.rsplit(".", 1)[-1],
             line=line,
             confidence=0.92,
             parser_id=parser_id,
+            call_range=(line, child.start_point[1], child.end_point[0] + 1, child.end_point[1])
+                if node_type == "call" else None,
         )
-    return sorted(calls.values(), key=lambda item: (item.line or 0, item.callee))
+    return sorted(calls.values(), key=lambda item: (item.line or 0, item.callee, item.call_range or ()))
 
 
 _DOCSTRING_NODE_TYPES = {

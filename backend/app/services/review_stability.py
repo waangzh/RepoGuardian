@@ -59,16 +59,46 @@ def resolved_call(edge):
             and edge.get("relationship_level") != "search_hint")
 
 
-def companion_definitions(edge, graph, symbols):
+def companion_definitions(edge, graph, symbols, *, nested_only=False):
     """One-hop caller context includes outer(inner(...)) without guessing bindings."""
     selected = {}
-    for other in graph.get("edges", []):
-        if not resolved_call(other) or other.get("source") != edge.get("source"):
-            continue
+    calls = [other for other in graph.get("edges", [])
+             if resolved_call(other) and other.get("source") == edge.get("source")]
+    if nested_only:
+        calls = _nested_calls(edge, calls, symbols)
+    for other in calls:
         symbol = symbols.get(str(other.get("target")))
         if symbol is not None:
             selected[str(symbol.get("id"))] = symbol
     return [selected[key] for key in sorted(selected)]
+
+
+def _nested_calls(edge, calls, symbols):
+    """Follow expression containment per call site, not all sites of a matched callee."""
+    caller = symbols.get(str(edge.get("source")), {})
+    sites = []
+    for other in calls:
+        if not other.get("call_sites"):
+            return calls
+        for site in other["call_sites"]:
+            span = site.get("call_range")
+            if (not isinstance(span, (list, tuple)) or len(span) != 4
+                    or any(type(value) is not int for value in span)
+                    or not caller.get("start_line", 1) <= span[0] <= span[2] <= caller.get("end_line", 0)
+                    or min(span[1], span[3]) < 0 or tuple(span[:2]) >= tuple(span[2:])
+                    or site.get("line") != span[0]):
+                # Missing syntax metadata cannot prove that calls are independent.
+                return calls
+            sites.append((other, tuple(span)))
+    selected = {span for other, span in sites if other == edge}
+    while True:
+        expanded = selected | {span for _, span in sites if any(
+            (span[:2] <= known[:2] and known[2:] <= span[2:])
+            or (known[:2] <= span[:2] and span[2:] <= known[2:]) for known in selected)}
+        if expanded == selected:
+            break
+        selected = expanded
+    return [other for other, span in sites if span in selected]
 
 
 def request_key(request):

@@ -100,3 +100,19 @@ test("未知发现状态保留，历史通知不自动升级为新引擎", () =>
   assert.match(reviewCompletionMessage({ engine: "legacy_units", issues: [], task_runtime_report: report }), /未发现达到报告门槛/);
   assert.equal(runtimeLabel("completed"), "审查执行已结束");
 });
+
+test("已执行失败和已开始的调查不显示为未执行或未知", () => {
+  const report = mixedReport({ admitted_investigations: [
+    { status: "failed" }, { status: "incomplete" }, { status: "not_executed" }, { status: "future" },
+  ] });
+  assert.deepEqual(taskRuntimeSummary(report).investigations, {
+    total: 4, answered: 0, insufficient_evidence: 0, failed: 1, incomplete: 1, not_executed: 1,
+  });
+  const warnings = runtimeWarnings(report).join(" ");
+  assert.match(warnings, /1 项调查已执行，但未通过验收或执行失败/);
+  assert.match(warnings, /1 项调查已开始，尚未取得验收结果/);
+  assert.match(warnings, /1 项调查尚未执行/);
+  assert.match(warnings, /1 项调查状态未知/);
+  assert.equal(runtimeLabel("failed"), "执行失败");
+  assert.equal(runtimeLabel("incomplete"), "已执行，尚未完成");
+});

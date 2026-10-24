@@ -14,6 +14,7 @@ REASON_HINTS = {
     "invalid_json": "模型返回的 JSON 无法解析",
     "invalid_response_kind": "模型返回了不支持的响应类型",
     "incomplete_goal_evidence": "检查引用的证据未覆盖完整目标范围",
+    "incomplete_investigation_evidence": "调查提交的证据引用未覆盖全部必要范围",
     "response_schema_invalid": "模型返回结构未通过校验",
 }
 _REJECTION_REASON_CODES = set(REASON_HINTS) | {
@@ -108,7 +109,9 @@ def project_task_runtime(runtime, steps, goals, *, termination_reason, budget=No
             continue
         result = step.executor.projection.investigation
         investigations.append({"work_item_id": item.work_item_id, "unit_id": item.unit_id,
-            "proposition": item.proposition, "status": "not_executed" if result is None else
+            "proposition": item.proposition, "status": (
+                "failed" if item.state.value == "failed" else "incomplete" if item.started else "not_executed")
+                if result is None else
                 "insufficient_evidence" if result.answer.value == "insufficient_evidence" else "answered",
             "answer": result.answer.value if result else None,
             "reason": item.reason if not result else result.reason,
@@ -336,6 +339,8 @@ def task_runtime_summary(report: TaskRuntimeReport | dict) -> dict:
             "answered": investigation_statuses.count("answered"),
             "insufficient_evidence": investigation_statuses.count("insufficient_evidence"),
             "not_executed": investigation_statuses.count("not_executed"),
+            "failed": investigation_statuses.count("failed"),
+            "incomplete": investigation_statuses.count("incomplete"),
         },
         "scope": {
             "total": len(scope_statuses),

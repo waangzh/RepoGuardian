@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.languages.base import AnalysisLevel, FileAnalysis
 
 logger = logging.getLogger("RepoGuardian.Parser")
-PARSER_PROTOCOL = "isolated-parser-v1"
+PARSER_PROTOCOL = "isolated-parser-v2"
 MAX_SOURCE_BYTES = 4 * 1024 * 1024
 MAX_OUTPUT_BYTES = 16 * 1024 * 1024
 PARSER_TIMEOUT_SECONDS = 15.0
@@ -53,7 +53,7 @@ class ParserFailure(Exception):
 class ParserRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    protocol: Literal["isolated-parser-v1"]
+    protocol: Literal["isolated-parser-v2"]
     language_id: Literal["python", "javascript", "typescript", "go", "java", "rust"]
     relative_path: str = Field(min_length=1, max_length=1000)
     extension: str
