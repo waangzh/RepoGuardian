@@ -4,9 +4,11 @@ import threading
 from typing import Any
 
 from langgraph.config import get_stream_writer
+from langgraph.runtime import Runtime
 
 from app.graph.nodes._events import append_step
-from app.graph.state import ReviewState
+from app.graph.state import ReviewState, ReviewRunContext
+from app.services.prepared_workspaces import prepare_repository
 from app.tools.git_tool import GitProgressEvent, GitTool
 from app.tools.github_tool import GitHubTool
 from app.core.config import settings
@@ -14,10 +16,12 @@ from app.core.config import settings
 logger = logging.getLogger("RepoGuardian.Node")
 
 
-async def repo_prepare_node(state: ReviewState) -> ReviewState:
+async def repo_prepare_node(state: ReviewState, runtime: Runtime[ReviewRunContext] = None) -> ReviewState:
     """准备节点：从 GitHub 拉取 PR 元数据，克隆仓库并生成 unified diff。"""
     github: Any = state.get("_github_tool") or GitHubTool(settings.github_token)
-    git_tool: Any = state.get("_git_tool") or GitTool(
+    context = (runtime.context or {}) if runtime else {}
+    repository = context.get("coordination_repository") or state.get("_coordination_repository")
+    git_tool: Any = context.get("task_runtime_git") or state.get("_git_tool") or GitTool(
         settings.repoguardian_workdir, settings.repoguardian_git_bin
     )
     stream_writer = get_stream_writer()
@@ -47,8 +51,11 @@ async def repo_prepare_node(state: ReviewState) -> ReviewState:
     cancel_event = threading.Event()
     clone_task = asyncio.create_task(
         asyncio.to_thread(
-            git_tool.clone_and_diff,
+            prepare_repository,
             pr_info,
+            git_tool,
+            repository,
+            state.get("task_runtime_configuration") or {},
             progress_callback=report_progress,
             cancel_event=cancel_event,
         )

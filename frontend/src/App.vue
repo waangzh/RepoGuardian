@@ -226,6 +226,14 @@ async function loadPreview() {
   }
 }
 
+async function prepareFreshReview() {
+  if (!preview.value?.existing_review_id || previewing.value || submitting.value || createdTaskId.value || taskActive.value) return;
+  forceFullReview.value = true;
+  // Let the input watcher invalidate the previous confirmation before starting its replacement.
+  await nextTick();
+  await loadPreview();
+}
+
 function applyPreviewJob(value: PreviewJob) {
   if (value.status === 'completed' && value.result) {
     preview.value = value.result;
@@ -622,7 +630,7 @@ onBeforeUnmount(() => {
       <AppHeader :title="pageTitle" :status-text="statusText" :menu-open="mobileOpen" @menu="mobileOpen = !mobileOpen" />
       <main v-if="activePage === 'dashboard'" id="workspace-content" class="page">
         <ReviewWorkspace v-if="task" :key="task.id" :task="task" :report="report" :section="reviewSection" :status-text="statusText" :duration="taskDuration" :cancelling="cancelling" :retrying-unit-id="retryingUnitId" @navigate="navigateReview" @cancel="cancelCurrentReview" @create="startNewReview" @rereview="rereviewCurrentPr" @retry="retryUnit" />
-        <ReviewPlanPage v-else-if="preview" v-model:model="model" v-model:force-full-review="forceFullReview" @resume="continueReview" @open-existing="openHistoricalReview($event)" :preview="preview" :capabilities="capabilities" :dirty="planDirty" :previewing="previewing" @change="changePlan" @repreview="loadPreview" :pr-url="prUrl" :models="models" :default-model="defaultModel" :models-loading="modelsLoading" :models-error="modelsError" :submitting="submitting || Boolean(createdTaskId && !task)" :created="Boolean(createdTaskId && !task && !submitting)" :preview-job="previewJob" @submit="submitReview" @back="backToInput" @open-created="createdTaskId && openHistoricalReview(createdTaskId)" />
+        <ReviewPlanPage v-else-if="preview" v-model:model="model" v-model:force-full-review="forceFullReview" @resume="continueReview" @open-existing="openHistoricalReview($event)" @fresh-review="prepareFreshReview" :preview="preview" :capabilities="capabilities" :dirty="planDirty" :previewing="previewing" @change="changePlan" @repreview="loadPreview" :pr-url="prUrl" :models="models" :default-model="defaultModel" :models-loading="modelsLoading" :models-error="modelsError" :submitting="submitting || Boolean(createdTaskId && !task)" :created="Boolean(createdTaskId && !task && !submitting)" :preview-job="previewJob" @submit="submitReview" @back="backToInput" @open-created="createdTaskId && openHistoricalReview(createdTaskId)" />
         <section v-else-if="opening" class="card card-pad workspace-loading" role="status" aria-live="polite">正在打开审查记录…</section>
         <QuickPreviewPage v-else-if="quickOverview || quickLoading || quickError" :overview="quickOverview" :loading="quickLoading" :error="quickError" :pr-url="prUrl" @prepare="loadPreview" @retry="loadQuickPreview" @back="backToInput" />
         <PreviewPage v-else-if="previewStage" :job="previewJob" :tracking="previewing" :connection-error="previewConnectionError" :pr-url="prUrl" :model="model" :default-model="defaultModel" @resume="restorePreview" @cancel="cancelPreviewJob" @retry="loadPreview" @back="backToInput" />

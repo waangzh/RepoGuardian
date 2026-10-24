@@ -11,7 +11,7 @@ import ReviewStepper from "../common/ReviewStepper.vue";
 import { groupingReasonText, unitSymbolSummary, unitTitle } from "../../utils/unitPresentation";
 import { incrementalReviewLabel } from "../../utils/reportPresentation";
 const props = defineProps<{ capabilities: ReviewCapabilities | null; dirty: boolean; previewing: boolean; preview: ReviewPreviewResponse; prUrl: string; model: string; forceFullReview?: boolean; models: ProviderModelInfo[]; defaultModel: string; modelsLoading: boolean; modelsError: string | null; submitting: boolean; created?: boolean; previewJob?: PreviewJob | null }>();
-const emit = defineEmits<{ "update:model": [value: string]; "update:forceFullReview": [value: boolean]; submit: []; resume: []; "open-existing": [id: string]; back: []; repreview: []; change: [plan: ReviewPlanOptions]; "open-created": [] }>();
+const emit = defineEmits<{ "update:model": [value: string]; "update:forceFullReview": [value: boolean]; submit: []; resume: []; "open-existing": [id: string]; "fresh-review": []; back: []; repreview: []; change: [plan: ReviewPlanOptions]; "open-created": [] }>();
 const continuationReason = computed(() => ({ deadline: '原审查期限已到', budget_exhausted: '原资源额度已用尽', unknown_attempts: '存在未知发送或未对账用量', cancelled: '原审查已取消', checkpoint_missing: '恢复记录缺失或不完整' }[props.preview.continuation?.reason || ''] || '原审查暂不满足续查条件'));
 const modelOptions = computed(() => [{ value: "", label: `服务端默认${props.defaultModel ? ` · ${props.defaultModel}` : ''}` }, ...props.models.map(item => ({ value: item.id, label: item.id }))]);
 const additions = computed(() => props.preview.changed_files.reduce((sum, file) => sum + file.additions, 0));
@@ -51,8 +51,13 @@ const updateStage = computed(() => {
       <p class="muted small">无需手动分配调用次数、Token 或运行时间。达到上限时会保留已有结果，并说明未检查的范围。</p>
       <p class="field-hint" role="status">{{ discussionLabel }}。此选择随本次方案保存。</p>
       <p v-if="incrementalLabel" class="field-hint" role="status">{{ incrementalLabel }}</p>
+      <div class="space-top">
+        <label class="check-row"><input type="checkbox" :checked="forceFullReview" :disabled="submitting || previewing" aria-describedby="fresh-review-hint" @change="emit('update:forceFullReview', ($event.target as HTMLInputElement).checked)" /> 重新执行 AI 审查（不复用已有结果）</label>
+        <p id="fresh-review-hint" class="field-hint">按本次范围重新检查，使用新额度，可能产生不同结论。仓库和索引仍可复用。修改后请更新方案。</p>
+        <p v-if="preview.force_full_review && !dirty" class="field-hint" role="status">本次方案已设为重新审查，确认后将重新调用 AI。</p>
+      </div>
       <div v-if="preview.existing_review_id" class="notice space-top" role="status">
-        <div><strong>相同快照与配置已有完整结果</strong><p>来源 {{ preview.existing_review_id.slice(0, 8) }}，保留原问题及核验依据。查看不会新增模型调用；历史讨论以该记录保存时为准。</p><button type="button" class="btn primary" :disabled="submitting || previewing || dirty" @click="emit('open-existing', preview.existing_review_id)">查看已保存结果</button></div>
+        <div><strong>相同快照与配置已有完整结果</strong><p>来源 {{ preview.existing_review_id.slice(0, 8) }}，保留原问题及核验依据。查看不会新增模型调用；历史讨论以该记录保存时为准。</p><button type="button" class="btn primary" :disabled="submitting || previewing || dirty" @click="emit('open-existing', preview.existing_review_id)">查看已保存结果</button> <button type="button" class="btn secondary" :disabled="submitting || previewing" @click="emit('fresh-review')">仍然重新审查</button></div>
       </div>
       <div v-if="preview.continuation" class="notice space-top" role="status">
         <div><strong>前序审查仍有未完成事项</strong><p>来源 {{ preview.continuation.review_id.slice(0, 8) }}。已用 {{ preview.continuation.calls_consumed ?? '未知' }} / {{ preview.continuation.max_calls ?? '未知' }} 次调用、{{ preview.continuation.tokens_consumed ?? '未知' }} / {{ preview.continuation.max_tokens ?? '未知' }} Tokens，原期限剩余 {{ preview.continuation.remaining_seconds ?? '未知' }} 秒。</p>
@@ -63,8 +68,6 @@ const updateStage = computed(() => {
       <details class="setting-section rg-plan-advanced">
         <summary class="link"><AppIcon name="settings" :size="16" />高级设置<span class="muted small"> · 深度、重点、范围、模型及资源上限</span></summary>
         <div class="space-top">
-          <label class="field-hint"><input type="checkbox" :checked="forceFullReview" :disabled="submitting || previewing" @change="emit('update:forceFullReview', ($event.target as HTMLInputElement).checked)" /> 强制全新审查（忽略已有结果）</label>
-          <p class="field-hint">独立执行全部目标并使用新额度，可能产生不同结论。修改后请更新方案。</p>
           <ReviewPlanControls :preview="preview" :capabilities="capabilities" :busy="submitting || previewing" @change="emit('change', $event)" />
           <div class="setting-section"><h3>执行模型</h3><AppSelect :model-value="model" :options="modelOptions" :disabled="modelsLoading || submitting || previewing" aria-label="执行模型" @update:model-value="emit('update:model', $event)" /><p class="field-hint">模型变更后须重新预览，确认后按保存的模型执行。</p><p v-if="modelsError" class="input-error">{{ modelsError }}</p></div>
           <div class="setting-section"><h3>初始预览分组</h3><details v-for="(unit, index) in preview.review_units" :key="unit.id" class="plan-file"><summary :title="unit.primary_files[0] || unit.id">{{ unitTitle(unit, index, preview.review_units.length) }}<span v-if="unitSymbolSummary(unit)" class="plan-file__symbol">{{ unitSymbolSummary(unit) }}</span></summary><p class="small muted">{{ groupingReasonText(unit.grouping_reason) }}</p><code v-if="unit.primary_files.length > 1" class="small">{{ unit.primary_files.length }} 主审 · {{ unit.related_files.length }} 关联</code><code v-else class="small">{{ unit.related_files.length }} 个关联文件</code></details></div>

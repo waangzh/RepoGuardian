@@ -187,6 +187,9 @@ class Settings(BaseSettings):
     repoguardian_orphan_workspace_ttl_seconds: int = Field(
         default=604_800, ge=3_600, le=31_536_000
     )
+    repoguardian_prepared_workspace_ttl_seconds: int = Field(default=3_600, ge=900, le=86_400)
+    repoguardian_prepared_workspace_max_entries: int = Field(default=4, ge=0, le=100)
+    repoguardian_prepared_workspace_max_bytes: int = Field(default=4 * 1024**3, ge=0)
     repoguardian_checkpoint_vacuum_min_bytes: int = Field(
         default=64 * 1024 * 1024, ge=0
     )

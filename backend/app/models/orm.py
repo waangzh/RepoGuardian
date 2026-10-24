@@ -11,6 +11,7 @@ from typing import Any
 
 from sqlalchemy import (
     Boolean,
+    BigInteger,
     JSON,
     LargeBinary,
     DateTime,
@@ -139,6 +140,21 @@ class PreviewInputCacheOrm(Base):
     digest: Mapped[str] = mapped_column(String(64))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PreparedWorkspaceOrm(Base):
+    __tablename__ = "prepared_workspaces"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    input_key: Mapped[str] = mapped_column(String(64), index=True)
+    directory: Mapped[str] = mapped_column(String(64), unique=True)
+    base_sha: Mapped[str] = mapped_column(String(64))
+    head_sha: Mapped[str] = mapped_column(String(64))
+    effective_base_sha: Mapped[str] = mapped_column(String(64))
+    size_bytes: Mapped[int] = mapped_column(BigInteger)
+    state: Mapped[str] = mapped_column(String(16), default="ready")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class FindingDispositionOrm(Base):

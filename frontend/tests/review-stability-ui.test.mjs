@@ -16,7 +16,16 @@ test('完整旧结果、原预算续查与强制全新入口保留各自语义',
     assert.match(saved, /查看已保存结果/);
     assert.match(saved, /历史讨论以该记录保存时为准/);
     assert.doesNotMatch(saved, /开始 AI 审查/);
-    assert.match(saved, /强制全新审查（忽略已有结果）/);
+    assert.match(saved, /重新执行 AI 审查（不复用已有结果）/);
+    assert.ok(saved.indexOf('重新执行 AI 审查（不复用已有结果）') < saved.indexOf('rg-plan-advanced'));
+    assert.match(saved, /仍然重新审查/);
+    assert.doesNotMatch(saved, /本次方案已设为重新审查/);
+    for (const busy of ['submitting', 'previewing']) {
+      props[busy] = true;
+      const blocked = await renderToString(createSSRApp(component, props));
+      assert.match(blocked, /<button[^>]*disabled[^>]*>仍然重新审查<\/button>/);
+      props[busy] = false;
+    }
     props.preview.existing_review_id = null;
     props.preview.continuation = { review_id: 'b'.repeat(32), can_resume: true, unit_ids: ['u'], reason: 'available', calls_consumed: 3, max_calls: 5, tokens_consumed: 200, max_tokens: 2000, remaining_seconds: 60 };
     const resumable = await renderToString(createSSRApp(component, props));
@@ -30,6 +39,14 @@ test('完整旧结果、原预算续查与强制全新入口保留各自语义',
     assert.match(expired, /原审查期限已到/);
     assert.doesNotMatch(expired, />继续未完成审查</);
     assert.match(expired, /开始 AI 审查/);
+    props.preview.continuation = null;
+    props.preview.force_full_review = true;
+    props.forceFullReview = true;
+    const fresh = await renderToString(createSSRApp(component, props));
+    assert.match(fresh, /本次方案已设为重新审查，确认后将重新调用 AI/);
+    assert.match(fresh, /<input[^>]*checked[^>]*aria-describedby="fresh-review-hint"/);
+    assert.match(fresh, /开始 AI 审查/);
+    assert.doesNotMatch(fresh, /仍然重新审查|查看已保存结果/);
   } finally { await server.close(); }
 });
 

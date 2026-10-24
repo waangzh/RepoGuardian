@@ -33,6 +33,7 @@ async def test_maintenance_coordinates_gc_retention_and_workspace_reaping(
     repository = FakeRepository()
     deleted_threads: list[str] = []
     reaper_arguments: dict[str, object] = {}
+    prepared_calls: list[bool] = []
 
     async def delete_thread(thread_id: str) -> None:
         deleted_threads.append(thread_id)
@@ -47,6 +48,15 @@ async def test_maintenance_coordinates_gc_retention_and_workspace_reaping(
         reaper_arguments.update(kwargs)
         return WorkspaceReapResult(scanned=1, removed=1)
 
+    class Prepared:
+        def __init__(self, actual_repository):
+            assert actual_repository is repository
+
+        def maintain(self):
+            prepared_calls.append(True)
+            return 1
+
+    monkeypatch.setattr(maintenance_module, "PreparedWorkspaces", Prepared)
     monkeypatch.setattr(maintenance_module, "delete_thread_checkpoints", delete_thread)
     monkeypatch.setattr(maintenance_module, "list_checkpoint_thread_ids", list_threads)
     monkeypatch.setattr(maintenance_module, "compact_checkpoints_if_needed", compact)
@@ -63,4 +73,5 @@ async def test_maintenance_coordinates_gc_retention_and_workspace_reaping(
 
     assert deleted_threads == ["terminal-task"]
     assert repository.deleted == ["expired-task"]
+    assert prepared_calls == [True]
     assert reaper_arguments["active_paths"] == [tmp_path / "active"]

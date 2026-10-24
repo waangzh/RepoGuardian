@@ -284,6 +284,56 @@ class GitTool:
             cleanup_workspace(repo_dir, workdir=self._workdir)
             raise
 
+    def clone_prepared(
+        self, pr: PullRequestInfo, source: str | Path, *, effective_base_sha: str,
+        progress_callback: GitProgressCallback | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> tuple[Path, str]:
+        """Copy a guarded prepared repository without fetching or borrowing its objects."""
+        base_sha = _normalized_commit_sha(pr.base.sha, "PR base")
+        head_sha = _normalized_commit_sha(pr.head.sha, "PR head")
+        expected_base = _normalized_commit_sha(effective_base_sha, "effective base")
+        raw_source = Path(source)
+        source_dir = raw_source.resolve()
+        if (raw_source.is_symlink() or getattr(raw_source, "is_junction", lambda: False)()
+                or source_dir.parent != self._workdir.resolve()
+                or not re.fullmatch(r"\.prepared-[0-9a-f]{32}", raw_source.name)):
+            raise GitToolError("invalid prepared repository path")
+        self._validate_worktree(source_dir)
+        for path in (source_dir / ".git", source_dir / ".git" / "objects"):
+            if path.is_symlink() or getattr(path, "is_junction", lambda: False)() or not path.is_dir():
+                raise GitToolError("prepared repository must have independent objects")
+        if (source_dir / ".git" / "objects" / "info" / "alternates").exists():
+            raise GitToolError("prepared repository borrows external objects")
+        current = self._run([self._git, "-C", str(source_dir), "rev-parse", "HEAD"],
+                            cancel_event=cancel_event).strip()
+        dirty = self._run([self._git, "-C", str(source_dir), "status", "--porcelain=v1",
+                           "--untracked-files=all"], cancel_event=cancel_event)
+        if current != head_sha or dirty:
+            raise GitToolError("prepared repository snapshot is dirty or changed")
+        repo_dir = self._workdir / f"{pr.owner}-{pr.repo}-{pr.number}-{uuid4().hex[:8]}"
+        try:
+            self._notify(progress_callback, "local_copy", "正在从准备缓存创建独立工作区")
+            self._run([self._git, "clone", "--local", "--no-hardlinks", "--no-checkout",
+                       "--", str(source_dir), str(repo_dir)],
+                      progress_callback=progress_callback, phase="local_copy",
+                      phase_label="正在复制本地仓库", cancel_event=cancel_event)
+            for sha in (base_sha, head_sha):
+                if not self._commit_exists(repo_dir, sha, cancel_event=cancel_event):
+                    raise GitToolError("prepared repository is missing a frozen commit")
+            actual_base, diff = self.unified_diff(repo_dir, base_sha, head_sha, cancel_event=cancel_event)
+            if actual_base != expected_base:
+                raise GitToolError("prepared repository effective base changed")
+            self._notify(progress_callback, "checkout", "正在检出 Head 工作树")
+            self._run([self._git, "-C", str(repo_dir), "checkout", "--progress", "--detach", head_sha],
+                      progress_callback=progress_callback, phase="checkout",
+                      phase_label="正在检出 Head 工作树", cancel_event=cancel_event)
+            self._notify(progress_callback, "local_copy", "已复用本地准备仓库，独立工作区已就绪", "completed", 100)
+            return repo_dir, diff
+        except BaseException:
+            cleanup_workspace(repo_dir, workdir=self._workdir)
+            raise
+
     def unified_diff(
         self,
         repo_path: str | Path,

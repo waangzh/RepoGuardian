@@ -370,6 +370,7 @@ class ReviewService:
 
     async def _prepare_preview_inputs(self, pr, configuration, progress, cancel_event):
         from app.services.preview_input_cache import PreviewInputCache, input_cache_key
+        from app.services.prepared_workspaces import PreparedWorkspaces, prepare_repository
 
         async def report(phase, message, **extra):
             if progress:
@@ -378,6 +379,8 @@ class ReviewService:
         await report("cache", "等待并检查固定快照准备缓存")
         async with self._preview_prepare_lock:
             cache = PreviewInputCache(self._repository) if self._repository else None
+            workspaces = (PreparedWorkspaces(self._repository, self._git_tool._workdir)
+                          if self._repository else None)
             key = input_cache_key(pr, configuration)
             try:
                 cached = await asyncio.to_thread(cache.get, key) if cache else None
@@ -385,6 +388,11 @@ class ReviewService:
                 logger.warning("读取预览缓存失败：%s", type(exc).__name__)
                 cached = None
             if cached is not None:
+                if workspaces:
+                    try:
+                        await asyncio.to_thread(workspaces.touch, key)
+                    except Exception as exc:
+                        logger.warning("准备工作区续期失败：%s", type(exc).__name__)
                 await report("cache", "已复用相同快照的仓库输入与索引", cache_hit=True)
                 return cached
 
@@ -395,7 +403,9 @@ class ReviewService:
             await report("clone", "正在克隆仓库")
             # 无回调时保持旧工具适配器签名兼容。
             options = {"progress_callback": git_progress, "cancel_event": cancel_event} if progress or cancel_event else {}
-            repo_path, diff_text = await asyncio.to_thread(self._git_tool.clone_and_diff, pr, **options)
+            repo_path, diff_text = await asyncio.to_thread(prepare_repository, pr, self._git_tool,
+                                                         self._repository, configuration, **options)
+            retained = False
             try:
                 options = {"call_resolution_version": configuration["call_resolution_version"]}
                 if progress:
@@ -405,12 +415,22 @@ class ReviewService:
                 index = await RepoIndexer().execute(repo_path=str(repo_path), **options)
                 diff_context = await self._diff_context(repo_path, pr)
                 prepared = {"diff": diff_text, "index": index, "diff_context": diff_context}
+                if workspaces:
+                    try:
+                        retained = await asyncio.to_thread(workspaces.publish, key, repo_path, pr,
+                                                           diff_context, cancel_event=cancel_event)
+                    except Exception as exc:
+                        from app.tools.git_tool import GitToolCancelled
+                        if isinstance(exc, GitToolCancelled):
+                            raise
+                        logger.warning("登记准备工作区失败：%s", type(exc).__name__)
             finally:
-                # 取消／失租时也必须清理；不能让进度回调异常跳过清理。
+                # 未登记的目录必须清理；不能让进度回调异常跳过清理。
                 try:
-                    await report("cleanup", "正在清理临时仓库")
+                    await report("cleanup", "已保留可复用的准备仓库" if retained else "正在清理临时仓库")
                 finally:
-                    await _cleanup_repo(Path(repo_path))
+                    if not retained:
+                        await _cleanup_repo(Path(repo_path))
             if cache:
                 try:
                     await asyncio.to_thread(cache.put, key, prepared)
@@ -770,7 +790,9 @@ class ReviewService:
                             existing_path = frozen_state.get("repo_path")
                             if not existing_path or not await asyncio.to_thread(Path(existing_path).is_dir):
                                 pinned_pr = PullRequestInfo.model_validate(frozen_state["pr_info"])
-                                clone, _ = await asyncio.to_thread(self._git_tool.clone_and_diff, pinned_pr)
+                                from app.services.prepared_workspaces import prepare_repository
+                                clone, _ = await asyncio.to_thread(prepare_repository, pinned_pr, self._git_tool,
+                                                                  self._repository, task.task_runtime_configuration or {})
                                 frozen_state["repo_path"] = str(clone)
                                 if frozen_state.get("effective_base_sha") and frozen_state["effective_base_sha"] != pinned_pr.base.sha:
                                     actual = await asyncio.to_thread(self._git_tool._run,

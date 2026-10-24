@@ -47,7 +47,7 @@ def schema_is_current() -> bool:
         return False
     with sync_engine.connect() as connection:
         version = connection.scalar(text("SELECT version_num FROM alembic_version"))
-    return version == "20261018_0007"
+    return version == "20261024_0008"
 
 
 async def init_db() -> None:
