@@ -26,7 +26,7 @@ _REJECTION_REASON_CODES = set(REASON_HINTS) | {
     "unknown_related_target", "unknown_or_inactive_evidence", "diff_observation_requires_source_anchor",
     "stale_evidence_snapshot", "unknown_evidence_side", "evidence_outside_scope",
     "evidence_content_hash_mismatch", "invalid_evidence_source_range", "intent_contract_not_enabled",
-    "repeated_read_no_progress", "response_validation_failed",
+    "repeated_read_no_progress", "response_validation_failed", "finalization_requires_submit",
 }
 
 

@@ -124,13 +124,14 @@ class PreparedModelRequest:
     output_tokens: int
     extra_body_json: str = "{}"
     profile_source: str | None = None
+    temperature: float = 0.1
 
     def envelope(self) -> str:
         return json.dumps({
             "model": self.model, "messages": [
                 {"role": "system", "content": self.system},
                 {"role": "user", "content": self.prompt}],
-            "response_format": {"type": "json_object"}, "temperature": 0.1,
+            "response_format": {"type": "json_object"}, "temperature": self.temperature,
             "max_tokens": self.output_tokens, "extra_body": json.loads(self.extra_body_json),
         }, ensure_ascii=False, separators=(",", ":"))
 

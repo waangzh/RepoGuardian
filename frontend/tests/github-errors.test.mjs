@@ -2,6 +2,29 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 
+test('默认重审不复用同快照结果，只有显式来源才传递复用标识', async () => {
+  const server = await createServer({ server: { middlewareMode: true, hmr: false },
+    optimizeDeps: { noDiscovery: true, entries: [], include: [] }, appType: 'custom' });
+  const original = globalThis.fetch;
+  try {
+    const { previewReview, createPreviewJob } = await server.ssrLoadModule('/src/api/client.ts');
+    const calls = [];
+    globalThis.fetch = async (_url, init) => {
+      calls.push(JSON.parse(init.body));
+      return new Response('{}', { status: 200 });
+    };
+    await previewReview('https://github.com/o/r/pull/1');
+    assert.equal(Object.hasOwn(calls[0], 'reuse_review_id'), false);
+    const source = 'a'.repeat(32);
+    await previewReview('https://github.com/o/r/pull/1', 'review', 'none', undefined, undefined, undefined, source);
+    assert.equal(calls[1].reuse_review_id, source);
+    await createPreviewJob('b'.repeat(32), {
+      pr_url: 'https://github.com/o/r/pull/1', mode: 'review', validation_backend: 'none', reuse_review_id: source,
+    });
+    assert.equal(calls[2].request.reuse_review_id, source);
+  } finally { globalThis.fetch = original; await server.close(); }
+});
+
 test('确认方案网络错误显示可理解的原因，并保持原方案供再次确认', async () => {
   const server = await createServer({ server: { middlewareMode: true, hmr: false },
     optimizeDeps: { noDiscovery: true, entries: [], include: [] }, appType: 'custom' });

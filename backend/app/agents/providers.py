@@ -134,6 +134,8 @@ class OpenAICompatibleProvider(LLMProvider):
             raise LLMProviderError("task_review_v1_request_required")
         prepared = self._prepare_json_request(
             request.prompt, request.model, request.operation, request.system, request.output_tokens)
+        from dataclasses import replace
+        prepared = replace(prepared, temperature=request.temperature)
         return await self._send_prepared_json_request(prepared)
 
     def resolve_request_profile(self, model: str | None):
@@ -264,6 +266,7 @@ class OpenAICompatibleProvider(LLMProvider):
         except RequestAdmissionError as exc:
             raise LLMProviderError(str(exc)) from exc
         chat_model = self._build_chat_model(request.model, request.output_tokens)
+        chat_model.temperature = request.temperature
         started_at = time.monotonic()
         messages = [SystemMessage(content=request.system), HumanMessage(content=request.prompt)]
         attempt_errors: list[dict[str, Any]] = []

@@ -38,6 +38,7 @@ _COMPARABLE_CONFIGURATION = (
     "risk_planner_version", "call_resolution_version", "readable_scope_version",
     "policy_version", "max_lines_per_read", "max_search_results", "request_profile",
     "limits",
+    "stability_contract",
 )
 _CONFIGURATION_KEYS = ("incremental", "incremental_units")
 
@@ -79,14 +80,19 @@ def _report(task: ReviewTask) -> TaskRuntimeReport | None:
         return None
 
 
-def _report_reuse_reason(report: TaskRuntimeReport | None) -> str | None:
+def _report_reuse_reason(report: TaskRuntimeReport | None, *, same_snapshot=False) -> str | None:
     if (report is None or report.execution_status != "completed"
             or report.termination_reason != "plan_exhausted" or not report.scope_complete
             or report.usage_integrity != "complete" or report.unknown_attempts):
         return "previous_review_incomplete"
     if any(item.get("status") != "dismissed" for item in report.findings):
         return "previous_findings_require_reverification"
-    if report.admitted_investigations or report.unscheduled_leads or report.relationship_hints:
+    if same_snapshot:
+        if (any(item.get("status") != "answered" or item.get("answer") not in {"supported", "refuted"}
+                for item in report.admitted_investigations)
+                or any(item.get("status") != "duplicate" for item in report.unscheduled_leads)):
+            return "previous_investigations_require_reverification"
+    elif report.admitted_investigations or report.unscheduled_leads or report.relationship_hints:
         return "previous_investigations_require_reverification"
     return None
 
@@ -131,10 +137,12 @@ def reusable_units(
     delta_paths: set[str],
     full_plan_units: list[ReviewUnit],
     repository_graph: dict | None = None,
+    *,
+    same_snapshot=False,
 ) -> list[ReviewUnit]:
     """复用当前运行时的完整覆盖；旧结果或不完整依赖一律不作成功缓存。"""
     report = _report(previous)
-    if _report_reuse_reason(report):
+    if _report_reuse_reason(report, same_snapshot=same_snapshot):
         return []
     current_paths = {item.file_path for item in full_changed}
     reusable: list[ReviewUnit] = []
@@ -143,7 +151,8 @@ def reusable_units(
             continue
         files = set(unit.primary_files)
         dependencies = report.reuse_dependencies.get(unit.id)
-        if dependencies is None or dependencies.repository_discovery or not files <= current_paths:
+        if (dependencies is None or (dependencies.repository_discovery and not same_snapshot)
+                or not files <= current_paths):
             continue
         paths = set(dependencies.paths) | files | set(unit.related_files)
         if dependency_closure(paths, repository_graph) & delta_paths:
@@ -201,6 +210,12 @@ def _same_strategy(previous: ReviewTask, configuration: dict, model: str) -> str
     return None
 
 
+def same_snapshot_configuration_matches(saved: dict | None, current: dict) -> bool:
+    saved = saved or {}
+    keys = (set(saved) | set(current)) - {"incremental", "incremental_units", "plan_hash"}
+    return all(saved.get(key) == current.get(key) for key in keys)
+
+
 def plan_incremental(
     *,
     previous: ReviewTask | None,
@@ -216,6 +231,7 @@ def plan_incremental(
     ancestor: bool,
     same_merge_base: bool,
     repository_graph: dict | None = None,
+    allow_same_snapshot: bool = False,
 ) -> IncrementalDecision:
     """创建任务前完成全部可复用判定；任何不确定都退回完整审查。"""
 
@@ -240,13 +256,16 @@ def plan_incremental(
         return _not_applicable("previous_review_not_terminal", full_changed)
     if not previous.review_units:
         return _not_applicable("previous_review_units_missing", full_changed)
-    reason = _report_reuse_reason(_report(previous))
+    same_snapshot = manifest.head_sha == new_head_sha
+    if same_snapshot and (
+            not allow_same_snapshot or configuration.get("stability_contract") != "review-stability-v1"
+            or (previous.task_runtime_configuration or {}).get("stability_contract") != "review-stability-v1"):
+        return _not_applicable("same_head", full_changed)
+    reason = _report_reuse_reason(_report(previous), same_snapshot=same_snapshot)
     if reason:
         return _not_applicable(reason, full_changed)
     if (configuration.get("effective_plan") or {}).get("include_pr_discussions"):
         return _not_applicable("discussion_context_requires_reverification", full_changed)
-    if manifest.head_sha == new_head_sha:
-        return _not_applicable("same_head", full_changed)
     if not ancestor:
         return _not_applicable("history_rewritten", full_changed)
     if not same_merge_base or manifest.effective_base_sha != effective_base_sha:
@@ -256,6 +275,9 @@ def plan_incremental(
     reason = _same_strategy(previous, configuration, model)
     if reason:
         return _not_applicable(reason, full_changed)
+    if same_snapshot:
+        if not same_snapshot_configuration_matches(previous.task_runtime_configuration, configuration):
+            return _not_applicable("review_configuration_changed", full_changed)
     from app.services.review_input_context import build_pr_intent
 
     if build_pr_intent(previous.pr.model_dump(mode="json") if previous.pr else {})["intent_hash"] != \
@@ -263,9 +285,14 @@ def plan_incremental(
         return _not_applicable("pr_description_changed", full_changed)
 
     delta_paths = set(changed_since_previous)
-    if not delta_paths:
+    if same_snapshot and (delta_paths or stable_hash([item.model_dump(mode="json")
+            for item in previous.changed_files]) != stable_hash([item.model_dump(mode="json")
+            for item in full_changed])):
+        return _not_applicable("same_snapshot_input_changed", full_changed)
+    if not delta_paths and not same_snapshot:
         return _not_applicable("no_incremental_changes", full_changed)
-    reusable = reusable_units(previous, full_changed, delta_paths, full_plan_units, repository_graph)
+    reusable = reusable_units(previous, full_changed, delta_paths, full_plan_units, repository_graph,
+                              same_snapshot=same_snapshot)
     if not reusable:
         return _not_applicable("no_reusable_units", full_changed)
 
@@ -274,6 +301,9 @@ def plan_incremental(
         f"增量审查：复用前序任务 {previous.id[:8]} 中 {len(reusable)} 个未变更 Unit；"
         "其余 Unit 及依赖受影响的范围重新检查。",
     ]
+    if same_snapshot:
+        warnings = [f"同快照复用：沿用显式选择的任务 {previous.id[:8]} 中 {len(reusable)} 个已完整审查 Unit；"
+                    "未重新执行这些范围的模型审查。"]
     binding = IncrementalReviewBinding(
         previous_task_id=previous.id, previous_head_sha=manifest.head_sha,
         review_base_sha=manifest.effective_base_sha, effective_base_sha=effective_base_sha,
@@ -294,7 +324,8 @@ def plan_incremental(
         reused_unit_count=len(reusable),
         reused_file_count=len({path for unit in reusable for path in unit.primary_files}),
         warnings=warnings,
-        message=(f"检测到 {len(delta_files)} 个文件在 {manifest.head_sha[:8]}..{new_head_sha[:8]} 间变化；"
+        message=(warnings[0] if same_snapshot else
+                 f"检测到 {len(delta_files)} 个文件在 {manifest.head_sha[:8]}..{new_head_sha[:8]} 间变化；"
                  f"复用 {len(reusable)} 个未变更 Unit。"))
     return IncrementalDecision(True, None, binding, preview, previous, tuple(reusable))
 
@@ -369,7 +400,14 @@ def reuse_coverage(binding: IncrementalReviewBinding, previous: ReviewTask | Non
             "full": [item.model_dump(mode="json") for item in full_changed],
             "delta": sorted(delta_paths)})):
         raise ValueError("incremental_delta_changed")
-    eligible = reusable_units(previous, full_changed, set(delta_paths), plan_units, repository_graph)
+    same_snapshot = binding.previous_head_sha == binding.new_head_sha
+    if same_snapshot and (
+            (previous.task_runtime_configuration or {}).get("stability_contract") != "review-stability-v1"
+            or delta_paths or stable_hash([item.model_dump(mode="json") for item in previous.changed_files])
+            != stable_hash([item.model_dump(mode="json") for item in full_changed])):
+        raise ValueError("same_snapshot_input_changed")
+    eligible = reusable_units(previous, full_changed, set(delta_paths), plan_units, repository_graph,
+                              same_snapshot=same_snapshot)
     expected = {item.unit_id for item in binding.reused_units}
     if not expected <= {unit.id for unit in eligible}:
         raise ValueError("incremental_reused_coverage_invalid")

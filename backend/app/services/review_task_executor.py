@@ -69,7 +69,8 @@ class RuntimeResponseParser:
     _read_adapter = TypeAdapter(RuntimeReadResponse)
 
     def parse(self, raw: Any, *, task_kind: str = "inspect", publication_contract: str = "legacy",
-              discussions_enabled: bool = False, discussion_recheck: bool = False) -> ParsedRuntimeResponse:
+              discussions_enabled: bool = False, discussion_recheck: bool = False,
+              stability_contract: str | None = None) -> ParsedRuntimeResponse:
         if isinstance(raw, str):
             def unique_object(pairs):
                 obj = {}
@@ -85,6 +86,9 @@ class RuntimeResponseParser:
                 return ParsedRuntimeResponse(None, [RuntimeParseError("top_level", None, "invalid_json")])
         if not isinstance(raw, dict) or raw.get("kind") not in ("read", "submit"):
             return ParsedRuntimeResponse(None, [RuntimeParseError("top_level", None, "invalid_response_kind")])
+        if (stability_contract is None and isinstance(raw.get("investigation"), dict)
+                and "missing_evidence" in raw["investigation"]):
+            return ParsedRuntimeResponse(None, [RuntimeParseError("investigation", None, "unknown_submit_field")])
         if raw["kind"] == "read":
             try:
                 if raw.get("tool") == "discussion_read" and discussions_enabled:
@@ -267,7 +271,8 @@ class ReviewTaskExecutor:
         parsed = self.parser.parse(raw, task_kind=self.work_item.kind.value,
                                    publication_contract=self.spec.publication_contract,
                                    discussions_enabled=self.spec.discussion_manifest_hash is not None,
-                                   discussion_recheck=bool(self.spec.discussion_recheck))
+                                   discussion_recheck=bool(self.spec.discussion_recheck),
+                                   stability_contract=self.spec.stability_contract)
         if parsed.response is None:
             return parsed
         if isinstance(parsed.response, DiscussionRuntimeReadResponse):
@@ -316,6 +321,12 @@ class ReviewTaskExecutor:
         if item is None:
             return
         error = self.evidence_error(item.evidence_ids)
+        if error is None and self.spec.stability_contract and item.missing_evidence:
+            if item.answer.value != "insufficient_evidence":
+                error = "incomplete_investigation_evidence"
+            elif any(request.file_path not in self.readable_files
+                     or is_sensitive_repository_path(request.file_path) for request in item.missing_evidence):
+                error = "read_path_outside_work_item_scope"
         if error is None and item.answer.value != "insufficient_evidence":
             if not item.evidence_ids or set(self.work_item.required_evidence_ids) - set(item.evidence_ids):
                 error = "incomplete_investigation_evidence"

@@ -121,11 +121,62 @@ class InspectTaskStep:
         self.dependency_paths: set[str] = set()
         self.repository_discovery = False
         self.discussion_store = None
+        self.stability = {"prepared": False, "source_requests": [], "attempted_reads": [],
+                          "recovery_rounds": 0, "finalizing": False}
+
+    def _prepare_source_read(self):
+        from app.models.review_runtime import RuntimeReadArguments
+        from app.services.review_stability import covered, inspection_requests, request_key
+        executor = self.executor
+        if not self.stability["prepared"]:
+            self.stability["prepared"] = True
+            if executor.work_item.kind.value == "inspect" and not executor.pages:
+                self.stability["source_requests"] = inspection_requests(
+                    executor, self.symbol_index, self.repository_graph, self.scope.max_lines_per_read)
+        requests = (executor.work_item.evidence_requests if executor.work_item.kind.value == "investigate"
+                    else [RuntimeReadArguments.model_validate(raw) for raw in self.stability["source_requests"]])
+        for request in requests:
+            key = list(request_key(request))
+            if key in self.stability["attempted_reads"] or covered(executor, request):
+                continue
+            self.stability["attempted_reads"].append(key)
+            self.pending_read = RuntimeReadResponse(
+                tool="file_read", arguments=request, purpose="准备当前判断必需的固定快照源码")
+            return
+
+    def _recover_investigation(self):
+        from app.services.review_stability import MAX_RECOVERY_ROUNDS, covered, request_key
+        executor = self.executor
+        result = executor.projection.investigation
+        if (result is None or result.answer.value != "insufficient_evidence"
+                or self.stability["recovery_rounds"] >= MAX_RECOVERY_ROUNDS
+                or self.stability["finalizing"]):
+            return
+        requested = {request_key(request) for request in executor.work_item.evidence_requests}
+        missing = [request for request in result.missing_evidence
+                   if list(request_key(request)) not in self.stability["attempted_reads"]
+                   and request.end_line - request.start_line + 1 <= self.scope.max_lines_per_read
+                   and not covered(executor, request)]
+        missing = list({request_key(request): request for request in missing}.values())
+        if not missing or len(requested | {request_key(request) for request in missing}) > 20:
+            return
+        executor.work_item.evidence_requests.extend(
+            request for request in missing if request_key(request) not in requested)
+        executor.projection.invalidated_results.append({
+            "kind": "investigation", "result": result.model_dump(mode="json"),
+            "reason": "recoverable_source_gap"})
+        executor.projection.investigation = None
+        executor.projection.pending_target_ids.update(executor.work_item.goal_ids)
+        self.stability["recovery_rounds"] += 1
+        self._prepare_source_read()
 
     async def advance(self) -> dict:
         if self._lock.locked():
             raise RuntimeError("work_item_already_running")
         async with self._lock:
+            if (self.executor.spec.stability_contract and self.pending_read is None
+                    and self.executor.projection.pending_target_ids):
+                self._prepare_source_read()
             if self.pending_read is not None:
                 read = self.pending_read
                 read_key = json.dumps([self.pending_read.tool, self.pending_read.arguments.model_dump()], sort_keys=True)
@@ -140,7 +191,8 @@ class InspectTaskStep:
                 self.last_observation = observation
                 self.tool_observations.append(observation)
                 self.tool_observations = self.tool_observations[-4:]
-                if observation.get("status") == "completed" and self.executor.work_item.kind.value == "investigate":
+                if (not self.executor.spec.stability_contract and observation.get("status") == "completed"
+                        and self.executor.work_item.kind.value == "investigate"):
                     from app.services.review_task_derivation import TaskReviewDerivation
                     request = next((request for request in self.executor.work_item.evidence_requests
                         if not TaskReviewDerivation._request_covered(request, self.executor.evidence_catalog)), None)
@@ -221,6 +273,27 @@ class InspectTaskStep:
                         if isinstance(error.get("reason"), str)})
                     feedback["author_targets"] = author_targets(executor.spec.pr_intent_context)
                 request = replace(request, prompt=request.prompt + "\n" + json.dumps(feedback, ensure_ascii=False))
+            if executor.spec.stability_contract:
+                from dataclasses import replace
+                from app.services.model_request_budgeter import ModelRequestProfile
+                remaining = self.budget.available()
+                profile = self.provider.resolve_request_profile(executor.spec.model_name).profile
+                estimate = request.estimate(ModelRequestProfile.model_validate(profile))
+                pending = (sum(item.state.value in {"ready", "running", "waiting_evidence", "deferred_budget"}
+                               for item in self.runtime._items.values()) if self.runtime else 1)
+                self.stability["finalizing"] = (self.stability["finalizing"]
+                    or remaining["calls"] <= max(1, pending)
+                    or remaining["tokens"] < 2 * estimate["reserved_tokens"])
+                if self.stability["finalizing"]:
+                    payload = json.loads(request.prompt.split("\n")[0])
+                    payload["response"]["one_of"] = [payload["response"]["one_of"][1]]
+                    payload.pop("read_example", None)
+                    payload["finalization"] = {
+                        "instruction": "Submit the current results now. Do not request tools or add leads. "
+                            "Preserve blocked goals, missing material premises and unresolved candidates. "
+                            "No findings is NOT proof of complete review; never invent supporting evidence."}
+                    request = replace(request, prompt=json.dumps(payload, ensure_ascii=False, sort_keys=True)
+                                      + "\n" + "\n".join(request.prompt.split("\n")[1:]))
 
             async def bind_attempt(attempt, admission):
                 executor.request_id = attempt.request_id
@@ -281,7 +354,20 @@ class InspectTaskStep:
     def apply_response(self, raw: str) -> dict:
         """恢复重放与在线结果使用同一解析/纠错入口。"""
         executor = self.executor
+        if executor.spec.stability_contract and self.stability["finalizing"]:
+            try:
+                value = json.loads(raw)
+            except (TypeError, ValueError):
+                value = None
+            if isinstance(value, dict) and (value.get("kind") == "read" or value.get("leads")):
+                self.last_observation = {"action": "model", "response_kind": value.get("kind"),
+                    "errors": [{"item_type": "read", "index": None, "reason": "finalization_requires_submit"}],
+                    "pending_goals": sorted(executor.projection.pending_target_ids),
+                    "correction_pending": False, "page_advanced": False}
+                return self.last_observation
         parsed = executor.parse_and_apply(raw)
+        if executor.spec.stability_contract:
+            self._recover_investigation()
         if isinstance(parsed.response, (RuntimeReadResponse, DiscussionRuntimeReadResponse)) and not parsed.errors:
             read_key = json.dumps([parsed.response.tool, parsed.response.arguments.model_dump()], sort_keys=True)
             if self.read_observations.get(read_key, {}).get("repeats", 0) >= 2:

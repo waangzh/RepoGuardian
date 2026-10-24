@@ -110,6 +110,119 @@ def test_reuses_only_unchanged_files_and_keeps_full_diff_for_changed_files():
     assert decision.preview.reused_unit_count == 1 and decision.preview.delta_file_count == 1
 
 
+def same_snapshot_input():
+    from copy import deepcopy
+    previous = _previous([_unit("ru-a", ["a.py"])], [])
+    configuration = deepcopy(CONFIGURATION)
+    configuration["stability_contract"] = "review-stability-v1"
+    previous.task_runtime_configuration = deepcopy(configuration)
+    previous.task_runtime_report["admitted_investigations"] = [{
+        "work_item_id": "i", "unit_id": "ru-a", "status": "answered", "answer": "supported"}]
+    previous.task_runtime_report["reuse_dependencies"]["ru-a"]["repository_discovery"] = True
+    return {"previous": previous, "pr_url": previous.pr_url, "pr_info": PR_INFO,
+            "effective_base_sha": "c" * 40, "new_head_sha": "b" * 40,
+            "full_changed": previous.changed_files, "full_plan_units": previous.review_units,
+            "changed_since_previous": [], "configuration": configuration,
+            "model": "fixture", "ancestor": True, "same_merge_base": True}
+
+
+def test_same_snapshot_reuse_is_explicit_and_revalidates_bound_completed_work():
+    values = same_snapshot_input()
+    independent = incremental.plan_incremental(**values)
+    assert not independent.applicable and independent.reason == "same_head"
+    decision = incremental.plan_incremental(**values, allow_same_snapshot=True)
+    assert decision.applicable and decision.preview.delta_file_count == 0
+    assert "未重新执行" in decision.preview.message
+    coverage = incremental.reuse_coverage(decision.binding, values["previous"],
+        values["full_changed"], values["full_plan_units"], delta_paths=[], repository_graph={})
+    assert coverage and all(item["reused_from_task_id"] == values["previous"].id
+                            for item in coverage.values())
+
+
+@pytest.mark.parametrize("change", [
+    "legacy", "unresolved", "unknown_usage", "description", "base", "strategy", "diff", "findings",
+    "planner_input", "request_timeout",
+])
+def test_same_snapshot_reuse_rejects_uncertain_or_changed_inputs(change):
+    values = same_snapshot_input()
+    previous = values["previous"]
+    if change == "legacy":
+        previous.task_runtime_configuration.pop("stability_contract")
+    elif change == "unresolved":
+        previous.task_runtime_report["admitted_investigations"][0]["answer"] = "insufficient_evidence"
+    elif change == "unknown_usage":
+        previous.task_runtime_report["usage_integrity"] = "unknown"
+    elif change == "description":
+        values["pr_info"] = {**PR_INFO, "body": "different"}
+    elif change == "base":
+        values["effective_base_sha"] = "e" * 40
+    elif change == "strategy":
+        values["configuration"]["prompt_version"] = "different"
+    elif change == "planner_input":
+        values["configuration"]["initial_plan_hash"] = "different"
+    elif change == "request_timeout":
+        values["configuration"]["request_timeout_seconds"] = 120
+    elif change == "diff":
+        values["full_changed"] = [_changed("a.py", "different")]
+    elif change == "findings":
+        previous.task_runtime_report["findings"] = [{"status": "confirmed"}]
+    assert not incremental.plan_incremental(**values, allow_same_snapshot=True).applicable
+
+
+async def test_same_snapshot_runtime_reuses_coverage_without_new_model_calls(production_input, persistence):
+    from copy import deepcopy
+    from app.graph.nodes.task_review_runtime import task_review_runtime_node
+    from app.models.review import ReviewUnit as Unit
+    from app.services.review_manifest import build_review_manifest
+
+    state, provider, calls = production_input
+    repository = persistence[0]
+    state["task_id"] = "a" * 32
+    state["effective_base_sha"] = state["base_sha"]
+    state["pr_info"] = deepcopy(PR_INFO)
+    state["pr_info"]["base"]["sha"] = state["base_sha"]
+    state["pr_info"]["head"]["sha"] = state["head_sha"]
+    state["task_runtime_configuration"]["stability_contract"] = "review-stability-v1"
+    state.update(_provider=provider, _coordination_repository=repository)
+    repository.create_task(ReviewTask(id=state["task_id"], pr_url=state["pr_url"],
+        engine="task_review_v1", task_runtime_configuration=state["task_runtime_configuration"]))
+    first = await task_review_runtime_node(state)
+    previous = ReviewTask(id=state["task_id"], pr_url=state["pr_url"], engine="task_review_v1",
+        status="completed", model="fixture", pr=PullRequestInfo.model_validate(state["pr_info"]),
+        changed_files=[ChangedFile.model_validate(value) for value in state["changed_files"]],
+        review_units=[Unit.model_validate(value) for value in state["review_plan"]["review_units"]],
+        task_runtime_configuration=state["task_runtime_configuration"],
+        task_runtime_report=first["task_runtime_report"],
+        run_manifest=build_review_manifest({**state, **first}, datetime.now(timezone.utc)))
+    repository.save_task(previous)
+    configuration = deepcopy(state["task_runtime_configuration"])
+    decision = incremental.plan_incremental(
+        previous=previous, pr_url=state["pr_url"], pr_info=state["pr_info"],
+        effective_base_sha=state["base_sha"], new_head_sha=state["head_sha"],
+        full_changed=previous.changed_files, full_plan_units=previous.review_units,
+        changed_since_previous=[], configuration=configuration, model="fixture",
+        ancestor=True, same_merge_base=True, allow_same_snapshot=True)
+    assert decision.applicable, decision.reason
+    configuration.update(incremental=decision.binding.model_dump(mode="json"),
+        incremental_units=[unit.model_dump(mode="json") for unit in decision.reused_units])
+    current = {**state, "task_id": "b" * 32, "task_runtime_configuration": configuration}
+    repository.create_task(ReviewTask(id=current["task_id"], pr_url=current["pr_url"],
+        engine="task_review_v1", task_runtime_configuration=configuration))
+    output = await task_review_runtime_node(current)
+    assert len(calls) == 1 and output["task_runtime_report"]["sent_calls"] == 0
+    assert output["task_runtime_report"]["scope_complete"]
+    assert all(goal["reused_from_task_id"] == previous.id
+               for goal in output["task_runtime_report"]["initial_scope_coverage"])
+    invalid = deepcopy(configuration)
+    invalid["deadline_seconds"] += 1
+    rejected = {**state, "task_id": "c" * 32, "task_runtime_configuration": invalid}
+    repository.create_task(ReviewTask(id=rejected["task_id"], pr_url=rejected["pr_url"],
+        engine="task_review_v1", task_runtime_configuration=invalid))
+    with pytest.raises(ValueError, match="same_snapshot_configuration_changed"):
+        await task_review_runtime_node(rejected)
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize("change,reason", [
     ({"ancestor": False}, "history_rewritten"),
     ({"same_merge_base": False}, "content_base_changed"),

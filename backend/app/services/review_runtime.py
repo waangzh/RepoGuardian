@@ -173,9 +173,11 @@ class TaskReviewRuntime:
         elif (step.pending_read or step.repair_errors or observation.get("action") == "tool"
               or observation.get("page_advanced")):
             state = "ready"
-        elif any(error.get("reason") == "repeated_read_no_progress" for error in observation.get("errors", [])):
+        elif any(error.get("reason") in {"repeated_read_no_progress", "finalization_requires_submit"}
+                 for error in observation.get("errors", [])):
             state = "waiting_evidence"
-            item.reason = "repeated_read_no_progress"
+            item.reason = next(error["reason"] for error in observation["errors"]
+                               if error.get("reason") in {"repeated_read_no_progress", "finalization_requires_submit"})
         elif observation.get("errors") or pending:
             state = "failed"
             # 纠错机会已用尽仍被拒绝：区分“模型输出未通过验收”和执行故障。
@@ -320,6 +322,17 @@ class TaskReviewRuntime:
             if self._unit(item) != unit_id or item.state.value == "unknown":
                 continue
             projection = steps[item.work_item_id].executor.projection
+            step = steps[item.work_item_id]
+            if (step.executor.spec.stability_contract and item.kind.value == "investigate"
+                    and (projection.investigation is None
+                         or projection.investigation.answer.value == "insufficient_evidence")):
+                if projection.investigation is not None:
+                    projection.invalidated_results.append({
+                        "kind": "investigation", "result": projection.investigation.model_dump(mode="json"),
+                        "reason": "explicit_investigation_retry"})
+                projection.investigation = None
+                projection.pending_target_ids.update(item.goal_ids)
+                step.stability["attempted_reads"] = []
             blocked = {key for key, result in projection.examinations.items()
                        if result.disposition.value == "blocked"}
             gaps = projection.pending_target_ids | blocked

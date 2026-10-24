@@ -422,11 +422,23 @@ class TaskReviewV1Protocol:
                 "For verification, discussion_matches may quote an exact visible comment substring; assess subject, "
                 "trigger and impact separately and mark new_information for any new evidence, regression or wider impact. "
                 "Uncertain matches must not suppress publication.")
+        if not self.spec.stability_contract:
+            for schema in payload["response"]["one_of"]:
+                for name in ("InvestigationSubmission", "DiscussionInvestigationSubmission"):
+                    schema.get("$defs", {}).get(name, {}).get("properties", {}).pop("missing_evidence", None)
+        if self.spec.stability_contract and work_item.kind.value == "investigate":
+            payload["investigation_evidence_requirements"]["recovery"] = {
+                "missing_evidence": "For insufficient_evidence, provide up to four exact readonly source ranges "
+                    "needed for material premises. The server may read them and resume this same investigation. "
+                    "Never use a supported/refuted answer while any necessary premise is missing.",
+                "bounded": True,
+            }
         prompt = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         request = PreparedModelRequest(
             model=self.spec.model_name, operation="task_review_v1",
             system=system,
             prompt=prompt, output_tokens=4096,
+            temperature=0.0 if self.spec.stability_contract else 0.1,
         )
         if self.spec.discussion_manifest_hash:
             from dataclasses import replace

@@ -453,6 +453,8 @@ class ReviewService:
         previous_head = previous.run_manifest.head_sha
         if not previous_head or previous.run_manifest.effective_base_sha != effective_base:
             return None, False, False
+        if previous_head == pr.head.sha:
+            return [], True, True
         reader = getattr(self._github_tool, "compare_delta", None)
         if not callable(reader):
             return None, True, False
@@ -497,15 +499,20 @@ class ReviewService:
         frozen["initial_plan"] = plan.model_dump(mode="json")
         from app.services.incremental_review import plan_incremental
 
-        previous = (await self._previous_review(pr_url)
-                    if settings.repoguardian_incremental_review_enabled else None)
+        requested_source = request.reuse_review_id
+        if requested_source and self._repository is not None:
+            previous = await asyncio.to_thread(self._repository.get_task, requested_source)
+        else:
+            previous = (await self._previous_review(pr_url)
+                        if settings.repoguardian_incremental_review_enabled else None)
         delta_paths, same_base, ancestor = await self._incremental_delta(pr, previous, effective_base)
         decision = plan_incremental(
             previous=previous, pr_url=pr_url, pr_info=pr.model_dump(mode="json"),
             effective_base_sha=effective_base, new_head_sha=pr.head.sha,
             full_changed=changed_files, full_plan_units=plan.review_units,
             changed_since_previous=delta_paths, configuration=frozen, model=configuration["model"],
-            ancestor=ancestor, same_merge_base=same_base, repository_graph=index.get("repository_graph"))
+            ancestor=ancestor, same_merge_base=same_base, repository_graph=index.get("repository_graph"),
+            allow_same_snapshot=bool(requested_source))
         incremental_preview = decision.preview
         if decision.applicable and decision.binding is not None:
             frozen["incremental"] = decision.binding.model_dump(mode="json")
@@ -1141,9 +1148,14 @@ class ReviewService:
             raise ValueError("task runtime retry requires persisted fixed runtime")
         gaps = {item["goal_id"] for item in report.initial_scope_coverage
                 if item.get("unit_id") == unit_id and item.get("status") in {"blocked", "not_examined"}}
+        investigations = ({item["work_item_id"] for item in report.admitted_investigations
+                           if item.get("unit_id") == unit_id and (item.get("status") != "answered"
+                               or item.get("answer") not in {"supported", "refuted"})}
+                          if (task.task_runtime_configuration or {}).get("stability_contract") else set())
         requeued = [item["work_item_id"] for item in report.work_items
                     if item.get("unit_id") == unit_id and item.get("state") != "unknown"
-                    and gaps.intersection(item.get("goal_ids", []))]
+                    and (gaps.intersection(item.get("goal_ids", []))
+                         or item["work_item_id"] in investigations)]
         if not requeued:
             return TaskRuntimeRetryResult(unit_id=unit_id, requeued_work_item_ids=[], task_runtime_report=report)
         task.task_runtime_retry_unit_id = unit_id
