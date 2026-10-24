@@ -1,7 +1,5 @@
 import copy
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
 import httpx
 
 import pytest
@@ -14,22 +12,20 @@ from sqlalchemy import create_engine, inspect
 from app.api import reviews
 from app.core.config import settings
 from app.main import app
-from app.models.review import ReviewCreateRequest, ReviewPreviewRequest, ReviewTask, TaskStatus, PullRequestInfo
+from app.models.review import ReviewPreviewRequest, ReviewTask, TaskStatus
 from app.models.review_plan import ReviewPlanOptions, ReviewLimits, ReviewScope
-from app.services.review_plan import normalize_plan
-from app.services.review_service import ReviewService
-from app.services.report_service import ReportService
+from app.services.review.review_plan import normalize_plan
 from app.tools.git_tool import GitTool
-from app.tools.diff_parser import DiffParser
 from app.graph.nodes.task_review_runtime import task_review_runtime_node
 from app.graph.nodes.review_units import review_plan_node
-from app.services.review_run_budget import ReviewRunBudget, activate_run_budget
-from test_phase6a_persistence import persistence as persistence
-from test_task_runtime_p4 import production_input as production_input
+from app.services.review.review_run_budget import ReviewRunBudget, activate_run_budget
+from tests.support.review_plans import confirmation, plan_service as plan_service  # noqa: F401
+from tests.support.persistence import persistence as persistence
+from tests.support.runtime_harness import production_input as production_input
 
 
 def test_deadline_handles_sqlite_naive_utc_and_never_resets():
-    from app.services.review_plan import remaining_review_seconds
+    from app.services.review.review_plan import remaining_review_seconds
     created = datetime.now(timezone.utc) - timedelta(seconds=120)
     for value in (created, created.replace(tzinfo=None), created.isoformat(), created.replace(tzinfo=None).isoformat()):
         assert remaining_review_seconds({"deadline_seconds": 60}, value) < -59
@@ -57,7 +53,7 @@ def test_server_maximum_and_unknown_price_rejected(monkeypatch):
 
 
 def test_discussion_policy_and_legacy_serialization(monkeypatch):
-    from app.services.review_plan import configure_runtime
+    from app.services.review.review_plan import configure_runtime
     assert "include_pr_discussions" not in ReviewPlanOptions().model_dump(mode="json")
     monkeypatch.setattr(settings, "repoguardian_pr_discussions_enabled", True)
     assert normalize_plan(None, "fixture").include_pr_discussions is True
@@ -72,8 +68,8 @@ def test_discussion_policy_and_legacy_serialization(monkeypatch):
 
 
 async def test_disabled_history_is_frozen_and_never_opens_discussion_store(plan_service, monkeypatch):
-    from app.services.pr_discussions import prepare_discussions_node
-    from app.services.pr_discussion_recheck import recheck_discussions_node
+    from app.services.discussions.pr_discussions import prepare_discussions_node
+    from app.services.discussions.pr_discussion_recheck import recheck_discussions_node
     service, _, _, calls, _ = plan_service
     preview = await service.preview(ReviewPreviewRequest(pr_url="https://github.com/o/r/pull/1",
         plan=ReviewPlanOptions(include_pr_discussions=False)))
@@ -83,40 +79,16 @@ async def test_disabled_history_is_frozen_and_never_opens_discussion_store(plan_
     assert restored.task_runtime_configuration["discussion_contract"] is None
     async def forbidden(*args, **kwargs):
         raise AssertionError("disabled history must not open store or access GitHub/model")
-    monkeypatch.setattr("app.services.pr_discussions.open_store", forbidden)
-    monkeypatch.setattr("app.services.pr_discussion_recheck.open_store", forbidden)
+    monkeypatch.setattr("app.services.discussions.pr_discussions.open_store", forbidden)
+    monkeypatch.setattr("app.services.discussions.pr_discussion_recheck.open_store", forbidden)
     state = {"task_runtime_configuration": restored.task_runtime_configuration}
     assert await prepare_discussions_node(state) == {}
     assert await recheck_discussions_node(state) == {}
     assert calls == []
 
 
-@pytest.fixture
-def plan_service(production_input, persistence, monkeypatch):
-    state, provider, calls = production_input
-    configuration = copy.deepcopy(state["task_runtime_configuration"])
-    configuration["call_resolution_version"] = "import-evidence-v5"
-    monkeypatch.setattr("app.graph.nodes.task_review_runtime.task_runtime_configuration", lambda *a, **k: copy.deepcopy(configuration))
-    monkeypatch.setattr("app.services.review_service._cleanup_repo", AsyncMock(return_value=True))
-    pr = PullRequestInfo(owner="o", repo="r", number=1, title="fixture", body="", clone_url="https://github.com/o/r.git",
-        html_url="https://github.com/o/r/pull/1",
-        head={"sha": state["head_sha"], "ref": "feature", "repo_clone_url": "https://github.com/o/r.git"},
-        base={"sha": state["base_sha"], "ref": "main", "repo_clone_url": "https://github.com/o/r.git"})
-    state["pr_info"] = pr.model_dump(mode="json")
-    git = GitTool()
-    raw = git._run([git._git, "-C", state["repo_path"], "diff", "--unified=3", state["base_sha"], state["head_sha"]])
-    git.clone_and_diff = lambda *a, **k: (state["repo_path"], raw)
-    repository, queue, _ = persistence
-    service = ReviewService(SimpleNamespace(fetch_pr=AsyncMock(return_value=pr)), git, DiffParser(), provider,
-                            ReportService(), repository=repository, task_queue=queue)
-    service._ensure_worker_started = lambda: None
-    return service, state, provider, calls, pr
 
 
-def confirmation(preview):
-    return ReviewCreateRequest(pr_url="https://github.com/o/r/pull/1", preview_id=preview.preview_id,
-        plan_hash=preview.plan_hash, expected_head_sha=preview.snapshot.head_sha,
-        expected_effective_base_sha=preview.snapshot.effective_base_sha)
 
 
 async def test_preview_confirm_persist_and_replay(plan_service):
@@ -138,7 +110,7 @@ async def test_preview_confirm_persist_and_replay(plan_service):
 
 
 async def test_preview_claim_rolls_back_when_enqueue_fails(plan_service, monkeypatch):
-    from app.services.task_queue import DatabaseTaskQueue
+    from app.services.review.task_queue import DatabaseTaskQueue
     service, _, _, _, _ = plan_service
     preview = await service.preview(ReviewPreviewRequest(pr_url="https://github.com/o/r/pull/1"))
     def fail(*args, **kwargs):
@@ -153,7 +125,7 @@ async def test_preview_claim_rolls_back_when_enqueue_fails(plan_service, monkeyp
 async def test_confirmation_connection_failure_preserves_plan_and_retry_is_idempotent(plan_service, monkeypatch):
     from sqlalchemy import func, select
     from app.models.orm import WorkerJobOrm
-    from app.tools.github_tool import GitHubTool
+    from app.tools.github.github_tool import GitHubTool
     service, _, _, model_calls, pr = plan_service
     pr.body = None
     preview = await service.preview(ReviewPreviewRequest(pr_url="https://github.com/o/r/pull/1"))
@@ -168,7 +140,7 @@ async def test_confirmation_connection_failure_preserves_plan_and_retry_is_idemp
             "base": {"sha": pr.base.sha, "ref": pr.base.ref, "repo": {"clone_url": pr.clone_url}},
             "head": {"sha": pr.head.sha, "ref": pr.head.ref, "repo": {"clone_url": pr.head.repo_clone_url}}})
     original = AsyncClient
-    monkeypatch.setattr("app.tools.github_tool.httpx.AsyncClient", lambda **kwargs:
+    monkeypatch.setattr("app.tools.github.github_tool.httpx.AsyncClient", lambda **kwargs:
         original(transport=httpx.MockTransport(transport), **kwargs))
     service._github_tool = GitHubTool("secret")
     monkeypatch.setattr(reviews, "get_review_service", lambda: service)

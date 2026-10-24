@@ -1,5 +1,5 @@
 from app.models.review import ChangedFile, DiffHunk
-from app.services.review_planner import DeterministicReviewPlanner
+from app.services.review.review_planner import DeterministicReviewPlanner
 
 
 def _file(path: str, *, additions: int = 1, hunks: list[DiffHunk] | None = None) -> ChangedFile:

@@ -1,21 +1,11 @@
-from datetime import datetime, timezone
 
 import pytest
 
-from app.models.review import ReviewTask, ReviewRunManifest, TaskStatus
-from app.services.review_outcome import derive_review_outcome
+from app.models.review import ReviewTask, TaskStatus
+from app.services.review.review_outcome import derive_review_outcome
+from tests.support.review_tasks import completed_task  # noqa: F401
 
 
-def completed_task(**report_updates):
-    task = ReviewTask(id="run", pr_url="https://github.com/o/r/pull/1", engine="task_review_v1", status="completed")
-    task.run_manifest = ReviewRunManifest(review_id=task.id, engine=task.engine, coverage_version="task-goals-v1",
-        head_sha="a" * 40, base_sha="b" * 40, effective_base_sha="c" * 40, usage_integrity="complete",
-        provider="fixture", model="fixture", started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        completed_at=datetime(2026, 1, 1, tzinfo=timezone.utc), duration_ms=0, coverage=task.coverage)
-    task.task_runtime_report = {"execution_status": "completed", "termination_reason": "plan_exhausted",
-        "scope_complete": True, "initial_scope_coverage": [{"status": "examined"}], "usage_integrity": "complete",
-        **report_updates}
-    return task
 
 
 def test_complete_nonempty_scope_is_clean():

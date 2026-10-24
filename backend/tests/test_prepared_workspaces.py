@@ -18,14 +18,14 @@ from app.core.config import Settings, settings
 from app.graph.nodes.repo_prepare import repo_prepare_node
 from app.models.orm import PreparedWorkspaceOrm, utcnow
 from app.models.review import PullRequestInfo, ReviewPreviewRequest
-from app.services.prepared_workspaces import PreparedWorkspaces, prepare_repository
-from app.services.preview_input_cache import input_cache_key
+from app.services.workspaces.prepared_workspaces import PreparedWorkspaces, prepare_repository
+from app.services.preview.preview_input_cache import input_cache_key
 from app.tools.git_tool import GitTool, GitToolCancelled
 from app.tools.workspace_cleanup import cleanup_workspace, reap_orphaned_workspaces
-from test_phase6a_persistence import persistence as persistence
+from tests.support.persistence import persistence as persistence
 from test_production_diff_base import _forked_repo, _git
-from test_review_plans import plan_service as plan_service, confirmation
-from test_task_runtime_p4 import production_input as production_input
+from tests.support.review_plans import confirmation, plan_service as plan_service
+from tests.support.runtime_harness import production_input as production_input
 
 
 @pytest.fixture
@@ -164,7 +164,7 @@ def test_touch_extends_only_live_entries_and_failed_removal_retries(prepared, mo
         row.expires_at = utcnow() - timedelta(seconds=1)
     store.touch(input_cache_key(pr, configuration))
     with monkeypatch.context() as patch:
-        patch.setattr("app.services.prepared_workspaces.cleanup_workspace", lambda *a, **k: False)
+        patch.setattr("app.services.workspaces.prepared_workspaces.cleanup_workspace", lambda *a, **k: False)
         assert store.maintain() == 0
     with sessions() as session:
         assert session.scalar(select(PreparedWorkspaceOrm)).state == "deleting"
@@ -282,7 +282,7 @@ def test_cross_process_occupancy_is_released_after_process_exit(prepared):
     script = """
 import os, sys
 from types import SimpleNamespace
-from app.services.prepared_workspaces import PreparedWorkspaces
+from app.services.workspaces.prepared_workspaces import PreparedWorkspaces
 store = PreparedWorkspaces(SimpleNamespace(_session_factory=None), sys.argv[1])
 with store.guard():
     print("locked", flush=True)
@@ -357,14 +357,14 @@ async def test_preview_confirmation_and_formal_node_use_one_remote_preparation(p
 
 async def test_service_recovery_copies_prepared_source_and_cleans_only_task_copy(prepared, monkeypatch):
     from app.models.review import ReviewTask
-    from app.services.report_service import ReportService
-    from app.services.review_service import ReviewService
+    from app.services.review.report_service import ReportService
+    from app.services.review.review_service import ReviewService
     from app.tools.diff_parser import DiffParser
 
     store, tool, pr, configuration, source, _, _ = prepared
     monkeypatch.setattr(settings, "repoguardian_workdir", tool._workdir)
-    from app.services.review_repository import ReviewRepository
-    from app.services.artifact_store import LocalArtifactStore
+    from app.services.review.review_repository import ReviewRepository
+    from app.services.review.artifact_store import LocalArtifactStore
 
     repository = ReviewRepository(store.sessions, LocalArtifactStore(store.root / "artifacts"),
                                   require_migration=False)
@@ -376,8 +376,8 @@ async def test_service_recovery_copies_prepared_source_and_cleans_only_task_copy
               "effective_base_sha": tool.merge_base(source, pr.base.sha, pr.head.sha)}
     compiled = SimpleNamespace(aget_state=AsyncMock(return_value=SimpleNamespace(
         values=frozen, next=("task_review_runtime",))), aupdate_state=AsyncMock())
-    monkeypatch.setattr("app.services.review_service.get_checkpointer", AsyncMock(return_value=object()))
-    monkeypatch.setattr("app.services.review_service.build_review_graph",
+    monkeypatch.setattr("app.services.review.review_service.get_checkpointer", AsyncMock(return_value=object()))
+    monkeypatch.setattr("app.services.review.review_service.build_review_graph",
                         lambda: SimpleNamespace(compile=lambda **_: compiled))
     monkeypatch.setattr(tool, "clone_and_diff", Mock(side_effect=AssertionError("remote recovery")))
     service = ReviewService(None, tool, DiffParser(), None, ReportService(), repository=repository)

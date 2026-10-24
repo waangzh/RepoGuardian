@@ -2,8 +2,8 @@ from copy import deepcopy
 
 import pytest
 
-from app.services.review_findings import finding_views
-from test_publication_planner import publishable_task
+from app.services.review.review_findings import finding_views
+from tests.support.review_tasks import publishable_task as publishable_task
 
 
 def test_public_finding_is_self_contained_and_disposition_is_independent():

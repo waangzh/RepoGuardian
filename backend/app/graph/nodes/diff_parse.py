@@ -15,7 +15,7 @@ async def diff_parse_node(state: ReviewState) -> ReviewState:
     diff_text = state.get("diff_text") or ""
     logger.info("📄 [解析] 开始解析 diff（长度: %d 字符）...", len(diff_text))
     changed_files = parser.parse(diff_text)
-    from app.services.file_change_evidence import bind_file_change_evidence
+    from app.evidence.file_change_evidence import bind_file_change_evidence
     from app.tools.git_tool import GitTool
     from app.review.diff_base import review_diff_base
 

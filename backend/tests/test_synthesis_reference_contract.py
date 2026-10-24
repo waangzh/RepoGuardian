@@ -9,15 +9,15 @@ from app.models.review_synthesis import (
     ReviewSynthesisArtifact, ReviewSynthesisDraft, ReviewSynthesisInput,
     ReviewSynthesisOutput, SynthesisSource,
 )
-from app.services.fingerprints import stable_hash
-from app.services.publication_planner import PublicationPlanner
-from app.services.review_synthesis_input import SOURCE_POLICY_VERSION, build_synthesis_input
-from app.services.review_synthesis_repository import SynthesisStore
-from app.services.review_synthesis_service import bound_synthesis, freeze_review_synthesis
-from app.services.review_synthesis_validator import (
+from app.core.fingerprints import stable_hash
+from app.services.publication.publication_planner import PublicationPlanner
+from app.services.review.review_synthesis_input import SOURCE_POLICY_VERSION, build_synthesis_input
+from app.services.review.review_synthesis_repository import SynthesisStore
+from app.services.review.review_synthesis_service import bound_synthesis, freeze_review_synthesis
+from app.services.review.review_synthesis_validator import (
     SynthesisReferenceError, synthesis_output_schema, validate_review_synthesis,
 )
-from test_phase6a_persistence import persistence as persistence
+from tests.support.persistence import persistence as persistence
 from test_review_synthesis import draft_for, stub_provider, synthesis_task
 
 

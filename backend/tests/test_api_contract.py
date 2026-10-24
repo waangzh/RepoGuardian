@@ -70,7 +70,7 @@ def test_publication_interfaces_cover_backend_fields() -> None:
 
 def test_browser_publication_fixtures_reproduce_backend_plan() -> None:
     import json
-    from app.services.publication_planner import PublicationPlanner
+    from app.services.publication.publication_planner import PublicationPlanner
     path = FRONTEND_TYPES.parents[2] / "tests" / "fixtures" / "publication-plans.json"
     for fixture in json.loads(path.read_text(encoding="utf-8")).values():
         task = ReviewTask.model_validate(fixture["task"])
@@ -79,8 +79,8 @@ def test_browser_publication_fixtures_reproduce_backend_plan() -> None:
 
 def test_browser_copy_variants_reproduce_backend_selection():
     import json
-    from app.services.publication_planner import PublicationPlanner
-    from app.services.publication_renderer import comment_selection, render_review_comment, render_finding_comment
+    from app.services.publication.publication_planner import PublicationPlanner
+    from app.services.publication.publication_renderer import comment_selection, render_review_comment, render_finding_comment
 
     folder = FRONTEND_TYPES.parents[2] / "tests" / "fixtures"
     fixtures = json.loads((folder / "publication-plans.json").read_text(encoding="utf-8"))

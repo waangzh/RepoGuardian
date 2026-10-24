@@ -4,10 +4,10 @@ from datetime import datetime, timezone
 import pytest
 
 from app.models.review import ChangedFile, DiffHunk, DiffLine
-from app.services.publication_planner import PublicationPlanner
-from app.services.report_service import ReportService
-from app.services.publication_renderer import render_user_report
-from test_publication_planner import publishable_task
+from app.services.publication.publication_planner import PublicationPlanner
+from app.services.review.report_service import ReportService
+from app.services.publication.publication_renderer import render_user_report
+from tests.support.review_tasks import publishable_task as publishable_task
 from test_report_service import _pr
 
 
@@ -77,7 +77,7 @@ def test_tampered_publication_text_is_never_copied():
 
 
 def test_zero_finding_report_and_comment_explain_behavior_and_answered_investigation():
-    from test_review_outcome import completed_task
+    from tests.support.review_tasks import completed_task as completed_task
     task = completed_task(initial_scope_coverage=[{"goal_id": "g", "target_ref": "src/a.py",
         "target_kind": "source_range", "start_line": 3, "end_line": 8, "status": "examined",
         "reason": "检查空值分支先返回，再读取非空对象的字段"}], admitted_investigations=[{
@@ -111,7 +111,7 @@ def test_compact_change_understanding_summarizes_and_does_not_trim_defect():
 
 
 def test_unknown_investigation_answer_cannot_become_a_supported_change_claim():
-    from test_review_outcome import completed_task
+    from tests.support.review_tasks import completed_task as completed_task
     task = completed_task(admitted_investigations=[{"proposition": "边界是否保持兼容", "status": "answered",
         "answer": ["supported"], "reason": "无效答案", "limitations": []}])
     plan = PublicationPlanner().build(task)

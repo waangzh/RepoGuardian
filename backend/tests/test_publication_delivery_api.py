@@ -3,13 +3,13 @@ import pytest
 
 from app.api import publications
 from app.main import app
-from app.services.publication_service import PublicationService
-from app.services.publication_repository import PublicationRepository
-from app.tools.github_publisher import GitHubPublisher
-from test_publication_planner import publishable_task
-from test_publication_preflight import publish_config
+from app.services.publication.publication_service import PublicationService
+from app.services.publication.publication_repository import PublicationRepository
+from app.tools.github.github_publisher import GitHubPublisher
+from tests.support.review_tasks import publishable_task as publishable_task
+from tests.support.publication_fixtures import publish_config
 from test_sticky_summary import FakeGitHub
-from test_phase6a_persistence import persistence as persistence
+from tests.support.persistence import persistence as persistence
 
 
 @pytest.fixture

@@ -5,17 +5,17 @@ import pytest
 
 from app.api import reviews
 from app.main import app
-from app.tools.github_tool import GitHubToolError
-from test_publication_planner import publishable_task
-from test_phase6a_persistence import persistence as persistence
+from app.tools.github.github_tool import GitHubToolError
+from tests.support.review_tasks import publishable_task as publishable_task
+from tests.support.persistence import persistence as persistence
 
 
 @pytest.mark.parametrize("remote,expected", [("a" * 40, "current"), ("d" * 40, "stale"), ("invalid", "unknown"), (None, "unknown")])
 async def test_copy_check_binds_snapshot_keeps_human_annotations_and_network_unknown(monkeypatch, remote, expected):
     task = publishable_task()
     original = task.model_dump(mode="json")
-    service = SimpleNamespace(get_task=lambda identity: task, _dispositions={task.id: {
-        "key-a": {"current": {"status": "resolved", "reason": "人工复核已处理"}}}})
+    saved = {"key-a": {"current": {"status": "resolved", "reason": "人工复核已处理"}}}
+    service = SimpleNamespace(get_task=lambda identity: task, finding_dispositions=lambda task_id: saved)
     monkeypatch.setattr(reviews, "get_review_service", lambda: service)
     calls = []
 
@@ -50,7 +50,8 @@ async def test_copy_check_rejects_missing_and_unfinished_before_network(monkeypa
     task = publishable_task()
     if status:
         task.status = status
-    monkeypatch.setattr(reviews, "get_review_service", lambda: SimpleNamespace(get_task=lambda identity: task if status else None))
+    monkeypatch.setattr(reviews, "get_review_service", lambda: SimpleNamespace(
+        get_task=lambda identity: task if status else None, finding_dispositions=lambda _: {}))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         assert (await client.post("/api/reviews/run/review-comment-check")).status_code == expected
 
@@ -58,7 +59,8 @@ async def test_copy_check_rejects_missing_and_unfinished_before_network(monkeypa
 async def test_missing_snapshot_never_fetches_or_claims_current(monkeypatch):
     task = publishable_task()
     task.run_manifest = None
-    monkeypatch.setattr(reviews, "get_review_service", lambda: SimpleNamespace(get_task=lambda identity: task))
+    monkeypatch.setattr(reviews, "get_review_service", lambda: SimpleNamespace(
+        get_task=lambda identity: task, finding_dispositions=lambda _: {}))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         body = (await client.post("/api/reviews/run/review-comment-check")).json()
     assert body["status"] == "unknown" and body["latest_head_sha"] is None
@@ -70,7 +72,10 @@ async def test_persisted_disposition_refreshes_delivery_without_rewriting_frozen
     task = publishable_task()
     task.report_markdown = "已冻结的原始技术记录"
     repository.create_task(task)
-    service = SimpleNamespace(get_task=repository.get_task, _repository=repository)
+    service = SimpleNamespace(get_task=repository.get_task,
+        finding_dispositions=repository.finding_dispositions,
+        save_finding_disposition=lambda task_id, finding_id, value: repository.save_finding_disposition(
+            task_id, finding_id, {"current": value}))
     monkeypatch.setattr(reviews, "get_review_service", lambda: service)
 
     async def fetch(self, url):

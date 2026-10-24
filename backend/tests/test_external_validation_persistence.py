@@ -11,10 +11,10 @@ from app.core.database import Base
 from app.models.project_ci import ProjectCIWorkflow, ProjectCIWorkflowRun
 from app.models.review import PatchValidationRequest, ValidationCheck, ValidationStatus
 from app.models.runner import RunnerRegistrationRequest, RunnerResultSubmission
-from app.services.external_validation_repository import ExternalValidationRepository
-from app.services.project_ci_service import ProjectCIService
-from app.services.user_runner_service import UserRunnerService
-from app.tools.patch_tool import normalized_patch_sha
+from app.services.external_validation.external_validation_repository import ExternalValidationRepository
+from app.services.external_validation.project_ci_service import ProjectCIService
+from app.services.external_validation.user_runner_service import UserRunnerService
+from app.tools.patch_identity import normalized_patch_sha
 
 
 API_TOKEN = "api-token-" + "a" * 32

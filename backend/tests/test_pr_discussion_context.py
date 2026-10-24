@@ -6,21 +6,21 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agents.providers import LLMProviderError, OpenAICompatibleProvider
+from app.llm.providers import LLMProviderError, OpenAICompatibleProvider
 from app.models.pr_discussion import (
     CONTRACT, DiscussionComment, DiscussionSnapshot, DiscussionSummary, DiscussionThread,
 )
-from app.services import pr_discussions as module
-from app.services.artifact_store import LocalArtifactStore
-from app.services.model_request_budgeter import (
+from app.services.discussions import pr_discussions as module
+from app.services.review.artifact_store import LocalArtifactStore
+from app.llm.model_request_budgeter import (
     ModelContextBudget, ModelRequestProfile, PreparedModelRequest, estimate_tokens,
 )
-from app.services.pr_discussion_store import DiscussionStore
-from app.services.pr_discussions import (
+from app.services.discussions.pr_discussion_store import DiscussionStore
+from app.services.discussions.pr_discussions import (
     add_limitation, discussion_page, frozen_provider, metadata, prepare_discussions_node,
     select_discussions,
 )
-from app.services.review_run_budget import ReviewRunBudget, activate_run_budget
+from app.services.review.review_run_budget import ReviewRunBudget, activate_run_budget
 
 
 def thread_input_value(index, body="Potential retry issue. " + "x" * 500, path="src/a.py", summary=None):
@@ -204,7 +204,7 @@ class FailingProvider:
         self.fail_after_sent = fail_after_sent
 
     async def task_review_step(self, request):
-        from app.services.review_run_budget import (
+        from app.services.review.review_run_budget import (
             current_run_budget, run_budget_attempt_observer, run_budget_dispatch_guard,
         )
         budget = current_run_budget()

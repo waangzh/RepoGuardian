@@ -9,7 +9,7 @@ from app.evaluation.runtime_quality_gate import recompute_quality_gate, validate
 from app.evaluation.runtime_experiments import screen_empty_candidate_regression
 from test_runtime_experiments import frozen_plan
 from test_task_risk_planner import relationship_fixture
-from app.services.review_task_derivation import build_task_risk_catalog
+from app.services.review.review_task_derivation import build_task_risk_catalog
 from app.tools.repository_graph import build_repository_graph
 
 
@@ -62,7 +62,7 @@ def test_gate_recomputes_annotations_retention_and_hash_chain(tmp_path, monkeypa
     monkeypatch.setattr(module, "blind_review_packets", packets)
     monkeypatch.setattr(module, "reconcile_wire_usage", lambda value: {"actual_total_tokens": 50})
     first = {"admitted": True, "fixed_scope_coverage": {"not_worse_than_baseline": True}}
-    monkeypatch.setattr("app.evaluation.runtime_experiments.first_sample_gate", lambda *args: first)
+    monkeypatch.setattr(module, "first_sample_gate", lambda *args: first)
     def save(name, value):
         path = tmp_path / (name + ".json")
         content = json.dumps(value).encode()

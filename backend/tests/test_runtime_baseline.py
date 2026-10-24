@@ -9,7 +9,7 @@ from app.evaluation.runtime_baseline import (
     quality_summary,
     reconcile_wire_usage,
 )
-from app.evaluation.runtime_baseline_cli import build_baseline
+from app.evaluation.cli.runtime_baseline_cli import build_baseline
 
 
 def _result():

@@ -3,7 +3,7 @@
 import json
 import re
 
-from app.services.fingerprints import stable_hash
+from app.core.fingerprints import stable_hash
 
 
 def partition_source_case(case):

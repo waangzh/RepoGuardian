@@ -12,9 +12,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from pathlib import PurePosixPath
 from typing import Any, Generic, Iterator, Literal, TypeVar
 from uuid import uuid4
+from app.core.paths import validate_repo_relative_path
 from app.models.incremental import IncrementalPreview
 from app.models.review_plan import ReviewPlanOptions, PlanSnapshot
 
@@ -28,6 +28,9 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+# 兼容旧导入名；规则实现位于 app.core.paths。
+_validate_repo_relative_path = validate_repo_relative_path
 
 
 # ---------------------------------------------------------------------------
@@ -311,18 +314,6 @@ class FixRisk(str, Enum):
     high = "high"
 
 
-def _validate_repo_relative_path(value: str) -> str:
-    """只接受与仓库索引格式一致的 POSIX 相对路径。"""
-    if not isinstance(value, str) or not value or len(value) > 260:
-        raise ValueError("repository path must be a non-empty relative path")
-    if "\\" in value or "\x00" in value or value.startswith(("/", "~")) or ":" in value:
-        raise ValueError("repository path must use a safe POSIX relative path")
-    path = PurePosixPath(value)
-    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
-        raise ValueError("repository path traversal is not allowed")
-    if path.as_posix() != value:
-        raise ValueError("repository path must be normalized")
-    return value
 
 
 class ContextRetrievalPlan(BaseModel):
@@ -344,7 +335,7 @@ class ContextRetrievalPlan(BaseModel):
     @field_validator("target_files")
     @classmethod
     def validate_target_files(cls, values: list[str]) -> list[str]:
-        return list(dict.fromkeys(_validate_repo_relative_path(value) for value in values))
+        return list(dict.fromkeys(validate_repo_relative_path(value) for value in values))
 
     @field_validator("target_symbols")
     @classmethod
@@ -406,7 +397,7 @@ class FileReadRequest(BaseModel):
     @field_validator("file_path")
     @classmethod
     def validate_file_path(cls, value: str) -> str:
-        return _validate_repo_relative_path(value)
+        return validate_repo_relative_path(value)
 
     @model_validator(mode="after")
     def validate_line_range(self) -> "FileReadRequest":
@@ -466,7 +457,7 @@ class FileReadDiffRequest(BaseModel):
     @field_validator("file_path")
     @classmethod
     def validate_file_path(cls, value: str) -> str:
-        return _validate_repo_relative_path(value)
+        return validate_repo_relative_path(value)
 
     @field_validator("hunk_ids")
     @classmethod
@@ -837,7 +828,7 @@ class FileChangeSide(BaseModel):
     @field_validator("path")
     @classmethod
     def validate_path(cls, value: str) -> str:
-        return _validate_repo_relative_path(value)
+        return validate_repo_relative_path(value)
 
     @model_validator(mode="after")
     def consistent_presence(self) -> "FileChangeSide":
@@ -1073,7 +1064,7 @@ class EvidenceAnchor(BaseModel):
     @field_validator("file_path")
     @classmethod
     def validate_file_path(cls, value: str) -> str:
-        return _validate_repo_relative_path(value)
+        return validate_repo_relative_path(value)
 
     @field_validator("context_before", "context_after")
     @classmethod
@@ -1276,7 +1267,7 @@ class UnitRiskHypothesis(BaseModel):
     @field_validator("affected_files")
     @classmethod
     def validate_affected_files(cls, values: list[str]) -> list[str]:
-        return list(dict.fromkeys(_validate_repo_relative_path(value) for value in values))
+        return list(dict.fromkeys(validate_repo_relative_path(value) for value in values))
 
 
 class UnitReviewPlan(BaseModel):
@@ -1484,7 +1475,7 @@ class PatchEligibilityDecision(BaseModel):
     @field_validator("allowed_files")
     @classmethod
     def validate_allowed_files(cls, values: list[str]) -> list[str]:
-        return list(dict.fromkeys(_validate_repo_relative_path(value) for value in values))
+        return list(dict.fromkeys(validate_repo_relative_path(value) for value in values))
 
 
 class PatchApplyCheck(BaseModel):
@@ -1581,7 +1572,7 @@ class PatchProposal(BaseModel):
     @field_validator("touched_files")
     @classmethod
     def validate_touched_files(cls, values: list[str]) -> list[str]:
-        return list(dict.fromkeys(_validate_repo_relative_path(value) for value in values))
+        return list(dict.fromkeys(validate_repo_relative_path(value) for value in values))
 
     @computed_field(return_type=str | None)
     @property
@@ -1651,7 +1642,7 @@ class UnitEvidenceReference(BaseModel):
     @field_validator("file_path")
     @classmethod
     def validate_path(cls, value: str) -> str:
-        return _validate_repo_relative_path(value)
+        return validate_repo_relative_path(value)
 
     @model_validator(mode="after")
     def ordered_lines(self) -> "UnitEvidenceReference":
@@ -1660,7 +1651,7 @@ class UnitEvidenceReference(BaseModel):
         if self.source == "repository_tree" and (self.start_line or self.end_line):
             raise ValueError("repository tree evidence has no source line anchor")
         if self.source == "file_change":
-            from app.services.file_change_evidence import validate_file_change_evidence
+            from app.evidence.file_change_evidence import validate_file_change_evidence
             if self.file_change is None or self.start_line or self.end_line:
                 raise ValueError("file change evidence has no line anchor")
             validate_file_change_evidence(self.file_change, self.head_sha, self.base_sha, self.file_path)
@@ -1710,7 +1701,7 @@ class UnitContractDependency(BaseModel):
     @field_validator("file_path")
     @classmethod
     def validate_path(cls, value: str) -> str:
-        return _validate_repo_relative_path(value)
+        return validate_repo_relative_path(value)
 
     @model_validator(mode="after")
     def conclusion_requires_evidence(self) -> "UnitContractDependency":
@@ -1729,7 +1720,7 @@ class UnitUnresolvedQuestion(BaseModel):
     @field_validator("affected_files")
     @classmethod
     def validate_paths(cls, values: list[str]) -> list[str]:
-        return list(dict.fromkeys(_validate_repo_relative_path(value) for value in values))
+        return list(dict.fromkeys(validate_repo_relative_path(value) for value in values))
 
 
 class UnitQuestionUpdate(BaseModel):
@@ -1885,7 +1876,7 @@ class CrossUnitFollowupRequest(BaseModel):
     @field_validator("primary_files", "supporting_files", "verification_files")
     @classmethod
     def validate_paths(cls, values: list[str]) -> list[str]:
-        return list(dict.fromkeys(_validate_repo_relative_path(value) for value in values))
+        return list(dict.fromkeys(validate_repo_relative_path(value) for value in values))
 
     @field_validator("tracking_queries")
     @classmethod
@@ -1893,7 +1884,7 @@ class CrossUnitFollowupRequest(BaseModel):
         from app.review.tool_scope import is_sensitive_repository_path
         result = []
         for value in values:
-            name = _validate_repo_relative_path(value)
+            name = validate_repo_relative_path(value)
             if "/" in name or any(char in name for char in "*?[]") or is_sensitive_repository_path(name):
                 raise ValueError("tracking query must be a non-sensitive literal basename")
             result.append(name)

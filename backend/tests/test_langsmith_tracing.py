@@ -4,9 +4,9 @@ from typing import Any
 import pytest
 
 from app.models.review import ReviewTask, StepStatus
-from app.services import review_service
-from app.services.report_service import ReportService
-from app.services.review_service import ReviewService
+from app.services.review import review_service
+from app.services.review.report_service import ReportService
+from app.services.review.review_service import ReviewService
 
 
 class FakeCompiledGraph:

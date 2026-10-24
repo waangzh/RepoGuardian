@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-from app.services.review_run_budget import AttemptState
-from test_phase6a_persistence import persistence as persistence
+from app.services.review.review_run_budget import AttemptState
+from tests.support.persistence import persistence as persistence
 from test_task_runtime_p2 import configured
 
 

@@ -4,11 +4,11 @@ import hashlib
 import pytest
 from langchain_core.messages import AIMessage
 
-from app.agents.providers import OpenAICompatibleProvider
-from app.evaluation.runtime_capability_runner import (freeze_diagnostic, provider_configuration,
+from app.llm.providers import OpenAICompatibleProvider
+from app.evaluation.cli.runtime_capability_runner import (freeze_diagnostic, provider_configuration,
                                                     run_diagnostic, write_new, read_json)
 from app.evaluation.runtime_capability import investigation_decision_changes
-from app.services.fingerprints import stable_hash
+from app.core.fingerprints import stable_hash
 
 
 def setup_stage(tmp_path, monkeypatch):
@@ -28,7 +28,7 @@ def setup_stage(tmp_path, monkeypatch):
         write_new(stage / (name + ".json"), value)
     roots = tmp_path / "roots.json"
     write_new(roots, [])
-    monkeypatch.setattr("app.evaluation.runtime_adjudication_cli.make_source_reader", lambda *args: lambda *args: "return None")
+    monkeypatch.setattr("app.evaluation.cli.runtime_adjudication_cli.make_source_reader", lambda *args: lambda *args: "return None")
     return stage, roots, provider
 
 

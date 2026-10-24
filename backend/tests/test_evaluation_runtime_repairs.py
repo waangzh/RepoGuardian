@@ -5,10 +5,10 @@ import pytest
 import httpx
 from langchain_core.messages import AIMessage
 
-from app.agents.providers import OpenAICompatibleProvider
+from app.llm.providers import OpenAICompatibleProvider
 from app.evaluation.data import FrozenSample
 from app.evaluation.runner import run_sample
-from app.services.review_run_budget import current_run_budget
+from app.services.review.review_run_budget import current_run_budget
 
 
 @pytest.mark.parametrize("versions", [None, {"prompt_version": "task-review-prompt-v5", "risk_planner_version": "risk-planner-v2"}])
@@ -73,7 +73,7 @@ async def test_evaluation_activates_and_exports_each_attempt(monkeypatch, tmp_pa
 
 
 async def test_deepseek_thinking_is_serialized_in_http_body(monkeypatch):
-    import app.agents.providers as providers
+    import app.llm.providers as providers
 
     wire = []
     def transport(request):

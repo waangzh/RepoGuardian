@@ -7,11 +7,11 @@ import subprocess
 
 from langchain_core.messages import AIMessage
 
-from app.agents.providers import OpenAICompatibleProvider
+from app.llm.providers import OpenAICompatibleProvider
 from app.graph.nodes.task_review_runtime import plan_runtime_goals, task_review_runtime_node
 from app.models.review import ChangedFile
-from app.services.review_planner import DeterministicReviewPlanner
-from app.services.review_task_derivation import dangling_deleted_references
+from app.services.review.review_planner import DeterministicReviewPlanner
+from app.services.review.review_task_derivation import dangling_deleted_references
 from app.tools.diff_parser import DiffParser
 
 

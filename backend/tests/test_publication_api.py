@@ -7,13 +7,14 @@ from app.api import reviews
 from app.main import app
 from app.models.publication import PublicationPlan
 from app.models.review import ReviewTask, TaskStatus
-from test_publication_planner import publishable_task
-from test_review_outcome import completed_task
+from tests.support.review_tasks import publishable_task as publishable_task
+from tests.support.review_tasks import completed_task as completed_task
 
 
 async def fetch_plan(monkeypatch, task, task_id="run"):
     # 唯一依赖为任务读取；Fake 不提供任何模型、GitHub 或写入方法。
-    monkeypatch.setattr(reviews, "get_review_service", lambda: SimpleNamespace(get_task=lambda identity: task if identity == task_id else None))
+    monkeypatch.setattr(reviews, "get_review_service", lambda: SimpleNamespace(get_task=lambda identity: task if identity == task_id else None,
+                                    finding_dispositions=lambda _: {}))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         return await client.get(f"/api/reviews/{task_id}/publication-plan")
 
@@ -72,7 +73,8 @@ async def test_historical_incomplete_tasks_always_get_conservative_plan(monkeypa
 
 
 async def fetch_summary(monkeypatch, task, task_id="run"):
-    monkeypatch.setattr(reviews, "get_review_service", lambda: SimpleNamespace(get_task=lambda identity: task if identity == task_id else None))
+    monkeypatch.setattr(reviews, "get_review_service", lambda: SimpleNamespace(get_task=lambda identity: task if identity == task_id else None,
+                                    finding_dispositions=lambda _: {}))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         return await client.get(f"/api/reviews/{task_id}/publication-summary")
 

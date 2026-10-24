@@ -16,11 +16,11 @@ from app.api import reviews
 from app.main import app
 from app.models.orm import PreviewInputCacheOrm, PreviewJobOrm, ReviewPreviewOrm, utcnow
 from app.models.review import ReviewPreviewRequest
-from app.services.preview_input_cache import PreviewInputCache, input_cache_key
-from app.services.preview_jobs import PreviewJobs, PreviewJobStore, PreviewLeaseLost
-from test_review_plans import plan_service as plan_service, confirmation
-from test_task_runtime_p4 import production_input as production_input
-from test_phase6a_persistence import persistence as persistence
+from app.services.preview.preview_input_cache import PreviewInputCache, input_cache_key
+from app.services.preview.preview_jobs import PreviewJobs, PreviewJobStore, PreviewLeaseLost
+from tests.support.review_plans import confirmation, plan_service as plan_service
+from tests.support.runtime_harness import production_input as production_input
+from tests.support.persistence import persistence as persistence
 
 REQUEST = ReviewPreviewRequest(pr_url="https://github.com/o/r/pull/1")
 
@@ -134,7 +134,7 @@ async def test_bad_or_expired_cache_rebuilds_and_changed_identity_misses(plan_se
         session.get(PreviewInputCacheOrm, key).expires_at = utcnow() - timedelta(seconds=1)
     await service.preview(REQUEST)
     assert clone.call_count == 2
-    from app.graph.nodes.task_review_runtime import task_runtime_configuration
+    from app.review.runtime_spec import task_runtime_configuration
     configuration = task_runtime_configuration()
     assert input_cache_key(pr, configuration) != input_cache_key(
         pr.model_copy(update={"head": pr.head.model_copy(update={"sha": "f" * 40})}), configuration)
@@ -149,20 +149,20 @@ def test_cache_capacity_and_oversize_are_bounded(persistence, monkeypatch):
         cache.put(str(n), payload)
     with persistence[2]() as session:
         assert len(list(session.scalars(select(PreviewInputCacheOrm)))) == 4
-    monkeypatch.setattr("app.services.preview_input_cache.MAX_BYTES", 1)
+    monkeypatch.setattr("app.services.preview.preview_input_cache.MAX_BYTES", 1)
     cache.put("oversize", payload)
     assert cache.get("oversize") is None
 
 
 def test_large_repetitive_index_is_compressed_and_expansion_is_bounded(persistence, monkeypatch):
     cache = PreviewInputCache(persistence[0])
-    monkeypatch.setattr("app.services.preview_input_cache.MAX_BYTES", 4096)
+    monkeypatch.setattr("app.services.preview.preview_input_cache.MAX_BYTES", 4096)
     payload = {"diff": "source text\n" * 20000,
         "index": {"file_index": [], "symbol_index": [], "repository_graph": {}, "project_meta": {}},
         "diff_context": {}}
     cache.put("large", payload)
     assert cache.get("large") == payload
-    monkeypatch.setattr("app.services.preview_input_cache.MAX_RAW_BYTES", 1000)
+    monkeypatch.setattr("app.services.preview.preview_input_cache.MAX_RAW_BYTES", 1000)
     assert cache.get("large") is None
     cache.put("too-large-expanded", payload)
     assert cache.get("too-large-expanded") is None
@@ -174,7 +174,7 @@ async def test_formal_review_reuses_index_only_for_matching_actual_diff_and_snap
     from app.tools.repo_indexer import RepoIndexer
     service, state, _, _, pr = plan_service
     await service.preview(REQUEST)
-    from app.graph.nodes.task_review_runtime import task_runtime_configuration
+    from app.review.runtime_spec import task_runtime_configuration
     state = {**state, "pr_info": pr.model_dump(mode="json"),
              "task_runtime_configuration": task_runtime_configuration()}
     state["diff_text"] = service._git_tool.clone_and_diff()[1]

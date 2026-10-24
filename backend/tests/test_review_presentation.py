@@ -3,13 +3,13 @@ from copy import deepcopy
 import pytest
 
 from app.models.publication import PublicationPlan
-from app.services.fingerprints import stable_hash
-from app.services.publication_planner import PublicationPlanner
-from app.services.publication_repository import finding_fingerprint
-from app.services.publication_worker import compose_summary
-from test_publication_planner import publishable_task
-from test_phase6a_persistence import persistence as persistence
-from test_review_outcome import completed_task
+from app.core.fingerprints import stable_hash
+from app.services.publication.publication_planner import PublicationPlanner
+from app.services.publication.publication_repository import finding_fingerprint
+from app.services.publication.publication_worker import compose_summary
+from tests.support.review_tasks import publishable_task as publishable_task
+from tests.support.persistence import persistence as persistence
+from tests.support.review_tasks import completed_task as completed_task
 
 
 def new_output(task):
@@ -68,7 +68,7 @@ def test_old_frozen_plan_serialization_and_hash_remain_unchanged():
 
 
 def test_full_copy_keeps_scope_and_safe_historical_links():
-    from app.services.publication_renderer import render_review_comment
+    from app.services.publication.publication_renderer import render_review_comment
     plan = PublicationPlanner().build(new_output(publishable_task()))
     finding = plan.presentation.findings[0]
     finding.default_selection_reason = "historical_duplicate"
@@ -84,7 +84,7 @@ def test_full_copy_keeps_scope_and_safe_historical_links():
 @pytest.mark.parametrize("synthesis_status", ["ready", "fallback"])
 def test_author_purpose_omits_requested_editorial_labels(synthesis_status):
     from app.models.publication import ChangeUnderstanding
-    from app.services.publication_renderer import render_review_comment, render_summary
+    from app.services.publication.publication_renderer import render_review_comment, render_summary
 
     goal = "通过放宽区间边界调整点估计。"
     plan = PublicationPlanner().build(new_output(completed_task()))
@@ -106,7 +106,7 @@ def test_author_purpose_omits_requested_editorial_labels(synthesis_status):
 @pytest.mark.parametrize("synthesis_status", ["ready", "fallback", "unavailable"])
 def test_overview_is_one_paragraph_from_presentation_for_all_delivery_modes(synthesis_status):
     from app.models.publication import ChangeUnderstanding
-    from app.services.publication_renderer import render_review_comment, render_summary
+    from app.services.publication.publication_renderer import render_review_comment, render_summary
 
     plan = PublicationPlanner().build(new_output(completed_task()))
     implementation = "当点估计位于区间之外时，使用 min(lo, point) 和 max(hi, point) 扩展区间，避免缩窄原有范围。"
@@ -141,8 +141,8 @@ def test_overview_is_one_paragraph_from_presentation_for_all_delivery_modes(synt
 ])
 def test_fallback_uses_deterministic_diff_metadata(diff_summary, expected, absent):
     from app.models.publication import ChangeUnderstanding
-    from app.services.publication_renderer import render_summary
-    from app.services.review_presentation import build_presentation
+    from app.services.publication.publication_renderer import render_summary
+    from app.services.publication.review_presentation import build_presentation
 
     plan = PublicationPlanner().build(new_output(completed_task()))
     plan.digest.change_understanding = ChangeUnderstanding(
@@ -167,8 +167,8 @@ def test_fallback_uses_deterministic_diff_metadata(diff_summary, expected, absen
 ])
 def test_ready_summary_preserves_saved_observations_without_keyword_rewriting(tests):
     from app.models.publication import ChangeUnderstanding
-    from app.services.publication_renderer import markdown_text, render_summary
-    from app.services.review_presentation import build_presentation
+    from app.services.publication.publication_renderer import markdown_text, render_summary
+    from app.services.publication.review_presentation import build_presentation
 
     plan = PublicationPlanner().build(new_output(completed_task()))
     implementation = ("代码中 lo = min(lo, point) 与 hi = max(hi, point)"
@@ -190,7 +190,7 @@ def test_ready_summary_preserves_saved_observations_without_keyword_rewriting(te
 
 
 def test_overview_does_not_repeat_test_observation_already_in_summary():
-    from app.services.publication_renderer import render_summary
+    from app.services.publication.publication_renderer import render_summary
 
     plan = PublicationPlanner().build(new_output(completed_task()))
     tests = "新增区间包含性测试用例。"
@@ -202,7 +202,7 @@ def test_overview_does_not_repeat_test_observation_already_in_summary():
 
 
 def test_overview_does_not_restore_test_observation_outside_visible_excerpt():
-    from app.services.publication_renderer import render_summary
+    from app.services.publication.publication_renderer import render_summary
 
     plan = PublicationPlanner().build(new_output(completed_task()))
     tests = "新增区间包含性测试用例。"
@@ -214,7 +214,7 @@ def test_overview_does_not_restore_test_observation_outside_visible_excerpt():
 
 
 def test_overview_preserves_negation_without_appending_separate_test_observation():
-    from app.services.publication_renderer import render_summary
+    from app.services.publication.publication_renderer import render_summary
 
     plan = PublicationPlanner().build(new_output(completed_task()))
     plan.presentation.change_summary = "未新增区间包含性测试用例。"
@@ -224,7 +224,7 @@ def test_overview_preserves_negation_without_appending_separate_test_observation
 
 
 def test_missing_purpose_and_observations_does_not_invent_changes():
-    from app.services.publication_renderer import render_summary
+    from app.services.publication.publication_renderer import render_summary
 
     plan = PublicationPlanner().build(new_output(completed_task()))
     plan.presentation.purpose_text = None
@@ -236,8 +236,8 @@ def test_missing_purpose_and_observations_does_not_invent_changes():
 
 def test_summary_coverage_warns_only_for_diff_that_limits_the_summary():
     from app.models.review_synthesis import ReviewSynthesisArtifact
-    from app.services.publication_renderer import render_summary, render_technical_audit
-    from app.services.review_presentation import build_presentation
+    from app.services.publication.publication_renderer import render_summary, render_technical_audit
+    from app.services.publication.review_presentation import build_presentation
 
     plan = PublicationPlanner().build(new_output(completed_task()))
     artifact = ReviewSynthesisArtifact(
@@ -265,8 +265,8 @@ def test_summary_coverage_warns_only_for_diff_that_limits_the_summary():
 
 
 def test_investigation_is_one_actionable_item_not_a_finding_or_generic_warning():
-    from app.services.publication_renderer import render_review_comment, render_technical_audit
-    from app.services.review_digest import execution_record
+    from app.services.publication.publication_renderer import render_review_comment, render_technical_audit
+    from app.services.review.review_digest import execution_record
 
     task = completed_task(
         initial_scope_coverage=[
@@ -340,7 +340,7 @@ def test_old_presentation_roundtrip_does_not_add_summary_coverage_or_change_hash
 
 
 def test_frozen_v1_plan_keeps_test_supplement_body_and_hash_for_publication_recovery():
-    from app.services.publication_renderer import render_review_comment, render_summary
+    from app.services.publication.publication_renderer import render_review_comment, render_summary
 
     plan = PublicationPlanner().build(new_output(completed_task()))
     plan.presentation.schema_version = "review-presentation-v1"
@@ -362,8 +362,8 @@ def test_frozen_v1_plan_keeps_test_supplement_body_and_hash_for_publication_reco
 
 def test_test_only_fallback_does_not_use_model_prose_as_the_summary():
     from app.models.publication import ChangeUnderstanding
-    from app.services.publication_renderer import render_review_comment, render_user_report
-    from app.services.review_presentation import build_presentation
+    from app.services.publication.publication_renderer import render_review_comment, render_user_report
+    from app.services.publication.review_presentation import build_presentation
 
     task = new_output(completed_task())
     plan = PublicationPlanner().build(task)
@@ -392,7 +392,7 @@ def test_unknown_finding_status_is_not_promoted_to_no_confirmed_problem():
 
 @pytest.mark.parametrize("synthesis_status", ["ready", "fallback"])
 def test_overview_does_not_fill_remaining_sentences_with_test_observations(synthesis_status):
-    from app.services.publication_renderer import render_summary
+    from app.services.publication.publication_renderer import render_summary
 
     plan = PublicationPlanner().build(new_output(completed_task()))
     plan.presentation.synthesis_status = synthesis_status
@@ -406,7 +406,7 @@ def test_overview_does_not_fill_remaining_sentences_with_test_observations(synth
 
 
 def test_four_sentence_summary_does_not_grow_with_supplementary_test_observations():
-    from app.services.publication_renderer import render_summary
+    from app.services.publication.publication_renderer import render_summary
 
     plan = PublicationPlanner().build(new_output(completed_task()))
     summary = "调整区间边界。保留下界。扩展上界。增加点估计包含性断言。"
@@ -417,7 +417,7 @@ def test_four_sentence_summary_does_not_grow_with_supplementary_test_observation
 
 
 def test_long_test_observation_is_not_cut_before_its_limitation():
-    from app.services.publication_renderer import render_summary
+    from app.services.publication.publication_renderer import render_summary
 
     plan = PublicationPlanner().build(new_output(completed_task()))
     plan.presentation.change_summary = "调整区间边界。"
@@ -429,7 +429,7 @@ def test_long_test_observation_is_not_cut_before_its_limitation():
 
 
 def test_default_clean_result_is_one_conclusion_without_delivery_accounting():
-    from app.services.publication_renderer import render_review_comment, render_summary
+    from app.services.publication.publication_renderer import render_review_comment, render_summary
 
     plan = PublicationPlanner().build(new_output(completed_task()))
     for markdown in (render_summary(plan), render_review_comment(plan)):
@@ -447,7 +447,7 @@ def test_default_clean_result_is_one_conclusion_without_delivery_accounting():
     ("medium", "请评估上述非高优先级问题的业务影响"),
 ])
 def test_default_findings_keep_full_list_and_action_without_duplicate_editorial_summary(severity, action):
-    from app.services.publication_renderer import render_review_comment
+    from app.services.publication.publication_renderer import render_review_comment
 
     task = publishable_task(severity=severity, claim="权限绕过导致未授权数据访问")
     task.task_runtime_report["findings"][0]["issue"]["confidence"] = 0.99
@@ -467,7 +467,7 @@ def test_default_findings_keep_full_list_and_action_without_duplicate_editorial_
 
 def test_short_output_keeps_combined_blocker_and_head_validation_failure():
     from app.models.review import TestRunResult as RunResult, ValidationSnapshot
-    from app.services.publication_renderer import render_review_comment, render_summary
+    from app.services.publication.publication_renderer import render_review_comment, render_summary
 
     task = publishable_task(severity="high", claim="权限绕过导致未授权数据访问")
     task.task_runtime_report["findings"][0]["issue"]["confidence"] = 0.99
@@ -490,7 +490,7 @@ def test_short_output_keeps_combined_blocker_and_head_validation_failure():
     ("unknown", "动态验证状态未知"),
 ])
 def test_short_validation_section_preserves_all_validation_states(state, expected):
-    from app.services.publication_renderer import render_summary
+    from app.services.publication.publication_renderer import render_summary
 
     plan = PublicationPlanner().build(new_output(completed_task()))
     plan.digest.validation_state = state
@@ -502,7 +502,7 @@ def test_short_validation_section_preserves_all_validation_states(state, expecte
 
 
 def test_unknown_scope_is_not_presented_as_zero_of_zero_completed():
-    from app.services.publication_renderer import render_summary
+    from app.services.publication.publication_renderer import render_summary
 
     plan = PublicationPlanner().build(new_output(completed_task(initial_scope_coverage=[])))
     markdown = render_summary(plan)

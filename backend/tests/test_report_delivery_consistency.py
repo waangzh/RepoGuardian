@@ -7,15 +7,15 @@ import pytest
 from app.api import reviews
 from app.main import app
 from app.models.review import TestRunResult as RunResult, ValidationSnapshot
-from app.services.publication_planner import PublicationPlanner
-from app.services.review_findings import finding_views
-from app.services.review_runtime import TaskReviewRuntime
-from app.services.review_task_protocol import TaskReviewV1Protocol
-from app.services.task_review_projection import project_task_runtime
-from app.tools.github_tool import GitHubToolError
-from test_publication_planner import publishable_task
-from test_review_outcome import completed_task
-from test_task_review_sdk_slice import make_slice
+from app.services.publication.publication_planner import PublicationPlanner
+from app.services.review.review_findings import finding_views
+from app.services.review.review_runtime import TaskReviewRuntime
+from app.services.review.review_task_protocol import TaskReviewV1Protocol
+from app.services.review.task_review_projection import project_task_runtime
+from app.tools.github.github_tool import GitHubToolError
+from tests.support.review_tasks import publishable_task as publishable_task
+from tests.support.review_tasks import completed_task as completed_task
+from tests.support.runtime_harness import make_slice
 
 
 @pytest.mark.parametrize("strong,expected", [(False, "medium"), (True, "high")])
@@ -24,7 +24,7 @@ async def test_effective_severity_agrees_across_api_digest_comment_and_merge(mon
     if strong:
         task.task_runtime_report["findings"][0]["issue"]["confidence"] = 0.9
     original = deepcopy(task.task_runtime_report)
-    monkeypatch.setattr(reviews, "get_review_service", lambda: SimpleNamespace(get_task=lambda _: task, _repository=None, _dispositions={}))
+    monkeypatch.setattr(reviews, "get_review_service", lambda: SimpleNamespace(get_task=lambda _: task, finding_dispositions=lambda _: {}))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         views = (await client.get(f"/api/reviews/{task.id}/findings")).json()["items"]
         plan = (await client.get(f"/api/reviews/{task.id}/publication-plan")).json()
@@ -121,7 +121,7 @@ async def test_single_finding_copy_uses_latest_server_body_and_head_check(monkey
     task.task_runtime_report["findings"].append(other)
     before = deepcopy(task.task_runtime_report)
     monkeypatch.setattr(reviews, "get_review_service", lambda: SimpleNamespace(get_task=lambda _: task,
-        _dispositions={task.id: {"key-a": {"current": {"status": "resolved", "reason": "最新人工处理说明"}}}}))
+        finding_dispositions=lambda _: {"key-a": {"current": {"status": "resolved", "reason": "最新人工处理说明"}}}))
     calls = []
     async def fetch(self, url):
         calls.append(url)
@@ -150,7 +150,8 @@ async def test_single_finding_copy_rejects_unavailable_or_conflicting_selection_
     task = publishable_task()
     if case == "withheld":
         task.task_runtime_report["findings"][0].pop("publication")
-    monkeypatch.setattr(reviews, "get_review_service", lambda: SimpleNamespace(get_task=lambda _: task))
+    monkeypatch.setattr(reviews, "get_review_service", lambda: SimpleNamespace(
+        get_task=lambda _: task, finding_dispositions=lambda _: {}))
     async def fetch(*args):
         pytest.fail("invalid selection must not query GitHub")
     monkeypatch.setattr(reviews.GitHubTool, "fetch_pr", fetch)

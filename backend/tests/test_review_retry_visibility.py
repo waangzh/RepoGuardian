@@ -7,10 +7,10 @@ import pytest
 
 from app.models.orm import WorkerJobOrm, utcnow
 from app.models.review import ReviewCreateRequest, TaskStatus
-from app.services.task_queue import ReviewWorker
-from test_review_plans import plan_service as plan_service
-from test_task_runtime_p4 import production_input as production_input
-from test_phase6a_persistence import persistence as persistence
+from app.services.review.task_queue import ReviewWorker
+from tests.support.review_plans import plan_service as plan_service
+from tests.support.runtime_harness import production_input as production_input
+from tests.support.persistence import persistence as persistence
 
 
 @pytest.mark.parametrize("recover", [False, True])
@@ -19,8 +19,8 @@ async def test_intermediate_failure_remains_active_and_empty_errors_are_diagnost
     task = service.create_task(ReviewCreateRequest(pr_url="https://github.com/o/r/pull/1"), dispatch=False)
     compiled = SimpleNamespace(aget_state=AsyncMock(return_value=SimpleNamespace(values={}, next=())),
                                ainvoke=AsyncMock(side_effect=httpx.ReadTimeout("")))
-    monkeypatch.setattr("app.services.review_service.get_checkpointer", AsyncMock(return_value=None))
-    monkeypatch.setattr("app.services.review_service.build_review_graph",
+    monkeypatch.setattr("app.services.review.review_service.get_checkpointer", AsyncMock(return_value=None))
+    monkeypatch.setattr("app.services.review.review_service.build_review_graph",
                         lambda: SimpleNamespace(compile=lambda **k: compiled))
     queue = service._task_queue
     worker = ReviewWorker(queue, service._handle_job, worker_id="test-retry")

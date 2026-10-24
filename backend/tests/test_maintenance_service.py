@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from app.services import maintenance_service as maintenance_module
-from app.services.maintenance_service import MaintenanceService
+from app.services.workspaces import maintenance_service as maintenance_module
+from app.services.workspaces.maintenance_service import MaintenanceService
 from app.tools.workspace_cleanup import WorkspaceReapResult
 
 

@@ -4,10 +4,10 @@ from copy import deepcopy
 import pytest
 
 from app.models.review_runtime import ReviewGoal, ReviewWorkItem, RuntimeReadArguments, WorkItemState
-from app.services.review_runtime import TaskReviewRuntime
-from app.services.review_task_derivation import build_task_risk_catalog
-from app.services.task_review_projection import project_task_runtime, runtime_failure_summary, task_runtime_summary
-from app.services.task_runtime_checkpoint import TaskRuntimeCheckpoint
+from app.services.review.review_runtime import TaskReviewRuntime
+from app.services.review.review_task_derivation import build_task_risk_catalog
+from app.services.review.task_review_projection import project_task_runtime, runtime_failure_summary, task_runtime_summary
+from app.services.review.task_runtime_checkpoint import TaskRuntimeCheckpoint
 from test_python_call_binding import indexed_graph
 from test_review_report_evidence import investigation_slice
 from test_review_stability import enable

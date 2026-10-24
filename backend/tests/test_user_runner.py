@@ -13,7 +13,7 @@ from app.models.review import (
     ValidationStatus,
 )
 from app.models.runner import RunnerRegistrationRequest, RunnerResultSubmission
-from app.services.user_runner_service import (
+from app.services.external_validation.user_runner_service import (
     InvalidRunnerResult,
     RunnerAuthenticationError,
     RunnerAuthorizationError,
@@ -21,8 +21,8 @@ from app.services.user_runner_service import (
     ValidationRequestConflict,
     ValidationRequestExpired,
 )
-from app.services.review_service import ReviewService
-from app.tools.patch_tool import normalized_patch_sha
+from app.services.review.review_service import ReviewService
+from app.tools.patch_identity import normalized_patch_sha
 from app.validation.user_runner import UserRunnerValidationBackend
 from app.validation import NoValidationBackend, ValidationBackendRegistry, ValidationBackendSelector
 

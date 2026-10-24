@@ -23,8 +23,8 @@ class ReviewScope(PlanModel):
     @field_validator("primary_files")
     @classmethod
     def paths(cls, values):
-        from app.models.review import _validate_repo_relative_path
-        return sorted(set(_validate_repo_relative_path(value) for value in values))
+        from app.core.paths import validate_repo_relative_path
+        return sorted(set(validate_repo_relative_path(value) for value in values))
 
     @model_validator(mode="after")
     def selection(self):
@@ -97,8 +97,8 @@ class FindingLocation(PlanModel):
     @field_validator("path")
     @classmethod
     def normalized_path(cls, value):
-        from app.models.review import _validate_repo_relative_path
-        return _validate_repo_relative_path(value)
+        from app.core.paths import validate_repo_relative_path
+        return validate_repo_relative_path(value)
 
     @model_validator(mode="after")
     def ordered_lines(self):

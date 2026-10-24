@@ -1,64 +1,17 @@
-import asyncio
 import logging
 import sys
-from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.reviews import get_review_service, get_preview_jobs, router as reviews_router
-from app.api.publications import get_publication_service, router as publications_router
-from app.api.validation_requests import router as validation_requests_router
 from app.api.incremental import router as incremental_router
 from app.api.project_ci import router as project_ci_router
+from app.api.publications import router as publications_router
+from app.api.reviews import router as reviews_router
 from app.api.system import router as system_router
-from app.graph.checkpointer import close_checkpointer
-from app.languages.isolation import close_parser_workers
-from app.services.maintenance_service import MaintenanceService
-from app.validation.project_ci import get_project_ci_service
+from app.api.validation_requests import router as validation_requests_router
+from app.bootstrap.dependencies import lifespan
 
-
-@asynccontextmanager
-async def lifespan(_app: FastAPI):
-    from app.core.config import settings
-
-    resolved = settings.resolve_model_profile()
-    log = logging.getLogger("RepoGuardian.LLM")
-    (log.warning if resolved.source == "generic_fallback" else log.info)(
-        "启动模型窗口配置：model=%s model_profile_source=%s profile=%s",
-        settings.repoguardian_model, resolved.source, resolved.profile.model_dump(mode="json"))
-    service = get_review_service()
-    maintenance = MaintenanceService(
-        service._repository,
-        active_workspace_paths=lambda: tuple(service._repo_paths.values()),
-    )
-    await maintenance.run_once()
-    maintenance_task = asyncio.create_task(maintenance.run_forever())
-    service._ensure_worker_started()
-    previews = get_preview_jobs()
-    previews.start()
-    publication = get_publication_service() if settings.repoguardian_github_publish_enabled else None
-    if publication:
-        publication.start()
-    project_ci = get_project_ci_service()
-    if project_ci is not None:
-        project_ci.start_pending_polling()
-    try:
-        yield
-    finally:
-        await previews.close()
-        if publication:
-            await publication.close()
-        maintenance.stop()
-        await maintenance_task
-        if project_ci is not None:
-            await project_ci.close()
-        if service._worker:
-            service._worker.stop()
-        if service._worker_task:
-            await service._worker_task
-        await asyncio.to_thread(close_parser_workers)
-        await close_checkpointer()
 
 # ---------------------------------------------------------------------------
 # 统一日志配置：所有模块共享同一 Logger，控制台输出中文流程日志

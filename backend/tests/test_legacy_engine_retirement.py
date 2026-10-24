@@ -10,11 +10,11 @@ from app.models.review import (
     ReviewTask,
     TaskStatus,
 )
-from app.services.report_service import ReportService
-from app.services.review_service import ReviewService
+from app.services.review.report_service import ReportService
+from app.services.review.review_service import ReviewService
 from app.models.orm import WorkerJobOrm, utcnow
-from app.services.task_queue import NonRetryableJobError
-from test_phase6a_persistence import persistence as persistence
+from app.services.review.task_queue import NonRetryableJobError
+from tests.support.persistence import persistence as persistence
 
 
 def _legacy_snapshot() -> dict:
@@ -120,9 +120,9 @@ async def test_worker_retires_old_jobs_without_changing_historical_task(
     build = Mock(side_effect=AssertionError("retired jobs must not build a graph"))
     load_budget = AsyncMock(side_effect=AssertionError("retired jobs must not load a budget"))
     cleanup = AsyncMock()
-    monkeypatch.setattr("app.services.review_service.build_review_graph", build)
-    monkeypatch.setattr("app.services.review_service.ReviewRunBudget.load_or_create", load_budget)
-    monkeypatch.setattr("app.services.review_service.delete_thread_checkpoints", cleanup)
+    monkeypatch.setattr("app.services.review.review_service.build_review_graph", build)
+    monkeypatch.setattr("app.services.review.review_service.ReviewRunBudget.load_or_create", load_budget)
+    monkeypatch.setattr("app.services.review.review_service.delete_thread_checkpoints", cleanup)
     service = ReviewService(None, None, None, None, None, repository=repository, task_queue=queue)
 
     assert await service._worker.run_once()

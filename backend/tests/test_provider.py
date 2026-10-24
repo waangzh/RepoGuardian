@@ -3,7 +3,7 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from app.agents.providers import LLMProviderError, OpenAICompatibleProvider, build_provider
+from app.llm.providers import LLMProviderError, OpenAICompatibleProvider, build_provider
 from app.models.review import ChangedFile, PullRequestInfo, PullRequestRef
 
 
@@ -28,7 +28,7 @@ class FakeChatOpenAI:
 def fake_chat(monkeypatch: pytest.MonkeyPatch) -> type[FakeChatOpenAI]:
     FakeChatOpenAI.responses = []
     FakeChatOpenAI.instances = []
-    monkeypatch.setattr("app.agents.providers.ChatOpenAI", FakeChatOpenAI)
+    monkeypatch.setattr("app.llm.providers.ChatOpenAI", FakeChatOpenAI)
     return FakeChatOpenAI
 
 
@@ -199,7 +199,7 @@ def test_build_provider_rejects_unknown_provider() -> None:
 
 @pytest.mark.asyncio
 async def test_task_review_step_requires_matching_operation(fake_chat: type[FakeChatOpenAI]) -> None:
-    from app.services.model_request_budgeter import PreparedModelRequest
+    from app.llm.model_request_budgeter import PreparedModelRequest
 
     provider = OpenAICompatibleProvider("key", "https://example.com/v1", "model")
     request = PreparedModelRequest(model="model", operation="diagnosis", system="s",

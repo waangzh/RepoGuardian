@@ -11,7 +11,7 @@ from fastapi import APIRouter, Header, HTTPException, Request, status
 from app.api.reviews import get_review_service
 from app.core.config import settings
 from app.models.incremental import IncrementalWebhookReceipt
-from app.services.incremental_webhook import (
+from app.services.review.incremental_webhook import (
     IncrementalWebhookService, allowed_repositories, parse_synchronize, verify_signature,
 )
 
@@ -55,7 +55,7 @@ async def incremental_webhook(
         return IncrementalWebhookReceipt(delivery_id="missing", status="skipped",
                                          reason="delivery_id_missing")
     service = get_review_service()
-    repository = service._repository
+    repository = service.repository
     if repository is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                             detail="Persistence is required for incremental review")

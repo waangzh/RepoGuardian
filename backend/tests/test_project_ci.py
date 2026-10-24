@@ -11,12 +11,12 @@ from app.models.project_ci import (
     ProjectCIWorkflowRun,
 )
 from app.models.review import PatchValidationRequest, ValidationCheck, ValidationStatus
-from app.services.project_ci_service import ProjectCIEventRejected, ProjectCIService
-from app.tools.github_actions import (
+from app.services.external_validation.project_ci_service import ProjectCIEventRejected, ProjectCIService
+from app.tools.github.github_actions import (
     GitHubActionsPermissionError,
     WorkflowNotFoundError,
 )
-from app.tools.patch_tool import normalized_patch_sha
+from app.tools.patch_identity import normalized_patch_sha
 from app.validation.project_ci import ProjectCIBackend
 
 

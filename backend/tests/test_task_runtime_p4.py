@@ -4,34 +4,25 @@ import subprocess
 import pytest
 from langchain_core.messages import AIMessage
 from langgraph.graph import StateGraph, END
-from app.agents.providers import OpenAICompatibleProvider
+from app.llm.providers import OpenAICompatibleProvider
 from app.graph.nodes.task_review_runtime import task_review_runtime_node
 from app.graph.nodes.report import report_node
 from app.graph.state import ReviewState, ReviewRunContext
-from app.services.review_run_budget import ReviewRunBudget, ReviewRepositoryRunBudgetStore, activate_run_budget
-from app.services.review_planner import DeterministicReviewPlanner
+from app.services.review.review_run_budget import ReviewRunBudget, ReviewRepositoryRunBudgetStore, activate_run_budget
+from app.services.review.review_planner import DeterministicReviewPlanner
 from app.tools.diff_parser import DiffParser
-from test_phase6a_persistence import persistence as persistence
-from app.services.task_queue import DatabaseTaskQueue
+from tests.support.persistence import persistence as persistence
+from app.services.review.task_queue import DatabaseTaskQueue
 
 from app.graph.review_graph import build_review_graph
 from app.models.review import ReviewTask, TaskStatus
-from app.models.review_runtime import TaskRuntimeReport
-from app.services.report_service import ReportService
-from app.services.task_review_projection import task_runtime_summary
-from app.services.review_manifest import build_review_manifest
-from app.services.review_rebuild import rebuild_task_from_state
+from app.services.review.report_service import ReportService
+from app.services.review.task_review_projection import task_runtime_summary
+from app.services.review.review_manifest import build_review_manifest
+from app.services.review.review_rebuild import rebuild_task_from_state
+from tests.support.runtime_harness import runtime_report  # noqa: F401
 
 
-def runtime_report(**updates):
-    value = TaskRuntimeReport(
-        execution_status="completed", termination_reason="plan_exhausted", scope_complete=True,
-        initial_scope_coverage=[{"goal_id": "g1", "status": "examined"}],
-        findings=[{"status": "unresolved", "candidate": {"claim": "候选命题"}, "reason": "证据不足"}],
-        usage_integrity="complete", sent_calls=2, settled_tokens=30,
-        unknown_attempts=0, work_items=[{"work_item_id": "w1", "unit_id": "u1", "state": "completed"}],
-    )
-    return value.model_copy(update=updates)
 
 
 def test_task_runtime_graph_has_single_runtime_node_and_no_legacy_coordination():
@@ -102,49 +93,6 @@ def test_old_task_without_runtime_fields_stays_legacy():
     assert task.engine == "legacy_units" and task.task_runtime_report is None
 
 
-@pytest.fixture
-def production_input(tmp_path):
-    root = tmp_path / "snapshot"
-    root.mkdir()
-    def git(*args):
-        return subprocess.run(["git", "-C", str(root), *args], capture_output=True,
-                              check=True, encoding="utf-8").stdout.strip()
-    git("init")
-    git("config", "user.name", "Test")
-    git("config", "user.email", "test@example.test")
-    (root / "a.py").write_text("def answer():\n    return 1\n", encoding="utf-8")
-    git("add", "a.py")
-    git("commit", "-m", "base")
-    base = git("rev-parse", "HEAD")
-    (root / "a.py").write_text("def answer():\n    return 2\n", encoding="utf-8")
-    git("add", "a.py")
-    git("commit", "-m", "head")
-    head = git("rev-parse", "HEAD")
-    changed = DiffParser().parse(git("diff", "--unified=3", base, head))
-    plan = DeterministicReviewPlanner().plan(changed, base_sha=base, head_sha=head, model="fixture")
-    configuration = {"provider": "openai-compatible", "model": "fixture", "endpoint": "https://example.test/v1",
-        "readable_scope_version": "repository-tracked-v1",
-        "policy_version": "test-v1", "limits": {"max_tokens": 100_000, "max_calls": 5},
-        "concurrency": 2, "deadline_seconds": 10, "request_attempts": 1, "request_timeout_seconds": 60,
-        "request_profile": {"context_window": 32_000}, "max_lines_per_read": 240, "max_search_results": 12}
-    state = {"task_id": "run", "engine": "task_review_v1", "task_runtime_configuration": configuration,
-        "repo_path": str(root), "head_sha": head, "base_sha": base, "pr_url": "https://github.com/o/r/pull/1",
-        "changed_files": [value.model_dump(mode="json") for value in changed], "review_plan": plan.model_dump(mode="json"),
-        "review_units": [value.model_dump(mode="json") for value in plan.review_units],
-        "file_index": [{"path": "a.py"}], "created_at": datetime.now(timezone.utc).isoformat()}
-    calls = []
-    provider = OpenAICompatibleProvider("test-key", configuration["endpoint"], "fixture", request_attempts=1)
-    class SDK:
-        async def ainvoke(self, messages):
-            payload = json.loads(messages[1].content.split("\n")[0])
-            calls.append(payload)
-            assert any("return 2" in value["content"] for value in payload["active_evidence"])
-            assert not any(value["content"] == "" for value in payload["active_evidence"])
-            raw = {"kind": "submit", "examinations": [{"target_id": value["goal_id"], "disposition": "examined",
-                "evidence_ids": payload["active_evidence_ids"], "reason": "核对固定 hunk"} for value in payload["goals"]]}
-            return AIMessage(content=json.dumps(raw), usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15})
-    provider._build_chat_model = lambda *args: SDK()
-    return state, provider, calls
 
 
 async def test_production_node_reuses_budget_and_database_restores_without_resend(production_input, persistence):
@@ -300,7 +248,7 @@ async def test_frozen_repository_scope_reads_caller_beyond_first_forty(productio
 
 def test_executor_rejects_tampered_frozen_readable_scope():
     from app.models.review_runtime import ReviewRunSpec, ReviewGoal, ReviewWorkItem
-    from app.services.review_task_executor import ReviewTaskExecutor
+    from app.services.review.review_task_executor import ReviewTaskExecutor
     spec = ReviewRunSpec(run_id="scope", snapshot_head_sha="a" * 40, snapshot_base_sha="b" * 40,
         diff_manifest_hash="diff", model_provider="fixture", model_name="fixture", policy_version="test",
         max_tokens=10, max_calls=1, readable_scope_files=("a.py", "caller.py", ".env"))
@@ -373,7 +321,7 @@ def test_frozen_configuration_cannot_be_replaced(persistence):
 async def test_service_stream_and_retry_use_saved_snapshot_and_budget(
         production_input, persistence, monkeypatch, caplog, connection_failure):
     caplog.set_level("INFO", logger="RepoGuardian.Service")
-    from app.services.review_service import ReviewService
+    from app.services.review.review_service import ReviewService
     from app.tools.git_tool import GitTool
     from langgraph.checkpoint.memory import InMemorySaver
     import app.graph.review_graph as graph_module
@@ -393,8 +341,8 @@ async def test_service_stream_and_retry_use_saved_snapshot_and_budget(
         return saver
     async def no_cleanup(*args):
         pass
-    monkeypatch.setattr("app.services.review_service.get_checkpointer", checkpointer)
-    monkeypatch.setattr("app.services.review_service._cleanup_repo", no_cleanup)
+    monkeypatch.setattr("app.services.review.review_service.get_checkpointer", checkpointer)
+    monkeypatch.setattr("app.services.review.review_service._cleanup_repo", no_cleanup)
     prepares = []
     async def prepare(input_state):
         prepares.append(input_state["engine"])
@@ -538,9 +486,9 @@ async def test_outer_deadline_during_discussion_recheck_marks_usage_unknown(pers
     import asyncio
     from types import SimpleNamespace
     from app.models.pr_discussion import DiscussionSnapshot
-    from app.services import review_service as service_module
-    from app.services.pr_discussion_store import DiscussionStore
-    from app.services.review_service import ReviewService
+    from app.services.review import review_service as service_module
+    from app.services.discussions.pr_discussion_store import DiscussionStore
+    from app.services.review.review_service import ReviewService
 
     repository = persistence[0]
     configuration = {"provider": "openai-compatible", "model": "fixture",
@@ -577,8 +525,8 @@ async def test_outer_deadline_during_discussion_recheck_marks_usage_unknown(pers
         "rechecks": [], "links": {}}
     repository.save_task(current)
 
-    from app.services.review_run_budget import ReviewRunBudget
-    from app.services.review_run_budget import ReviewRepositoryRunBudgetStore
+    from app.services.review.review_run_budget import ReviewRunBudget
+    from app.services.review.review_run_budget import ReviewRepositoryRunBudgetStore
     # 模拟历史复核已发出一次模型请求，但响应仍在途、尚未结算。
     pinned = await ReviewRunBudget.load_or_create("run", max_tokens=100_000, max_calls=5,
         store=ReviewRepositoryRunBudgetStore(repository))
@@ -599,7 +547,7 @@ async def test_outer_deadline_during_discussion_recheck_marks_usage_unknown(pers
 
     monkeypatch.setattr(service_module, "build_review_graph", lambda: Graph())
     monkeypatch.setattr(service_module, "get_checkpointer", _async_none)
-    from app.services import review_plan
+    from app.services.review import review_plan
     monkeypatch.setattr(review_plan, "remaining_review_seconds",
         lambda configuration, created_at: 0.05)
     async def no_cleanup(*args):
@@ -635,7 +583,7 @@ async def _async_none():
 
 async def test_evaluation_observer_uses_frozen_profile_in_actual_provider(production_input):
     from app.evaluation.runner import ObservedProvider
-    from app.services.model_request_budgeter import ModelRequestProfile
+    from app.llm.model_request_budgeter import ModelRequestProfile
     state, provider, calls = production_input
     provider._profile_override = ModelRequestProfile(context_window=1_000)
     observed = ObservedProvider(provider)

@@ -6,14 +6,14 @@ import asyncio
 import pytest
 
 from app.models.review_runtime import ReviewGoal, ReviewRunSpec, ReviewWorkItem, RuntimeReadArguments
-from app.services.review_runtime import TaskReviewRuntime
-from app.services.review_stability import CONTRACT, source_requests
-from app.services.review_task_derivation import build_task_risk_catalog
-from app.services.review_task_protocol import TaskReviewV1Protocol
-from app.services.task_runtime_checkpoint import TaskRuntimeCheckpoint
+from app.services.review.review_runtime import TaskReviewRuntime
+from app.services.review.review_stability import CONTRACT, source_requests
+from app.services.review.review_task_derivation import build_task_risk_catalog
+from app.services.review.review_task_protocol import TaskReviewV1Protocol
+from app.services.review.task_runtime_checkpoint import TaskRuntimeCheckpoint
 from test_review_report_evidence import investigation_slice
-from test_task_review_sdk_slice import make_slice
-from test_phase6a_persistence import persistence as persistence
+from tests.support.runtime_harness import make_slice
+from tests.support.persistence import persistence as persistence
 
 
 def enable(step):
@@ -78,7 +78,7 @@ def test_sensitive_companion_source_is_a_real_gap_not_a_silently_removed_require
 
 
 def test_v7_unverified_binding_remains_an_optional_hint_not_a_completed_investigation(tmp_path):
-    from test_task_runtime_p3 import configured
+    from tests.support.runtime_harness import configured
     runtime, steps, derivation, _ = configured(tmp_path, [], risk_planner_version="risk-planner-v7")
     goal = derivation.initial_goals["t1"]
     graph = nested_graph()
@@ -95,7 +95,7 @@ def test_v7_unverified_binding_remains_an_optional_hint_not_a_completed_investig
     assert risks and all(risk.get("hint") for risk in risks)
     derivation.risk_catalog = risks
     derivation.refresh()
-    from app.services.task_review_projection import project_task_runtime
+    from app.services.review.task_review_projection import project_task_runtime
     report = project_task_runtime(runtime, steps, [goal], termination_reason="running")
     assert report.relationship_hints and not report.admitted_investigations
     assert not report.unscheduled_leads
@@ -287,7 +287,7 @@ async def test_cancelled_runtime_never_runs_preparatory_reads(tmp_path):
 @pytest.mark.parametrize("boundary", ["response_saved", "recovery_applied"])
 async def test_durable_recovery_crash_replays_once_without_duplicate_model_call(tmp_path, persistence, boundary):
     from app.models.review import ReviewTask
-    from app.services.review_run_budget import ReviewRepositoryRunBudgetStore, ReviewRunBudget
+    from app.services.review.review_run_budget import ReviewRepositoryRunBudgetStore, ReviewRunBudget
     repository = persistence[0]
     repository.create_task(ReviewTask(id="run", pr_url="https://github.com/a/b/pull/1",
                                      engine="task_review_v1"))
@@ -332,7 +332,7 @@ async def test_durable_recovery_crash_replays_once_without_duplicate_model_call(
 async def test_retry_api_accepts_unresolved_investigation_with_complete_initial_coverage(
         persistence, monkeypatch):
     from app.models.review import ReviewTask
-    from app.services.review_service import ReviewService
+    from app.services.review.review_service import ReviewService
     repository, queue, _ = persistence
     task = ReviewTask(id="run", pr_url="https://github.com/a/b/pull/1", engine="task_review_v1",
         status="completed_with_warnings", task_runtime_configuration={"stability_contract": CONTRACT},

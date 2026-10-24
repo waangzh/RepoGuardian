@@ -8,9 +8,9 @@ from langgraph.runtime import Runtime
 
 from app.graph.nodes._events import append_step
 from app.graph.state import ReviewState, ReviewRunContext
-from app.services.prepared_workspaces import prepare_repository
+from app.services.workspaces.prepared_workspaces import prepare_repository
 from app.tools.git_tool import GitProgressEvent, GitTool
-from app.tools.github_tool import GitHubTool
+from app.tools.github.github_tool import GitHubTool
 from app.core.config import settings
 
 logger = logging.getLogger("RepoGuardian.Node")

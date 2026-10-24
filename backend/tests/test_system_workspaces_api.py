@@ -38,7 +38,7 @@ async def test_workspace_preview_and_cleanup_only_remove_expired_inactive_direct
     monkeypatch.setattr(
         system_api,
         "get_review_service",
-        lambda: SimpleNamespace(_repo_paths={"active-task": active}),
+        lambda: SimpleNamespace(active_workspace_paths=lambda: (active,)),
     )
     # workspace_cleanup 使用自己的 time 模块，固定时间避免依赖系统时钟。
     from app.tools import workspace_cleanup

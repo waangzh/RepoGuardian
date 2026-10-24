@@ -6,7 +6,7 @@ from langgraph.runtime import Runtime
 from app.graph.nodes._events import append_step
 from app.graph.state import ReviewState, ReviewRunContext
 from app.models.review import PullRequestInfo
-from app.services.preview_input_cache import PreviewInputCache, input_cache_key
+from app.services.preview.preview_input_cache import PreviewInputCache, input_cache_key
 from app.tools.repo_indexer import RepoIndexer
 
 logger = logging.getLogger("RepoGuardian.Node")

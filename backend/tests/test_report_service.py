@@ -6,7 +6,7 @@ from app.models.review import (
     ReviewTask,
     TaskStatus,
 )
-from app.services.report_service import ReportService
+from app.services.review.report_service import ReportService
 from app.models.review_runtime import TaskRuntimeReport
 
 

@@ -4,10 +4,10 @@ from copy import deepcopy
 
 import pytest
 
-from app.services.publication_planner import PublicationPlanner
-from app.services.publication_renderer import render_review_comment
-from test_publication_planner import publishable_task
-from test_review_outcome import completed_task, discussion
+from app.services.publication.publication_planner import PublicationPlanner
+from app.services.publication.publication_renderer import render_review_comment
+from tests.support.review_tasks import publishable_task as publishable_task
+from tests.support.review_tasks import completed_task, discussion
 
 URL = "https://github.com/o/r/pull/1#discussion_r1"
 
@@ -88,7 +88,7 @@ def test_same_defect_is_counted_once_but_both_sources_remain_visible():
         assert "发现 2 项高优先级问题" not in markdown
         assert "权限绕过导致未授权数据访问" in markdown
     # 技术审计仍分别给出两份证据来源。
-    from app.services.publication_renderer import merge_advice
+    from app.services.publication.publication_renderer import merge_advice
     audit = merge_advice(plan)
     assert "独立缺陷：高优先级问题 1 项" in audit
     assert "本轮记录高优先级 1 项" in audit and "历史复核高优先级 1 项" in audit

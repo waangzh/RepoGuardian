@@ -4,11 +4,11 @@ from copy import deepcopy
 import pytest
 
 from app.models.review import ReviewTask
-from app.services.coordination_runtime import CoordinationLeaseLost
-from app.services.review_run_budget import (
+from app.services.review.coordination_runtime import CoordinationLeaseLost
+from app.services.review.review_run_budget import (
     AttemptState, ReviewRepositoryRunBudgetStore, ReviewRunBudget, RunBudgetError,
 )
-from test_phase6a_persistence import persistence as persistence
+from tests.support.persistence import persistence as persistence
 
 
 @pytest.mark.parametrize("running", [False, True])

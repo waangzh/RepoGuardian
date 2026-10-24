@@ -7,22 +7,22 @@ from langchain_core.messages import AIMessage
 
 from app.models.review import ReviewPreviewRequest
 from app.models.review_plan import ReviewPlanOptions
-from app.services.review_continuation import continuation
-from app.services.review_run_budget import ReviewRunBudget
-from test_review_plans import plan_service as plan_service, confirmation
-from test_phase6a_persistence import persistence as persistence
-from test_task_runtime_p4 import production_input as production_input
+from app.services.review.review_continuation import continuation
+from app.services.review.review_run_budget import ReviewRunBudget
+from tests.support.review_plans import confirmation, plan_service as plan_service
+from tests.support.persistence import persistence as persistence
+from tests.support.runtime_harness import production_input as production_input
 
 
 async def saved_v2(plan_service, monkeypatch, *, blocked=False):
     import json
     from app.graph.nodes.task_review_runtime import task_review_runtime_node
-    from app.services.review_manifest import build_review_manifest
+    from app.services.review.review_manifest import build_review_manifest
     from app.tools.repo_indexer import RepoIndexer
     service, state, provider, _, _ = plan_service
-    from app.graph.nodes import task_review_runtime
-    original = task_review_runtime.task_runtime_configuration
-    monkeypatch.setattr(task_review_runtime, "task_runtime_configuration", lambda *a, **k:
+    from app.review import runtime_spec
+    original = runtime_spec.task_runtime_configuration
+    monkeypatch.setattr(runtime_spec, "task_runtime_configuration", lambda *a, **k:
         {**original(*a, **k), "stability_contract": "review-stability-v2", "deadline_seconds": 600})
     request = ReviewPreviewRequest(pr_url=state["pr_url"], plan=ReviewPlanOptions(include_pr_discussions=False))
     preview = await service.preview(request)
@@ -98,7 +98,7 @@ async def test_resume_rejects_changed_identity_and_rolls_back_failed_enqueue(pla
     preview = await service.preview(request)
     before = service._repository.load_run_budget(task.id)
     if failure == "enqueue":
-        from app.services.task_queue import DatabaseTaskQueue
+        from app.services.review.task_queue import DatabaseTaskQueue
         def reject(*args, **kwargs):
             raise RuntimeError("fixture enqueue failure")
         monkeypatch.setattr(DatabaseTaskQueue, "enqueue", reject)

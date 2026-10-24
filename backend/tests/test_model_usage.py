@@ -5,11 +5,11 @@ import json
 import pytest
 from langchain_core.messages import AIMessage
 
-from app.agents.providers import OpenAICompatibleProvider
+from app.llm.providers import OpenAICompatibleProvider
 from app.models.review import ModelUsage, ReviewUnitComplexity
-from app.services.model_request_budgeter import PreparedModelRequest
-from app.services.model_pricing import calculate_cost_microusd
-from app.services.model_usage import summarize_model_usage
+from app.llm.model_request_budgeter import PreparedModelRequest
+from app.llm.model_pricing import calculate_cost_microusd
+from app.llm.model_usage import summarize_model_usage
 
 
 class _FakeChat:

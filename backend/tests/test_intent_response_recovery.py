@@ -6,21 +6,22 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage
 
-from app.graph.nodes.task_review_runtime import frozen_runtime_spec, task_review_runtime_node
+from app.graph.nodes.task_review_runtime import task_review_runtime_node
+from app.review.runtime_spec import frozen_runtime_spec
 from app.graph.nodes.report import report_node
 from app.models.review import ReviewTask
 from app.models.review_runtime import ReviewGoal
-from app.services.publication_planner import PublicationPlanner
-from app.services.model_request_budgeter import ModelRequestProfile
-from app.services.review_run_budget import ReviewRunBudget, ReviewRepositoryRunBudgetStore
-from app.services.review_runtime import TaskReviewRuntime
-from app.services.review_task_protocol import TaskReviewV1Protocol
-from app.services.task_review_projection import project_task_runtime, runtime_failure_summary
-from app.services.task_runtime_checkpoint import TaskRuntimeCheckpoint
-from test_phase6a_persistence import persistence as persistence
-from test_review_outcome import completed_task
-from test_task_review_sdk_slice import make_slice
-from test_task_runtime_p4 import production_input as production_input
+from app.services.publication.publication_planner import PublicationPlanner
+from app.llm.model_request_budgeter import ModelRequestProfile
+from app.services.review.review_run_budget import ReviewRunBudget, ReviewRepositoryRunBudgetStore
+from app.services.review.review_runtime import TaskReviewRuntime
+from app.services.review.review_task_protocol import TaskReviewV1Protocol
+from app.services.review.task_review_projection import project_task_runtime, runtime_failure_summary
+from app.services.review.task_runtime_checkpoint import TaskRuntimeCheckpoint
+from tests.support.persistence import persistence as persistence
+from tests.support.review_tasks import completed_task as completed_task
+from tests.support.runtime_harness import make_slice
+from tests.support.runtime_harness import production_input as production_input
 
 
 def slice_with_intent(folder, responses, *, max_calls=5, contract="structured-intent-v2"):

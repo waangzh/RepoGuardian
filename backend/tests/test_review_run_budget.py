@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from app.services.review_run_budget import (
+from app.services.review.review_run_budget import (
     AttemptState,
     ReviewRunBudget,
     RunBudgetError,

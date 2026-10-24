@@ -5,19 +5,19 @@ from pathlib import Path
 
 import pytest
 
-from app.graph.nodes.task_review_runtime import task_runtime_configuration
+from app.review.runtime_spec import task_runtime_configuration
 from app.models.review import ReviewTask
 from app.models.review_runtime import ReviewGoal, ReviewRunSpec, ReviewWorkItem
-from app.services.fingerprints import stable_hash
-from app.services.review_run_budget import ReviewRepositoryRunBudgetStore, ReviewRunBudget
-from app.services.review_runtime import TaskReviewRuntime
-from app.services.review_task_executor import ReviewTaskExecutor
-from app.services.review_task_protocol import TaskReviewV1Protocol
-from app.services.task_runtime_checkpoint import TaskRuntimeCheckpoint
-from app.services.task_review_projection import project_task_runtime
+from app.core.fingerprints import stable_hash
+from app.services.review.review_run_budget import ReviewRepositoryRunBudgetStore, ReviewRunBudget
+from app.services.review.review_runtime import TaskReviewRuntime
+from app.services.review.review_task_executor import ReviewTaskExecutor
+from app.services.review.review_task_protocol import TaskReviewV1Protocol
+from app.services.review.task_runtime_checkpoint import TaskRuntimeCheckpoint
+from app.services.review.task_review_projection import project_task_runtime
 from test_intent_context_completeness import spec_for
 from test_intent_response_recovery import slice_with_intent
-from test_phase6a_persistence import persistence as persistence
+from tests.support.persistence import persistence as persistence
 
 
 FIXTURES = Path(__file__).parent / "fixtures"

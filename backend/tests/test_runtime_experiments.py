@@ -9,14 +9,14 @@ from app.evaluation.runtime_experiments import (GROUPS, FIXED_SETTINGS, validate
                                               first_sample_gate, claim_experiment_slot, compare_fixed_scope,
                                               screen_empty_candidate_regression, compare_group_run)
 from app.evaluation.data import sha256
-from app.services.fingerprints import stable_hash
-from app.services.review_runtime import TaskReviewRuntime
-from app.services.task_runtime_checkpoint import TaskRuntimeCheckpoint
-from app.services.review_run_budget import ReviewRunBudget, ReviewRepositoryRunBudgetStore
-from test_task_review_sdk_slice import make_slice
+from app.core.fingerprints import stable_hash
+from app.services.review.review_runtime import TaskReviewRuntime
+from app.services.review.task_runtime_checkpoint import TaskRuntimeCheckpoint
+from app.services.review.review_run_budget import ReviewRunBudget, ReviewRepositoryRunBudgetStore
+from tests.support.runtime_harness import make_slice
 from test_task_runtime_p2 import configured
-from test_task_runtime_p3 import configured as derived_runtime, inspect_submit
-from test_phase6a_persistence import persistence as persistence
+from tests.support.runtime_harness import configured as derived_runtime, inspect_submit
+from tests.support.persistence import persistence as persistence
 
 
 def frozen_plan():
@@ -91,7 +91,7 @@ def test_first_gate_rejects_changed_runtime_versions(monkeypatch, field):
         "execution_status": "completed", "readable_scope_hash": "scope", "scope_complete": True, "work_items": []},
         "task_runtime_configuration": {**plan["runtime_versions"], "experiment": GROUPS["full_180"],
                                        "provider": "deepseek", "model": "deepseek-flash"}}
-    monkeypatch.setattr("app.evaluation.runtime_experiments.reconcile_wire_usage",
+    monkeypatch.setattr("app.evaluation.runtime_shared.reconcile_wire_usage",
                         lambda value: {"integrity": "complete", "wire_attempts": 1})
     assert first_sample_gate(result, plan, "full_180")["admitted"]
     result["task_runtime_configuration"][field] = "old-version"

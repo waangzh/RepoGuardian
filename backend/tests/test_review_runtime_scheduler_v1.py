@@ -1,7 +1,7 @@
 import pytest
 
 from app.models.review_runtime import ReviewWorkItem, WorkItemKind
-from app.services.review_runtime import TaskReviewRuntime
+from app.services.review.review_runtime import TaskReviewRuntime
 
 
 def item(identity):

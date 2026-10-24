@@ -48,7 +48,7 @@ async def test_system_diagnostics_remains_available_without_backend_discovery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        system_api, "get_review_service", lambda: SimpleNamespace(_worker_task=None)
+        system_api, "get_review_service", lambda: SimpleNamespace(worker_running=False)
     )
     monkeypatch.setattr(system_api, "schema_is_current", lambda: True)
 

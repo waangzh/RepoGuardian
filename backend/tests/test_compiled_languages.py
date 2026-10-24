@@ -290,7 +290,7 @@ async def test_call_search_is_language_bounded_and_unresolved(language, target, 
 def test_cache_version_separates_old_indexes(monkeypatch):
     from types import SimpleNamespace
 
-    from app.services import preview_input_cache as cache
+    from app.services.preview import preview_input_cache as cache
     pr = SimpleNamespace(clone_url="https://example.test/repo", base=SimpleNamespace(sha="a" * 40),
                          head=SimpleNamespace(sha="b" * 40))
     configuration = {"call_resolution_version": "import-evidence-v5"}

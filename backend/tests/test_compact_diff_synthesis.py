@@ -7,14 +7,14 @@ import pytest
 
 from app.models.review import PullRequestInfo, ReviewPlan
 from app.models.review_synthesis import ReviewSynthesisArtifact, ReviewSynthesisDraft
-from app.services.fingerprints import stable_hash
-from app.services.publication_planner import PublicationPlanner
-from app.services.review_synthesis_input import SOURCE_POLICY_VERSION, build_synthesis_input
-from app.services.review_synthesis_repository import SynthesisStore
-from app.services.review_synthesis_service import bound_synthesis, freeze_review_synthesis
+from app.core.fingerprints import stable_hash
+from app.services.publication.publication_planner import PublicationPlanner
+from app.services.review.review_synthesis_input import SOURCE_POLICY_VERSION, build_synthesis_input
+from app.services.review.review_synthesis_repository import SynthesisStore
+from app.services.review.review_synthesis_service import bound_synthesis, freeze_review_synthesis
 from app.tools.diff_parser import DiffParser
 from test_incremental_review import PR_INFO, _previous, _result, _unit
-from test_phase6a_persistence import persistence as persistence
+from tests.support.persistence import persistence as persistence
 from test_review_synthesis import draft_for, stub_provider, synthesis_task
 
 
@@ -234,7 +234,7 @@ async def test_missing_observation_falls_back_without_sending(persistence):
 
 
 def test_prepared_cache_does_not_cross_diff_policy(monkeypatch):
-    from app.services import preview_input_cache as cache
+    from app.services.preview import preview_input_cache as cache
 
     task = synthesis_task()
     task.pr = PullRequestInfo.model_validate(PR_INFO)
@@ -249,8 +249,8 @@ def test_prepared_cache_does_not_cross_diff_policy(monkeypatch):
 
 
 def test_changed_hunk_identity_prevents_incremental_goal_reuse():
-    from app.graph.nodes.task_review_runtime import plan_runtime_goals
-    from app.services.incremental_review import reusable_units
+    from app.review.runtime_goals import plan_runtime_goals
+    from app.services.review.incremental_review import reusable_units
 
     previous = _previous([_unit("ru-a", ["a.py"])], [_result("ru-a")])
     wide = parsed_task(context=80).changed_files

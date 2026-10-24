@@ -11,13 +11,13 @@ from sqlalchemy import select
 from app.models.orm import ArtifactOrm, SideEffectOrm, WorkerJobOrm, utcnow
 from app.models.review import ReviewTask
 from app.models.review_runtime import ReviewGoal, ReviewWorkItem
-from app.services.coordination_runtime import CoordinationLeaseLost
-from app.services.review_run_budget import AttemptState, ReviewRepositoryRunBudgetStore, ReviewRunBudget
-from app.services.review_runtime import TaskReviewRuntime
-from app.services.task_context_pages import build_context_pages
-from app.services.task_runtime_checkpoint import TaskRuntimeCheckpoint
-from test_phase6a_persistence import persistence as persistence
-from test_task_review_sdk_slice import make_slice
+from app.services.review.coordination_runtime import CoordinationLeaseLost
+from app.services.review.review_run_budget import AttemptState, ReviewRepositoryRunBudgetStore, ReviewRunBudget
+from app.services.review.review_runtime import TaskReviewRuntime
+from app.services.review.task_context_pages import build_context_pages
+from app.services.review.task_runtime_checkpoint import TaskRuntimeCheckpoint
+from tests.support.persistence import persistence as persistence
+from tests.support.runtime_harness import make_slice
 
 
 def submit(payload):
@@ -48,7 +48,7 @@ async def configured(tmp_path, persistence, *, responses=None, restore=False):
 async def test_connection_failure_persists_safe_usage_and_keeps_unknown_attempts(tmp_path, persistence):
     import httpx
     from openai import APIConnectionError
-    from app.services.task_review_projection import project_task_runtime
+    from app.services.review.task_review_projection import project_task_runtime
     runtime, _, step, messages = await configured(tmp_path / "first", persistence)
     step.provider._request_attempts = 2
     step.provider._retry_backoff_seconds = 0
@@ -167,7 +167,7 @@ async def test_settled_missing_response_keeps_cost_and_retry_uses_new_admission(
 
 
 async def test_v5_candidate_correction_survives_database_restore_without_rechecking(tmp_path, persistence):
-    from app.services.review_task_protocol import TaskReviewV1Protocol
+    from app.services.review.review_task_protocol import TaskReviewV1Protocol
     repository = persistence[0]
     repository.create_task(ReviewTask(id="run", pr_url="https://github.com/a/b/pull/1", engine="task_review_v1"))
     invalid = {"kind": "submit", "examinations": [{"target_id": "t1", "disposition": "examined",
@@ -342,7 +342,7 @@ def test_invalid_page_manifest_cannot_shrink_denominator(tmp_path):
         executor.bind_pages([])
     broken = deepcopy(asdict(pages[0]))
     broken["ranges"][0]["original_end_line"] = 0
-    from app.services.task_context_pages import ContextPage
+    from app.services.review.task_context_pages import ContextPage
     with pytest.raises(ValueError, match="invalid page"):
         executor.bind_pages([ContextPage(**broken)])
 
@@ -396,7 +396,7 @@ async def test_page_progress_and_frozen_correction_survive_restart(tmp_path, per
     repository.create_task(ReviewTask(id="page-run", pr_url="https://github.com/a/b/pull/2", engine="task_review_v1"))
     step.budget = await ReviewRunBudget.load_or_create("page-run", max_tokens=100_000, max_calls=5,
         store=ReviewRepositoryRunBudgetStore(repository))
-    from app.services.review_task_protocol import TaskReviewV1Protocol
+    from app.services.review.review_task_protocol import TaskReviewV1Protocol
     step.protocol = TaskReviewV1Protocol(executor.spec)
     checkpoint = TaskRuntimeCheckpoint(runtime, {"w1": step}, repository)
     await checkpoint.restore()
@@ -442,7 +442,7 @@ async def test_runtime_deadline_preserves_unknown_inflight_usage(tmp_path):
 
 
 def test_artifact_uri_with_spaces_and_invalid_kind_stays_controlled(tmp_path):
-    from app.services.artifact_store import LocalArtifactStore
+    from app.services.review.artifact_store import LocalArtifactStore
     store = LocalArtifactStore(tmp_path / "space directory")
     ref = store.put_text(task_id="run", kind="response", content="完整响应")
     assert store.read_text(ref.uri) == "完整响应"

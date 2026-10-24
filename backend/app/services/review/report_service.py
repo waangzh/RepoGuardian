@@ -1,0 +1,581 @@
+"""Markdown 报告生成器 —— 按实际产出渲染内容优先的审查报告。"""
+
+from collections import Counter
+import html
+import re
+
+from app.models.review import ReviewTask
+
+
+_MODE_LABELS = {
+    "review": "只读审查",
+    "review_and_suggest": "审查并生成修复建议",
+    "review_suggest_and_validate": "审查、修复建议与验证",
+}
+_CONVENTIONAL_TITLE_PREFIX = re.compile(
+    r"^(?:build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)"
+    r"(?:\([^)]*\))?!?:\s*",
+    re.IGNORECASE,
+)
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+class ReportService:
+    """生成 Markdown 格式的代码审查报告，包含 PR 概览、变更、问题、修复、测试等章节。"""
+
+    def generate(self, task: ReviewTask, *, purpose_summary: str | None = None) -> str:
+        """从 ReviewTask 渲染完整 Markdown 报告，仅展示适用或有结果的章节。"""
+        lines: list[str] = ["# RepoGuardian 代码审查报告", ""]
+        if task.engine == "task_review_v1":
+            if not task.task_runtime_report:
+                return "\n".join(lines + ["任务级报告尚未生成，不能据此判断本轮检查完整性。"])
+            from app.services.publication.publication_planner import PublicationPlanner
+            from app.services.publication.publication_renderer import render_technical_audit
+            from app.services.review.review_digest import execution_record
+            plan = PublicationPlanner().build(task)
+            lines = [render_technical_audit(plan, execution_record(task.task_runtime_report))]
+            _append_execution_details(lines, task)
+        else:
+            _append_pr_summary(lines, task)
+            _append_pr_purpose(lines, task, purpose_summary=purpose_summary)
+            _append_issue_summary(lines, task)
+            _append_coverage(lines, task)
+            _append_cross_unit_risk(lines, task)
+            _append_unit_review_records(lines, task)
+            _append_change_summary(lines, task)
+            _append_issue_details(lines, task)
+            _append_static_results(lines, task)
+            _append_validation_results(lines, task)
+            _append_patch_results(lines, task)
+            _append_test_results(lines, task)
+            _append_limitations(lines, task)
+            _append_execution_details(lines, task)
+        return "\n".join(lines)
+
+
+def _append_unit_review_records(lines: list[str], task: ReviewTask) -> None:
+    if not task.review_unit_results:
+        return
+    lines.extend(["## Unit 检查记录", "", "检查状态描述实际检查范围，不代表代码正确性证明。", "",
+                  "| Unit | 已检查目标 | 未解决或未检查目标 | 未决问题 |",
+                  "|---|---:|---|---|"])
+    for result in task.review_unit_results:
+        record = result.review_summary.record
+        checked = sum(item.status == "checked" for item in record.target_checks) if record else 0
+        missing = "；".join(item.target for item in record.target_checks if item.status != "checked") if record else "检查记录未知"
+        questions = "；".join(item.question for item in record.unresolved_questions) if record else "未知"
+        lines.append(f"| {_table_cell(result.review_unit_id)} | {checked} | {_table_cell(missing or '-')} | {_table_cell(questions or '-')} |")
+    lines.append("")
+    for result in task.review_unit_results:
+        if result.diff_manifest and result.coverage_ledger:
+            ledger = result.coverage_ledger
+            reviewed = sum(item.status == "reviewed" for item in ledger.diff_hunks.values())
+            pending = [item.hunk_id for item in result.diff_manifest.hunks
+                       if ledger.diff_hunks.get(item.id) is None or ledger.diff_hunks[item.id].status != "reviewed"]
+            lines.extend([f"### {_inline_text(result.review_unit_id)} Hunk 覆盖账本", "",
+                f"已检查 {reviewed}/{len(result.diff_manifest.hunks)} 个 Hunk；检查状态不表示正确性证明。",
+                "未完成范围：" + _inline_text("；".join(pending) or "无"), "",
+                f"待解决问题：{sum(item.status == 'pending' for item in ledger.questions.values())}", ""])
+        if result.diff_batches:
+            lines.extend([f"### {_inline_text(result.review_unit_id)} 分批覆盖", "",
+                "| 批次 | 状态 | Diff 范围 | 原因 |", "|---|---|---|---|"])
+            for batch in result.diff_batches:
+                ranges = "；".join(f"{item['file_path']}:{item['start_offset']}–{item['end_offset']}"
+                                  for item in batch.ranges)
+                lines.append(f"| {_table_cell(batch.id)} | {batch.status} | {_table_cell(ranges)} | {_table_cell(batch.reason or '-')} |")
+            lines.append("")
+
+
+def _append_cross_unit_risk(lines: list[str], task: ReviewTask) -> None:
+    assessment = task.cross_unit_risk
+    if assessment is None:
+        return
+    labels = {"required": "需要检查", "uncertain": "关系不明确", "skip": "可以跳过"}
+    lines.extend(["## 跨 Unit 风险筛查", "", f"- 判定：{labels[assessment.decision]}",
+                  f"- 协调执行状态：{assessment.execution_status}", ""])
+    for reason in assessment.reasons:
+        lines.append(f"- {_inline_text(reason.detail)}")
+    for diagnostic in assessment.index_diagnostics:
+        lines.append(f"- 索引诊断：{_inline_text(diagnostic)}")
+    lines.append("")
+    plan = task.coordination_plan
+    if plan is None:
+        lines.extend(["未执行跨 Unit 协调或补查。", ""])
+        return
+    lines.extend(["### 跨 Unit 协调与定向补查", "",
+                  f"- 协调判定：{labels[plan.decision]}；状态：{plan.status}",
+                  f"- 理由：{_inline_text(plan.reason)}",
+                  f"- 共享调用预算：{plan.execution_budget.model_calls}/{plan.execution_budget.max_model_calls}",
+                  f"- 估算 token 预算：{plan.execution_budget.token_usage}/{plan.execution_budget.max_token_usage}",
+                  "- 补查独立记录，不计入原始 Unit 覆盖率。", ""])
+    metrics = plan.runtime_metrics
+    lines.extend([f"- 协调运行指纹：{plan.runtime_fingerprint or '旧记录无运行指纹'}",
+                  f"- 本轮调用尝试：{metrics.model_calls}；失败：{metrics.failed_calls}；结果未知：{metrics.unknown_calls}",
+                  f"- 恢复次数：{metrics.resume_count}；账本复用：{metrics.cache_hits}",
+                  f"- 补查候选：{metrics.candidate_count}；独立验证确认：{metrics.confirmed_count}", ""])
+    if plan.catalog_batches:
+        validated = sum(item.status == "validated" for item in plan.catalog_batches)
+        lines.append(f"- 目录批次规划覆盖：{validated}/{len(plan.catalog_batches)}；规划校验不表示代码已验证。")
+        for batch in plan.catalog_batches:
+            lines.append(f"- 目录批次 {_inline_text(batch.id)}：{batch.status}；Unit："
+                         f"{_inline_text('、'.join(batch.unit_ids))}；关系数：{len(batch.relationship_ids)}"
+                         + (f"；{_inline_text(batch.reason)}" if batch.reason else ""))
+    for request in plan.followups:
+        lines.append(f"- {_inline_text(request.id)}：{_inline_text(request.question)}")
+        if request.supporting_files:
+            lines.append(f"  - 必要支持文件：{_inline_text('、'.join(request.supporting_files))}")
+        if request.verification_files:
+            lines.append(f"  - 本问题核验范围：{_inline_text('、'.join(request.verification_files))}")
+    for result in task.followup_results:
+        lines.append(f"- {_inline_text(result.request_id)}：{result.outcome}；{_inline_text(result.reason)}")
+    for question in plan.unresolved_questions:
+        lines.append(f"- 未决：{_inline_text(question)}")
+    question_labels = {"pending": "尚未执行或未覆盖", "invalid": "审查记录无效", "unresolved": "有效结论不足或执行未完成", "resolved": "已解决"}
+    for question in plan.question_states:
+        lines.append(f"- 规划问题[{question_labels[question.status]}]：{_inline_text(question.question)}；"
+                     f"{_inline_text(question.reason)}")
+    lines.append("")
+
+
+def _append_coverage(lines: list[str], task: ReviewTask) -> None:
+    coverage = task.coverage
+    lines.extend([
+        "## 审查覆盖率",
+        "",
+        f"- Changed：{coverage.changed_files}",
+        f"- Eligible：{coverage.eligible_files}",
+        f"- Reviewed：{coverage.reviewed_files}",
+        f"- Partial：{coverage.partial_files}",
+        f"- Skipped：{coverage.skipped_files}",
+        f"- Failed：{coverage.failed_files}",
+        f"- File Coverage：{coverage.coverage_rate:.1%}",
+        f"- Unit Coverage：{coverage.unit_coverage_rate:.1%} "
+        f"({coverage.completed_units}/{coverage.total_units})",
+        f"- 整体审查：{'完整' if coverage.review_complete is True else '未完整完成' if coverage.review_complete is False else '未知'}",
+        f"- 跨 Unit 协调状态：{coverage.coordination_status}",
+        f"- 协调说明：{_inline_text(coverage.coordination_reason or '未记录')}",
+        "",
+    ])
+    incomplete = [item for item in coverage.files if item.status.value != "reviewed"]
+    if incomplete:
+        lines.extend(["| 文件 | 状态 | 原因 |", "|---|---|---|"])
+        for item in incomplete:
+            lines.append(
+                f"| `{item.file_path}` | {item.status.value} | {_table_cell(item.reason or '-')} |"
+            )
+        lines.append("")
+    for unit in coverage.units:
+        gap = unit.input_coverage
+        if gap is None or (
+            gap.target_coverage == "complete"
+            and gap.contract_coverage == "complete"
+            and getattr(gap, "contract_verification_status", "complete") == "complete"
+        ):
+            continue
+        lines.append(f"- Unit {_inline_text(unit.review_unit_id)}：执行状态 {unit.status.value}；"
+                     f"证据输入展示 {gap.evidence_coverage}；目标覆盖 {gap.target_coverage}；"
+                     f"契约闭合 {gap.contract_coverage}；契约证据 {gap.contract_evidence_coverage}；"
+                     f"契约核验 {gap.contract_verification_status}；"
+                     f"原因 {_inline_text(gap.reason or '未记录')}")
+        for target in gap.omitted_targets:
+            lines.append(f"  - 省略目标：{_inline_text(target)}")
+        for question in gap.unresolved_questions:
+            lines.append(f"  - 未决问题：{_inline_text(question)}")
+        for dependency in gap.unresolved_dependencies:
+            lines.append(f"  - 未验证依赖：{_inline_text(dependency)}")
+        for dependency in gap.blocking_dependencies:
+            lines.append(f"  - 阻塞性依赖：{_inline_text(dependency)}")
+    lines.append("")
+
+
+def _append_pr_summary(lines: list[str], task: ReviewTask) -> None:
+    """PR 概览：仓库、编号、标题、链接、base/head。"""
+    if not task.pr:
+        return
+    pr = task.pr
+    lines.extend([
+        "## PR 概览",
+        "",
+        f"- 仓库：{pr.owner}/{pr.repo}",
+        f"- PR：{pr.number}",
+        f"- 标题：{pr.title}",
+        f"- 链接：{pr.html_url}",
+        f"- Base：{pr.base.ref} ({pr.base.sha[:8]})",
+        f"- Head：{pr.head.ref} ({pr.head.sha[:8]})",
+        f"- 审查模式：{_MODE_LABELS.get(task.mode.value, task.mode.value)}",
+        f"- 模型：{task.model or '默认配置'}",
+        "",
+    ])
+
+
+def _append_pr_purpose(
+    lines: list[str],
+    task: ReviewTask,
+    *,
+    purpose_summary: str | None,
+) -> None:
+    """用作者描述和实际变更范围解释 PR 的作用，并明确推断来源。"""
+    if not task.pr:
+        return
+    title_purpose = _plain_text_excerpt(
+        _CONVENTIONAL_TITLE_PREFIX.sub("", task.pr.title).strip(), limit=240
+    )
+    author_purpose = _plain_text_excerpt(task.pr.body or "", limit=600)
+    lines.extend(["## PR 作用", ""])
+    if purpose_summary:
+        lines.append(f"**作者意图（中文概括）：** {_inline_text(purpose_summary)}")
+    elif author_purpose and _contains_chinese(author_purpose):
+        lines.append(f"**作者意图：** {author_purpose}")
+        if (
+            title_purpose
+            and _contains_chinese(title_purpose)
+            and title_purpose.casefold() not in author_purpose.casefold()
+        ):
+            lines.extend(["", f"**标题概括：** {title_purpose}"])
+    elif title_purpose and _contains_chinese(title_purpose):
+        lines.append(f"**作用概括（根据标题）：** {title_purpose}")
+    else:
+        lines.append("**作用概括：** 未获得可靠的中文作者说明，以下根据实际改动归纳。")
+    lines.extend(["", f"**实际改动：** {_change_scope_summary(task)}"])
+    if not purpose_summary and not (
+        _contains_chinese(author_purpose) or _contains_chinese(title_purpose)
+    ):
+        lines.extend([
+            "",
+            "> 未直接复述非中文 PR 标题或正文；实际改动来自 Diff 统计，未视为作者声明。",
+        ])
+    lines.append("")
+
+
+def _append_change_summary(lines: list[str], task: ReviewTask) -> None:
+    """变更概览：文件数、增减行数表格。"""
+    total_additions = sum(file.additions for file in task.changed_files)
+    total_deletions = sum(file.deletions for file in task.changed_files)
+    lines.extend([
+        "## 变更概览",
+        "",
+        f"- 变更文件数：{len(task.changed_files)}",
+        f"- 新增行数：{total_additions}",
+        f"- 删除行数：{total_deletions}",
+        "",
+    ])
+    if task.changed_files:
+        lines.extend(["| 文件 | 类型 | 新增 | 删除 |", "|---|---|---:|---:|"])
+        for file in task.changed_files:
+            lines.append(f"| `{file.file_path}` | {file.change_type} | {file.additions} | {file.deletions} |")
+        lines.append("")
+
+
+def _append_issue_summary(lines: list[str], task: ReviewTask) -> None:
+    """优先展示面向读者的审查结论。"""
+    lines.extend(["## 审查结论", ""])
+    if task.issues:
+        severity_counts = Counter(issue.severity.value for issue in task.issues)
+        confirmed = sum(issue.status.value == "confirmed" for issue in task.issues)
+        lines.append(
+            f"本次审查汇总 {len(task.issues)} 项发现（代码证据已确认 {confirmed} 项，"
+            f"未确认 {len(task.issues) - confirmed} 项），风险等级："
+            f"critical {severity_counts['critical']} 个，"
+            f"high {severity_counts['high']} 个，"
+            f"medium {severity_counts['medium']} 个，"
+            f"low {severity_counts['low']} 个。"
+        )
+    else:
+        lines.append("未发现有明确证据的代码问题。")
+    lines.append("")
+
+
+def _append_issue_details(lines: list[str], task: ReviewTask) -> None:
+    """展示已确认与未确认发现，并明确证据和验证缺口。"""
+    if not task.issues:
+        return
+    lines.extend(["## 详细问题", ""])
+    for index, issue in enumerate(task.issues, start=1):
+        anchor = issue.primary_evidence
+        location = anchor.file_path
+        if anchor.resolved_start_line is not None:
+            location = f"{location}:{anchor.resolved_start_line}"
+            if anchor.resolved_end_line != anchor.resolved_start_line:
+                location += f"-{anchor.resolved_end_line}"
+        lines.extend([
+            f"### 问题 {index}：{issue.title}",
+            "",
+            f"- ID：`{issue.id}`",
+            f"- 位置：`{location}`",
+            f"- 风险等级：{issue.severity.value}",
+            f"- 类型：{issue.category.value}",
+            f"- 置信度：{issue.confidence:.2f}",
+            f"- 评论位置：{issue.placement.value}",
+            f"- 问题状态：{issue.status.value}",
+            f"- 验证结论：{'已确认' if issue.status.value == 'confirmed' else '未确认，请结合证据缺口判断'}",
+            f"- 未确认原因：{issue.unresolved_reason or '无'}",
+            "",
+            "问题说明：",
+            issue.failure_scenario,
+            "",
+            "代码证据：",
+            anchor.existing_code,
+            "",
+            "证据位置：",
+            (
+                f"`{location}` ({anchor.resolution_method.value}, {anchor.resolved_side or '-'})"
+                if anchor.resolved_start_line is not None
+                else f"未定位：{issue.unresolved_reason or anchor.unresolved_reason or 'unknown'}"
+            ),
+            "",
+            "受影响行为：",
+            issue.affected_behavior,
+            "",
+            "假设：",
+            "; ".join(issue.assumptions) or "无",
+            "",
+            "相关测试：",
+            ", ".join(issue.related_tests) or "无",
+            "",
+            "修复建议：",
+            issue.recommendation,
+            "",
+        ])
+        if issue.reasoning_summary:
+            reasoning = issue.reasoning_summary
+            lines.extend([
+                "审计摘要：",
+                f"- 变更：{reasoning.change}",
+                f"- 不变量：{reasoning.invariant}",
+                f"- 违反：{reasoning.violation}",
+                f"- 后果：{reasoning.consequence}",
+                "",
+            ])
+        if issue.supporting_evidence:
+            lines.extend(["Supporting Evidence：", ""])
+            for evidence in issue.supporting_evidence:
+                resolved = (
+                    f":{evidence.resolved_start_line}-{evidence.resolved_end_line}"
+                    if evidence.resolved_start_line is not None else ""
+                )
+                provenance = evidence.provenance.value if evidence.provenance else "-"
+                lines.append(
+                    f"- `{evidence.file_path}{resolved}` "
+                    f"({evidence.resolution_status.value}, {provenance})"
+                )
+            lines.append("")
+
+
+def _append_static_results(lines: list[str], task: ReviewTask) -> None:
+    """仅在实际运行后展示静态分析结果。"""
+    if not task.static_results:
+        return
+    lines.extend(["## 静态分析结果", ""])
+    lines.extend(["| 命令 | 状态 | Exit Code | 耗时 |", "|---|---|---:|---:|"])
+    for result in task.static_results:
+        lines.append(
+            f"| `{result.command}` | {'通过' if result.passed else '失败'} | "
+            f"{result.exit_code} | {result.duration:.2f}s |"
+        )
+    lines.append("")
+
+
+def _append_validation_results(lines: list[str], task: ReviewTask) -> None:
+    """展示 Base、Head 与各补丁的验证快照和差异，保留故障归因。"""
+    if not (task.validation or task.validation_snapshots or task.validation_deltas):
+        return
+    lines.extend(["## 验证结果", ""])
+    if task.validation:
+        lines.extend(["| 后端 | Patch | 状态 | 可信 | 检查 |", "|---|---|---|---|---|"])
+        for result in task.validation:
+            checks = "; ".join(
+                f"{check.name}: {check.status.value}" for check in result.checks
+            )
+            lines.append(
+                f"| {result.backend} | `{(result.patch_id or '')[:8]}` | "
+                f"{result.status.value} | {'是' if result.trusted else '否'} | {checks} |"
+            )
+        lines.append("")
+    if not task.validation_snapshots:
+        return
+
+    lines.extend([
+        "| 阶段 | SHA | Patch | 状态 | 失败类型 | 命令 |",
+        "|---|---|---|---|---|---|",
+    ])
+    for snapshot in task.validation_snapshots:
+        commands = ", ".join(
+            f"{result.command} ({'通过' if result.passed else '失败'}, exit {result.exit_code})"
+            for result in snapshot.command_results
+        ) or "未运行"
+        lines.append(
+            f"| {snapshot.stage.value} | `{snapshot.sha[:8]}` | "
+            f"`{(snapshot.patch_id or '')[:8]}` | {'通过' if snapshot.passed else '失败'} | "
+            f"{snapshot.failure_kind.value if snapshot.failure_kind else '-'} | {commands} |"
+        )
+        if snapshot.failure_detail:
+            lines.append(f"> {snapshot.stage.value}：{snapshot.failure_detail}")
+    lines.append("")
+
+    if task.validation_deltas:
+        lines.extend([
+            "| 比较 | Patch | 新增失败 | 已解决失败 | 结论 |",
+            "|---|---|---|---|---|",
+        ])
+        for delta in task.validation_deltas:
+            outcome = delta.failure_kind.value if delta.failure_kind else "通过"
+            lines.append(
+                f"| {delta.from_stage.value} → {delta.to_stage.value} | "
+                f"`{(delta.patch_id or '')[:8]}` | {'是' if delta.introduced_failure else '否'} | "
+                f"{'是' if delta.resolved_failure else '否'} | {outcome} |"
+            )
+        lines.append("")
+
+
+def _append_patch_results(lines: list[str], task: ReviewTask) -> None:
+    """仅在生成候选修复后展示结果表格。"""
+    if not task.patches:
+        return
+    lines.extend(["## 候选修复结果", ""])
+    lines.extend([
+        "| Patch | Issues | 文件 | 风险 | apply-check | 验证状态 | Head | 过期 |",
+        "|---|---|---|---|---|---|---|---|",
+    ])
+    for patch in task.patches:
+        status = patch.status.value
+        lines.append(
+            f"| `{patch.id[:8]}` | `{', '.join(patch.issue_ids)}` | "
+            f"{', '.join(patch.touched_files)} | {patch.risk} | {patch.apply_check.status.value} | "
+            f"{status} | `{patch.head_sha[:8]}` | {'是' if patch.stale else '否'} |"
+        )
+        if patch.presentation:
+            lines.append(f"> {patch.presentation.warning}")
+        elif status in {"unverified", "suggested"}:
+            lines.append("> 候选修复，尚未运行项目测试。")
+        if patch.error:
+            lines.append(f"> apply-check 错误：{patch.error}")
+    lines.append("")
+
+
+def _append_test_results(lines: list[str], task: ReviewTask) -> None:
+    """仅在实际运行后展示测试结果。"""
+    if not task.test_results:
+        return
+    lines.extend(["## 测试结果", ""])
+    lines.extend(["| 命令 | 状态 | Exit Code | 耗时 |", "|---|---|---:|---:|"])
+    for result in task.test_results:
+        lines.append(
+            f"| `{result.command}` | {'通过' if result.passed else '失败'} | "
+            f"{result.exit_code} | {result.duration:.2f}s |"
+        )
+    lines.append("")
+
+
+def _append_limitations(lines: list[str], task: ReviewTask) -> None:
+    """保留真正影响审查可信度的警告与失败，而不是输出未触发步骤。"""
+    limitations = list(task.warnings)
+    if task.error:
+        limitations.append(task.error)
+    for event in task.agent_events:
+        if event.status in {"failed", "timed_out", "cancelled"}:
+            detail = event.message or event.reason
+            limitations.append(f"{event.action}（{event.status}）：{detail}")
+    limitations = list(dict.fromkeys(item.strip() for item in limitations if item.strip()))
+    if not limitations:
+        return
+    lines.extend(["## 审查限制与警告", ""])
+    lines.extend(f"- {_inline_text(item)}" for item in limitations)
+    lines.append("")
+
+
+def _append_execution_details(lines: list[str], task: ReviewTask) -> None:
+    """将诊断信息放入默认折叠的附录，保持主报告聚焦结论。"""
+    metrics = task.issue_metrics
+    lines.extend([
+        "<details>",
+        "<summary>执行详情（Agent 决策与任务元数据）</summary>",
+        "",
+        "### Issue 流水线",
+        "",
+        (
+            f"候选 {metrics.candidate_issue_count}，"
+            f"确定性过滤 {metrics.deterministic_drop_count}，"
+            f"verifier 丢弃 {metrics.verifier_drop_count}，"
+            f"未确认 {metrics.unresolved_count + metrics.needs_human_count}，"
+            f"重复 {metrics.duplicate_count}，"
+            f"确认 {metrics.confirmed_count}。"
+        ),
+        "",
+    ])
+    if task.agent_events:
+        lines.extend([
+            "### Agent 决策日志",
+            "",
+            "| 动作 | 状态 | 理由 | 消息 |",
+            "|---|---|---|---|",
+        ])
+        for event in task.agent_events:
+            lines.append(
+                f"| {_table_cell(str(event.action))} | {_table_cell(event.status)} | "
+                f"{_table_cell(event.reason)} | {_table_cell(event.message or '')} |"
+            )
+        lines.append("")
+    lines.extend([
+        "### 任务信息",
+        "",
+        f"- 任务 ID：`{task.id}`",
+        f"- 状态：{task.status.value}",
+        f"- 创建时间：{task.created_at.isoformat()}",
+        f"- 更新时间：{task.updated_at.isoformat()}",
+        "",
+        "</details>",
+        "",
+    ])
+
+
+def _change_scope_summary(task: ReviewTask) -> str:
+    files = task.changed_files
+    if not files:
+        return "未解析到可展示的文件变更。"
+    test_files = [file for file in files if _is_test_file(file.file_path)]
+    implementation_count = len(files) - len(test_files)
+    scopes: list[str] = []
+    if implementation_count:
+        scopes.append(f"{implementation_count} 个实现或配置文件")
+    if test_files:
+        scopes.append(f"{len(test_files)} 个测试文件")
+    additions = sum(file.additions for file in files)
+    deletions = sum(file.deletions for file in files)
+    paths = "、".join(f"`{file.file_path}`" for file in files[:4])
+    if len(files) > 4:
+        paths += f" 等 {len(files)} 个文件"
+    return f"涉及{'、'.join(scopes)}，新增 {additions} 行、删除 {deletions} 行；主要包括 {paths}。"
+
+
+def _is_test_file(file_path: str) -> bool:
+    normalized = file_path.casefold()
+    name = normalized.rsplit("/", 1)[-1]
+    return (
+        "/tests/" in f"/{normalized}/"
+        or name.startswith("test_")
+        or name.endswith(("_test.py", ".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx"))
+    )
+
+
+def _plain_text_excerpt(value: str, *, limit: int) -> str:
+    text = _HTML_COMMENT.sub(" ", value)
+    text = re.sub(r"!\[([^]]*)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"\[([^]]+)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", text)
+    text = re.sub(r"(?m)^\s*[-*+]\s+(?:\[[ xX]\]\s*)?", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return _inline_text(text)
+
+
+def _inline_text(value: str) -> str:
+    return html.escape(value, quote=False)
+
+
+def _contains_chinese(value: str) -> bool:
+    return any("\u4e00" <= char <= "\u9fff" for char in value)
+
+
+def _table_cell(value: str) -> str:
+    return _inline_text(value).replace("|", "\\|").replace("\r", " ").replace("\n", " ")

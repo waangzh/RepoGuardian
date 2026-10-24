@@ -1,15 +1,15 @@
 from copy import deepcopy
 
 from app.models.review import ReviewTask
-from app.services.report_service import ReportService
-from app.services.review_task_derivation import build_task_risk_catalog
-from app.services.task_review_projection import group_relationship_leads, relationship_description, project_task_runtime
-from app.services.task_runtime_checkpoint import TaskRuntimeCheckpoint
-from test_phase6a_persistence import persistence as persistence
+from app.services.review.report_service import ReportService
+from app.services.review.review_task_derivation import build_task_risk_catalog
+from app.services.review.task_review_projection import group_relationship_leads, relationship_description, project_task_runtime
+from app.services.review.task_runtime_checkpoint import TaskRuntimeCheckpoint
+from tests.support.persistence import persistence as persistence
 from test_relationship_admission_v5 import v5_graph
-from test_task_runtime_p3 import configured
-from test_task_runtime_p4 import runtime_report
-from app.services.task_review_projection import runtime_failure_summary
+from tests.support.runtime_harness import configured
+from tests.support.runtime_harness import runtime_report
+from app.services.review.task_review_projection import runtime_failure_summary
 
 
 def test_failed_report_exports_fixed_summary_and_preserves_partial_results():

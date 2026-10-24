@@ -99,7 +99,7 @@ def test_malformed_sibling_is_rejected_without_losing_valid_annotation():
 
 
 def test_source_reader_rejects_external_roots_and_symlink_objects_before_blob_read(tmp_path):
-    from app.evaluation.runtime_adjudication_cli import make_source_reader
+    from app.evaluation.cli.runtime_adjudication_cli import make_source_reader
 
     boundary = tmp_path / "runs"
     repository = boundary / "source"
@@ -127,7 +127,7 @@ def test_source_reader_rejects_external_roots_and_symlink_objects_before_blob_re
 
 
 def test_source_reader_reads_exact_registered_sha_and_caches_bounded_blob_identity(tmp_path):
-    from app.evaluation.runtime_adjudication_cli import make_source_reader
+    from app.evaluation.cli.runtime_adjudication_cli import make_source_reader
 
     root = tmp_path / "source"
     root.mkdir()

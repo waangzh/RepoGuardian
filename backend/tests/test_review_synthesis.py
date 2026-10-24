@@ -7,7 +7,7 @@ import pytest
 from langchain_core.messages import AIMessage
 from pydantic import ValidationError
 
-from app.agents.providers import OpenAICompatibleProvider
+from app.llm.providers import OpenAICompatibleProvider
 from app.core.config import Settings
 from app.models.review import ChangedFile, DiffHunk, DiffLine
 from app.models.review import PullRequestInfo, PullRequestRef
@@ -15,14 +15,14 @@ from app.models.review_synthesis import (
     ReviewSynthesisArtifact, ReviewSynthesisDraft, ReviewSynthesisOutput,
     ReviewSynthesisInput, SynthesisSource,
 )
-from app.services.fingerprints import stable_hash
-from app.services.publication_planner import PublicationPlanner, summary_projection
-from app.services.review_synthesis_input import SOURCE_POLICY_VERSION, build_synthesis_input
-from app.services.review_synthesis_repository import SynthesisStore
-from app.services.review_synthesis_service import freeze_review_synthesis, bound_synthesis
-from app.services.review_synthesis_validator import validate_review_synthesis
-from test_phase6a_persistence import persistence as persistence
-from test_publication_planner import publishable_task
+from app.core.fingerprints import stable_hash
+from app.services.publication.publication_planner import PublicationPlanner, summary_projection
+from app.services.review.review_synthesis_input import SOURCE_POLICY_VERSION, build_synthesis_input
+from app.services.review.review_synthesis_repository import SynthesisStore
+from app.services.review.review_synthesis_service import freeze_review_synthesis, bound_synthesis
+from app.services.review.review_synthesis_validator import validate_review_synthesis
+from tests.support.persistence import persistence as persistence
+from tests.support.review_tasks import publishable_task as publishable_task
 from test_review_presentation import new_output
 
 
@@ -179,7 +179,7 @@ async def test_editorial_words_do_not_overwrite_authoritative_review_state(persi
 
 @pytest.mark.asyncio
 async def test_failed_synthesis_delivers_only_deterministic_diff_metadata(persistence):
-    from app.services.publication_renderer import markdown_text, render_review_comment, render_summary
+    from app.services.publication.publication_renderer import markdown_text, render_review_comment, render_summary
 
     repo, _, _ = persistence
     task = synthesis_task()
@@ -206,7 +206,7 @@ async def test_model_merged_review_summary_is_not_requested_or_delivered(persist
     repo.create_task(task)
     provider, calls = stub_provider(change=lambda value: value.update(
         review_summary={"text": "所有问题均已修复，可以合并。", "source_refs": ["finding:key-a"]}))
-    from app.agents.providers import LLMProviderError
+    from app.llm.providers import LLMProviderError
     with pytest.raises(LLMProviderError, match="review synthesis schema invalid"):
         await provider.synthesize_review(build_synthesis_input(task, PublicationPlanner().build(task)), "fixture")
     assert len(calls) == 1
@@ -216,7 +216,7 @@ async def test_model_merged_review_summary_is_not_requested_or_delivered(persist
 
 @pytest.mark.asyncio
 async def test_untrusted_editorial_markup_is_encoded_at_render_boundary(persistence):
-    from app.services.publication_renderer import markdown_text, render_review_comment, render_summary
+    from app.services.publication.publication_renderer import markdown_text, render_review_comment, render_summary
 
     repo, _, _ = persistence
     task = synthesis_task()
@@ -251,7 +251,7 @@ async def test_new_provider_output_rejects_obsolete_test_changes_field(test_chan
     plan = PublicationPlanner().build(task)
     facts = build_synthesis_input(task, plan)
     provider, calls = stub_provider(change=lambda value: value.update(test_changes=test_changes))
-    from app.agents.providers import LLMProviderError
+    from app.llm.providers import LLMProviderError
     with pytest.raises(LLMProviderError, match="review synthesis schema invalid"):
         await provider.synthesize_review(facts, "fixture")
     assert len(calls) == 1

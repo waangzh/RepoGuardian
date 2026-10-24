@@ -12,19 +12,19 @@ from app.models.pr_discussion import (
     DiscussionReadArguments, DiscussionMatch,
 )
 from app.models.review_runtime import Candidate, ReviewGoal, ReviewWorkItem, RuntimeReadArguments
-from app.services.artifact_store import LocalArtifactStore
-from app.services.pr_discussion_store import DiscussionStore
-from app.services.pr_discussions import (
+from app.services.review.artifact_store import LocalArtifactStore
+from app.services.discussions.pr_discussion_store import DiscussionStore
+from app.services.discussions.pr_discussions import (
     summary_valid, thread_input, read_original, discussion_page, prepare_discussions_node, metadata,
 )
-from app.services.pr_discussion_matching import valid_matches, safe_discussion_url
-from app.services.review_run_budget import activate_run_budget
-from app.services.review_task_executor import ReviewTaskExecutor
-from app.services.task_runtime_checkpoint import TaskRuntimeCheckpoint
-from app.tools.github_discussions import GitHubDiscussionReader
-from runtime_v1_fixtures import evidence_catalog
-from test_task_review_sdk_slice import make_slice
-from test_task_runtime_p4 import production_input as production_input  # noqa: E402, F401
+from app.services.discussions.pr_discussion_matching import valid_matches, safe_discussion_url
+from app.services.review.review_run_budget import activate_run_budget
+from app.services.review.review_task_executor import ReviewTaskExecutor
+from app.services.review.task_runtime_checkpoint import TaskRuntimeCheckpoint
+from app.tools.github.github_discussions import GitHubDiscussionReader
+from tests.support.runtime_v1_fixtures import evidence_catalog
+from tests.support.runtime_harness import make_slice
+from tests.support.runtime_harness import production_input as production_input  # noqa: E402, F401
 
 
 def recheck_executor(*, base_visible):
@@ -184,7 +184,7 @@ async def test_memory_mode_graph_nodes_share_one_frozen_discussion_store(tmp_pat
     from app.graph.nodes.task_review_runtime import task_review_runtime_node
     from app.graph.state import ReviewState, ReviewRunContext
     from langgraph.graph import END, StateGraph
-    from app.services.review_run_budget import ReviewRunBudget, activate_run_budget
+    from app.services.review.review_run_budget import ReviewRunBudget, activate_run_budget
     monkeypatch.setattr(settings, "repoguardian_artifact_dir", tmp_path / "artifacts")
     state, provider, calls = production_input
     class EmptyGitHub:
@@ -227,13 +227,13 @@ async def test_memory_mode_missing_frozen_input_is_a_domain_error(tmp_path, prod
 
 async def test_checkpoint_restore_replays_visible_discussions_for_duplicate_matching(tmp_path, persistence):
     from langchain_core.messages import AIMessage
-    from app.agents.providers import OpenAICompatibleProvider
+    from app.llm.providers import OpenAICompatibleProvider
     from app.models.review import ReviewTask, ReviewToolScope
     from app.models.review_runtime import ReviewRunSpec
-    from app.services.review_run_budget import ReviewRepositoryRunBudgetStore, ReviewRunBudget
-    from app.services.review_runtime import TaskReviewRuntime
-    from app.services.review_task_protocol import TaskReviewV1Protocol
-    from app.services.review_task_step import InspectTaskStep
+    from app.services.review.review_run_budget import ReviewRepositoryRunBudgetStore, ReviewRunBudget
+    from app.services.review.review_runtime import TaskReviewRuntime
+    from app.services.review.review_task_protocol import TaskReviewV1Protocol
+    from app.services.review.review_task_step import InspectTaskStep
     repository = persistence[0]
     repository.create_task(ReviewTask(id="run", pr_url=snapshot().pr_url, engine="task_review_v1"))
     entry = thread_input(snapshot().threads[0])
@@ -346,12 +346,12 @@ async def test_budgeted_original_read_is_not_code_evidence(tmp_path):
     step, messages = make_slice(tmp_path, [{"kind": "read", "tool": "discussion_read",
         "arguments": {"discussion_id": "inline:1"}, "purpose": "Read prior objections"}])
     store = await store_for(tmp_path)
-    from app.services.model_request_budgeter import ModelRequestProfile
+    from app.llm.model_request_budgeter import ModelRequestProfile
     step.provider._profile_override = ModelRequestProfile(context_window=20_000)
     step.executor.spec = step.executor.spec.model_copy(update={"prompt_version": "task-review-prompt-v7",
         "discussion_manifest_hash": "frozen", "discussion_context": [thread_input(snapshot().threads[0])],
         "discussion_profile": {"context_window": 20_000}})
-    from app.services.review_task_protocol import TaskReviewV1Protocol
+    from app.services.review.review_task_protocol import TaskReviewV1Protocol
     step.protocol = TaskReviewV1Protocol(step.executor.spec)
     step.discussion_store = store
     before = set(step.executor.evidence_catalog)
@@ -391,8 +391,8 @@ def test_duplicate_requires_visible_exact_source_and_same_subject_trigger_impact
 
 
 async def test_history_only_gaps_do_not_change_diff_outcome_or_legacy_inputs(tmp_path):
-    from test_review_outcome import completed_task
-    from app.services.publication_planner import PublicationPlanner, summary_projection
+    from tests.support.review_tasks import completed_task as completed_task
+    from app.services.publication.publication_planner import PublicationPlanner, summary_projection
     task = completed_task()
     original = PublicationPlanner().build(task).outcome
     task.pr_discussion = {"stats": {"status": "complete", "collected": 1, "comments": 1, "referenced": 1,
@@ -413,7 +413,7 @@ async def test_history_only_gaps_do_not_change_diff_outcome_or_legacy_inputs(tmp
 
 
 async def test_supplemental_queue_checks_files_outside_diff_and_preserves_main_termination(tmp_path, monkeypatch):
-    from app.services import pr_discussion_recheck as module
+    from app.services.discussions import pr_discussion_recheck as module
     step, messages = make_slice(tmp_path, [lambda payload: {"kind": "submit", "investigation": {
         "answer": "supported", "resolution": "still_present", "reason": "Current source still returns null",
         "severity": "high", "affected_behavior": "Unauthenticated calls still reach the protected path",
@@ -448,7 +448,7 @@ async def test_supplemental_queue_checks_files_outside_diff_and_preserves_main_t
 
 
 async def test_outer_deadline_during_recheck_keeps_completed_part_and_marks_rest_unchecked(tmp_path, monkeypatch):
-    from app.services import pr_discussion_recheck as module
+    from app.services.discussions import pr_discussion_recheck as module
     import asyncio
 
     value = snapshot()
@@ -496,7 +496,7 @@ async def test_outer_deadline_during_recheck_keeps_completed_part_and_marks_rest
 
 
 async def test_summary_cap_rejects_before_sending(tmp_path):
-    from app.agents.providers import LLMProviderError
+    from app.llm.providers import LLMProviderError
     step, messages = make_slice(tmp_path, [])
     store = await store_for(tmp_path)
     request = step.protocol.prepare(step.executor.work_item, step.executor.current_goals(),
@@ -508,9 +508,9 @@ async def test_summary_cap_rejects_before_sending(tmp_path):
 
 
 def test_duplicate_default_does_not_withhold_risk_and_explicit_selection_restores_comment():
-    from test_publication_planner import publishable_task
-    from app.services.publication_planner import PublicationPlanner
-    from app.services.publication_renderer import render_review_comment
+    from tests.support.review_tasks import publishable_task as publishable_task
+    from app.services.publication.publication_planner import PublicationPlanner
+    from app.services.publication.publication_renderer import render_review_comment
     task = publishable_task()
     task.pr_discussion = {"manifest_hash": "frozen", "links": {"inline:1": snapshot().threads[0].comments[0].url}}
     verification = task.task_runtime_report["findings"][0]["verification"]
@@ -529,14 +529,14 @@ def test_duplicate_default_does_not_withhold_risk_and_explicit_selection_restore
     assert PublicationPlanner().build(task).inline_drafts[0].default_selected is True
 
 
-from test_phase6a_persistence import persistence as persistence  # noqa: E402, F401
+from tests.support.persistence import persistence as persistence  # noqa: E402, F401
 
 
 async def test_discussion_journal_persistence_cas_cancellation_and_readonly_api(tmp_path, persistence, monkeypatch):
     from fastapi import FastAPI
     from app.api import reviews
     from app.models.review import ReviewTask
-    from app.services.coordination_runtime import CoordinationLeaseLost
+    from app.services.review.coordination_runtime import CoordinationLeaseLost
     repository, _, _ = persistence
     task = ReviewTask(id="run", pr_url=snapshot().pr_url, engine="task_review_v1")
     repository.create_task(task)
@@ -551,7 +551,7 @@ async def test_discussion_journal_persistence_cas_cancellation_and_readonly_api(
     app = FastAPI()
     app.include_router(reviews.router, prefix="/api")
     monkeypatch.setattr(reviews, "get_review_service", lambda: SimpleNamespace(
-        get_task=repository.get_task, _repository=repository))
+        get_task=repository.get_task, repository=repository))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         result = await client.get("/api/reviews/run/discussions")
         assert result.status_code == 200 and result.json()["items"][0]["comments"] == []
@@ -565,9 +565,9 @@ async def test_discussion_journal_persistence_cas_cancellation_and_readonly_api(
 
 
 def test_renamed_history_and_original_read_share_the_context_cap():
-    from app.services.pr_discussion_recheck import thread_path
-    from app.services.pr_discussions import fit_discussion_observations
-    from app.services.model_request_budgeter import PreparedModelRequest, ModelRequestProfile, ModelContextBudget, estimate_tokens
+    from app.services.discussions.pr_discussion_recheck import thread_path
+    from app.services.discussions.pr_discussions import fit_discussion_observations
+    from app.llm.model_request_budgeter import PreparedModelRequest, ModelRequestProfile, ModelContextBudget, estimate_tokens
     from app.models.review_runtime import ReviewRunSpec
     import json
     assert thread_path(snapshot().threads[0], {"src/renamed.py"}, {"src/a.py": "src/renamed.py"}) == "src/renamed.py"
@@ -586,8 +586,8 @@ def test_renamed_history_and_original_read_share_the_context_cap():
 
 
 def test_long_discussion_keeps_readable_id_when_full_text_does_not_fit():
-    from app.services.pr_discussions import select_discussions
-    from app.services.model_request_budgeter import PreparedModelRequest, ModelRequestProfile
+    from app.services.discussions.pr_discussions import select_discussions
+    from app.llm.model_request_budgeter import PreparedModelRequest, ModelRequestProfile
     item = thread_input(snapshot(body="Potential retry issue. " + "x" * 20_000).threads[0])
     request = PreparedModelRequest(model="fixture", operation="task_review_v1", system="source", prompt="source", output_tokens=4096)
     selected = select_discussions([item], {"src/a.py"}, "fixture", ModelRequestProfile(context_window=20_000), request)

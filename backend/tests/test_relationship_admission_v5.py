@@ -2,12 +2,12 @@ from copy import deepcopy
 
 import pytest
 
-from app.services.review_task_derivation import build_task_risk_catalog
-from app.services.task_review_projection import project_task_runtime
+from app.services.review.review_task_derivation import build_task_risk_catalog
+from app.services.review.task_review_projection import project_task_runtime
 from app.graph.nodes.report import _final_status
 from app.graph.nodes.repo_index import repo_index_node
 from test_task_risk_planner import relationship_fixture
-from test_task_runtime_p3 import configured
+from tests.support.runtime_harness import configured
 from test_python_call_binding import indexed_graph
 
 

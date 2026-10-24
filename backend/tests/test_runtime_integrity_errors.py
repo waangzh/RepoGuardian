@@ -12,9 +12,9 @@ from sqlalchemy.orm import Session
 
 from app.models.orm import SideEffectOrm, WorkerJobOrm, utcnow
 from app.models.review import ReviewTask, TaskStatus
-from app.services.coordination_runtime import CoordinationLeaseLost
-from app.services.review_repository import _runtime_integrity_error
-from test_phase6a_persistence import persistence as persistence
+from app.services.review.coordination_runtime import CoordinationLeaseLost
+from app.services.review.review_repository import _runtime_integrity_error
+from tests.support.persistence import persistence as persistence
 
 
 def runtime_payload(task_id, reference, revision=0):

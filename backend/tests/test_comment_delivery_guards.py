@@ -2,9 +2,9 @@
 
 import pytest
 
-from app.services.publication_planner import PublicationPlanner
-from app.services.publication_renderer import comment_selection, render_review_comment
-from test_publication_planner import publishable_task
+from app.services.publication.publication_planner import PublicationPlanner
+from app.services.publication.publication_renderer import comment_selection, render_review_comment
+from tests.support.review_tasks import publishable_task as publishable_task
 
 
 @pytest.mark.parametrize("severity", ["critical", "high", "medium", "low"])

@@ -2,15 +2,15 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from app.agents.providers import LLMProviderError, build_provider
+from app.llm.providers import LLMProviderError, build_provider
 from app.core.config import settings
 from app.graph.nodes._events import append_step
 from app.graph.state import ReviewState
 from app.models.review import ReviewPhase
-from app.services.review_rebuild import rebuild_task_from_state
-from app.services.report_service import ReportService
-from app.services.model_usage import append_usage, unpack_model_call
-from app.services.review_manifest import build_review_manifest, coordination_coverage
+from app.services.review.review_rebuild import rebuild_task_from_state
+from app.services.review.report_service import ReportService
+from app.llm.model_usage import append_usage, unpack_model_call
+from app.services.review.review_manifest import build_review_manifest, coordination_coverage
 from app.models.review import ReviewUnitResult
 from app.review.unit_completion import review_unit_coverage_warning
 

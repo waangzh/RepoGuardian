@@ -4,8 +4,8 @@ import json
 import pytest
 
 from app.models.review_runtime import ReviewGoal, ReviewRunSpec, ReviewWorkItem
-from app.services.review_symbol_context import build_definition_hints
-from app.services.review_task_protocol import TaskReviewV1Protocol
+from app.services.review.review_symbol_context import build_definition_hints
+from app.services.review.review_task_protocol import TaskReviewV1Protocol
 
 
 def spec(version="task-review-prompt-v8", readable=("app/service.py", "app/builder.py")):

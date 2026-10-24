@@ -1,11 +1,11 @@
 import pytest
 from langchain_core.messages import AIMessage
 
-from app.agents.providers import OpenAICompatibleProvider
+from app.llm.providers import OpenAICompatibleProvider
 from app.core.config import Settings
 from app.models.review import ExecutionBudget, ReviewTask
-from app.services.review_run_budget import ReviewRunBudget, ReviewRepositoryRunBudgetStore, activate_run_budget
-from test_phase6a_persistence import persistence as persistence
+from app.services.review.review_run_budget import ReviewRunBudget, ReviewRepositoryRunBudgetStore, activate_run_budget
+from tests.support.persistence import persistence as persistence
 
 
 @pytest.mark.parametrize("field", ["repoguardian_run_max_tokens", "repoguardian_run_max_calls",

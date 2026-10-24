@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from app.services.fingerprints import stable_hash
+from app.core.fingerprints import stable_hash
 
 
 VARIABLES = {"model", "reasoning", "dependency_docs", "task_expression", "context"}

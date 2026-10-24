@@ -3,9 +3,9 @@ import pytest
 from app.api import reviews
 from app.models.persistence import ReviewTaskListResponse
 from app.models.review import TaskStatus
-from app.services.publication_planner import PublicationPlanner
-from test_publication_planner import publishable_task
-from test_review_outcome import completed_task
+from app.services.publication.publication_planner import PublicationPlanner
+from tests.support.review_tasks import publishable_task as publishable_task
+from tests.support.review_tasks import completed_task as completed_task
 
 
 @pytest.mark.asyncio
@@ -26,7 +26,7 @@ async def test_history_projects_saved_results_without_markdown_or_remote_calls(m
             return response
 
     monkeypatch.setattr(reviews, "get_review_service", lambda: Service())
-    import app.services.publication_planner as planner
+    import app.services.publication.publication_planner as planner
     expected = [PublicationPlanner().build(task) for task in tasks]
     monkeypatch.setattr(planner, "render_summary", lambda *_: pytest.fail("history rendered Markdown"))
     monkeypatch.setattr(planner, "render_user_report", lambda *_: pytest.fail("history rendered Markdown"))

@@ -1,10 +1,10 @@
 from copy import deepcopy
 
 from app.models.review_runtime import ReviewGoal
-from app.services.fingerprints import stable_hash
-from app.services.review_task_protocol import TaskReviewV1Protocol
-from app.services.task_context_pages import build_context_pages
-from runtime_v1_fixtures import evidence_catalog
+from app.core.fingerprints import stable_hash
+from app.services.review.review_task_protocol import TaskReviewV1Protocol
+from app.services.review.task_context_pages import build_context_pages
+from tests.support.runtime_v1_fixtures import evidence_catalog
 import hashlib
 import pytest
 

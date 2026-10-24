@@ -4,7 +4,7 @@ import json
 import pytest
 
 from app.evaluation.runtime_source_layout import partition_source_case, layout_inventory, source_layout_prompt
-from app.services.fingerprints import stable_hash
+from app.core.fingerprints import stable_hash
 
 
 def case_fixture():

@@ -51,4 +51,4 @@ select = ["E4", "E7", "E9", "F"]
 include = ["app*"]
 
 [tool.setuptools.package-data]
-"app.tools" = ["deepseek_v4_tokenizer/tokenizer.json"]
+"app.llm" = ["tokenizer/tokenizer.json"]

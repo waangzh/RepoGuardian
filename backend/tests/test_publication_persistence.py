@@ -5,11 +5,11 @@ from sqlalchemy import select, func, inspect, create_engine
 
 from app.models.orm import PublicationAttemptOrm, PublicationItemOrm, WorkerJobOrm, GitHubSummarySlotOrm
 from app.models.publication import PublicationSelection
-from app.services.publication_planner import PublicationPlanner
-from app.services.publication_repository import PublicationRepository, PublicationConflict
-from app.services.fingerprints import stable_hash
-from test_phase6a_persistence import persistence as persistence
-from test_publication_planner import publishable_task
+from app.services.publication.publication_planner import PublicationPlanner
+from app.services.publication.publication_repository import PublicationRepository, PublicationConflict
+from app.core.fingerprints import stable_hash
+from tests.support.persistence import persistence as persistence
+from tests.support.review_tasks import publishable_task as publishable_task
 from test_artifact_schema_migration import migrate
 
 

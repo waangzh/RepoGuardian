@@ -1,7 +1,7 @@
 from app.models.review_runtime import ReviewGoal, ReviewRunSpec, ReviewWorkItem, WorkItemKind
-from app.services.review_task_executor import ReviewTaskExecutor
-from app.services.review_task_protocol import TaskReviewV1Protocol
-from runtime_v1_fixtures import evidence_catalog
+from app.services.review.review_task_executor import ReviewTaskExecutor
+from app.services.review.review_task_protocol import TaskReviewV1Protocol
+from tests.support.runtime_v1_fixtures import evidence_catalog
 import json
 import hashlib
 import pytest

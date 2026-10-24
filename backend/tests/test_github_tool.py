@@ -2,7 +2,7 @@ import pytest
 import asyncio
 import httpx
 
-from app.tools.github_tool import GitHubTool, GitHubToolError, parse_pr_url
+from app.tools.github.github_tool import GitHubTool, GitHubToolError, parse_pr_url
 
 
 def test_parse_pr_url() -> None:
@@ -54,7 +54,7 @@ async def test_fetch_pr_preserves_body(monkeypatch: pytest.MonkeyPatch) -> None:
             assert headers["Accept"] == "application/vnd.github+json"
             return FakeResponse()
 
-    monkeypatch.setattr("app.tools.github_tool.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("app.tools.github.github_tool.httpx.AsyncClient", FakeAsyncClient)
 
     pr = await GitHubTool().fetch_pr("https://github.com/openai/codex/pull/12")
 
@@ -63,7 +63,7 @@ async def test_fetch_pr_preserves_body(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def mocked_github(monkeypatch, handler):
     original = httpx.AsyncClient
-    monkeypatch.setattr("app.tools.github_tool.httpx.AsyncClient", lambda **kwargs:
+    monkeypatch.setattr("app.tools.github.github_tool.httpx.AsyncClient", lambda **kwargs:
         original(transport=httpx.MockTransport(handler), **kwargs))
     return GitHubTool("credential-must-not-leak")
 
@@ -124,7 +124,7 @@ async def test_total_deadline_interrupts_an_inflight_read(monkeypatch):
         await asyncio.sleep(1)
         return httpx.Response(200, text="too late")
     tool = mocked_github(monkeypatch, handler)
-    monkeypatch.setattr("app.tools.github_tool.GITHUB_READ_DEADLINE_SECONDS", 0.01)
+    monkeypatch.setattr("app.tools.github.github_tool.GITHUB_READ_DEADLINE_SECONDS", 0.01)
     with pytest.raises(GitHubToolError) as caught:
         await tool.fetch_diff("https://github.com/o/r/pull/1")
     assert caught.value.code == "github_timeout" and caught.value.api_status == 504

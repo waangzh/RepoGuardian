@@ -426,7 +426,7 @@ def _read_snippet(git_tool: GitTool, repo_path: str, file_path: str, start: int,
 
 
 def _truncate(content: str, limit: int) -> str:
-    from app.services.review_input_context import complete_line_prefix
+    from app.services.review.review_input_context import complete_line_prefix
 
     return complete_line_prefix(content, limit)
 

@@ -1,13 +1,13 @@
 from types import SimpleNamespace
 
 from app.models.review_runtime import IntentAssessment
-from app.services.publication_planner import PublicationPlanner
-from app.services.review_prose import concise_text
-from app.services.review_task_executor import ReviewTaskExecutor
+from app.services.publication.publication_planner import PublicationPlanner
+from app.services.publication.review_prose import concise_text
+from app.services.review.review_task_executor import ReviewTaskExecutor
 from test_intent_response_recovery import payload_for, slice_with_intent
 from test_intent_context_completeness import spec_for
-from test_publication_planner import publishable_task
-from test_review_outcome import completed_task
+from tests.support.review_tasks import publishable_task as publishable_task
+from tests.support.review_tasks import completed_task as completed_task
 
 
 def test_bound_goal_summary_and_separate_test_observations():

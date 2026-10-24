@@ -6,8 +6,8 @@ from pydantic import ValidationError
 from app.models.publication import PublicationPlan
 from app.models.review import TestRunResult as RunResult, ValidationSnapshot
 from app.models.review_runtime import DiscussionInvestigationSubmission, DiscussionInvestigationResult
-from app.services.publication_planner import PublicationPlanner
-from test_review_outcome import completed_task, discussion
+from app.services.publication.publication_planner import PublicationPlanner
+from tests.support.review_tasks import completed_task, discussion
 
 
 @pytest.mark.parametrize("source", ["report", "manifest", "attempts"])

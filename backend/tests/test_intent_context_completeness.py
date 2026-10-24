@@ -8,13 +8,13 @@ from pydantic import ValidationError
 
 from app.api import reviews
 from app.main import app
-from app.graph.nodes.task_review_runtime import frozen_runtime_spec
+from app.review.runtime_spec import frozen_runtime_spec
 from app.models.review_runtime import ReviewRunSpec, TaskRuntimeReport
-from app.services.fingerprints import stable_hash
-from app.services.publication_planner import PublicationPlanner
-from app.services.publication_renderer import render_technical_audit
-from app.services.review_intent import author_targets
-from test_review_outcome import completed_task
+from app.core.fingerprints import stable_hash
+from app.services.publication.publication_planner import PublicationPlanner
+from app.services.publication.publication_renderer import render_technical_audit
+from app.services.review.review_intent import author_targets
+from tests.support.review_tasks import completed_task as completed_task
 
 
 def spec_for(statement, contract="pr-intent-assessment-v2"):
@@ -104,7 +104,7 @@ def test_no_statement_and_invalid_metadata_do_not_become_complete():
 
 async def test_copy_check_preserves_input_gap_and_rechecks_head(monkeypatch):
     task = assessed_task(spec_for("说明" * 2100 + "\n尾部目标"))
-    monkeypatch.setattr(reviews, "get_review_service", lambda: SimpleNamespace(get_task=lambda _: task))
+    monkeypatch.setattr(reviews, "get_review_service", lambda: SimpleNamespace(get_task=lambda _: task, finding_dispositions=lambda _: {}))
     calls = []
     async def fetch(self, url):
         calls.append(url)

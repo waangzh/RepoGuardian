@@ -8,11 +8,11 @@ from sqlalchemy import delete, func, select
 from app.core.config import settings
 from app.models.orm import PreviewInputCacheOrm, ReviewPreviewOrm, WorkerJobOrm
 from app.models.review import ReviewPreviewRequest
-from app.services.review_planner import DeterministicReviewPlanner
+from app.services.review.review_planner import DeterministicReviewPlanner
 from app.tools.repo_indexer import RepoIndexer
-from test_review_plans import plan_service as plan_service, confirmation
-from test_task_runtime_p4 import production_input as production_input
-from test_phase6a_persistence import persistence as persistence
+from tests.support.review_plans import confirmation, plan_service as plan_service
+from tests.support.runtime_harness import production_input as production_input
+from tests.support.persistence import persistence as persistence
 
 
 REQUEST = ReviewPreviewRequest(pr_url="https://github.com/o/r/pull/1")
@@ -100,9 +100,9 @@ async def test_current_configuration_changes_require_repreview_without_github(pl
     elif change == "server_limits":
         monkeypatch.setattr(settings, "repoguardian_run_max_tokens", settings.repoguardian_run_max_tokens + 1)
     else:
-        from app.graph.nodes import task_review_runtime
-        original = task_review_runtime.task_runtime_configuration
-        monkeypatch.setattr(task_review_runtime, "task_runtime_configuration", lambda *args, **kwargs:
+        from app.review import runtime_spec
+        original = runtime_spec.task_runtime_configuration
+        monkeypatch.setattr(runtime_spec, "task_runtime_configuration", lambda *args, **kwargs:
             {**original(*args, **kwargs), "endpoint": "https://changed.invalid"})
     service._github_tool.fetch_pr.reset_mock()
     with pytest.raises(ValueError, match="review_plan_configuration_changed"):
@@ -143,7 +143,7 @@ async def test_configuration_change_during_metadata_request_is_rejected(plan_ser
 async def test_invalid_current_model_profile_requires_repreview_without_exposing_details(plan_service, monkeypatch):
     service, *_ = plan_service
     preview = await service.preview(REQUEST)
-    monkeypatch.setattr("app.graph.nodes.task_review_runtime.task_runtime_configuration",
+    monkeypatch.setattr("app.review.runtime_spec.task_runtime_configuration",
         Mock(side_effect=ValueError("private configuration details")))
     service._github_tool.fetch_pr.reset_mock()
     with pytest.raises(ValueError, match="^review_plan_configuration_changed$"):

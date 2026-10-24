@@ -15,7 +15,7 @@ from app.models.runner import (
     ValidationClaim,
     ValidationRequestSummary,
 )
-from app.services.user_runner_service import (
+from app.services.external_validation.user_runner_service import (
     InvalidRunnerResult,
     RunnerAuthenticationError,
     RunnerAuthorizationError,

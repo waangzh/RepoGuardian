@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from app.models.review_plan import PlanSnapshot
-from app.services.file_context import FileContextError, load_file_context
+from app.services.review.file_context import FileContextError, load_file_context
 
 
 def task(path="src/new.py", old="src/old.py", change="renamed"):

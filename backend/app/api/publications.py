@@ -1,6 +1,5 @@
 """与只读审查路由隔离的本地单用户手动发布 API。"""
 import hmac
-from functools import lru_cache
 from ipaddress import ip_address
 from urllib.parse import urlparse
 
@@ -9,9 +8,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from app.core.config import settings
 from app.models.publication import (PublicationSelection, PublicationAttempt, PublicationAccepted,
     PublicationPreflightRequest, PublicationPreflightResult)
-from app.services.publication_repository import PublicationRepository, PublicationConflict
-from app.services.publication_service import PublicationService
-from app.tools.github_publisher import GitHubPublisher, GitHubPublishError
+from app.services.publication.publication_repository import PublicationConflict
+from app.tools.github.github_publisher import GitHubPublishError
 
 
 def require_operator(request: Request, authorization: str | None = Header(default=None)):
@@ -37,12 +35,7 @@ def require_operator(request: Request, authorization: str | None = Header(defaul
 router = APIRouter(prefix="/reviews", tags=["publications"], dependencies=[Depends(require_operator)])
 
 
-@lru_cache
-def get_publication_service():
-    from app.api.reviews import get_review_service
-    token = settings.repoguardian_github_publish_token
-    return PublicationService(PublicationRepository(), GitHubPublisher(token.get_secret_value() if token else None),
-                              settings, get_review_service().get_task)
+from app.bootstrap.dependencies import get_publication_service  # noqa: E402
 
 
 async def domain_call(awaitable):

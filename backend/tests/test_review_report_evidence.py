@@ -4,14 +4,14 @@ from copy import deepcopy
 
 import pytest
 
-from app.agents.providers import LLMProviderError
+from app.llm.providers import LLMProviderError
 from app.models.review_runtime import ReviewRunSpec, WorkItemKind
-from app.services.publication_planner import PublicationPlanner
-from app.services.model_request_budgeter import ModelRequestProfile
-from app.services.review_task_protocol import TaskReviewV1Protocol
-from app.services.task_runtime_checkpoint import TaskRuntimeCheckpoint
-from test_review_outcome import completed_task
-from test_task_review_sdk_slice import make_slice
+from app.services.publication.publication_planner import PublicationPlanner
+from app.llm.model_request_budgeter import ModelRequestProfile
+from app.services.review.review_task_protocol import TaskReviewV1Protocol
+from app.services.review.task_runtime_checkpoint import TaskRuntimeCheckpoint
+from tests.support.review_tasks import completed_task as completed_task
+from tests.support.runtime_harness import make_slice
 
 
 def investigation_task():

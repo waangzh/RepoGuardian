@@ -6,7 +6,7 @@ from fastapi import HTTPException
 
 from app.api import system
 from app.models.operations import ModelCatalogResponse
-from app.services.model_catalog import ModelCatalogError, fetch_model_catalog
+from app.llm.model_catalog import ModelCatalogError, fetch_model_catalog
 
 
 class FakeAsyncClient:
@@ -33,7 +33,7 @@ class FakeAsyncClient:
 def fake_client(monkeypatch: pytest.MonkeyPatch) -> type[FakeAsyncClient]:
     FakeAsyncClient.request = None
     FakeAsyncClient.response = httpx.Response(200, json={"data": []})
-    monkeypatch.setattr("app.services.model_catalog.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("app.llm.model_catalog.httpx.AsyncClient", FakeAsyncClient)
     return FakeAsyncClient
 
 

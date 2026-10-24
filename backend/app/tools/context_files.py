@@ -10,8 +10,8 @@ import secrets
 from typing import Any
 
 from app.models.review import ChangedFile, ReviewToolScope
-from app.services.fingerprints import stable_hash
-from app.services.review_input_context import build_scope_projection
+from app.core.fingerprints import stable_hash
+from app.services.review.review_input_context import build_scope_projection
 from app.review.tool_scope import (
     ReviewPathPolicyError,
     is_sensitive_repository_path,
@@ -149,8 +149,8 @@ class ScopedContextTool:
     @staticmethod
     def normalize_diff_hunk_ids(target, hunk_ids):
         """只转换当前授权文件正文可重建的原始 ID 与 manifest ID。"""
-        from app.services.review_planner import DeterministicReviewPlanner
-        from app.services.fingerprints import stable_hash
+        from app.services.review.review_planner import DeterministicReviewPlanner
+        from app.core.fingerprints import stable_hash
 
         aliases = {}
         for index, hunk in enumerate(target.hunks):
@@ -210,7 +210,7 @@ class ScopedContextTool:
                 f"{target.old_file_path or target.file_path} -> {target.file_path}"
             )
         selected = set(self.normalize_diff_hunk_ids(target, hunk_ids))
-        from app.services.review_planner import DeterministicReviewPlanner
+        from app.services.review.review_planner import DeterministicReviewPlanner
 
         rendered: list[str] = [f"--- a/{target.old_file_path or file_path}", f"+++ b/{file_path}"]
         included = 0
@@ -293,6 +293,6 @@ class ScopedContextTool:
     def _truncate_content(content: str) -> str:
         if len(content) <= _MAX_CONTENT_CHARS:
             return content
-        from app.services.review_input_context import complete_line_prefix
+        from app.services.review.review_input_context import complete_line_prefix
 
         return complete_line_prefix(content, _MAX_CONTENT_CHARS)

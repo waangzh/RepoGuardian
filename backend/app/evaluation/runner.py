@@ -12,12 +12,13 @@ from uuid import uuid4
 from app.core.config import settings
 from app.evaluation.data import DatasetLock, FrozenSample, sha256
 from app.evaluation.diff_inputs import DiffInputLock, PreparedDiff
+from app.evaluation.runtime_shared import implementation_digest
 from app.graph.review_graph import build_review_graph
 from app.models.review import PullRequestInfo, PullRequestRef, ReviewIssue
 from app.review.issue_audit import capture_issue_audit
 from app.review.run_audit import capture_run_audit
-from app.services.model_usage import unpack_model_call
-from app.services.review_run_budget import ReviewRunBudget, activate_run_budget
+from app.llm.model_usage import unpack_model_call
+from app.services.review.review_run_budget import ReviewRunBudget, activate_run_budget
 from app.tools.git_tool import DIFF_POLICY, DIFF_POLICY_VERSION, GitTool, GitToolError
 
 
@@ -257,7 +258,7 @@ async def run_sample(sample: FrozenSample, provider, workdir: Path, *, timeout_s
                      runtime_configuration: dict | None = None) -> dict:
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive")
-    from app.graph.nodes.task_review_runtime import task_runtime_configuration
+    from app.review.runtime_spec import task_runtime_configuration
     configuration = deepcopy(runtime_configuration) if runtime_configuration is not None else (
         task_runtime_configuration(settings.repoguardian_model, provider=provider))
     observed = ObservedProvider(provider)
@@ -350,11 +351,6 @@ def write_json(path: Path, value: dict):
     temporary.replace(path)
 
 
-def implementation_digest() -> str:
-    code_root = Path(__file__).parents[1]
-    content = b"".join(path.relative_to(code_root).as_posix().encode() + b"\0" +
-                       path.read_bytes() + b"\0" for path in sorted(code_root.rglob("*.py")))
-    return sha256(content)
 
 
 async def run_dataset(lock_path: Path, output: Path, provider, *, sample_ids: list[str] | None = None,
@@ -379,7 +375,7 @@ async def run_dataset(lock_path: Path, output: Path, provider, *, sample_ids: li
                                 experiment_stage, sample_ids, first_gate, quality_gate)
         if await asyncio.to_thread(implementation_digest) != experiment_plan["implementation_sha256"]:
             raise ValueError("experiment implementation changed; new frozen audit plan required")
-        from app.graph.nodes.task_review_runtime import task_runtime_configuration
+        from app.review.runtime_spec import task_runtime_configuration
         configuration = task_runtime_configuration(settings.repoguardian_model, provider=provider)
         if (not experiment_plan.get("runtime_versions") or any(
                 configuration.get(key) != value for key, value in experiment_plan["runtime_versions"].items())):
@@ -409,7 +405,7 @@ async def run_dataset(lock_path: Path, output: Path, provider, *, sample_ids: li
         if limit < 1:
             raise ValueError("limit must be positive")
         samples = samples[:limit]
-    from app.graph.nodes.task_review_runtime import task_runtime_configuration
+    from app.review.runtime_spec import task_runtime_configuration
     configuration = task_runtime_configuration(settings.repoguardian_model, provider=provider)
     if experiment is not None:
         from app.evaluation.runtime_experiments import claim_experiment_slot

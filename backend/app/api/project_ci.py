@@ -15,11 +15,11 @@ from app.models.project_ci import (
     ProjectCIWebhookReceipt,
     ProjectCIWorkflowRun,
 )
-from app.services.project_ci_service import (
+from app.services.external_validation.project_ci_service import (
     ProjectCIEventRejected,
     ProjectCIRequestNotFound,
 )
-from app.validation.project_ci import get_project_ci_service
+from app.bootstrap.dependencies import get_project_ci_service
 
 
 router = APIRouter(prefix="/project-ci", tags=["project-ci"])

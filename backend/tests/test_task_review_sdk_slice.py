@@ -2,61 +2,16 @@ import json
 from copy import deepcopy
 
 import pytest
-from langchain_core.messages import AIMessage
 
-from app.agents.providers import OpenAICompatibleProvider, LLMProviderError
-from app.models.review import ReviewToolScope
-from app.models.review_runtime import ReviewGoal, ReviewRunSpec, ReviewWorkItem
-from app.services.review_run_budget import ReviewRunBudget
-from app.services.review_task_executor import ReviewTaskExecutor
-from app.services.review_task_protocol import TaskReviewV1Protocol
-from app.services.review_task_step import InspectTaskStep
-from runtime_v1_fixtures import evidence_catalog
+from app.llm.providers import LLMProviderError
+from app.services.review.review_task_protocol import TaskReviewV1Protocol
+from tests.support.runtime_harness import make_slice
 
 
-def make_slice(tmp_path, responses, *, max_calls=5):
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src/a.py").write_text("return value\n", encoding="utf-8")
-    spec = ReviewRunSpec(run_id="run", snapshot_head_sha="a" * 40, snapshot_base_sha="b" * 40,
-        diff_manifest_hash="manifest", model_provider="openai-compatible", model_name="fixture",
-        policy_version="p1", max_tokens=100_000, max_calls=max_calls)
-    goal = ReviewGoal(goal_id="t1", unit_id="u1", kind="inspect", target_ref="src/a.py")
-    work = ReviewWorkItem(work_item_id="w1", kind="inspect", goal_ids=["t1"], scope_files=["src/a.py"])
-    executor = ReviewTaskExecutor(spec, work, [goal], active_evidence_ids={"e1"},
-        evidence_catalog=evidence_catalog("e1"), request_id="initial")
-    provider = OpenAICompatibleProvider("stub-key", "https://example.test/v1", "fixture",
-                                       request_attempts=1)
-    messages = []
-
-    class SDKChat:
-        async def ainvoke(self, payload):
-            messages.append(payload)
-            response = responses.pop(0)
-            if callable(response):
-                response = response(json.loads(payload[1].content.split("\n")[0]))
-            return AIMessage(content=response if isinstance(response, str) else json.dumps(response),
-                             usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15})
-
-    class SnapshotGit:
-        _git = "git"
-
-        def _run(self, argv):
-            return "a" * 40
-
-        def get_file_content_at_revision(self, *args):
-            return "return value\n"
-
-    provider._build_chat_model = lambda *args: SDKChat()
-    scope = ReviewToolScope(review_unit_id="w1", commentable_files={"src/a.py"},
-        readable_files={"src/a.py"}, repository_root=str(tmp_path),
-        max_lines_per_read=240, max_search_results=12)
-    budget = ReviewRunBudget("run", max_tokens=spec.max_tokens, max_calls=max_calls)
-    step = InspectTaskStep(executor, provider, budget, scope, git_tool=SnapshotGit())
-    return step, messages
 
 
 async def test_sdk_stub_read_tool_submit_uses_real_provider_budget_and_store(tmp_path):
-    from app.services.review_runtime import TaskReviewRuntime
+    from app.services.review.review_runtime import TaskReviewRuntime
     def submit(payload):
         # Current Prompt actually contains the canonical stored tool evidence text.
         evidence = next(item for item in payload["active_evidence"] if item["id"] != "e1")
@@ -137,7 +92,7 @@ async def test_correction_keeps_rejected_item_and_does_not_advance_page(tmp_path
     step.protocol = TaskReviewV1Protocol(step.executor.spec)
     first = await step.advance()
     assert first["correction_pending"] and not first["page_advanced"]
-    from app.services.task_runtime_checkpoint import TaskRuntimeCheckpoint
+    from app.services.review.task_runtime_checkpoint import TaskRuntimeCheckpoint
     saved = TaskRuntimeCheckpoint._session(step)
     assert saved["rejected_items"][0]["item"]["evidence_ids_note"] is None
     step.rejected_items = []
@@ -154,7 +109,7 @@ async def test_correction_keeps_rejected_item_and_does_not_advance_page(tmp_path
 
 async def test_candidate_correction_stays_on_original_evidence_page(tmp_path):
     import hashlib
-    from app.services.task_context_pages import build_context_pages
+    from app.services.review.task_context_pages import build_context_pages
     def submit_page(payload):
         return {"kind": "submit", "examinations": [{"target_id": "t1", "disposition": "examined",
             "evidence_ids": payload["active_evidence_ids"], "reason": "已检查当前页"}],

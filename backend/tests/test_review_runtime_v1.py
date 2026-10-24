@@ -1,8 +1,8 @@
 from app.models.review_runtime import (
     ReviewGoal, ReviewRunSpec, ReviewWorkItem, RuntimeSubmitResponse, WorkItemKind,
 )
-from app.services.review_task_executor import ReviewTaskExecutor, RuntimeResponseParser
-from runtime_v1_fixtures import evidence_catalog
+from app.services.review.review_task_executor import ReviewTaskExecutor, RuntimeResponseParser
+from tests.support.runtime_v1_fixtures import evidence_catalog
 
 
 HEAD = "a" * 40

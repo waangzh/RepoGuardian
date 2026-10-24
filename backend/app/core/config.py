@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from app.services.model_request_budgeter import ModelRequestProfile
+from app.llm.model_request_budgeter import ModelRequestProfile
 
 
 class Settings(BaseSettings):
@@ -89,7 +89,7 @@ class Settings(BaseSettings):
         default_factory=dict)
 
     def resolve_model_profile(self, model: str | None = None, provider: str | None = None):
-        from app.services.model_request_budgeter import resolve_model_profile
+        from app.llm.model_request_budgeter import resolve_model_profile
 
         return resolve_model_profile(model or self.repoguardian_model,
             provider or self.repoguardian_provider, self.openai_base_url,

@@ -4,13 +4,13 @@ from copy import deepcopy
 import pytest
 
 from app.models.review_runtime import WorkItemState
-from app.services.review_run_budget import ReviewRunBudget, RunBudgetError
-from app.services.review_runtime import TaskReviewRuntime
-from app.services.review_task_protocol import TaskReviewV1Protocol
-from app.services.task_runtime_checkpoint import TaskRuntimeCheckpoint
+from app.services.review.review_run_budget import ReviewRunBudget, RunBudgetError
+from app.services.review.review_runtime import TaskReviewRuntime
+from app.services.review.review_task_protocol import TaskReviewV1Protocol
+from app.services.review.task_runtime_checkpoint import TaskRuntimeCheckpoint
 from test_review_citation_recovery import citation_slice, submission
-from test_task_runtime_p3 import candidate, configured, inspect_submit, verification
-from test_task_review_sdk_slice import make_slice
+from tests.support.runtime_harness import candidate, configured, inspect_submit, verification
+from tests.support.runtime_harness import make_slice
 
 
 def v2(step):
@@ -30,9 +30,9 @@ async def test_visible_investigation_citation_failure_is_unresolved_not_supporte
     assert result.reason == "citation_coverage_incomplete" and not result.evidence_ids
     assert item.state == WorkItemState.completed and len(messages) == 2
     assert step.executor.projection.invalidated_results[-1]["result"]["answer"] == "supported"
-    from app.services.task_review_projection import project_task_runtime
-    from app.services.review_outcome import derive_review_outcome
-    from test_review_outcome import completed_task
+    from app.services.review.task_review_projection import project_task_runtime
+    from app.services.review.review_outcome import derive_review_outcome
+    from tests.support.review_tasks import completed_task as completed_task
     report = project_task_runtime(runtime, {item.work_item_id: step}, [], termination_reason="plan_exhausted")
     assert report.execution_status == "completed"
     assert derive_review_outcome(completed_task(
@@ -123,7 +123,7 @@ async def test_closing_recovery_does_not_create_another_protection(tmp_path):
 @pytest.mark.parametrize("transport_failure", [False, True])
 async def test_frozen_round_has_same_admission_and_derivation_under_reversed_delays(tmp_path, transport_failure):
     import asyncio
-    from app.services.review_task_derivation import TaskReviewDerivation
+    from app.services.review.review_task_derivation import TaskReviewDerivation
 
     async def run(name, delays):
         steps, traces, prompts = {}, [], []
@@ -192,7 +192,7 @@ async def test_frozen_round_has_same_admission_and_derivation_under_reversed_del
     ("def run():\n    iv = wilson(30, 40)\n    if iv:\n        return weighted_posterior(iv)\n", set()),
 ])
 def test_one_hop_context_is_a_conservative_syntax_hint(source, expected):
-    from app.services.review_stability import one_hop_consumers
+    from app.services.review.review_stability import one_hop_consumers
     assert one_hop_consumers(source) == expected
 
 
@@ -218,7 +218,7 @@ def test_goal_citation_gaps_respect_base_side_and_current_page(tmp_path):
 
 @pytest.mark.parametrize("extension", ["js", "ts", "go", "java", "rs"])
 def test_multilanguage_hints_preload_whole_source_without_upgrading_binding(tmp_path, extension):
-    from app.services.review_stability import inspection_requests, resolved_call
+    from app.services.review.review_stability import inspection_requests, resolved_call
     step, _ = make_slice(tmp_path, [])
     v2(step)
     path = f"src/a.{extension}"

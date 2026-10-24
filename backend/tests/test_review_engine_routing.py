@@ -3,8 +3,8 @@ from pydantic import ValidationError
 
 from app.core.config import Settings
 from app.models.review import ReviewCreateRequest, ReviewPreviewRequest, ReviewTask, TaskStatus
-from app.services.review_service import ReviewService
-from test_phase6a_persistence import persistence as persistence
+from app.services.review.review_service import ReviewService
+from tests.support.persistence import persistence as persistence
 
 
 def test_review_engine_defaults_to_task_runtime(monkeypatch):

@@ -12,7 +12,7 @@ from app.models.review import (
     ReviewUnitStatus,
     ReviewUnitTerminalReason,
 )
-from app.services.review_manifest import build_review_manifest
+from app.services.review.review_manifest import build_review_manifest
 
 
 def test_production_review_graph_contains_only_static_readonly_critical_path() -> None:

@@ -10,11 +10,11 @@ from app.api import reviews
 from app.models.orm import (ArtifactOrm, GitHubSummarySlotOrm, PatchOrm, PublicationAttemptOrm,
                             ReviewTaskOrm, ValidationOrm, WorkerJobOrm)
 from app.models.review import PatchProposal, ReviewUnitResult, TaskStatus
-from app.services.publication_repository import PublicationConflict
-from app.services.publication_service import PublicationService
-from app.services.review_repository import ReviewRepository
-from app.services.review_service import ReviewService
-from test_phase6a_persistence import persistence as persistence, _task, _unit
+from app.services.publication.publication_repository import PublicationConflict
+from app.services.publication.publication_service import PublicationService
+from app.services.review.review_repository import ReviewRepository
+from app.services.review.review_service import ReviewService
+from tests.support.persistence import _task, _unit
 from test_publication_persistence import setup_publication
 
 

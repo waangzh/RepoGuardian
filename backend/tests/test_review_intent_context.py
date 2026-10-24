@@ -3,16 +3,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agents.providers import LLMProviderError
+from app.llm.providers import LLMProviderError
 from app.graph.nodes.task_review_runtime import frozen_runtime_spec
 from app.models.review_runtime import ReviewRunSpec
-from app.services.fingerprints import stable_hash
-from app.services.publication_planner import PublicationPlanner
-from app.services.review_runtime import TaskReviewRuntime
-from app.services.review_task_protocol import TaskReviewV1Protocol
-from app.services.task_review_projection import project_task_runtime
-from test_review_outcome import completed_task
-from test_task_review_sdk_slice import make_slice
+from app.core.fingerprints import stable_hash
+from app.services.publication.publication_planner import PublicationPlanner
+from app.services.review.review_runtime import TaskReviewRuntime
+from app.services.review.review_task_protocol import TaskReviewV1Protocol
+from app.services.review.task_review_projection import project_task_runtime
+from tests.support.review_tasks import completed_task as completed_task
+from tests.support.runtime_harness import make_slice
 
 
 def test_intent_is_opt_in_bounded_and_part_of_frozen_spec_identity():

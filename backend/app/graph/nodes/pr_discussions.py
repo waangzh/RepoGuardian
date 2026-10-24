@@ -4,8 +4,8 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.runtime import Runtime
 
 from app.graph.state import ReviewRunContext, ReviewState
-from app.services.pr_discussions import prepare_discussions_node
-from app.services.pr_discussion_recheck import recheck_discussions_node
+from app.services.discussions.pr_discussions import prepare_discussions_node
+from app.services.discussions.pr_discussion_recheck import recheck_discussions_node
 
 
 async def discussion_prepare_node(state: ReviewState, runtime: Runtime[ReviewRunContext], config: RunnableConfig):

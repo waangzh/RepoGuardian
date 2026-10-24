@@ -6,14 +6,14 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import AIMessage
 
-from app.agents.providers import LLMProvider, OpenAICompatibleProvider
+from app.llm.providers import LLMProvider, OpenAICompatibleProvider
 from app.core.config import settings
 from app.evaluation.data import DatasetLock, FrozenSample, freeze_dataset, load_references
 from app.evaluation.runner import FrozenGitHubTool, SnapshotGitTool, final_audit, run_dataset, run_sample
 from app.models.review import ReviewIssue
-from app.services.model_request_budgeter import ModelRequestProfile
+from app.llm.model_request_budgeter import ModelRequestProfile
 from app.review.issue_audit import audit_issue, capture_issue_audit
-from test_task_runtime_p4 import production_input as production_input
+from tests.support.runtime_harness import production_input as production_input
 
 
 class ScriptedProvider(LLMProvider):
@@ -304,7 +304,7 @@ def test_cli_rejects_quality_gate_without_experiment_plan(tmp_path, monkeypatch,
     def forbidden(*args, **kwargs):
         pytest.fail("invalid experiment arguments must fail before provider construction")
 
-    monkeypatch.setattr("app.agents.providers.build_provider", forbidden)
+    monkeypatch.setattr("app.llm.providers.build_provider", forbidden)
     with pytest.raises(SystemExit) as exc:
         main(["_review", "--lock", str(tmp_path / "lock.json"), "--output", str(tmp_path / "output"),
               "--quality-gate", str(tmp_path / "gate.json")])
@@ -324,7 +324,7 @@ def test_frozen_local_dataset():
 
 async def test_wire_request_audit_keeps_retries_and_payload(monkeypatch):
     from langchain_core.messages import AIMessage
-    from app.agents.providers import OpenAICompatibleProvider
+    from app.llm.providers import OpenAICompatibleProvider
     from app.review.run_audit import capture_run_audit
 
     class Chat:

@@ -95,7 +95,7 @@ def main(argv=None):
         write_json(args.output, result)
         print(f"已记录固定范围与真实用量对照，质量门仍未完成：{args.output}")
     else:
-        from app.agents.providers import build_provider
+        from app.llm.providers import build_provider
         from app.core.config import settings
 
         plan, gate, quality_gate = None, None, None

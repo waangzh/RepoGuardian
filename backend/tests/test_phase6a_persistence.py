@@ -6,19 +6,16 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
 from typing import TypedDict
-from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, StateGraph
 from langgraph.types import Command, interrupt
-from sqlalchemy import create_engine, event, select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import select
 
 from app.core.config import settings
 from app.api import reviews as reviews_api
-from app.core.database import Base
 from app.models.orm import PatchOrm, ReviewTaskOrm, SideEffectOrm, WorkerJobOrm, utcnow
 from app.models.review import (
     ChangedFile,
@@ -28,60 +25,35 @@ from app.models.review import (
     ReviewIssue,
     ReviewTask,
     TaskStatus,
-    ReviewUnit,
-    ReviewUnitComplexity,
     ReviewUnitResult,
     ReviewUnitStatus,
     ReviewUnitTerminalReason,
     UnitPlanStatus,
     UnitReviewPlan,
 )
-from app.services.artifact_store import LocalArtifactStore
-from app.services.fingerprints import patch_fingerprint, validation_fingerprint
-from app.services.review_planner import DeterministicReviewPlanner
-from app.services.review_repository import ReviewRepository
-from app.services.task_queue import DatabaseTaskQueue
+from app.core.fingerprints import patch_fingerprint, validation_fingerprint
+from app.services.review.review_planner import DeterministicReviewPlanner
+from app.services.review.review_repository import ReviewRepository
+from tests.support.persistence import _task, _unit
+from tests.support.persistence import persistence as persistence
 
 
-@pytest.fixture
-def persistence(tmp_path: Path):
-    engine = create_engine(
-        f"sqlite:///{(tmp_path / 'state.db').as_posix()}",
-        connect_args={"check_same_thread": False},
-    )
-
-    @event.listens_for(engine, "connect")
-    def _foreign_keys(connection, _record):  # type: ignore[no-untyped-def]
-        connection.execute("PRAGMA foreign_keys=ON")
-
-    Base.metadata.create_all(engine)
-    sessions = sessionmaker(engine, expire_on_commit=False)
-    repository = ReviewRepository(
-        sessions,
-        LocalArtifactStore(tmp_path / "artifacts"),
-        require_migration=False,
-    )
-    yield repository, DatabaseTaskQueue(sessions), sessions
-    engine.dispose()
+def _registered_paths(router) -> set[str]:
+    paths, stack = set(), [router]
+    while stack:
+        current = stack.pop()
+        for route in getattr(current, "routes", ()):
+            if hasattr(route, "path"):
+                paths.add(route.path)
+            if hasattr(route, "routes"):
+                stack.append(route)
+    return paths
 
 
-def _task() -> ReviewTask:
-    return ReviewTask(
-        id=uuid4().hex,
-        pr_url="https://github.com/acme/repo/pull/7",
-        model="model-a",
-    )
 
 
-def _unit(fingerprint: str = "f" * 64) -> ReviewUnit:
-    return ReviewUnit(
-        id="ru-test",
-        primary_files=["app.py"],
-        fingerprint=fingerprint,
-        estimated_tokens=512,
-        complexity=ReviewUnitComplexity.small,
-        grouping_reason="single_file",
-    )
+
+
 
 
 def test_task_survives_repository_restart_and_api_does_not_need_memory_dict(persistence) -> None:
@@ -415,7 +387,7 @@ async def test_api_reads_persistence_without_human_answer_routes(
     monkeypatch.setattr(reviews_api, "get_review_service", lambda: service)
     loaded = await reviews_api.get_review(task.id)
     assert loaded.id == task.id
-    assert not any("human-requests" in route.path for route in reviews_api.router.routes)
+    assert not any("human-requests" in path for path in _registered_paths(reviews_api.router))
     assert not hasattr(repository, "answer_human_request")
 
 

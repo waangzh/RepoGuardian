@@ -4,17 +4,17 @@ from copy import deepcopy
 import pytest
 
 from app.models.review import ReviewTask
-from app.services.review_input_context import build_context_evidence
-from app.services.review_run_budget import ReviewRepositoryRunBudgetStore, ReviewRunBudget
-from app.services.review_runtime import EvidenceIdentityConflict, TaskReviewRuntime
-from app.services.task_review_projection import project_task_runtime, runtime_failure_summary, _safe_diagnostic
-from app.services.task_runtime_checkpoint import TaskRuntimeCheckpoint
+from app.services.review.review_input_context import build_context_evidence
+from app.services.review.review_run_budget import ReviewRepositoryRunBudgetStore, ReviewRunBudget
+from app.services.review.review_runtime import EvidenceIdentityConflict, TaskReviewRuntime
+from app.services.review.task_review_projection import project_task_runtime, runtime_failure_summary, _safe_diagnostic
+from app.services.review.task_runtime_checkpoint import TaskRuntimeCheckpoint
 from test_intent_response_recovery import slice_with_intent, valid
-from test_phase6a_persistence import persistence as persistence
+from tests.support.persistence import persistence as persistence
 from test_r10_runtime_repairs import catalog_derivation
 from test_task_runtime_p2 import configured as checkpoint_slice
-from test_task_runtime_p3 import configured as derivation_slice, candidate, inspect_submit, verification
-from test_task_review_sdk_slice import make_slice
+from tests.support.runtime_harness import configured as derivation_slice, candidate, inspect_submit, verification
+from tests.support.runtime_harness import make_slice
 
 
 @pytest.mark.parametrize("reverse", [False, True])

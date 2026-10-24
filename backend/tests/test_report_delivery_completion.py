@@ -9,17 +9,17 @@ import pytest
 from app.api import reviews
 from app.main import app
 from app.models.review import TestRunResult as RunResult, ValidationSnapshot, ValidationResult
-from app.services.publication_planner import PublicationPlanner
-from app.services.publication_renderer import render_review_comment
-from app.services.review_runtime import TaskReviewRuntime
-from app.services.review_task_protocol import TaskReviewV1Protocol
-from app.services.task_context_pages import build_context_pages
-from app.services.task_review_projection import project_task_runtime
-from app.services.task_runtime_checkpoint import TaskRuntimeCheckpoint
-from test_phase6a_persistence import persistence as persistence
-from test_publication_planner import publishable_task
-from test_review_outcome import completed_task
-from test_task_review_sdk_slice import make_slice
+from app.services.publication.publication_planner import PublicationPlanner
+from app.services.publication.publication_renderer import render_review_comment
+from app.services.review.review_runtime import TaskReviewRuntime
+from app.services.review.review_task_protocol import TaskReviewV1Protocol
+from app.services.review.task_context_pages import build_context_pages
+from app.services.review.task_review_projection import project_task_runtime
+from app.services.review.task_runtime_checkpoint import TaskRuntimeCheckpoint
+from tests.support.persistence import persistence as persistence
+from tests.support.review_tasks import publishable_task as publishable_task
+from tests.support.review_tasks import completed_task as completed_task
+from tests.support.runtime_harness import make_slice
 
 
 def intent_submit(payload):
@@ -103,7 +103,7 @@ async def test_intent_rejects_invalid_bindings_without_promoting_inspection(tmp_
 
 
 async def test_structured_intent_keeps_zero_budget_and_stale_evidence_rejection(tmp_path):
-    from app.agents.providers import LLMProviderError
+    from app.llm.providers import LLMProviderError
     step, messages = make_slice(tmp_path, [], max_calls=0)
     enable_intent(step)
     with pytest.raises(LLMProviderError, match="run_budget_admission_rejected"):
@@ -128,7 +128,7 @@ def test_validation_stage_identity_and_failure_remain_separate(stage, sha, passe
 
 @pytest.mark.parametrize("trusted,bound", [(True, True), (False, True), (True, False)])
 def test_patch_success_never_becomes_head_success(trusted, bound):
-    from app.services.review_validation_digest import validation_digest
+    from app.services.review.review_validation_digest import validation_digest
     result = ValidationResult(id="v", backend="user_runner", status="passed", trusted=trusted,
         trust_source="user_runner", head_sha="a" * 40, patch_sha="hash", patch_id="p")
     task = SimpleNamespace(run_manifest=SimpleNamespace(head_sha="a" * 40, effective_base_sha="c" * 40),
@@ -152,7 +152,8 @@ def test_blockers_withheld_and_human_resolved_do_not_disappear():
 async def test_copy_selection_is_explicit_keeps_blockers_and_rechecks_head(monkeypatch):
     task = publishable_task()
     saved = {"key-a": {"current": {"status": "resolved", "reason": "人工已处理"}}}
-    monkeypatch.setattr(reviews, "get_review_service", lambda: SimpleNamespace(get_task=lambda _: task, _dispositions={task.id: saved}))
+    monkeypatch.setattr(reviews, "get_review_service", lambda: SimpleNamespace(get_task=lambda _: task,
+        finding_dispositions=lambda _: saved))
     calls = []
     async def fetch(self, url):
         calls.append(url)

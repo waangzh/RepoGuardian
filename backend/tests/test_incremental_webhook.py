@@ -10,8 +10,8 @@ import pytest
 
 from app.core.config import settings
 from app.main import app
-from app.services.incremental_webhook import parse_synchronize, verify_signature
-from test_phase6a_persistence import persistence as persistence
+from app.services.review.incremental_webhook import parse_synchronize, verify_signature
+from tests.support.persistence import persistence as persistence
 
 
 def payload(**overrides):
@@ -76,7 +76,7 @@ def test_malformed_or_mismatched_pr_identity_is_rejected(pr_change):
 @pytest.mark.parametrize("changed", ["head_sha", "declared_base_sha"])
 async def test_webhook_does_not_create_task_for_a_different_snapshot(changed):
     from unittest.mock import AsyncMock
-    from app.services.incremental_webhook import IncrementalWebhookService
+    from app.services.review.incremental_webhook import IncrementalWebhookService
 
     snapshot = {"head_sha": "b" * 40, "declared_base_sha": "a" * 40,
                 "effective_base_sha": "a" * 40}
@@ -163,7 +163,7 @@ async def test_duplicate_delivery_replays_saved_receipt(monkeypatch):
     created = []
 
     class Service:
-        _repository = Repository()
+        repository = Repository()
 
         async def preview(self, request):
             return SimpleNamespace(preview_id="p", plan_hash="h" * 64,

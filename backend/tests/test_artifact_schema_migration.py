@@ -15,8 +15,8 @@ from sqlalchemy.orm import sessionmaker
 from app.core import database
 from app.models.orm import ArtifactOrm, utcnow
 from app.models.review import ReviewTask
-from app.services.artifact_store import LocalArtifactStore
-from app.services.review_repository import ReviewRepository
+from app.services.review.artifact_store import LocalArtifactStore
+from app.services.review.review_repository import ReviewRepository
 from test_runtime_integrity_errors import runtime_payload
 
 

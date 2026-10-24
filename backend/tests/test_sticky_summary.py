@@ -3,12 +3,12 @@ import json
 import httpx
 import pytest
 
-from app.services.sticky_summary import StickySummary
-from app.services.publication_preflight import PublicationPreflight
-from app.tools.github_publisher import GitHubPublisher, GitHubPublishError
-from test_publication_preflight import github_fixture, publish_config
+from app.services.review.sticky_summary import StickySummary
+from app.services.publication.publication_preflight import PublicationPreflight
+from app.tools.github.github_publisher import GitHubPublisher, GitHubPublishError
+from tests.support.publication_fixtures import github_fixture, publish_config
 from test_publication_persistence import setup_publication
-from test_phase6a_persistence import persistence as persistence
+from tests.support.persistence import persistence as persistence
 
 
 class FakeGitHub:

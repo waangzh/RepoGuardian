@@ -6,9 +6,9 @@ import pytest
 
 from app.graph.nodes.task_review_runtime import task_review_runtime_node
 from app.graph.nodes.report import report_node
-from app.services.review_task_derivation import TaskReviewDerivation
-from app.services.task_review_projection import project_task_runtime
-from test_task_runtime_p4 import production_input as production_input
+from app.services.review.review_task_derivation import TaskReviewDerivation
+from app.services.review.task_review_projection import project_task_runtime
+from tests.support.runtime_harness import production_input as production_input
 
 
 def catalog_derivation(catalogs):
@@ -67,7 +67,7 @@ async def test_failed_runtime_exports_accepted_results_and_manifest(production_i
     if not has_accepted:
         async def broken_advance(self):
             raise ValueError("secret should never be exported")
-        monkeypatch.setattr("app.services.review_task_step.InspectTaskStep.advance", broken_advance)
+        monkeypatch.setattr("app.services.review.review_task_step.InspectTaskStep.advance", broken_advance)
     else:
         def broken_refresh(self):
             raise ValueError("secret should never be exported")
@@ -87,7 +87,7 @@ async def test_failed_runtime_exports_accepted_results_and_manifest(production_i
 def test_incomplete_derivation_keeps_accepted_candidates():
     # 投影无需再次执行派生；接受过而未映射到 Issue 的候选仍可诊断。
     from app.models.review_runtime import Candidate
-    from app.services.review_runtime import TaskReviewRuntime
+    from app.services.review.review_runtime import TaskReviewRuntime
     candidate = Candidate(candidate_id="c", primary_anchor="g", claim="缺陷", affected_behavior="行为",
         failure_scenario="场景", supporting_evidence=[], source_result_ids=[])
     step = SimpleNamespace(executor=SimpleNamespace(work_item=SimpleNamespace(kind=SimpleNamespace(value="inspect")),
@@ -103,10 +103,10 @@ def test_incomplete_derivation_keeps_accepted_candidates():
 
 def test_investigation_citation_repair_is_bounded_and_preserves_valid_results():
     from app.models.review_runtime import ReviewRunSpec, ReviewGoal, ReviewWorkItem
-    from app.services.review_task_executor import ReviewTaskExecutor
-    from app.services.review_task_step import InspectTaskStep
-    from app.services.review_task_protocol import TaskReviewV1Protocol
-    from runtime_v1_fixtures import evidence_catalog
+    from app.services.review.review_task_executor import ReviewTaskExecutor
+    from app.services.review.review_task_step import InspectTaskStep
+    from app.services.review.review_task_protocol import TaskReviewV1Protocol
+    from tests.support.runtime_v1_fixtures import evidence_catalog
     spec = ReviewRunSpec(run_id="r", snapshot_head_sha="a" * 40, snapshot_base_sha="b" * 40,
         diff_manifest_hash="m", model_provider="stub", model_name="m", policy_version="p", max_calls=3,
         max_tokens=100, prompt_version="task-review-prompt-v5")

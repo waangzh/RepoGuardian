@@ -12,8 +12,8 @@ from app.models.review import (
     ValidationCheck,
     ValidationStatus,
 )
-from app.services.user_runner_service import UserRunnerService
-from app.services.external_validation_repository import ExternalValidationRepository
+from app.services.external_validation.user_runner_service import UserRunnerService
+from app.services.external_validation.external_validation_repository import ExternalValidationRepository
 from app.core.database import schema_is_current
 
 

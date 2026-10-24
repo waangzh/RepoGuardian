@@ -1,14 +1,14 @@
 import httpx
 import pytest
 
-from app.services.publication_worker import PublicationDelivery, PublicationWorker
-from app.services.task_queue import ReviewWorker
-from app.tools.github_publisher import GitHubPublisher
-from app.services.publication_preflight import PublicationPreflight
+from app.services.publication.publication_worker import PublicationDelivery, PublicationWorker
+from app.services.review.task_queue import ReviewWorker
+from app.tools.github.github_publisher import GitHubPublisher
+from app.services.publication.publication_preflight import PublicationPreflight
 from test_sticky_summary import FakeGitHub
-from test_publication_preflight import publish_config
+from tests.support.publication_fixtures import publish_config
 from test_publication_persistence import setup_publication
-from test_phase6a_persistence import persistence as persistence
+from tests.support.persistence import persistence as persistence
 
 
 def worker_setup(persistence):
@@ -87,9 +87,9 @@ async def test_new_head_blocks_every_write(persistence):
 
 async def test_same_head_new_review_reuses_inline_and_old_review_cannot_replace_summary(persistence):
     from datetime import timedelta
-    from app.services.publication_planner import PublicationPlanner
+    from app.services.publication.publication_planner import PublicationPlanner
     from app.models.publication import PublicationSelection
-    from app.services.fingerprints import stable_hash
+    from app.core.fingerprints import stable_hash
     repo, attempt, fake, worker, delivery, queue = worker_setup(persistence)
     await worker.run_once()
     task = persistence[0].get_task(attempt.review_id).model_copy(deep=True)
@@ -142,7 +142,7 @@ async def test_rate_limit_is_deferred_without_writing(persistence):
 async def test_expired_worker_recovers_committed_summary_without_reposting(persistence):
     from datetime import timedelta
     from app.models.orm import WorkerJobOrm, GitHubSummarySlotOrm, utcnow
-    from app.tools.github_publisher import GitHubPublishError
+    from app.tools.github.github_publisher import GitHubPublishError
     repo, attempt, fake, worker, delivery, queue = worker_setup(persistence)
     job = queue.claim(worker_id="crashed", kinds=("github_publication",))
     lease = repo.acquire(attempt, "crashed", job)
@@ -160,7 +160,7 @@ async def test_expired_worker_recovers_committed_summary_without_reposting(persi
 
 async def test_lost_job_generation_blocks_writes(persistence):
     from app.models.orm import WorkerJobOrm
-    from app.services.publication_repository import PublicationLeaseLost
+    from app.services.publication.publication_repository import PublicationLeaseLost
     repo, attempt, fake, worker, delivery, queue = worker_setup(persistence)
     job = queue.claim(worker_id="old", kinds=("github_publication",))
     with repo.sessions.begin() as session:
@@ -182,9 +182,9 @@ async def test_lost_job_generation_blocks_writes(persistence):
 ])
 def test_summary_links_only_confirmed_selected_inline_receipts(state, fallback, selected, url, linked):
     from types import SimpleNamespace
-    from app.services.publication_worker import compose_summary
-    from app.services.publication_planner import PublicationPlanner
-    from test_publication_planner import publishable_task
+    from app.services.publication.publication_worker import compose_summary
+    from app.services.publication.publication_planner import PublicationPlanner
+    from tests.support.review_tasks import publishable_task as publishable_task
     plan = PublicationPlanner().build(publishable_task())
     saved = plan.model_dump(mode="json")
     item = SimpleNamespace(kind="inline", state=state, finding_key="key-a", github_url=url)

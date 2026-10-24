@@ -7,7 +7,7 @@ from importlib.metadata import PackageNotFoundError, version
 from fastapi import APIRouter, HTTPException, status
 
 from app.api.reviews import get_review_service
-from app.agents.providers import build_provider
+from app.llm.providers import build_provider
 from app.core.config import persist_editable_settings, settings
 from app.core.database import schema_is_current
 from app.models.operations import (
@@ -20,10 +20,10 @@ from app.models.operations import (
     WorkspaceCleanupRequest,
     WorkspaceCleanupResponse,
 )
-from app.services.maintenance_service import workspace_cleanup_lock, workspace_ttl_seconds
-from app.services.model_catalog import ModelCatalogError, fetch_model_catalog
+from app.services.workspaces.maintenance_service import workspace_cleanup_lock, workspace_ttl_seconds
+from app.llm.model_catalog import ModelCatalogError, fetch_model_catalog
 from app.models.review_plan import ReviewCapabilities
-from app.services.review_plan import capabilities
+from app.services.review.review_plan import capabilities
 from app.tools.workspace_cleanup import inspect_orphaned_workspaces, reap_orphaned_workspaces
 
 
@@ -42,8 +42,7 @@ async def get_publication_capability() -> PublicationCapability:
 
 
 def _active_workspace_paths() -> tuple[object, ...]:
-    service = get_review_service()
-    return tuple(service._repo_paths.values())
+    return get_review_service().active_workspace_paths()
 
 
 @router.get("/models", response_model=ModelCatalogResponse)
@@ -71,7 +70,7 @@ async def get_system_diagnostics() -> SystemDiagnostics:
         app_version = "0.1.0"
 
     service = get_review_service()
-    worker_running = bool(service._worker_task and not service._worker_task.done())
+    worker_running = service.worker_running
     artifact_path = settings.repoguardian_artifact_dir.resolve()
     writable_target = artifact_path if artifact_path.exists() else artifact_path.parent
 

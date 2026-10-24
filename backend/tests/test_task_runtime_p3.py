@@ -6,51 +6,22 @@ import pytest
 
 from app.models.review import ReviewTask
 from app.models.review_runtime import ReviewGoal, ReviewWorkItem
-from app.services.review_run_budget import ReviewRepositoryRunBudgetStore, ReviewRunBudget
-from app.services.review_runtime import TaskReviewRuntime
-from app.services.review_task_derivation import TaskReviewDerivation, build_task_risk_catalog
-from app.services.task_runtime_checkpoint import TaskRuntimeCheckpoint
-from test_phase6a_persistence import persistence as persistence
-from test_task_review_sdk_slice import make_slice
+from app.services.review.review_run_budget import ReviewRepositoryRunBudgetStore, ReviewRunBudget
+from app.services.review.review_task_derivation import build_task_risk_catalog
+from app.services.review.task_runtime_checkpoint import TaskRuntimeCheckpoint
+from tests.support.runtime_harness import candidate, configured, inspect_submit, verification  # noqa: F401
+from tests.support.runtime_harness import investigation
+from tests.support.persistence import persistence as persistence
 
 
-def candidate(*, claim="空返回值破坏调用方契约", scenario="服务返回空值时调用方直接读取字段", requests=None):
-    return {"claim": claim, "primary_anchor": "t1", "evidence_ids": ["e1"],
-            "affected_behavior": "调用方字段读取失败", "failure_scenario": scenario,
-            "recommendation": "在读取返回值前处理空值", "evidence_requests": requests or []}
 
 
-def inspect_submit(candidates=(), leads=()):
-    return {"kind": "submit", "examinations": [{"target_id": "t1", "disposition": "examined",
-        "evidence_ids": ["e1"], "reason": "核对固定源码"}], "candidates": list(candidates), "leads": list(leads)}
 
 
-def verification(payload, decision="supported"):
-    assert payload["task"]["kind"] == "verify"
-    assert "confidence" not in payload["candidate"]
-    assert not {"question_updates", "obligation_updates", "review_record"} & set(payload)
-    result = {"kind": "submit", "verification": {"candidate_id": payload["candidate"]["candidate_id"],
-        "decision": decision, "evidence_ids": payload["active_evidence_ids"], "reason": "独立核对主张及必要反证"}}
-    if payload.get("publication_contract") == "claim-publication-v1":
-        result["verification"].update(subject_hash=payload["verification_subject_hash"],
-            publication_action="retain" if decision == "supported" else "none")
-    return result
 
 
-def investigation(payload, answer="refuted", candidates=(), leads=()):
-    assert payload["task"]["kind"] == "investigate" and payload["proposition"]
-    return {"kind": "submit", "investigation": {"answer": answer,
-        "evidence_ids": payload["active_evidence_ids"], "limitations": [], "reason": "核对具体关系"},
-        "candidates": list(candidates), "leads": list(leads)}
 
 
-def configured(tmp_path, responses, **kwargs):
-    step, messages = make_slice(tmp_path, responses)
-    step.executor.work_item.unit_id = "u1"
-    runtime = TaskReviewRuntime([step.executor.work_item])
-    steps = {"w1": step}
-    derivation = TaskReviewDerivation(runtime, steps, **kwargs)
-    return runtime, steps, derivation, messages
 
 
 async def test_identical_candidates_share_one_independent_verification_preserving_sources(tmp_path):

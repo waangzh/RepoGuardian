@@ -19,12 +19,12 @@ from app.models.review import (
     UnitReviewRecord,
     UnitReviewSummary,
 )
-from app.services import incremental_review as incremental
-from app.services.review_outcome import derive_review_outcome
-from app.graph.nodes.task_review_runtime import plan_runtime_goals
-from test_task_runtime_p4 import production_input as production_input
-from test_phase6a_persistence import persistence as persistence
-from test_review_plans import plan_service as plan_service
+from app.services.review import incremental_review as incremental
+from app.services.review.review_outcome import derive_review_outcome
+from app.review.runtime_goals import plan_runtime_goals
+from tests.support.runtime_harness import production_input as production_input
+from tests.support.persistence import persistence as persistence
+from tests.support.review_plans import plan_service as plan_service
 
 
 def _unit(identity: str, files: list[str]) -> ReviewUnit:
@@ -174,7 +174,7 @@ async def test_same_snapshot_runtime_reuses_coverage_without_new_model_calls(pro
     from copy import deepcopy
     from app.graph.nodes.task_review_runtime import task_review_runtime_node
     from app.models.review import ReviewUnit as Unit
-    from app.services.review_manifest import build_review_manifest
+    from app.services.review.review_manifest import build_review_manifest
 
     state, provider, calls = production_input
     repository = persistence[0]
@@ -199,8 +199,8 @@ async def test_same_snapshot_runtime_reuses_coverage_without_new_model_calls(pro
     if with_finding:
         from types import SimpleNamespace
         from app.models.review_runtime import Candidate, VerificationResult
-        from app.services.review_publication import publication_view, verification_subject_hash, publication_issue
-        from test_publication_planner import publishable_task
+        from app.services.publication.review_publication import publication_view, verification_subject_hash, publication_issue
+        from tests.support.review_tasks import publishable_task as publishable_task
         record = deepcopy(publishable_task().task_runtime_report["findings"][0])
         record["candidate"]["primary_anchor"] = ("derived-source" if with_finding == "derived" else
             previous.task_runtime_report["initial_scope_coverage"][0]["goal_id"])
@@ -339,7 +339,7 @@ def test_previous_findings_require_current_reverification(status):
 def test_incremental_binding_is_recorded_in_manifest_and_outcome():
     from datetime import datetime, timezone
 
-    from app.services.review_manifest import build_review_manifest
+    from app.services.review.review_manifest import build_review_manifest
 
     task = _previous([_unit("ru-a", ["a.py"])], [_result("ru-a")])
     task.incremental = {"version": "incremental-review-v1"}
@@ -401,7 +401,7 @@ async def test_production_runtime_reuses_current_coverage_and_preserves_accounti
     from app.graph.nodes.review_units import review_plan_node
     from app.graph.nodes.task_review_runtime import task_review_runtime_node
     from app.models.review import ReviewUnit as Unit
-    from app.services.review_manifest import build_review_manifest
+    from app.services.review.review_manifest import build_review_manifest
     from app.tools.diff_parser import DiffParser
 
     state, provider, calls = production_input
@@ -512,10 +512,10 @@ async def test_preview_confirmation_and_execution_use_the_same_incremental_bindi
     from app.graph.nodes.task_review_runtime import task_review_runtime_node
     from app.models.review import ReviewPreviewRequest
     from app.models.review_plan import ReviewPlanOptions
-    from app.services.preview_confirmation import validate_confirmation
-    from app.services.review_manifest import build_review_manifest
-    from app.services.review_rebuild import rebuild_task_from_state
-    from test_review_plans import confirmation
+    from app.services.preview.preview_confirmation import validate_confirmation
+    from app.services.review.review_manifest import build_review_manifest
+    from app.services.review.review_rebuild import rebuild_task_from_state
+    from tests.support.review_plans import confirmation
 
     service, state, provider, calls, pr = plan_service
     request = ReviewPreviewRequest(pr_url=pr.html_url,

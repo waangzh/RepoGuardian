@@ -1,9 +1,9 @@
 import pytest
 from langchain_core.messages import AIMessage
 
-from app.agents.providers import OpenAICompatibleProvider
-from app.services.model_request_budgeter import request_budget_reserver
-from app.services.review_run_budget import ReviewRunBudget, activate_run_budget
+from app.llm.providers import OpenAICompatibleProvider
+from app.llm.model_request_budgeter import request_budget_reserver
+from app.services.review.review_run_budget import ReviewRunBudget, activate_run_budget
 
 
 class _Chat:

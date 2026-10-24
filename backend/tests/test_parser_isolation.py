@@ -318,7 +318,7 @@ def test_rust_large_line_numbers_and_chained_calls(tmp_path):
 
 def test_parser_version_changes_preview_cache_key(monkeypatch):
     from types import SimpleNamespace
-    from app.services import preview_input_cache as cache
+    from app.services.preview import preview_input_cache as cache
 
     pr = SimpleNamespace(clone_url="https://example.test/repo",
                          base=SimpleNamespace(sha="a" * 40), head=SimpleNamespace(sha="b" * 40))
@@ -329,7 +329,7 @@ def test_parser_version_changes_preview_cache_key(monkeypatch):
 
 
 def test_parser_version_changes_confirmation_policy(monkeypatch):
-    from app.services import preview_confirmation as confirmation
+    from app.services.preview import preview_confirmation as confirmation
 
     original = confirmation.policy_fingerprint()
     monkeypatch.setattr(isolation, "parser_fingerprint", lambda: "other-parser")

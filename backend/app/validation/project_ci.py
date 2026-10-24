@@ -1,7 +1,6 @@
 """ProjectCIBackend：把候选补丁 dispatch 到仓库显式安装的安全 workflow。"""
 
 from datetime import timedelta
-from functools import lru_cache
 
 from app.core.config import registered_project_ci_profiles, settings
 from app.models.review import (
@@ -10,21 +9,16 @@ from app.models.review import (
     RepositorySnapshot,
     ValidationCapabilities,
 )
-from app.services.project_ci_service import ProjectCIService
-from app.services.external_validation_repository import ExternalValidationRepository
+from app.services.external_validation.project_ci_service import ProjectCIService
+from app.services.external_validation.external_validation_repository import ExternalValidationRepository
 from app.core.database import schema_is_current
-from app.tools.github_actions import HttpGitHubActionsClient
+from app.tools.github.github_actions import HttpGitHubActionsClient
 
 
-@lru_cache
-def get_project_ci_service() -> ProjectCIService | None:
+def build_project_ci_service(on_result=None) -> ProjectCIService | None:
+    """构造 Project CI 服务；结果回调由应用组装层注入，验证层不反向依赖启动入口。"""
     if not settings.github_token or not settings.repoguardian_project_ci_workflow:
         return None
-    def apply_result(summary, result) -> None:
-        from app.api.reviews import get_review_service
-
-        get_review_service().apply_project_ci_result(summary.task_id, summary.patch_id, result)
-
     return ProjectCIService(
         HttpGitHubActionsClient(settings.github_token),
         workflow=settings.repoguardian_project_ci_workflow,
@@ -35,7 +29,7 @@ def get_project_ci_service() -> ProjectCIService | None:
         timeout=timedelta(seconds=settings.repoguardian_project_ci_timeout_seconds),
         poll_interval=settings.repoguardian_project_ci_poll_interval_seconds,
         max_patch_input_bytes=settings.repoguardian_project_ci_max_patch_input_bytes,
-        on_result=apply_result,
+        on_result=on_result,
         repository=ExternalValidationRepository() if schema_is_current() else None,
     )
 
@@ -44,7 +38,10 @@ class ProjectCIBackend:
     name = "project_ci"
 
     def __init__(self, service: ProjectCIService | None = None) -> None:
-        self.service = service if service is not None else get_project_ci_service()
+        if service is None:
+            from app.bootstrap.dependencies import get_project_ci_service
+            service = get_project_ci_service()
+        self.service = service
 
     async def capabilities(self, repository: RepositorySnapshot) -> ValidationCapabilities:
         profiles = list(self.service.profiles) if self.service else []

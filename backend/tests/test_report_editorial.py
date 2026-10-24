@@ -6,11 +6,11 @@ import pytest
 
 from app.models.review import ChangedFile
 from app.models.review_runtime import IntentAssessment
-from app.services.publication_planner import PublicationPlanner, summary_projection
-from app.services.publication_renderer import render_review_comment, render_user_report
-from app.services.review_intent import author_targets, matched_author_targets, matches_author_target
-from test_publication_planner import publishable_task
-from test_review_outcome import completed_task
+from app.services.publication.publication_planner import PublicationPlanner, summary_projection
+from app.services.publication.publication_renderer import render_review_comment, render_user_report
+from app.services.review.review_intent import author_targets, matched_author_targets, matches_author_target
+from tests.support.review_tasks import publishable_task as publishable_task
+from tests.support.review_tasks import completed_task as completed_task
 
 
 def test_author_targets_skip_markdown_scaffolding_and_non_goal_sections():

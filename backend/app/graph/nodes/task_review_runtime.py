@@ -10,29 +10,31 @@ from langgraph.runtime import Runtime
 from langgraph.config import get_stream_writer
 from langchain_core.runnables import RunnableConfig
 
-from app.agents.providers import OpenAICompatibleProvider
+from app.llm.providers import OpenAICompatibleProvider
 from app.core.config import settings
 from app.graph.nodes._events import append_step
 from app.graph.state import ReviewState, ReviewRunContext
 from app.models.review import ChangedFile, ReviewPlan, ReviewToolScope
-from app.models.review_runtime import ReviewGoal, ReviewRunSpec, ReviewWorkItem
+from app.models.review_runtime import ReviewWorkItem
+from app.review.runtime_spec import frozen_runtime_spec, task_runtime_configuration  # noqa: F401
 from app.review.diff_base import review_diff_base
 from app.review.tool_scope import (validate_repository_base_file, validate_repository_file,
                                   is_sensitive_repository_path, list_git_tracked_files)
-from app.services.fingerprints import stable_hash
-from app.services.model_request_budgeter import ModelRequestProfile, RequestAdmissionError
-from app.services.review_run_budget import current_run_budget, ReviewRepositoryRunBudgetStore, ReviewRunBudget
-from app.services.review_runtime import TaskReviewRuntime
-from app.services.review_task_derivation import (TaskReviewDerivation, build_task_risk_catalog,
+from app.core.fingerprints import stable_hash
+from app.llm.model_request_budgeter import ModelRequestProfile, RequestAdmissionError
+from app.services.review.review_run_budget import current_run_budget, ReviewRepositoryRunBudgetStore, ReviewRunBudget
+from app.services.review.review_runtime import TaskReviewRuntime
+from app.review.runtime_goals import plan_runtime_goals
+from app.services.review.review_task_derivation import (TaskReviewDerivation, build_task_risk_catalog,
                                                 dangling_deleted_references)
-from app.services.review_task_executor import ReviewTaskExecutor
-from app.services.review_task_step import InspectTaskStep
-from app.services.task_runtime_checkpoint import TaskRuntimeCheckpoint
-from app.services.task_context_pages import build_context_pages
-from app.services.task_review_projection import project_task_runtime, task_runtime_issues, task_runtime_coverage
+from app.services.review.review_task_executor import ReviewTaskExecutor
+from app.services.review.review_task_step import InspectTaskStep
+from app.services.review.task_runtime_checkpoint import TaskRuntimeCheckpoint
+from app.services.review.task_context_pages import build_context_pages
+from app.services.review.task_review_projection import project_task_runtime, task_runtime_issues, task_runtime_coverage
 from app.tools.git_tool import GitTool
-from app.services.review_planner import DeterministicReviewPlanner
-from app.services.review_input_context import build_context_evidence
+from app.services.review.review_planner import DeterministicReviewPlanner
+from app.services.review.review_input_context import build_context_evidence
 
 
 def fit_context_pages(executor, step, configuration):
@@ -68,130 +70,10 @@ def fit_context_pages(executor, step, configuration):
     raise ValueError("task_context_unsplittable_capacity")
 
 
-def task_runtime_configuration(model=None, *, provider=None):
-    provider_name = getattr(provider, "_provider_name", settings.repoguardian_provider)
-    selected_model = model or settings.repoguardian_model
-    resolver = getattr(provider, "resolve_request_profile", None)
-    profile = resolver(selected_model) if callable(resolver) else settings.resolve_model_profile(selected_model)
-    return {"provider": provider_name, "model": selected_model,
-        "output_policy": settings.review_output_policy(),
-        "prompt_version": "task-review-prompt-v8",
-        "stability_contract": "review-stability-v2",
-        "discussion_contract": "pr-discussion-context-v1" if settings.repoguardian_pr_discussions_enabled else None,
-        "publication_contract": "claim-publication-v1",
-        "pr_intent_contract": "pr-intent-assessment-v6",
-        # 新任务冻结具体关系规划；历史手工配置缺省为 legacy，恢复时不能静默换规划器。
-        "risk_planner_version": "risk-planner-v8",
-        "call_resolution_version": "import-evidence-v6",
-        "readable_scope_version": "repository-tracked-v1",
-        "endpoint": getattr(provider, "_base_url", settings.openai_base_url),
-        "limits": settings.run_budget_limits(), "policy_version": settings.repoguardian_review_policy_version,
-        "concurrency": min(32, max(1, settings.repoguardian_review_unit_concurrency)),
-        "deadline_seconds": settings.repoguardian_task_review_timeout_seconds,
-        "request_attempts": settings.repoguardian_model_request_attempts,
-        "request_timeout_seconds": settings.repoguardian_model_request_timeout_seconds,
-        "max_lines_per_read": settings.repoguardian_review_unit_max_lines_per_read,
-        "max_search_results": settings.repoguardian_review_unit_max_search_results,
-        "request_profile": profile.profile.model_dump(mode="json")}
 
 
-def plan_runtime_goals(changed, plan):
-    """初始分母来自完整规范 diff；复用、分页和派生任务不能修改它。"""
-    goals = []
-    owned = set()
-    for unit in plan.review_units:
-        for file in changed:
-            if file.file_path not in unit.primary_files:
-                continue
-            owned.add(file.file_path)
-            selected = [(index, hunk) for index, hunk in enumerate(file.hunks)
-                        if not unit.diff_hunk_ids or DeterministicReviewPlanner.hunk_id(
-                            file.file_path, index, hunk.model_dump(mode="json")) in unit.diff_hunk_ids]
-            if file.is_binary or not selected:
-                goals.append(ReviewGoal(goal_id="file-" + stable_hash([unit.id, file.model_dump(mode="json")])[:32],
-                    unit_id=unit.id, kind="inspect", target_ref=file.file_path, target_kind="file_change",
-                    unsupported_reason="non_head_text_change"))
-                continue
-            if file.change_type == "deleted":
-                # 整文件删除与文件清空只有 Base 侧文本；unidiff 会同样判为 deleted。
-                # 范围按删除前行号，不构造 Head 零长度区间。
-                for index, hunk in selected:
-                    identity = DeterministicReviewPlanner.hunk_id(file.file_path, index, hunk.model_dump(mode="json"))
-                    goals.append(ReviewGoal(goal_id="goal-" + stable_hash([unit.id, identity])[:32],
-                        unit_id=unit.id, kind="inspect", target_ref=file.file_path,
-                        target_kind="base_source_range", start_line=max(1, hunk.old_start),
-                        end_line=max(1, hunk.old_start + hunk.old_length - 1)))
-                continue
-            for index, hunk in selected:
-                identity = DeterministicReviewPlanner.hunk_id(file.file_path, index, hunk.model_dump(mode="json"))
-                if hunk.new_length == 0 or hunk.new_start < 1:
-                    # 纯删除 hunk 没有 Head 行；改在 Base 侧核对被删原文。
-                    goals.append(ReviewGoal(goal_id="goal-" + stable_hash([unit.id, identity])[:32],
-                        unit_id=unit.id, kind="inspect", target_ref=file.file_path,
-                        target_kind="base_source_range", start_line=max(1, hunk.old_start),
-                        end_line=max(1, hunk.old_start + hunk.old_length - 1)))
-                    continue
-                goals.append(ReviewGoal(goal_id="goal-" + stable_hash([unit.id, identity])[:32],
-                    unit_id=unit.id, kind="inspect", target_ref=file.file_path,
-                    start_line=hunk.new_start, end_line=hunk.new_start + hunk.new_length - 1))
-    # 排除文件仍可见，不能变成零分母的完整结果。
-    for file in changed:
-        if file.file_path not in owned:
-            goals.append(ReviewGoal(goal_id="excluded-" + stable_hash(file.model_dump(mode="json"))[:32],
-                unit_id="excluded", kind="inspect", target_ref=file.file_path, target_kind="file_change",
-                unsupported_reason="excluded_or_unsupported_change"))
-    return goals
 
 
-def frozen_runtime_spec(state, configuration, budget, *, readable_files=()):
-    # 仅新配置启用；旧任务恢复不改变其冻结请求。上下文进入 Spec 哈希和同一预算请求包。
-    intent_context = None
-    intent_truncated = None
-    contract = configuration.get("pr_intent_contract")
-    if contract in {"pr-intent-context-v1", "pr-intent-assessment-v1", "pr-intent-assessment-v2",
-                    "pr-intent-assessment-v3", "pr-intent-assessment-v4", "pr-intent-assessment-v5", "pr-intent-assessment-v6"}:
-        pr = state.get("pr_info") or {}
-        statement = "\n\n".join(value.strip() for value in (pr.get("title"), pr.get("body"))
-                                 if isinstance(value, str) and value.strip())
-        if statement:
-            if contract in {"pr-intent-assessment-v2", "pr-intent-assessment-v3", "pr-intent-assessment-v4", "pr-intent-assessment-v5", "pr-intent-assessment-v6"}:
-                intent_truncated = len(statement) > 4_000
-            intent_context = statement[:3_999] + "…" if len(statement) > 4_000 else statement
-    discussion_fields = {}
-    if configuration.get("discussion_contract") == "pr-discussion-context-v1":
-        from app.services.pr_discussions import select_discussions
-        from app.services.model_request_budgeter import PreparedModelRequest
-        metadata = state.get("pr_discussion") or {}
-        if not metadata.get("manifest_hash"):
-            raise ValueError("discussion frozen manifest missing")
-        context_request = PreparedModelRequest(model=configuration["model"], operation="task_review_v1",
-            system="", prompt="", output_tokens=4096)
-        profile = ModelRequestProfile.model_validate(configuration["request_profile"])
-        selected = select_discussions(state.get("_discussion_items") or [],
-            set(readable_files), configuration["model"], profile, context_request)
-        discussion_fields = {"discussion_manifest_hash": metadata["manifest_hash"], "discussion_context": selected,
-                             "discussion_profile": configuration["request_profile"]}
-    return ReviewRunSpec(run_id=state["task_id"], snapshot_head_sha=state["head_sha"],
-        snapshot_base_sha=review_diff_base(state), diff_manifest_hash=stable_hash({
-            "changed_files": state.get("changed_files") or [], "plan": state.get("review_plan") or {}}),
-        model_provider=configuration["provider"], model_name=configuration["model"],
-        policy_version=configuration["policy_version"], max_tokens=budget.max_tokens, max_calls=budget.max_calls,
-        prompt_version=configuration.get("prompt_version", "task-review-prompt-v1"),
-        publication_contract=configuration.get("publication_contract", "legacy"),
-        stability_contract=configuration.get("stability_contract"),
-        readable_scope_files=tuple(sorted(readable_files)),
-        **discussion_fields, pr_intent_context=intent_context,
-        pr_intent_context_truncated=intent_truncated,
-        # 新 v6 配置允许同文件同侧的相交上下文；历史配置保留原冻结验收规则。
-        intent_assessment_contract=(("structured-intent-v5" if contract == "pr-intent-assessment-v6"
-            else "structured-intent-v4" if contract == "pr-intent-assessment-v5"
-            else "structured-intent-v3" if contract == "pr-intent-assessment-v4"
-            else "structured-intent-v2" if contract == "pr-intent-assessment-v3"
-            else "structured-intent-v1") if intent_context and contract in {
-                "pr-intent-assessment-v1", "pr-intent-assessment-v2", "pr-intent-assessment-v3",
-                "pr-intent-assessment-v4", "pr-intent-assessment-v5", "pr-intent-assessment-v6"} else None),
-        review_strategy={key: value for key, value in (configuration.get("effective_plan") or {}).items()
-                         if key in {"depth", "focus"}})
 
 
 async def source_catalog(goals, spec, root, git, changed_files=None):
@@ -287,7 +169,7 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
             if value.get("path") and not is_sensitive_repository_path(value["path"])})[:40])
     discussion_store = None
     if configuration.get("discussion_contract") == "pr-discussion-context-v1":
-        from app.services.pr_discussions import open_store
+        from app.services.discussions.pr_discussions import open_store
         discussion_store = await open_store(state, runtime, config)
         if not discussion_store.data.get("input"):
             raise ValueError("discussion frozen input missing")
@@ -325,7 +207,7 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
         target._profile_override = ModelRequestProfile.model_validate(configuration["request_profile"])
     changed = [ChangedFile.model_validate(value) for value in state.get("changed_files") or []]
     plan = ReviewPlan.model_validate(state["review_plan"])
-    from app.services.incremental_review import (
+    from app.services.review.incremental_review import (
         reuse_coverage, reused_unit_snapshots, runtime_dependencies, validate_binding,
         same_snapshot_configuration_matches,
     )
@@ -404,7 +286,7 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
             items.append(item)
     experiment = configuration.get("experiment") or {}
     strategy = configuration.get("effective_plan") or {}
-    from app.services.review_plan import DEPTHS
+    from app.services.review.review_plan import DEPTHS
     queue = TaskReviewRuntime(items, concurrency=configuration["concurrency"],
                              unit_timeout_seconds=experiment.get("unit_timeout_seconds"))
     try:
@@ -445,11 +327,11 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
         else:
             remaining = configuration["deadline_seconds"]
         if strategy:
-            from app.services.review_plan import remaining_review_seconds
+            from app.services.review.review_plan import remaining_review_seconds
             remaining = min(remaining, remaining_review_seconds(configuration, state["created_at"]))
         retry_id = state.get("task_runtime_retry_unit_id")
         if retry_id:
-            from app.services.review_continuation import ALL_PENDING
+            from app.services.review.review_continuation import ALL_PENDING
             all_pending = retry_id == ALL_PENDING and spec.stability_contract == "review-stability-v2"
             if not all_pending and not any(item.unit_id == retry_id for item in items):
                 raise KeyError(retry_id)

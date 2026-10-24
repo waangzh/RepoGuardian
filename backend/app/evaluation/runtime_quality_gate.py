@@ -6,8 +6,9 @@ import json
 from app.evaluation.data import sha256
 from app.evaluation.runtime_baseline import blind_review_packets, reconcile_wire_usage
 from app.evaluation.runtime_adjudication import adjudicate_annotations
-from app.evaluation.runtime_adjudication_cli import make_source_reader
-from app.services.fingerprints import stable_hash
+from app.evaluation.cli.runtime_adjudication_cli import make_source_reader
+from app.evaluation.runtime_shared import first_sample_gate
+from app.core.fingerprints import stable_hash
 
 
 def recompute_quality_gate(plan, group, materials, *, source_reader=None):
@@ -63,7 +64,6 @@ def recompute_quality_gate(plan, group, materials, *, source_reader=None):
             retained.add(item["blind_id"])
     comparison = adjudicate_annotations(retention_packets, normalized, source_reader=reader,
         reviewer_id=retention["reviewer_id"], blind=retention["blind"])
-    from app.evaluation.runtime_experiments import first_sample_gate
     first = first_sample_gate(result, plan, group)
     accounting = reconcile_wire_usage(result)
     tokens = accounting["actual_total_tokens"]

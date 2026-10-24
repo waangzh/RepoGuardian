@@ -1,10 +1,10 @@
 import pytest
 
-from app.services.publication_planner import PublicationPlanner
+from app.services.publication.publication_planner import PublicationPlanner
 from app.models.publication import PublicationPlan
-from app.services.publication_renderer import markdown_text, render_finding, render_summary, render_user_report, render_review_comment
-from test_publication_planner import publishable_task
-from test_review_outcome import completed_task
+from app.services.publication.publication_renderer import markdown_text, render_finding, render_summary, render_user_report, render_review_comment
+from tests.support.review_tasks import publishable_task as publishable_task
+from tests.support.review_tasks import completed_task as completed_task
 
 
 @pytest.mark.parametrize("task,label", [(completed_task(), "本次检查未发现需在合并前处理的问题"),
@@ -157,7 +157,7 @@ def test_historical_verified_defect_never_reads_as_no_confirmed_problem():
 
 
 def test_new_findings_and_verified_history_are_both_disclosed():
-    from test_review_outcome import discussion
+    from tests.support.review_tasks import discussion
 
     task = publishable_task()
     task.pr_discussion = discussion(rechecks=[

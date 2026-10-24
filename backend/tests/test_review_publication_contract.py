@@ -5,12 +5,12 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from app.models.review import ReviewTask
-from app.services.review_task_protocol import TaskReviewV1Protocol
-from app.services.review_run_budget import ReviewRunBudget, ReviewRepositoryRunBudgetStore
-from app.services.task_runtime_checkpoint import TaskRuntimeCheckpoint
-from app.services.task_review_projection import project_task_runtime, task_runtime_issues
-from test_phase6a_persistence import persistence as persistence
-from test_task_runtime_p3 import configured, candidate, inspect_submit, verification
+from app.services.review.review_task_protocol import TaskReviewV1Protocol
+from app.services.review.review_run_budget import ReviewRunBudget, ReviewRepositoryRunBudgetStore
+from app.services.review.task_runtime_checkpoint import TaskRuntimeCheckpoint
+from app.services.review.task_review_projection import project_task_runtime, task_runtime_issues
+from tests.support.persistence import persistence as persistence
+from tests.support.runtime_harness import configured, candidate, inspect_submit, verification
 
 
 def public_runtime(tmp_path, responses):

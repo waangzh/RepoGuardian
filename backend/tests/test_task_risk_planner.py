@@ -11,12 +11,12 @@ from langchain_core.messages import AIMessage
 from app.graph.nodes.task_review_runtime import task_review_runtime_node, task_runtime_configuration
 from app.models.review import ReviewTask
 from app.models.review_runtime import ReviewGoal, ReviewWorkItem
-from app.services.review_task_derivation import build_task_risk_catalog
-from app.services.task_review_projection import project_task_runtime
+from app.services.review.review_task_derivation import build_task_risk_catalog
+from app.services.review.task_review_projection import project_task_runtime
 from app.tools.diff_parser import DiffParser
-from test_phase6a_persistence import persistence as persistence
-from test_task_runtime_p3 import configured
-from test_task_runtime_p4 import production_input as production_input
+from tests.support.persistence import persistence as persistence
+from tests.support.runtime_harness import configured
+from tests.support.runtime_harness import production_input as production_input
 
 
 def relationship_fixture():

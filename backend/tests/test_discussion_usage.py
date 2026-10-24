@@ -5,22 +5,22 @@ import json
 import pytest
 from langchain_core.messages import AIMessage
 
-from app.agents.providers import OpenAICompatibleProvider
+from app.llm.providers import OpenAICompatibleProvider
 from app.models.pr_discussion import DiscussionComment, DiscussionSnapshot, DiscussionThread
 from app.models.review import ReviewTask, ReviewToolScope
 from app.models.review_runtime import Candidate, ReviewGoal, ReviewRunSpec, ReviewWorkItem
-from app.services.artifact_store import LocalArtifactStore
-from app.services.model_request_budgeter import ModelRequestProfile
-from app.services.pr_discussion_store import DiscussionStore
-from app.services.pr_discussions import metadata, thread_input
-from app.services.review_run_budget import ReviewRepositoryRunBudgetStore, ReviewRunBudget
-from app.services.review_runtime import TaskReviewRuntime
-from app.services.review_task_executor import ReviewTaskExecutor
-from app.services.review_task_protocol import TaskReviewV1Protocol
-from app.services.review_task_step import InspectTaskStep, discussion_usage
-from app.services.task_runtime_checkpoint import TaskRuntimeCheckpoint
-from runtime_v1_fixtures import evidence_catalog
-from test_phase6a_persistence import persistence as persistence  # noqa: E402, F401
+from app.services.review.artifact_store import LocalArtifactStore
+from app.llm.model_request_budgeter import ModelRequestProfile
+from app.services.discussions.pr_discussion_store import DiscussionStore
+from app.services.discussions.pr_discussions import metadata, thread_input
+from app.services.review.review_run_budget import ReviewRepositoryRunBudgetStore, ReviewRunBudget
+from app.services.review.review_runtime import TaskReviewRuntime
+from app.services.review.review_task_executor import ReviewTaskExecutor
+from app.services.review.review_task_protocol import TaskReviewV1Protocol
+from app.services.review.review_task_step import InspectTaskStep, discussion_usage
+from app.services.review.task_runtime_checkpoint import TaskRuntimeCheckpoint
+from tests.support.runtime_v1_fixtures import evidence_catalog
+from tests.support.persistence import persistence as persistence  # noqa: E402, F401
 
 
 QUOTE = "retry branch may return null"
