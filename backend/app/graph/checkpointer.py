@@ -50,14 +50,17 @@ class CheckpointStorageStats:
 
 def _checkpoint_serializer() -> JsonPlusSerializer:
     """仅允许恢复本项目 review 模型，拒绝任意外部模块构造器。"""
-    allowed = [
-        (review_models.__name__, name)
-        for name, value in inspect.getmembers(review_models, inspect.isclass)
-        if value.__module__ == review_models.__name__
-        and (issubclass(value, BaseModel) or issubclass(value, Enum))
-    ]
+    allowed = set()
+    for name, value in inspect.getmembers(review_models, inspect.isclass):
+        if (value.__module__ != review_models.__name__
+                and not value.__module__.startswith(review_models.__name__ + ".")):
+            continue
+        if issubclass(value, BaseModel) or issubclass(value, Enum):
+            # Preserve both the defining module and pre-split checkpoint identities.
+            allowed.add((value.__module__, value.__name__))
+            allowed.add((review_models.__name__, name))
     return JsonPlusSerializer(
-        allowed_msgpack_modules=allowed
+        allowed_msgpack_modules=sorted(allowed)
     )
 
 

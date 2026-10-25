@@ -140,7 +140,7 @@ async def test_real_production_graph_and_lifecycle(tmp_path, monkeypatch, produc
     assert [call["task"]["kind"] for call in calls] == ["inspect", "verify"]
     assert {call["operation"] for call in result["model_calls"]} == {"task_review_step"}
     assert result["task_runtime_configuration"]["publication_contract"] == "claim-publication-v1"
-    assert result["task_runtime_configuration"]["risk_planner_version"] == "risk-planner-v6"
+    assert result["task_runtime_configuration"]["risk_planner_version"] == "risk-planner-v8"
     assert result["confirmed"] and not result["needs_human"]
     assert result["confirmed"][0]["side"] == "right"
     assert result["scoring_profiles"]["product_core"] == result["confirmed"]

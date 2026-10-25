@@ -21,11 +21,29 @@ def normalize(text):
     return " ".join(text.split())
 
 
+def _tool_paths(event, observation, tool):
+    """None 表示路径未记录，空列表表示明确没有返回路径。"""
+    if "results" in event:
+        return event["results"]
+    if observation is event:
+        return None
+    if tool in {"file_read", "file_read_diff"}:
+        path = (event.get("arguments") or {}).get("file_path")
+        return [path] if path else None
+    if tool == "file_find":
+        result = observation.get("result")
+        return result.get("paths") if isinstance(result, dict) else None
+    if tool == "code_search" and observation.get("evidence_ids") == []:
+        return []
+    return None
+
+
 def check_result(result, run_dir, references):
     snapshot = result.get("snapshot")
     findings = []
     verification = {"snapshot": "unverified", "evidence": [], "reference_input_matches": [],
-                    "tool_paths": [], "tool_path_failures": [], "scope_failures": []}
+                    "tool_paths": [], "tool_path_failures": [], "scope_failures": [],
+                    "tool_audit_gaps": []}
     if snapshot:
         repo = Path(snapshot["repo_path"]).resolve()
         if not repo.is_relative_to((run_dir / "workspaces").resolve()):
@@ -84,21 +102,44 @@ def check_result(result, run_dir, references):
                 "commentable": index.is_commentable(EvidenceCandidate(
                     file_path=path, side=side, start_line=start, end_line=end))
                     if path and start and end else False})
-        for event in result.get("tool_reads", []):
-            if event["status"] != "completed":
+        for event_index, event in enumerate(result.get("tool_reads", [])):
+            tool = event.get("operation") or event.get("tool")
+            identity = {"event": event_index, "tool": tool}
+            observation = event.get("observation", event)
+            if not isinstance(observation, dict) or not observation.get("status"):
+                verification["tool_audit_gaps"].append({
+                    **identity, "reason": "tool_status_not_recorded",
+                })
                 continue
-            scope = event["scope"]
-            for item in event.get("results", []):
-                path = item if isinstance(item, str) else item.get("file")
-                if not path:
+            if observation["status"] != "completed" or tool == "discussion_read":
+                continue
+            paths = _tool_paths(event, observation, tool)
+            if not isinstance(paths, list):
+                verification["tool_audit_gaps"].append({
+                    **identity, "reason": "result_paths_not_recorded",
+                })
+                continue
+            scope = event.get("scope")
+            scope_known = isinstance(scope, dict) and isinstance(scope.get("readable_files"), list)
+            requires_scope = tool not in {"file_find", "code_search"}
+            if paths and requires_scope and not scope_known:
+                verification["tool_audit_gaps"].append({
+                    **identity, "reason": "readable_scope_not_recorded",
+                })
+            for item in paths:
+                path = item if isinstance(item, str) else (
+                    item.get("file") if isinstance(item, dict) else None)
+                if not isinstance(path, str) or not path:
+                    verification["tool_audit_gaps"].append({
+                        **identity, "reason": "result_paths_not_recorded",
+                    })
                     continue
                 verification["tool_paths"].append(path)
                 try:
                     validate_repository_file(repo, path)
                 except (OSError, ValueError):
                     verification["tool_path_failures"].append(path)
-                if (event["tool"] not in {"file_find", "code_search"} and
-                        path not in scope["readable_files"]):
+                if requires_scope and scope_known and path not in scope["readable_files"]:
                     verification["scope_failures"].append(path)
     wire = [x for x in result.get("model_requests", []) if x["status"] == "started"]
     for event in wire:
@@ -132,6 +173,8 @@ def check_result(result, run_dir, references):
         findings.append("模型输入存在完整参考意见文本匹配，需检查来源")
     if verification["tool_path_failures"] or verification["scope_failures"]:
         findings.append("存在需复核的工具读取路径")
+    if verification["tool_audit_gaps"]:
+        findings.append("部分工具读取缺少路径、范围或状态记录，无法完整核验")
     if result["status"] not in {"completed", "completed_with_warnings"}:
         findings.append("审查未完整完成：" + result["status"])
     if missing:

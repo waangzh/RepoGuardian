@@ -32,6 +32,58 @@ def setup_stage(tmp_path, monkeypatch):
     return stage, roots, provider
 
 
+@pytest.mark.parametrize("outside", [False, True], ids=["registered-source", "outside-source"])
+def test_diagnostic_uses_evaluation_workspace_boundary(tmp_path, monkeypatch, outside):
+    from app.evaluation.cli import runtime_adjudication_cli, runtime_capability_runner
+
+    make_reader = runtime_adjudication_cli.make_source_reader
+    stage, roots, provider = setup_stage(tmp_path, monkeypatch)
+    backend = tmp_path / "backend"
+    package_file = backend / "app/evaluation/__init__.py"
+    package_file.parent.mkdir(parents=True)
+    package_file.touch()
+    monkeypatch.setattr("app.evaluation.__file__", str(package_file))
+    monkeypatch.setattr(
+        runtime_capability_runner, "__file__",
+        str(package_file.parent / "cli/runtime_capability_runner.py"),
+    )
+    workspace = backend / ".repoguardian/evaluation-runs"
+    workspace.mkdir(parents=True)
+    source = backend / "outside" if outside else workspace / "registered"
+    source.mkdir()
+    roots.write_text(json.dumps([{
+        "repository": "repo", "source_root": str(source),
+        "head_sha": "a" * 40, "base_sha": "b" * 40,
+    }]), encoding="utf-8")
+
+    class GitStub:
+        def get_tree_entries(self, root, sha, paths):
+            assert root == source and sha == "a" * 40 and paths == ["src/a.py"]
+            return {"src/a.py": {"mode": "100644"}}
+
+        def get_file_content_at_revision(self, root, sha, path):
+            return "return None"
+
+    def source_reader(sources, boundary):
+        assert boundary == workspace
+        return make_reader(sources, boundary, git_tool=GitStub())
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("freezing a diagnostic must not send a model request")
+
+    monkeypatch.setattr(runtime_adjudication_cli, "make_source_reader", source_reader)
+    monkeypatch.setattr(provider, "_build_chat_model", forbidden)
+    output = tmp_path / "frozen"
+    if outside:
+        with pytest.raises(ValueError, match="source_root_identity_or_boundary_rejected"):
+            freeze_diagnostic(stage, output, provider=provider, source_roots=roots)
+        assert not output.exists()
+    else:
+        result = freeze_diagnostic(stage, output, provider=provider, source_roots=roots)
+        assert result["evidence_verification"] == "fixed_sha_text_verified_not_semantic_proof"
+        assert not (output / "dispatch.json").exists()
+
+
 async def test_frozen_diagnostic_uses_durable_budget_and_cannot_dispatch_twice(tmp_path, monkeypatch):
     stage, roots, provider = setup_stage(tmp_path, monkeypatch)
     sent = []

@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from app import evaluation
 from app.llm.providers import build_provider
 from app.core.config import settings
 from app.evaluation.runner import implementation_digest
@@ -58,7 +59,8 @@ def freeze_diagnostic(stage, output, *, task_expression=None, provider=None, sou
     if source_roots is not None:
         from app.evaluation.runtime_adjudication import _validate_evidence
         from app.evaluation.cli.runtime_adjudication_cli import make_source_reader
-        reader = make_source_reader(read_json(source_roots), Path(__file__).resolve().parents[2] / ".repoguardian/evaluation-runs")
+        workspace = Path(evaluation.__file__).resolve().parents[2] / ".repoguardian/evaluation-runs"
+        reader = make_source_reader(read_json(source_roots), workspace)
         for item in case["evidence"]:
             _validate_evidence({"path": item["path"], "side": item["side"], "snapshot_sha": item["snapshot_sha"],
                 "start_line": item["start_line"], "end_line": item["end_line"], "code": item["content"]},
