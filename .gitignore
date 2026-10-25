@@ -18,9 +18,7 @@ AGENTS.md
 CLAUDE.md
 .claude
 .zvec-grep
-# Preserve existing local drafts; other docs are tracked normally.
-/docs/PR Review 输出与交付体系改造方案.md
-/docs/review-output.md
+docs/
 /.trellis
 /.agents/
 /.codex/
