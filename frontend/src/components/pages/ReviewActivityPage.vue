@@ -5,15 +5,14 @@ import type { ReviewSummary } from "../../types/publication";
 import { asRecord, runtimeLabel, runtimeWarnings } from "../../utils/taskRuntimePresentation";
 import StatusBadge from "../common/StatusBadge.vue";
 import AppIcon from "../common/AppIcon.vue";
-const props = defineProps<{ task: ReviewTask; runtime: TaskRuntimeReport | null; duration: string; summary?: ReviewSummary | null; initialFocus?: "limits" | "validation" | "error" }>();
-const limitsPanel = ref<HTMLElement | null>(null), validationPanel = ref<HTMLElement | null>(null), errorPanel = ref<HTMLElement | null>(null);
+const props = defineProps<{ task: ReviewTask; runtime: TaskRuntimeReport | null; duration: string; summary?: ReviewSummary | null; initialFocus?: "limits" | "error" }>();
+const limitsPanel = ref<HTMLElement | null>(null), errorPanel = ref<HTMLElement | null>(null);
 const limits = computed(() => {
   const recorded = props.summary?.digest.merge_decision?.limits;
   return recorded?.length ? recorded : props.runtime ? runtimeWarnings(props.runtime) : [];
 });
-const validations = computed(() => props.summary?.digest.validations || []);
 onMounted(() => {
-  const target = props.initialFocus === "validation" ? validationPanel.value : props.initialFocus === "limits" ? limitsPanel.value : props.initialFocus === "error" ? errorPanel.value : null;
+  const target = props.initialFocus === "limits" ? limitsPanel.value : props.initialFocus === "error" ? errorPanel.value : null;
   target?.focus(); target?.scrollIntoView({ block: "start" });
 });
 const labels: Record<string, string> = { queued: '等待执行', intake: '读取 PR', repo_prepare: '准备仓库快照', diff_parse: '解析变更', repo_index: '建立静态索引', project_detection: '识别项目', review_plan: '规划审查目标', task_review_runtime: '检查代码与核验证据', review_units: '静态检查', resolve_evidence: '定位证据', issue_policy: '检查问题策略', issue_verifier: '独立核验问题', report: '整理报告', complete: '保存审查结果' };
@@ -26,7 +25,6 @@ const labels: Record<string, string> = { queued: '等待执行', intake: '读取
     <div class="grid twoone"><section class="card card-pad"><div class="card-header"><div><h2>审查执行历程</h2><p>来自服务端保存的步骤状态</p></div><StatusBadge :status="task.status" /></div><div class="timeline"><div v-for="(step, index) in task.steps" :key="`${step.name}-${index}`" class="timeline-row" :class="{ current: step.status === 'running' }"><span class="timeline-dot"><AppIcon v-if="step.status === 'completed'" name="check" :size="13" :stroke-width="2.4" /><template v-else>{{ index + 1 }}</template></span><div class="timeline-body"><strong>{{ labels[step.name] || step.name }}</strong><p>{{ step.message || '此步骤未提供说明。' }}</p><small v-if="step.progress">{{ step.progress.detail }} <template v-if="step.progress.current != null">{{ step.progress.current }} / {{ step.progress.total ?? '未知' }}</template></small></div><StatusBadge v-if="step.status !== 'completed'" :status="step.status" /></div></div><p v-if="!task.steps.length" class="muted small">尚无执行步骤记录。</p></section>
       <section class="card card-pad"><div class="card-header"><h2>运行信息</h2></div><dl class="rg-facts"><div><dt>审查引擎</dt><dd>{{ task.engine || 'legacy_units（历史）' }}</dd></div><div><dt>终止原因</dt><dd>{{ runtime ? runtimeLabel(runtime.termination_reason) : '未记录' }}</dd></div><div><dt>执行模型</dt><dd>{{ task.model || asRecord(task.task_runtime_configuration).model || '未记录 / 服务端默认' }}</dd></div><div><dt>Head SHA</dt><dd><code>{{ task.pr?.head.sha || '未记录' }}</code></dd></div><div><dt>有效 Base SHA</dt><dd><code>{{ task.run_manifest?.effective_base_sha || task.run_manifest?.base_sha || '未记录' }}</code></dd></div><div><dt>计量完整性</dt><dd>{{ runtime ? runtimeLabel(runtime.usage_integrity) : '未知' }}</dd></div><div><dt>费用</dt><dd>未知（未提供完整价格与结算信息）</dd></div></dl></section></div>
     <section class="card card-pad"><h2>冻结的资源限制</h2><pre class="rg-raw">{{ JSON.stringify(asRecord(task.task_runtime_configuration).limits || { status: 'not_recorded', note: '此记录未保存有效限额，不使用初始预览推断。' }, null, 2) }}</pre></section>
-    <section ref="validationPanel" class="card card-pad" tabindex="-1" aria-label="验证记录"><h2>验证记录</h2><p>通过仅指该记录覆盖的检查，不代表整个项目 CI 全部通过；请核对来源、快照绑定与失败原因。</p><ul v-if="validations.length"><li v-for="item in validations" :key="item.id">{{ item.source }} / {{ item.stage }}：<StatusBadge :status="item.status" /> {{ item.reason }} · {{ item.trusted && item.snapshot_matches ? '已绑定本次快照' : '可信绑定尚未确认' }}</li></ul><p v-else-if="!task.validation.length" class="muted small space-top">尚无可核对的动态验证结果。静态检查不等于测试通过。</p><div v-for="result in task.validation" :key="result.id" class="aside-stat"><span>{{ result.backend }}</span><StatusBadge :status="result.status" /></div></section>
     <details class="card card-pad"><summary class="rg-disclosure-title">高级审计数据</summary><details class="space-top"><summary>完整任务级检查记录</summary><pre class="rg-raw">{{ JSON.stringify(runtime, null, 2) }}</pre></details><details class="space-top"><summary>模型用量记录</summary><pre class="rg-raw">{{ JSON.stringify(task.model_usage_summary, null, 2) }}</pre></details><details class="space-top"><summary>原始事件与步骤</summary><pre class="rg-raw">{{ JSON.stringify({ steps: task.steps, events: task.agent_events }, null, 2) }}</pre></details></details>
   </div>
 </template>

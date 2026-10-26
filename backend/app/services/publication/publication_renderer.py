@@ -9,16 +9,12 @@ from app.services.discussions.pr_discussion_matching import exact_duplicate_matc
 from app.services.publication.review_prose import author_goal_text
 from app.services.publication.review_text_format import (
     MERGE_LABELS, MERGE_SYMBOLS, OUTCOME_DESCRIPTIONS, OUTCOME_LABELS, REASON_LABELS,
-    _comment_risks, _finding_location_text, _ordered_findings, _sentence, _validation_sentence,
+    _comment_risks, _finding_location_text, _ordered_findings, _sentence, STATIC_BOUNDARY,
     markdown_text,
 )
 
 
 # 对外只保留三种合并建议；review_suggestions 仅为旧冻结计划兼容。
-
-
-
-
 
 
 def outcome_description(plan) -> str:
@@ -81,18 +77,9 @@ def finding_body(text: dict, severity: str, *, category: str | None = None,
 def _validation_lines(plan):
     completeness = {"complete": "完整", "partial": "不完整", "unknown": "未知"}
     reliability = {"reliable": "可靠", "unreliable": "存在限制", "unknown": "未知"}
-    lines = [f"审查完整性：{completeness[plan.outcome.review_completeness]}；"
+    return [f"审查完整性：{completeness[plan.outcome.review_completeness]}；"
             f"运行可靠性：{reliability[plan.outcome.runtime_reliability]}。",
-        "当前 Head 未执行受控动态验证；Base 参考、独立补丁和历史记录仅适用于各自对象。未发现问题不等于证明代码正确。"
-        if plan.digest.validation_state == "not_executed" else
-        {"passed": "已有与当前 Head 绑定的受控验证通过记录；仅适用于记录的检查，不代替完整 CI 或审批。",
-         "failed": "已有与当前 Head 绑定的验证失败记录，需核对失败原因。",
-         "independent_results": "已有独立补丁验证结果；补丁通过不代表当前 PR Head 已通过测试。",
-         "unknown": "动态验证状态未知；不能据此宣称目标仓库测试或构建已通过。"}[plan.digest.validation_state]]
-    for result in plan.digest.validations:
-        lines.append(f"- {markdown_text(result.source)} / {markdown_text(result.stage)}：{markdown_text(result.status)}；"
-            f"可信绑定：{'是' if result.trusted and result.snapshot_matches else '否'}。{markdown_text(result.reason)}")
-    return lines
+        "未执行目标仓库代码、测试或构建；未发现问题不等于证明代码正确。"]
 
 
 def _goal_lines(goals, title, *, limit=20, include_reason=True):
@@ -844,7 +831,7 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False, inc
         lines += understanding_section()
         lines += limitations()
         lines += next_steps_section()
-    validation = _validation_sentence(plan)
+    validation = STATIC_BOUNDARY
     boundary = "" if any(validation in line for line in lines) else validation
     subject = "本记录" if note else "本结论"
     lines += ["", "---", "",
@@ -965,7 +952,7 @@ def render_summary(plan, *, discussion_urls: dict[str, str] | None = None) -> st
     if digest.author_context_limitation and not any(digest.author_context_limitation in line for line in risks):
         lines += ["", "作者目标输入限制：" + markdown_text(digest.author_context_limitation)]
     lines += ["", "### 下一步", "", *_comment_next_steps(plan, has_findings=bool(findings))]
-    validation = _validation_sentence(plan)
+    validation = STATIC_BOUNDARY
     boundary = "" if any(validation in line for line in lines) else validation
     lines += ["", "---", "", f"审查 Commit：`{markdown_text(plan.snapshot.head_sha or '未记录', 64)}`；"
               + boundary + "本结果不替代 CI 与人工审批。"]

@@ -26,7 +26,6 @@ class VersionDiagnostics(BaseModel):
     rule: str
     tool_schema: str
     review_policy: str
-    patch_policy: str
 
 
 class SystemDiagnostics(BaseModel):
@@ -40,7 +39,6 @@ class SystemDiagnostics(BaseModel):
     worker_status: Literal["running", "idle"]
     artifact_directory_writable: bool
     langsmith_enabled: bool
-    security_mode: Literal["restricted", "unsafe_local"]
     retention_days: int
     configured_secrets: dict[str, bool]
     versions: VersionDiagnostics

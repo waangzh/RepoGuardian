@@ -110,7 +110,6 @@ class FindingLocation(PlanModel):
 class FindingVerification(PlanModel):
     method: Literal["static_model_review"] = "static_model_review"
     evidence_status: Literal["verified", "insufficient", "unresolved", "unknown"] = "unknown"
-    dynamic_validation_status: Literal["not_executed", "passed", "failed", "unknown"] = "not_executed"
 
 
 class FindingView(PlanModel):
@@ -128,7 +127,6 @@ class FindingView(PlanModel):
     severity: str | None = None
     evidence_status: Literal["verified", "insufficient", "unresolved", "unknown"]
     human_confirmation_reason: str | None = None
-    dynamic_validation_status: Literal["not_executed", "passed", "failed", "unknown"] = "not_executed"
     anchor: dict | None = None
     limitations: list[str] = Field(default_factory=list)
     source_ids: list[str] = Field(default_factory=list)

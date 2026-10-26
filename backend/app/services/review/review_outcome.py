@@ -10,7 +10,6 @@ from app.models.review import ReviewTask
 from app.models.review_runtime import TaskRuntimeReport
 from app.services.discussions.historical_discussion import historical_discussion_outcome
 from app.services.publication.review_publication import select_publication_findings
-from app.services.review.review_validation_digest import validation_digest
 
 
 def snapshot_valid(task: ReviewTask) -> bool:
@@ -44,7 +43,7 @@ def derive_review_outcome(task: ReviewTask, *, publishable_count: int | None = N
     if not snapshot_valid(task):
         reasons.append(Reason.SNAPSHOT_MISSING)
     if report is None:
-        return ReviewOutcome(kind=kind, coverage=CoverageKind.UNKNOWN, reason_codes=reasons, dynamic_validation="unknown",
+        return ReviewOutcome(kind=kind, coverage=CoverageKind.UNKNOWN, reason_codes=reasons,
                              historical_discussion=HistoricalDiscussionOutcome(**(discussion or {})))
 
     confirmed = sum(str(item.get("status")) in {"confirmed", "published"} for item in report.findings)
@@ -94,7 +93,6 @@ def derive_review_outcome(task: ReviewTask, *, publishable_count: int | None = N
                          confirmed_count=confirmed, publishable_count=publishable, unresolved_count=unresolved,
                          total_goals=total, examined_goals=examined, incomplete_investigations=investigations,
                          reason_codes=reasons,
-                         dynamic_validation=validation_digest(task)[0],
                          finding_conclusion="confirmed" if confirmed else "unresolved" if unresolved else
                              "unknown" if unknown else "no_confirmed_findings",
                          review_completeness=completeness,

@@ -17,17 +17,10 @@ import ReportPanel from "../ReportPanel.vue";
 import { groupingReasonText, unitTitle } from "../../utils/unitPresentation";
 import ExecutionTimeline from "./runtime/ExecutionTimeline.vue";
 import CrossUnitReview from "./runtime/CrossUnitReview.vue";
-import TaskRuntimePanel from "./runtime/TaskRuntimePanel.vue";
-import CommentDraftPanel from "./publication/CommentDraftPanel.vue";
-import ReviewOutcomePanel from "./publication/ReviewOutcomePanel.vue";
-import GitHubPublicationPanel from "./publication/GitHubPublicationPanel.vue";
-import { usePublicationPlan } from "../../composables/usePublicationPlan";
-import { runtimeReport, runtimeLabel, taskRuntimeSummary, runtimeFindingRows, filterRuntimeFindings, type RuntimeFindingFilter } from "../../utils/taskRuntimePresentation";
 import UnitReviewRecord from "./runtime/UnitReviewRecord.vue";
 import { coverageCompletionLabel, crossUnitPresentation, evidenceSnapshotBase, originalIssueUnit, unitCoverageWarning, unitFindingLabel } from "../../utils/reviewObservability";
-import { incrementalReviewLabel } from "../../utils/reportPresentation";
 
-type ReviewTab = "overview" | "review" | "checks" | "files" | "report" | "activity";
+type ReviewTab = "overview" | "review" | "checks" | "files" | "activity";
 type SeverityFilter = "all" | ReviewIssue["severity"];
 type StatusFilter = "all" | "confirmed" | "unresolved";
 
@@ -45,26 +38,17 @@ const props = defineProps<{
   report: string | null;
   statusText: string;
   taskDuration: string;
-  cancelling: boolean;
-  retryingUnitId: string | null;
 }>();
 
 const emit = defineEmits<{
-  cancel: [];
   newReview: [];
-  retry: [unitId: string];
 }>();
 
 const snapshotBase = computed(() => evidenceSnapshotBase(props.task));
-const { plan: publicationPlan, error: publicationError, loading: publicationLoading, reload: reloadPublication } = usePublicationPlan(() => props.task, undefined, undefined, { autoPlan: true });
-const publicationFindings = computed(() => [...(publicationPlan.value?.inline_drafts || []), ...(publicationPlan.value?.summary_findings || [])]);
-const commentsMarkdown = computed(() => publicationFindings.value.map(item => item.body_markdown).join("\n\n---\n\n"));
 
 const activeTab = ref<ReviewTab>("overview");
 const severityFilter = ref<SeverityFilter>("all");
 const statusFilter = ref<StatusFilter>("all");
-const runtimeFilter = ref<RuntimeFindingFilter>("active");
-const selectedRuntimeKey = ref("");
 const categoryFilter = ref("all");
 const fileStatusFilter = ref("all");
 const fileGroupFilter = ref("all");
@@ -74,8 +58,6 @@ const crossUnitSummary = computed(() => crossUnitPresentation(props.task));
 
 watch(() => props.task.id, () => {
   activeTab.value = "overview";
-  runtimeFilter.value = "active";
-  selectedRuntimeKey.value = "";
   selectedUnitId.value = props.task.review_units[0]?.id || "";
   selectedIssueId.value = props.task.issues[0]?.id || "";
 });
@@ -100,14 +82,10 @@ const coverage = computed(() => props.task.coverage || {
 });
 const fileCoveragePercent = computed(() => Math.round(coverage.value.coverage_rate * 1000) / 10);
 const unitCoveragePercent = computed(() => Math.round(coverage.value.unit_coverage_rate * 1000) / 10);
-const incrementalLabel = computed(() => incrementalReviewLabel(props.task.run_manifest?.incremental));
-const taskRuntimeReport = computed(() => runtimeReport(props.task));
-const isTaskRuntime = computed(() => props.task.engine === "task_review_v1");
-const runtimeSummary = computed(() => taskRuntimeReport.value ? taskRuntimeSummary(taskRuntimeReport.value) : null);
 const confirmedIssues = computed(() => props.task.issues.filter((issue) => issue.status === "confirmed"));
-const confirmedIssueCount = computed(() => isTaskRuntime.value && runtimeSummary.value ? runtimeSummary.value.findings.confirmed : confirmedIssues.value.length);
-const unresolvedIssueCount = computed(() => isTaskRuntime.value && runtimeSummary.value ? runtimeSummary.value.findings.unresolved : props.task.issues.filter((issue) => ["candidate", "unresolved", "needs_human"].includes(issue.status)).length);
-const issueDisplayCount = computed(() => isTaskRuntime.value && runtimeSummary.value ? runtimeSummary.value.findings.active : props.task.issues.length);
+const confirmedIssueCount = computed(() => confirmedIssues.value.length);
+const unresolvedIssueCount = computed(() => props.task.issues.filter((issue) => ["candidate", "unresolved", "needs_human"].includes(issue.status)).length);
+const issueDisplayCount = computed(() => props.task.issues.length);
 const highPriorityCount = computed(() => confirmedIssues.value.filter((issue) => ["critical", "high"].includes(issue.severity)).length);
 const resolvedEvidenceCount = computed(() => props.task.issues.filter((issue) => issue.primary_evidence.resolution_status !== "unresolved").length);
 const severityCounts = computed(() => ({
@@ -122,30 +100,8 @@ const confirmedSeverityCounts = computed(() => ({
 }));
 const categories = computed(() => Array.from(new Set(props.task.issues.map((issue) => issue.category))).sort());
 
-const latestValidation = computed(() => {
-  const projectCI = [...(props.task.validation || [])].reverse().find((item) => item.backend === "project_ci");
-  return projectCI || props.task.validation?.at(-1) || null;
-});
-const ciPresentation = computed(() => {
-  const validation = latestValidation.value;
-  if (validation) {
-    const labels: Record<string, string> = {
-      passed: "已通过",
-      failed: "未通过",
-      timed_out: "已超时",
-      cancelled: "已取消",
-      infrastructure_error: "基础设施异常",
-      unsupported: "不支持",
-      inconclusive: "结论不明确",
-    };
-    return { value: labels[validation.status] || validation.status, detail: validation.backend === "project_ci" ? "Project CI" : validation.backend, status: validation.status };
-  }
-  if (props.task.validation_backend === "project_ci") return { value: terminal.value ? "无结果" : "运行中", detail: "Project CI", status: terminal.value ? "inconclusive" : "running" };
-  return { value: "未配置", detail: "严格只读审查", status: "pending" };
-});
-
 function containsChinese(value: string): boolean {
-  return /[\u4e00-\u9fff]/.test(value);
+  return /[一-鿿]/.test(value);
 }
 
 function plainSummary(value: string): string {
@@ -191,31 +147,12 @@ function unitResult(unitId: string): ReviewUnitResult | undefined {
   return props.task.review_unit_results.find((item) => item.review_unit_id === unitId);
 }
 
-function basename(path: string): string {
-  return path.split(/[\\/]/).pop() || path;
-}
-
 function unitFiles(unit: ReviewUnit): string[] {
   return Array.from(new Set([...unit.primary_files, ...unit.related_files]));
 }
 
 function issueCountForUnit(unitId: string): number {
   return props.task.issues.filter((issue) => issue.review_unit_id === unitId || issue.source_review_unit_ids.includes(unitId)).length;
-}
-
-const runtimeFindings = computed(() => taskRuntimeReport.value ? runtimeFindingRows(taskRuntimeReport.value, props.task.issues) : []);
-const visibleRuntimeFindings = computed(() => filterRuntimeFindings(runtimeFindings.value, runtimeFilter.value));
-const selectedRuntimeFinding = computed(() => visibleRuntimeFindings.value.find(item => item.key === selectedRuntimeKey.value) || null);
-const selectedPublicationFinding = computed(() => publicationFindings.value.find(item => item.finding_key === selectedRuntimeFinding.value?.key
-  || item.candidate_id === selectedRuntimeFinding.value?.issue?.id));
-watch(visibleRuntimeFindings, rows => {
-  if (!rows.some(row => row.key === selectedRuntimeKey.value)) selectedRuntimeKey.value = rows[0]?.key || "";
-}, { immediate: true });
-
-function openRuntimeFinding(key: string) {
-  runtimeFilter.value = "active";
-  selectedRuntimeKey.value = key;
-  activeTab.value = "review";
 }
 
 const selectedUnit = computed(() => props.task.review_units.find((unit) => unit.id === selectedUnitId.value) || props.task.review_units[0] || null);
@@ -245,10 +182,9 @@ watch(filteredIssues, (issues) => {
   if (!issues.some((issue) => issue.id === selectedIssueId.value)) selectedIssueId.value = issues[0]?.id || "";
 }, { immediate: true });
 
-const selectedIssue = computed(() => isTaskRuntime.value ? selectedRuntimeFinding.value?.issue || null
-  : filteredIssues.value.find((issue) => issue.id === selectedIssueId.value) || filteredIssues.value[0] || null);
+const selectedIssue = computed(() => filteredIssues.value.find((issue) => issue.id === selectedIssueId.value) || filteredIssues.value[0] || null);
 const selectedChangedFile = computed<ChangedFile | null>(() => {
-  const path = selectedIssue.value?.primary_evidence.file_path || (isTaskRuntime.value ? undefined : selectedUnit.value?.primary_files[0]);
+  const path = selectedIssue.value?.primary_evidence.file_path || selectedUnit.value?.primary_files[0];
   return props.task.changed_files.find((file) => file.file_path === path || file.old_file_path === path) || null;
 });
 
@@ -423,38 +359,19 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
         </div>
         <div class="review-hero__actions">
           <a v-if="task.pr?.html_url" class="button button--secondary button--compact" :href="task.pr.html_url" target="_blank" rel="noreferrer">在 GitHub 查看 ↗</a>
-          <button v-if="!terminal && isTaskRuntime" type="button" class="button button--secondary button--compact" :disabled="cancelling" @click="emit('cancel')">{{ cancelling ? "取消中…" : "取消审查" }}</button>
-          <button v-else type="button" class="button button--secondary button--compact" @click="emit('newReview')">＋ 新建审查</button>
-          <button v-if="isTaskRuntime && terminal" type="button" class="button button--primary button--compact" @click="activeTab = 'report'">报告与导出</button>
+          <button type="button" class="button button--secondary button--compact" @click="emit('newReview')">＋ 新建审查</button>
         </div>
       </div>
-      <p v-if="!isTaskRuntime" class="historical-review-notice">此任务使用的审查引擎已退役，仅供查看历史结果。请新建审查以使用当前引擎。</p>
+      <p class="historical-review-notice">此任务使用的审查引擎已退役，仅供查看历史结果。请新建审查以使用当前引擎。</p>
     </header>
 
     <nav class="review-tabs" aria-label="审查结果导航">
       <button v-for="tab in ([['overview', '概览'], ['review', `审查 ${issueDisplayCount || ''}`], ['checks', '检查与范围'], ['files', `文件 ${task.changed_files.length || ''}`], ['activity', '运行记录']] as const)" :key="tab[0]" type="button" :class="{ 'is-active': activeTab === tab[0] }" :aria-current="activeTab === tab[0] ? 'page' : undefined" @click="activeTab = tab[0]">
         {{ tab[1] }}
       </button>
-      <button v-if="isTaskRuntime" type="button" :class="{ 'is-active': activeTab === 'report' }" :aria-current="activeTab === 'report' ? 'page' : undefined" @click="activeTab = 'report'">报告与导出</button>
     </nav>
 
-    <p v-if="publicationLoading" class="runtime-caption" role="status">正在生成发布计划…</p>
-    <p v-if="publicationError" class="runtime-warning-block" role="alert">{{ publicationError }} <button type="button" class="text-button" @click="reloadPublication">重试加载发布计划</button></p>
-    <ReviewOutcomePanel v-if="publicationPlan && activeTab === 'overview'" :plan="publicationPlan" />
-    <GitHubPublicationPanel v-if="isTaskRuntime && terminal && publicationPlan?.content_eligible" :review-id="task.id" :plan="publicationPlan" />
-
-    <section v-if="isTaskRuntime && activeTab === 'overview'" class="review-tab-panel overview-view">
-      <article class="runtime-change-summary"><span>本次变更</span><p>{{ purposeSummary }}</p></article>
-      <TaskRuntimePanel v-if="taskRuntimeReport" :report="taskRuntimeReport" :terminal="terminal"
-        :retrying-unit-id="retryingUnitId" view="overview" @retry="emit('retry', $event)" @open-checks="activeTab = 'checks'" @open-finding="openRuntimeFinding" />
-      <EmptyState v-else icon="context" title="任务级报告尚未生成" description="当前范围与用量仍待记录，旧覆盖结果不能作为本轮成功证据。" />
-    </section>
-    <section v-else-if="isTaskRuntime && activeTab === 'checks'" class="review-tab-panel overview-view">
-      <TaskRuntimePanel v-if="taskRuntimeReport" :report="taskRuntimeReport" :terminal="terminal"
-        :retrying-unit-id="retryingUnitId" view="checks" @retry="emit('retry', $event)" />
-      <EmptyState v-else icon="context" title="任务级报告尚未生成" description="当前范围与用量仍待记录，旧覆盖结果不能作为本轮成功证据。" />
-    </section>
-    <section v-else-if="activeTab === 'overview'" class="review-tab-panel overview-view">
+    <section v-if="activeTab === 'overview'" class="review-tab-panel overview-view">
       <div class="review-overview-metrics">
         <article class="review-metric-card">
           <span class="review-metric-card__icon is-primary"><AppIcon name="context" :size="20" /></span>
@@ -467,10 +384,6 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
         <article class="review-metric-card">
           <span class="review-metric-card__icon is-danger"><AppIcon name="alert" :size="20" /></span>
           <p>已确认发现</p><strong>{{ confirmedIssueCount }}</strong><small>{{ highPriorityCount }} 高 · {{ confirmedSeverityCounts.medium }} 中 · {{ confirmedSeverityCounts.low }} 低<span v-if="unresolvedIssueCount"> · {{ unresolvedIssueCount }} 未确认</span></small>
-        </article>
-        <article class="review-metric-card">
-          <span class="review-metric-card__icon is-info"><AppIcon name="server" :size="20" /></span>
-          <p>Project CI</p><strong class="review-metric-card__status">{{ ciPresentation.value }}</strong><small>{{ ciPresentation.detail }}</small>
         </article>
       </div>
 
@@ -515,19 +428,7 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
       </div>
     </section>
     <section v-else-if="activeTab === 'review'" class="review-tab-panel findings-view">
-      <div v-if="isTaskRuntime" class="runtime-findings-browser">
-        <div class="filter-chips" aria-label="发现状态筛选">
-          <button v-for="filter in ([['active', '需关注', runtimeSummary?.findings.active], ['confirmed', '已确认', runtimeSummary?.findings.confirmed], ['unresolved', '待确认', runtimeSummary?.findings.unresolved], ['dismissed', '已排除', runtimeSummary?.findings.dismissed], ['unknown', '状态未知', runtimeSummary?.findings.unknown]] as const)"
-            :key="filter[0]" type="button" :class="{ 'is-active': runtimeFilter === filter[0] }" :aria-pressed="runtimeFilter === filter[0]" @click="runtimeFilter = filter[0]">{{ filter[1] }} {{ filter[2] ?? 0 }}</button>
-        </div>
-        <nav class="runtime-findings-list" aria-label="选择审查发现">
-          <button v-for="row in visibleRuntimeFindings" :key="row.key" type="button" :class="{ 'is-active': selectedRuntimeKey === row.key }" :aria-pressed="selectedRuntimeKey === row.key" @click="selectedRuntimeKey = row.key">
-            <StatusBadge :status="row.status" :label="runtimeLabel(row.status)" /><strong>{{ row.title }}</strong><code v-if="row.filePath">{{ row.filePath }}<template v-if="row.line">:{{ row.line }}</template></code>
-          </button>
-        </nav>
-        <EmptyState v-if="!visibleRuntimeFindings.length" icon="context" title="当前分类没有记录" description="切换其他状态查看发现；检查完整性请结合概览中的限制与未决事项。" />
-      </div>
-      <div v-else class="finding-toolbar">
+      <div class="finding-toolbar">
         <div class="filter-chips" aria-label="严重程度筛选">
           <button type="button" :class="{ 'is-active': severityFilter === 'all' }" @click="severityFilter = 'all'">全部 {{ task.issues.length }}</button>
           <button type="button" data-tone="danger" :class="{ 'is-active': severityFilter === 'high' }" @click="severityFilter = 'high'">高 {{ severityCounts.high + severityCounts.critical }}</button>
@@ -539,8 +440,8 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
         <label>类别<select v-model="categoryFilter"><option value="all">全部</option><option v-for="category in categories" :key="category" :value="category">{{ category }}</option></select></label>
       </div>
 
-      <div v-if="!isTaskRuntime || selectedRuntimeFinding" class="finding-workspace" :class="{ 'finding-workspace--runtime': isTaskRuntime, 'finding-workspace--no-code': isTaskRuntime && !selectedIssue }">
-        <aside v-if="!isTaskRuntime" class="change-group-nav">
+      <div class="finding-workspace">
+        <aside class="change-group-nav">
           <header><div><h2>变更组</h2><p>语义相关的改动故事</p></div><strong>{{ fileCoveragePercent }}%</strong></header>
           <button v-for="(unit, index) in task.review_units" :key="unit.id" type="button" :class="{ 'is-active': selectedUnit?.id === unit.id }" :title="unit.primary_files[0]" @click="chooseUnit(unit.id)">
             <strong>{{ unitTitle(unit, index, task.review_units.length) }}</strong><p>{{ unitResult(unit.id)?.plan?.change_summary || groupingReasonText(unit.grouping_reason) }}</p><span>{{ unitFiles(unit).length }} 文件 · {{ unitFindingLabel(unitResult(unit.id), issueCountForUnit(unit.id)) }}</span>
@@ -551,17 +452,17 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
           </div>
         </aside>
 
-        <article v-if="!isTaskRuntime || selectedIssue" class="diff-viewer">
+        <article class="diff-viewer">
           <header><code>{{ selectedChangedFile?.file_path || selectedIssue?.primary_evidence.file_path || "选择一个发现查看代码" }}</code><span v-if="selectedChangedFile">+{{ selectedChangedFile.additions }} −{{ selectedChangedFile.deletions }}</span></header>
           <div v-if="selectedIssue && codeRows.length" class="code-table" role="table" aria-label="问题代码证据">
             <div v-for="row in codeRows" :key="row.key" class="code-row" :data-kind="row.kind" :class="{ 'is-highlighted': row.highlighted }" role="row">
               <span>{{ row.oldLine ?? '' }}</span><span>{{ row.newLine ?? '' }}</span><i>{{ row.kind === 'added' ? '+' : row.kind === 'deleted' ? '−' : ' ' }}</i><code>{{ row.content }}</code>
             </div>
           </div>
-          <EmptyState v-else-if="!selectedIssue" icon="context" :title="isTaskRuntime ? '本条发现尚无可展示的代码定位' : '这个变更组没有需报告的问题'" :description="isTaskRuntime ? '右侧保留了该记录的说明与限制；没有代码定位不代表问题已经被确认或排除。' : '你仍可以在文件页确认覆盖范围，或切换到其他变更组。'" />
+          <EmptyState v-else-if="!selectedIssue" icon="context" title="这个变更组没有需报告的问题" description="你仍可以在文件页确认覆盖范围，或切换到其他变更组。" />
           <EmptyState v-else icon="code" title="代码上下文尚未定位" description="该发现保留在摘要中；请结合尚未定位的证据判断。" />
           <div v-if="selectedIssue" class="inline-finding-note"><StatusBadge :status="selectedIssue.severity" label="发现" /><strong>锚定到 {{ selectedIssue.primary_evidence.resolved_start_line ? `第 ${selectedIssue.primary_evidence.resolved_start_line} 行` : '当前证据片段' }}</strong><p>{{ selectedIssue.failure_scenario }}</p></div>
-          <div v-if="!isTaskRuntime && filteredIssues.length > 1" class="finding-switcher">
+          <div v-if="filteredIssues.length > 1" class="finding-switcher">
             <button v-for="issue in filteredIssues" :key="issue.id" type="button" :class="{ 'is-active': selectedIssue?.id === issue.id }" @click="selectedIssueId = issue.id"><span :data-severity="issue.severity" />{{ issue.title }}</button>
           </div>
         </article>
@@ -577,7 +478,6 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
               <div><dt>建议</dt><dd>{{ selectedIssue.recommendation }}</dd></div>
             </dl>
             <details class="runtime-technical finding-technical"><summary>证据定位与模型详情</summary><p>{{ selectedIssue.primary_evidence.resolution_status }} · {{ selectedIssue.primary_evidence.resolution_method }} · {{ selectedIssue.primary_evidence.provenance || '未知来源' }}</p><p>模型置信度 {{ Math.round(selectedIssue.confidence * 100) }}% · 未经校准</p></details>
-            <CommentDraftPanel v-if="selectedPublicationFinding" :finding="selectedPublicationFinding" :review-id="task.id" :reviewed-head-sha="task.run_manifest?.head_sha || null" />
             <section v-if="selectedIssue.supporting_evidence.length" class="supporting-evidence">
               <h4>辅助证据</h4>
               <article v-for="evidence in selectedIssue.supporting_evidence" :key="`${evidence.file_path}:${evidence.resolved_start_line}`"><code>{{ evidence.file_path }}<template v-if="evidence.resolved_start_line">:{{ evidence.resolved_start_line }}</template></code><pre>{{ evidence.existing_code }}</pre></article>
@@ -588,18 +488,6 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
             <header><div><h2>历史未决问题</h2><p>历史审查未完成后续验证；可新建审查获取当前结果</p></div><StatusBadge status="unresolved" /></header>
             <h3>{{ task.human_request.questions[0] }}</h3>
             <dl class="evidence-facts"><div><dt>缺失信息</dt><dd>{{ task.human_request.missing_information.join('；') }}</dd></div><div><dt>已知证据</dt><dd>{{ task.human_request.known_evidence.join('；') }}</dd></div></dl>
-          </template>
-          <template v-else-if="isTaskRuntime && selectedRuntimeFinding">
-            <header><h2>发现说明</h2><StatusBadge :status="selectedRuntimeFinding.status" :label="runtimeLabel(selectedRuntimeFinding.status)" /></header>
-            <h3>{{ selectedRuntimeFinding.title }}</h3>
-            <p v-if="selectedRuntimeFinding.reason">{{ selectedRuntimeFinding.reason }}</p>
-            <dl class="evidence-facts">
-              <div v-if="selectedRuntimeFinding.affectedBehavior"><dt>可能影响</dt><dd>{{ selectedRuntimeFinding.affectedBehavior }}</dd></div>
-              <div v-if="selectedRuntimeFinding.failureScenario"><dt>触发场景</dt><dd>{{ selectedRuntimeFinding.failureScenario }}</dd></div>
-              <div v-if="selectedRuntimeFinding.recommendation"><dt>建议</dt><dd>{{ selectedRuntimeFinding.recommendation }}</dd></div>
-            </dl>
-            <CommentDraftPanel v-if="selectedPublicationFinding" :finding="selectedPublicationFinding" :review-id="task.id" :reviewed-head-sha="task.run_manifest?.head_sha || null" />
-            <details v-if="selectedRuntimeFinding.rawReason"><summary>技术详情</summary><code>{{ selectedRuntimeFinding.rawReason }}</code></details>
           </template>
           <EmptyState v-else icon="context" title="没有选中的发现" description="请选择包含发现的变更组。" />
         </aside>
@@ -647,16 +535,13 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
       </div>
     </section>
 
-    <section v-else-if="activeTab === 'report'" class="review-tab-panel report-view">
-      <ReportPanel :key="task.id" :markdown="report || task.report_markdown" :user-markdown="publicationPlan?.user_report_markdown" :review-markdown="publicationPlan?.review_comment_markdown" :review-id="task.id" :reviewed-head-sha="publicationPlan?.snapshot.head_sha" :comments-markdown="commentsMarkdown" :filename-prefix="`review-${task.id}`" />
-    </section>
     <section v-else class="review-tab-panel activity-view">
       <article class="run-manifest-card">
         <div><span>Run Manifest · {{ task.run_manifest?.schema_version || '实时任务' }}</span><h2>可审计的审查运行记录</h2><code>{{ task.id }} · {{ task.pr?.owner }}/{{ task.pr?.repo }} #{{ task.pr?.number }}</code></div>
         <StatusBadge :status="task.status" /><button v-if="report || task.report_markdown" type="button" class="button button--secondary button--compact" @click="openRawReport">查看原始报告</button>
       </article>
       <div class="activity-grid">
-        <ExecutionTimeline :steps="task.steps || []" :task-status="task.status" :events="task.agent_events || []" :static-results="task.static_results || []" :test-results="task.test_results || []" />
+        <ExecutionTimeline :steps="task.steps || []" :task-status="task.status" :events="task.agent_events || []" />
         <aside class="run-summary-card">
           <header><h2>运行摘要</h2><p>模型调用、Token 与覆盖清单</p></header>
           <div class="run-summary-metrics"><span><small>耗时</small><strong>{{ task.run_manifest ? formatDuration(task.run_manifest.duration_ms) : taskDuration || '进行中' }}</strong></span><span><small>已保存调用记录</small><strong>{{ task.model_usage_summary.overall.calls }}</strong></span><span><small>Tokens</small><strong>{{ formatTokens(task.model_usage_summary.overall.actual_total_tokens || task.model_usage_summary.overall.accounted_tokens_estimate) }}</strong></span><span><small>发现</small><strong>{{ task.issues.length }}</strong></span></div>
@@ -664,7 +549,6 @@ const maxOperationCalls = computed(() => Math.max(1, ...props.task.model_usage_s
           <div v-for="operation in task.model_usage_summary.by_operation" :key="operation.key" class="operation-row"><code>{{ operation.key }}</code><i><b :style="{ width: `${operation.stats.calls / maxOperationCalls * 100}%` }" /></i><span>{{ operation.stats.calls }} 次 · {{ formatTokens(operation.stats.actual_total_tokens || operation.stats.accounted_tokens_estimate) }}</span></div>
           <h3>覆盖清单</h3>
           <dl class="manifest-coverage"><div><dt>文件覆盖率</dt><dd>{{ coverage.reviewed_files }}/{{ coverage.eligible_files }} · {{ fileCoveragePercent }}%</dd></div><div><dt>变更组覆盖率</dt><dd>{{ coverage.completed_units }}/{{ coverage.total_units }} · {{ unitCoveragePercent }}%</dd></div><div><dt>警告</dt><dd>{{ task.warnings.length }}</dd></div></dl>
-          <p v-if="incrementalLabel" class="manifest-warning"><AppIcon name="history" :size="14" />{{ incrementalLabel }}</p>
           <p v-for="warning in task.warnings" :key="warning" class="manifest-warning"><AppIcon name="alert" :size="14" />{{ warning }}</p>
         </aside>
       </div>

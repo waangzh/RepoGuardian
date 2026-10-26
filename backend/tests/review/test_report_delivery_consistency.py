@@ -6,7 +6,6 @@ import pytest
 
 from app.api import reviews
 from app.main import app
-from app.models.review import TestRunResult as RunResult, ValidationSnapshot
 from app.services.publication.publication_planner import PublicationPlanner
 from app.services.review.review_findings import finding_views
 from app.services.review.runtime.review_runtime import TaskReviewRuntime
@@ -35,48 +34,6 @@ async def test_effective_severity_agrees_across_api_digest_comment_and_merge(mon
     assert decision["blocking_finding_keys"] == (["key-a"] if strong else [])
     assert task.task_runtime_report == original
     assert finding_views(task, {"key-a": {"current": {"status": "resolved", "reason": "人工标记"}}})[0].severity == expected
-
-
-@pytest.mark.parametrize("kind,passed,expected", [("code_regression", False, "failed"),
-    ("dependency_missing", False, "unknown"), ("test_collection_error", False, "unknown"),
-    ("timeout", False, "unknown"), ("infrastructure", False, "unknown"), ("unknown", False, "unknown"),
-    (None, False, "failed"), (None, True, "passed"), ("code_regression", True, "unknown")])
-def test_failure_classification_keeps_known_failure_distinct_from_unknown(kind, passed, expected):
-    task = completed_task()
-    task.validation_snapshots = [ValidationSnapshot(stage="head", sha=task.run_manifest.head_sha,
-        passed=passed, failure_kind=kind, command_results=[RunResult(tool="test_runner", command="pytest",
-            exit_code=0 if passed else 1, passed=passed)])]
-    plan = PublicationPlanner().build(task)
-    assert plan.outcome.dynamic_validation == plan.digest.validation_state == plan.digest.validations[0].status == expected
-    for text in (plan.review_comment_markdown, plan.summary_markdown):
-        assert ("已有与当前 Head 绑定的验证失败记录" in text) is (expected == "failed")
-        if expected == "unknown":
-            assert text.count("动态验证状态未知") == 1
-    if expected == "failed":
-        assert "已有与当前 Head 绑定的验证失败记录" in plan.review_comment_markdown
-        assert "head_validation_failed" in plan.digest.merge_decision.unresolved_reasons
-    elif expected == "unknown":
-        assert "head_validation_unknown" in plan.digest.merge_decision.unresolved_reasons
-
-
-@pytest.mark.parametrize("bad", ["sha", "empty", "inconsistent"])
-def test_known_regression_does_not_bypass_identity_or_command_checks(bad):
-    task = completed_task()
-    snapshot = ValidationSnapshot(stage="head", sha=task.run_manifest.head_sha, passed=False,
-        failure_kind="code_regression", command_results=[RunResult(tool="test_runner", command="pytest", exit_code=1, passed=False)])
-    if bad == "sha":
-        snapshot.sha = "d" * 40
-    elif bad == "empty":
-        snapshot.command_results = []
-    else:
-        snapshot.command_results[0].exit_code = 0
-    task.validation_snapshots = [snapshot]
-    plan = PublicationPlanner().build(task)
-    expected = "not_executed" if bad == "sha" else "unknown"
-    assert plan.outcome.dynamic_validation == expected
-    for text in (plan.review_comment_markdown, plan.summary_markdown):
-        assert "已有与当前 Head 绑定的验证失败记录" not in text
-        assert ("动态验证状态未知" in text) is (expected == "unknown")
 
 
 @pytest.mark.parametrize("disposition", ["examined", "blocked"])

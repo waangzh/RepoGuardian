@@ -14,7 +14,6 @@ export interface ReviewOutcome {
   finding_conclusion: "confirmed" | "unresolved" | "no_confirmed_findings" | "unknown";
   review_completeness: CoverageKind;
   runtime_reliability: "reliable" | "unreliable" | "unknown";
-  dynamic_validation: "not_executed" | "passed" | "failed" | "independent_results" | "unknown";
   /** 历史讨论复核的独立结果；其超时或计量缺失不影响上方主审查字段。 */
   historical_discussion?: HistoricalDiscussionOutcome;
 }
@@ -97,8 +96,6 @@ export interface ReviewDigest {
   incomplete_goals: DigestGoal[];
   reviewed_files: string[];
   excluded_files: DigestExcludedFile[];
-  validation_state: ReviewOutcome['dynamic_validation'];
-  validations?: DigestValidation[];
   merge_decision?: MergeDecision;
   checked_areas: ("head_source_ranges" | "base_source_ranges" | "file_changes")[];
   termination_reason: string | null;
@@ -111,19 +108,6 @@ export interface DigestIntent {
     author_goal_summary?: string;
     actual_behavior: string; alignment: "supported" | "contradicted" | "insufficient" | "not_applicable";
     evidence_ids: string[]; limitations: string[] }[];
-}
-export interface DigestValidation {
-  id: string;
-  source: string;
-  stage: string;
-  head_sha: string;
-  patch_sha: string | null;
-  status: string;
-  trusted: boolean;
-  snapshot_matches: boolean;
-  reason: string;
-  checks: string[];
-  completed_at: string | null;
 }
 export interface MergeDecision {
   /** review_suggestions 仅用于兼容旧冻结计划；当前后端只生成三态。 */
@@ -218,8 +202,6 @@ export interface ReviewSummaryDigest {
   intent_alignment?: string;
   merge_decision?: MergeDecision;
   excluded_files: DigestExcludedFile[];
-  validation_state: ReviewOutcome['dynamic_validation'];
-  validations?: DigestValidation[];
   checked_areas: ("head_source_ranges" | "base_source_ranges" | "file_changes")[];
   termination_reason: string | null;
 }
@@ -272,7 +254,6 @@ export interface ReviewPresentation {
   verdict: MergeDecision;
   findings: PublicationFinding[];
   delivery: PresentationDelivery;
-  validation_state: ReviewOutcome["dynamic_validation"];
   limitations: string[];
   summary_input_coverage?: SummaryInputCoverage | null;
 }

@@ -17,7 +17,7 @@ def pr_fingerprint(pr):
 
 def request_fingerprint(request):
     value = request.model_dump(mode="json")
-    fields = {key: value[key] for key in ("engine", "mode", "validation_backend", "validation_profile")}
+    fields = {key: value[key] for key in ("engine", "mode")}
     if value.get("force_full_review"):
         fields["force_full_review"] = True
     return stable_hash(fields)

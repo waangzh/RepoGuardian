@@ -6,7 +6,6 @@ import type {
   TaskStepProgress,
   ReviewUnitResult,
   TaskRuntimeRetryResult,
-  ValidationBackend,
 } from "../types/review";
 import type {
   ModelCatalogResponse,
@@ -150,7 +149,6 @@ export async function createReview(
   prUrl: string,
   model?: string,
   mode: ReviewMode = "review",
-  validationBackend: ValidationBackend = "none",
   preview?: ReviewPreviewResponse,
 ): Promise<ReviewCreateResponse> {
   // 引擎由服务端冻结为 task_review_v1；客户端不再选择引擎。
@@ -160,7 +158,6 @@ export async function createReview(
       pr_url: prUrl,
       model: model || null,
       mode,
-      validation_backend: validationBackend,
       force_full_review: preview?.force_full_review ?? false,
       ...(preview ? { preview_id: preview.preview_id, plan_hash: preview.plan_hash,
         expected_head_sha: preview.snapshot?.head_sha,
@@ -172,7 +169,6 @@ export async function createReview(
 export async function previewReview(
   prUrl: string,
   mode: ReviewMode = "review",
-  validationBackend: ValidationBackend = "none",
   signal?: AbortSignal,
   model?: string,
   plan?: ReviewPlanOptions,
@@ -187,7 +183,6 @@ export async function previewReview(
       ...(reuseReviewId ? { reuse_review_id: reuseReviewId } : {}),
       ...(plan ? { plan } : {}),
       mode,
-      validation_backend: validationBackend,
     }),
   });
 }
@@ -201,7 +196,7 @@ export async function resumeReview(taskId: string, prUrl: string, preview: Revie
     method: 'POST', body: JSON.stringify({ pr_url: prUrl, preview_id: preview.preview_id,
       plan_hash: preview.plan_hash, expected_head_sha: preview.snapshot?.head_sha,
       expected_effective_base_sha: preview.snapshot?.effective_base_sha,
-      mode: preview.mode, validation_backend: preview.validation_backend.name }),
+      mode: preview.mode }),
   });
 }
 
@@ -276,7 +271,6 @@ export function subscribeToEvents(
       started_at?: string | null;
       updated_at?: string | null;
     }) => void;
-    onPatchUpdate?: (data: { id: string; status: string; warning?: string | null }) => void;
     onDone?: (data: { status: string }) => void;
     onError?: (data: { message: string }) => void;
   }
@@ -284,9 +278,6 @@ export function subscribeToEvents(
   const es = new EventSource(`${API_BASE}/api/reviews/${taskId}/stream`);
   es.addEventListener("step_progress", (e: MessageEvent) => {
     callbacks.onStepProgress?.(JSON.parse(e.data));
-  });
-  es.addEventListener("patch_update", (e: MessageEvent) => {
-    callbacks.onPatchUpdate?.(JSON.parse(e.data));
   });
   es.addEventListener("done", (e: MessageEvent) => {
     callbacks.onDone?.(JSON.parse(e.data));

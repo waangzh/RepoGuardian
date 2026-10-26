@@ -5,19 +5,15 @@ from __future__ import annotations
 
 from app.models.review.common import (  # noqa: F401
     AgentActionName,
-    CommandId,
     CommentPlacement,
     EvidenceProvenance,
     EvidenceResolutionMethod,
     EvidenceResolutionStatus,
-    FailureKind,
     FixRisk,
     IssueCategory,
     IssueStatus,
     IssueVerificationDecision,
     ModelCallValue,
-    PatchApplyCheckStatus,
-    PatchStatus,
     RetrievalRelevanceType,
     ReviewFileStatus,
     ReviewMode,
@@ -29,13 +25,8 @@ from app.models.review.common import (  # noqa: F401
     StepStatus,
     TaskStatus,
     UnitPlanStatus,
-    ValidationBackend,
-    ValidationStage,
-    ValidationStatus,
     _default_review_engine,
     _default_review_mode,
-    _default_validation_backend,
-    _default_validation_profile,
 )
 
 from app.models.review.diff import (  # noqa: F401
@@ -85,7 +76,6 @@ from app.models.review.evidence import (  # noqa: F401
 from app.models.review.issues import (  # noqa: F401
     AgentAction,
     AgentEvent,
-    CommandSpec,
     CrossUnitCatalogBatch,
     CrossUnitCoordinationPlan,
     CrossUnitFollowupRequest,
@@ -95,13 +85,11 @@ from app.models.review.issues import (  # noqa: F401
     CrossUnitRiskReason,
     CrossUnitRuntimeMetrics,
     DeterministicIssueCheck,
-    FailureFingerprint,
     IssueMetrics,
     ProjectProfile,
     ResolvedIssueLocation,
     ReviewIssue,
     ReviewUnitToolEvent,
-    TestRunResult,
     UnitContextOmission,
     UnitInputCoverage,
     UnitReviewPlan,
@@ -115,7 +103,6 @@ from app.models.review.plan import (  # noqa: F401
     ReviewPreviewResponse,
     ReviewToolScope,
     ReviewUnit,
-    ValidationBackendPreview,
 )
 
 from app.models.review.requests import (  # noqa: F401
@@ -135,9 +122,7 @@ from app.models.review.requests import (  # noqa: F401
 
 from app.models.review.task import (  # noqa: F401
     CrossUnitFollowupResult,
-    PRPurposeSummary,
     RepoSnapshot,
-    RepositorySnapshot,
     ReviewCoverage,
     ReviewFileCoverage,
     ReviewRunManifest,
@@ -155,22 +140,6 @@ from app.models.review.usage import (  # noqa: F401
     ModelUsageSummary,
 )
 
-from app.models.review.validation import (  # noqa: F401
-    PatchApplyCheck,
-    PatchEligibilityDecision,
-    PatchPresentation,
-    PatchProposal,
-    PatchResult,
-    PatchValidationRequest,
-    PatchValidationResult,
-    ValidationCapabilities,
-    ValidationCheck,
-    ValidationDelta,
-    ValidationResult,
-    ValidationSnapshot,
-)
-
-
 __all__ = [
     "AgentAction",
     "AgentActionName",
@@ -179,8 +148,6 @@ __all__ = [
     "ChangedFile",
     "ChangedLine",
     "CodeSearchRequest",
-    "CommandId",
-    "CommandSpec",
     "CommentPlacement",
     "ContextProvenance",
     "ContextRetrievalPlan",
@@ -206,8 +173,6 @@ __all__ = [
     "EvidenceResolutionStatus",
     "ExcludedReviewFile",
     "ExecutionBudget",
-    "FailureFingerprint",
-    "FailureKind",
     "FileChangeEvidence",
     "FileChangeSide",
     "FileFindRequest",
@@ -225,22 +190,11 @@ __all__ = [
     "ModelUsageGroup",
     "ModelUsageStats",
     "ModelUsageSummary",
-    "PRPurposeSummary",
-    "PatchApplyCheck",
-    "PatchApplyCheckStatus",
-    "PatchEligibilityDecision",
-    "PatchPresentation",
-    "PatchProposal",
-    "PatchResult",
-    "PatchStatus",
-    "PatchValidationRequest",
-    "PatchValidationResult",
     "PlannedChangedFile",
     "ProjectProfile",
     "PullRequestInfo",
     "PullRequestRef",
     "RepoSnapshot",
-    "RepositorySnapshot",
     "ResolvedIssueLocation",
     "RetrievalRelevanceType",
     "ReviewCoverage",
@@ -270,7 +224,6 @@ __all__ = [
     "TaskStatus",
     "TaskStep",
     "TaskStepProgress",
-    "TestRunResult",
     "UnitActiveEvidenceSet",
     "UnitActiveHunk",
     "UnitBudgetRejection",
@@ -299,19 +252,8 @@ __all__ = [
     "UnitStoredEvidence",
     "UnitTargetCheck",
     "UnitUnresolvedQuestion",
-    "ValidationBackend",
-    "ValidationBackendPreview",
-    "ValidationCapabilities",
-    "ValidationCheck",
-    "ValidationDelta",
-    "ValidationResult",
-    "ValidationSnapshot",
-    "ValidationStage",
-    "ValidationStatus",
     "_default_review_engine",
     "_default_review_mode",
-    "_default_validation_backend",
-    "_default_validation_profile",
 ]
 
 

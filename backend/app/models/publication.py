@@ -95,7 +95,6 @@ class ReviewOutcome(BaseModel):
     finding_conclusion: Literal["confirmed", "unresolved", "no_confirmed_findings", "unknown"] = "unknown"
     review_completeness: CoverageKind = CoverageKind.UNKNOWN
     runtime_reliability: Literal["reliable", "unreliable", "unknown"] = "unknown"
-    dynamic_validation: Literal["not_executed", "passed", "failed", "independent_results", "unknown"] = "unknown"
     # 历史讨论复核结果明确与主审查并列；其超时或计量缺失不写入上方主审查字段。
     historical_discussion: HistoricalDiscussionOutcome = Field(default_factory=HistoricalDiscussionOutcome)
 
@@ -136,20 +135,6 @@ class DigestIntent(BaseModel):
     author_target: str
     status: Literal["observed", "contradicted", "insufficient", "not_applicable", "not_checked"] = "not_checked"
     observations: list[dict] = Field(default_factory=list)
-
-
-class DigestValidation(BaseModel):
-    id: str
-    source: str
-    stage: str
-    head_sha: str
-    patch_sha: str | None = None
-    status: str
-    trusted: bool = False
-    snapshot_matches: bool = False
-    reason: str
-    checks: list[str] = Field(default_factory=list)
-    completed_at: datetime | None = None
 
 
 class MergeDecision(BaseModel):
@@ -221,8 +206,6 @@ class ReviewDigest(BaseModel):
     incomplete_goals: list[DigestGoal] = Field(default_factory=list)
     reviewed_files: list[str] = Field(default_factory=list)
     excluded_files: list[DigestExcludedFile] = Field(default_factory=list)
-    validation_state: Literal["not_executed", "passed", "failed", "independent_results", "unknown"] = "unknown"
-    validations: list[DigestValidation] = Field(default_factory=list)
     merge_decision: MergeDecision = Field(default_factory=MergeDecision)
     checked_areas: list[Literal["head_source_ranges", "base_source_ranges", "file_changes"]] = Field(default_factory=list)
     termination_reason: str | None = None
@@ -317,7 +300,6 @@ class ReviewPresentation(BaseModel):
     verdict: MergeDecision
     findings: list[PublicationFinding] = Field(default_factory=list)
     delivery: PresentationDelivery
-    validation_state: Literal["not_executed", "passed", "failed", "independent_results", "unknown"]
     limitations: list[str] = Field(default_factory=list)
     summary_input_coverage: SummaryInputCoverage | None = None
 
@@ -350,8 +332,6 @@ class ReviewSummaryDigest(BaseModel):
     intent_alignment: str = ""
     merge_decision: MergeDecision = Field(default_factory=MergeDecision)
     excluded_files: list[DigestExcludedFile] = Field(default_factory=list)
-    validation_state: Literal["not_executed", "passed", "failed", "independent_results", "unknown"] = "unknown"
-    validations: list[DigestValidation] = Field(default_factory=list)
     checked_areas: list[Literal["head_source_ranges", "base_source_ranges", "file_changes"]] = Field(default_factory=list)
     termination_reason: str | None = None
 

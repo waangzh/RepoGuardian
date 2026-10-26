@@ -48,7 +48,7 @@ const server = createServer(async (request, response) => {
       streams.clear(); return json(response, { completed: true });
     }
     if (path === '/api/system/models') return json(response, { provider: 'test-fixture', default_model: 'fixture-default', models: [{ id: 'fixture-default' }, { id: 'fixture-other' }] });
-    if (path === '/api/system/diagnostics') return json(response, { version: 'test-fixture', provider: 'fixture', default_model: 'fixture-default', database_schema_current: true, worker_status: 'idle', artifact_directory_writable: true, langsmith_enabled: false, security_mode: 'restricted', patch_max_files: 3, patch_max_changed_lines: 100, retention_days: 30, configured_secrets: {}, versions: {} });
+    if (path === '/api/system/diagnostics') return json(response, { version: 'test-fixture', provider: 'fixture', default_model: 'fixture-default', database_schema_current: true, worker_status: 'idle', artifact_directory_writable: true, langsmith_enabled: false, retention_days: 30, configured_secrets: {}, versions: {} });
     if (path === '/api/reviews/preview') return json(response, { mode: 'review', changed_file_count: 1, included_file_count: 1, changed_files: [{ ...changedFile, classifications: ['Python'], included: true }], review_units: [], excluded_files: [], matched_rules: [], risk_tags: ['跨模块'], planning_model_calls: 0, estimated_model_calls: 1, max_model_calls: 10, estimated_tokens: 1000, patch_generation_enabled: false, validation_backend: { name: 'none', available: true }, warnings: [] });
     if (path === '/api/reviews' && request.method === 'POST') {
       run = structuredClone(findings); Object.assign(run, { id: 'ui-running', status: 'reviewing', model: JSON.parse(body).model });

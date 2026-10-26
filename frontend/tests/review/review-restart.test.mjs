@@ -13,7 +13,7 @@ test("重新审查只带入可编辑选择，范围与快照授权必须重新�
         scope: { mode: "selected", primary_files: ["old.py"] },
         limits: { max_model_calls: 31, max_tokens: 90000, max_cost_microusd: 2000, timeout_seconds: 600 } },
       snapshot: { head_sha: "old-head" }, plan_hash: "old-hash", preview_id: "old-preview",
-      mode: "review_suggest_and_validate", generate_patches: true, validation_backend: "project_ci",
+      mode: "review", generate_patches: false, validation_backend: "none",
     };
     const before = structuredClone(original);
     const input = rereviewInput(original);

@@ -32,16 +32,6 @@ def test_retired_legacy_engine_is_rejected_in_configuration(monkeypatch):
         Settings(_env_file=None)
 
 
-def test_task_review_v1_rejects_legacy_side_effect_options():
-    # 候选补丁已下线；旧客户端传入该字段会被 extra=forbid 拒绝。
-    with pytest.raises(ValidationError, match="generate_patches"):
-        ReviewCreateRequest(pr_url="https://github.com/o/r/pull/1",
-                            generate_patches=True)
-    with pytest.raises(ValidationError, match="read-only"):
-        ReviewCreateRequest(pr_url="https://github.com/o/r/pull/1",
-                            validation_backend="gvisor")
-
-
 def test_engine_is_part_of_task_snapshot_and_old_task_defaults_to_legacy():
     task = ReviewTask.model_validate({"id": "old", "pr_url": "https://github.com/o/r/pull/1"})
     assert task.engine == "legacy_units"

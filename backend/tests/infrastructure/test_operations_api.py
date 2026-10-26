@@ -61,4 +61,3 @@ async def test_system_diagnostics_remains_available_without_backend_discovery(
     payload = response.json()
     assert payload["database_schema_current"] is True
     assert payload["worker_status"] == "idle"
-    assert "validation_backends" not in payload

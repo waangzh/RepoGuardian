@@ -37,7 +37,6 @@ const labels: Record<string, string> = {
   unverified: "未验证",
   validation_pending: "待验证",
   verified: "已验证",
-  validation_failed: "验证失败",
   validation_inconclusive: "结果不确定",
   stale: "已过期",
   abandoned: "已放弃",
@@ -65,7 +64,7 @@ const EXECUTION_TONES: Record<string, string> = {
   running: "info", reviewing: "info", planning: "info", validating: "info",
   resolving_evidence: "info", verifying_issues: "info", generating_patches: "info",
   completed: "success", passed: "success",
-  failed: "danger", validation_failed: "danger", infrastructure_error: "danger",
+  failed: "danger", infrastructure_error: "danger",
   timed_out: "warning", completed_with_warnings: "warning", warning: "warning",
   validation_pending: "warning", waiting_for_human: "warning",
 };

@@ -3,7 +3,6 @@ import type { ReviewSituation, SituationKey } from "./reviewSituation";
 import { reviewLimitationKind } from "./reviewSituation";
 import type { TaskRuntimeSummary } from "./taskRuntimePresentation";
 import type { ReviewSection } from "../types/workspace";
-import { reportValidationLabel } from "./reportPresentation";
 import { independentFindingCount, mergedHistoricalKeys } from "./findingWorkbench";
 
 export interface OverviewBoundary {
@@ -52,7 +51,6 @@ export function overviewFacts(plan: ReviewSummary | null, runtime: TaskRuntimeSu
   const decision = plan?.digest.merge_decision;
   const examined = outcome?.examined_goals ?? runtime?.scope.examined ?? null;
   const total = outcome?.total_goals ?? runtime?.scope.total ?? null;
-  const validation = outcome?.dynamic_validation ?? plan?.digest.validation_state ?? "unknown";
   const reasonLabels: Record<string, string> = {
     scope_incomplete: "仍有约定目标未完整检查。",
     investigation_incomplete: "关联调查尚未完成，需要补充证据。",
@@ -102,21 +100,9 @@ export function overviewFacts(plan: ReviewSummary | null, runtime: TaskRuntimeSu
       icon: "help",
       target: "scope",
     },
-    {
-      title: "动态测试与构建",
-      value: reportValidationLabel(validation),
-      description: validation === "not_executed" ? ""
-        : validation === "passed" ? "仅限当前 Head 绑定的受控检查。"
-        : validation === "failed" ? "已有当前 Head 绑定的验证失败记录，请核对失败原因。"
-        : validation === "independent_results" ? "独立补丁验证结果不代表当前 PR Head 已通过。"
-        : "动态验证状态未知，不能据此宣称测试或构建通过。",
-      tone: validation === "failed" ? "danger" : validation === "passed" ? "success" : "neutral",
-      icon: "flask",
-      target: "activity",
-    },
   ];
   return {
-    examined, total, validation,
+    examined, total,
     // 指标展示按缺陷身份去重后的独立数量；旧冻结计划缺少该字段时才回退为来源相加。
     // 同时给出可逐条核对的来源构成，避免总数无法在发现列表中找到全部条目。
     blockers: blockerMetric.total,
@@ -137,7 +123,6 @@ const SITUATION_DESCRIPTIONS: Record<SituationKey, string> = {
   stale: "记录仅适用于原 Head，最新提交需要重新审查。",
   failed: "执行错误导致中断，现有结果仅代表部分审查。",
   cancelled: "用户主动停止审查，剩余范围尚未完成。",
-  validation_failed: "当前 Head 绑定的受控检查存在失败记录，不代表全部 CI 失败。",
   blockers: "问题已有代码证据支持，按审查策略建议在合并前处理；该建议不是 GitHub Mergeability 结论。",
   evidence_gaps: "历史复核确认的既有风险与本轮未确认事项分别记录，均会限制合并判断。",
   scope_incomplete: "尚无法确认检查范围是否完整，未完成目标需单独确认。",
@@ -197,11 +182,6 @@ const NEXT_STEPS: Record<SituationKey, NextSteps> = {
     title: "核对停止前保留的记录",
     description: "核对已保留结果与未检查范围。",
     steps: [["查看已保留结果", "核对已检查目标和问题记录"], ["了解未检查范围", "不将未检查部分当成完成"], ["决定是否重新审查", "重新分析当前 PR 并确认方案"]],
-  },
-  validation_failed: {
-    title: "先核对验证失败原因",
-    description: "核对验证来源、检查范围与失败原因。",
-    steps: [["查看动态验证记录", "核对验证来源、快照和失败原因"], ["处理失败并补充验证", "在受控执行端确认修复效果"], ["重新核对审查结论", "运行状态与静态发现分别判断"]],
   },
 };
 

@@ -27,9 +27,6 @@ class ReviewState(TypedDict, total=False):
     task_runtime_retry_unit_id: str | None
     mode: str
     status: str
-    generate_patches: bool
-    validation_backend: str
-    validation_profile: str
     phase: ReviewPhase
     created_at: str
     updated_at: str
@@ -76,9 +73,6 @@ class ReviewState(TypedDict, total=False):
     retrieval_no_new_rounds: int
     discovery_stop_reason: str | None
 
-    # ---- 静态分析 ----
-    static_results: list[dict[str, Any]] | None
-
     # ---- 审查 ----
     next_action: dict[str, Any] | None             # 序列化的当前 AgentAction
     review_issues: list[dict[str, Any]] | None     # LLM 审查发现的问题列表
@@ -87,25 +81,11 @@ class ReviewState(TypedDict, total=False):
     issue_deduplication_decisions: list[dict[str, Any]] | None
     issue_metrics: dict[str, int] | None
 
-    # ---- 自动修复 ----
-    patches: list[dict[str, Any]] | None  # PatchResult 列表
-    patch_eligibility: list[dict[str, Any]] | None
-    patch_generation_requests: list[dict[str, Any]] | None
-    pending_patch_ids: list[str] | None
-    active_patch_id: str | None
-    active_patch_validation_passed: bool | None
-    patch_workspace_clean: bool | None
+    # ---- 预算 ----
     execution_budget: dict[str, int] | ExecutionBudget
     run_budget: dict[str, Any] | None
-    repair_enabled: bool
 
-    # ---- 测试结果 ----
-    test_results: list[dict[str, Any]] | None  # TestRunResult 列表
-    validation_snapshots: list[dict[str, Any]] | None
-    validation_deltas: list[dict[str, Any]] | None
-    validation_blocked: bool
-    validation_ready: bool
-    validation_results: list[dict[str, Any]] | None
+    # ---- 限制与警告 ----
     warnings: list[str] | None
 
     # ---- 输出 ----
@@ -115,7 +95,6 @@ class ReviewState(TypedDict, total=False):
     error: str | None
     human_request: dict[str, Any] | None
     _persistence_enabled: bool
-    _report_purpose_model_enabled: bool
     step_progress: list[dict[str, Any]] | None    # 图步骤进度 [{node, status, message, timestamp}]
     agent_events: list[dict[str, Any]] | None     # Agent 事件日志 [{action, reason, status, ...}]
 
@@ -128,5 +107,4 @@ class ReviewState(TypedDict, total=False):
     _review_planner: Any
     _coordination_repository: Any
     _discussion_store: Any  # 无仓储内存模式复用同一冻结讨论日志
-    _validation_backend_selector: Any
     _repo_prepared_callback: Any

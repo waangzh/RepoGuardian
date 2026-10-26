@@ -7,8 +7,7 @@ from app.models.review import ChangedFile, DiffHunk, DiffLine
 from app.services.publication.publication_planner import PublicationPlanner
 from app.services.review.report_service import ReportService
 from app.services.publication.publication_renderer import render_user_report
-from tests.support.review_tasks import publishable_task as publishable_task
-from tests.review.test_report_service import _pr
+from tests.support.review_tasks import publishable_task as publishable_task, pull_request
 
 
 def test_comment_contains_inline_finding_position_and_immutable_base_link():
@@ -45,7 +44,7 @@ def test_detailed_and_audit_share_facts_and_human_state_does_not_change_admissio
 
 def test_author_statement_and_actual_diff_are_kept_distinct_from_alignment():
     task = publishable_task()
-    task.pr = _pr(body="<!--隐藏-->修复空值异常 <script>@everyone</script>")
+    task.pr = pull_request(body="<!--隐藏-->修复空值异常 <script>@everyone</script>")
     task.changed_files = [ChangedFile(file_path="src/a.py", change_type="modified", additions=1, deletions=0,
         hunks=[DiffHunk(old_start=1, old_length=1, new_start=1, new_length=2,
             lines=[DiffLine(kind="added", content="def handle(value):", new_line_no=1)])])]

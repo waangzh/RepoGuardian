@@ -268,7 +268,6 @@ async def run_sample(sample: FrozenSample, provider, workdir: Path, *, timeout_s
     state = {"task_id": uuid4().hex, "mode": "review", "pr_url": sample.pr_url,
              "engine": EVALUATION_ENGINE,
              "model": configuration["model"], "created_at": datetime.now(timezone.utc).isoformat(),
-             "generate_patches": False, "validation_backend": "none",
              "_persistence_enabled": False,
              "_github_tool": FrozenGitHubTool(sample), "_git_tool": selected_git,
              "_provider": observed}

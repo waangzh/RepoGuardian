@@ -11,7 +11,7 @@ test("结果概览情景矩阵与主要操作", async () => {
   try {
     const { reviewSituation } = await server.ssrLoadModule("/src/utils/reviewSituation.ts");
     const clean = { outcome: { kind: "clean", confirmed_count: 0, unresolved_count: 0, examined_goals: 10, total_goals: 10,
-      incomplete_investigations: 0, reason_codes: [], dynamic_validation: "not_executed" },
+      incomplete_investigations: 0, reason_codes: [] },
       digest: { merge_decision: { status: "conditional_merge", blocking_finding_keys: [], nonblocking_finding_keys: [] } } };
     const cases = [
       ["clean", clean, "本次检查未发现需在合并前处理的问题", ["view_report"], "复制 PR 评论", "primary"],
@@ -31,8 +31,6 @@ test("结果概览情景矩阵与主要操作", async () => {
         runtime_reliability: "unreliable", reason_codes: ["usage_integrity_unknown"] },
         digest: { merge_decision: { status: "resolve_unknowns", blocking_finding_keys: [], nonblocking_finding_keys: [] } } },
         "审查已结束，但结果可靠性仍需核对", ["view_limits", "rereview"], "复制审查记录", "secondary"],
-      ["validation_failed", { outcome: { ...clean.outcome, dynamic_validation: "failed" }, digest: clean.digest },
-        "本次记录的动态检查未通过", ["view_validation", "rereview"], "复制审查记录", "secondary"],
       ["failed", { outcome: { ...clean.outcome, kind: "failed" },
         digest: { merge_decision: { status: "unavailable", blocking_finding_keys: [], nonblocking_finding_keys: [] } } },
         "审查中断，尚无完整结论", ["view_error", "rereview"], "复制部分审查记录", "secondary"],
@@ -67,19 +65,13 @@ test("结果概览情景矩阵与主要操作", async () => {
     assert.equal(reviewSituation(null), null);
 
     // 主结论以后端标签为准：同一审查在概览与详细报告中必须得到同一标题。
-    const combined = { outcome: { ...clean.outcome, kind: "findings", dynamic_validation: "failed" },
-      digest: { merge_decision: { status: "fix_blockers", label: "发现 1 项高优先级问题，另有当前版本动态检查未通过",
+    const combined = { outcome: { ...clean.outcome, kind: "findings" },
+      digest: { merge_decision: { status: "fix_blockers", label: "发现 1 项高优先级问题",
         blocking_finding_keys: ["a"], nonblocking_finding_keys: [] } } };
-    const blockedAndFailed = reviewSituation(combined);
-    assert.equal(blockedAndFailed.key, "blockers");
-    assert.equal(blockedAndFailed.title, "发现 1 项高优先级问题，另有当前版本动态检查未通过");
-    assert.deepEqual(blockedAndFailed.actions.map(item => item.key), ["view_blockers", "view_validation"]);
-    assert.match(blockedAndFailed.description, /另有动态检查未通过/);
-    // 仅有验证失败且后端已给出标签时，展示层不另造标题。
-    const failedOnly = { outcome: { ...clean.outcome, dynamic_validation: "failed" },
-      digest: { merge_decision: { status: "resolve_unknowns", label: "本次记录的动态检查未通过",
-        blocking_finding_keys: [], nonblocking_finding_keys: [] } } };
-    assert.equal(reviewSituation(failedOnly).title, "本次记录的动态检查未通过");
+    const blocked = reviewSituation(combined);
+    assert.equal(blocked.key, "blockers");
+    assert.equal(blocked.title, "发现 1 项高优先级问题");
+    assert.deepEqual(blocked.actions.map(item => item.key), ["view_blockers"]);
     // 旧冻结计划缺少标签时保留展示层回退，不显示占位文案。
     const legacy = { outcome: { ...clean.outcome, kind: "findings", confirmed_count: 1 },
       digest: { merge_decision: { status: "fix_blockers", label: "暂不能给出合并建议",
@@ -94,7 +86,7 @@ test("历史讨论复核的独立状态不改变主审查情景", async () => {
   try {
     const { reviewSituation } = await server.ssrLoadModule("/src/utils/reviewSituation.ts");
     const clean = { outcome: { kind: "clean", confirmed_count: 0, unresolved_count: 0, examined_goals: 10, total_goals: 10,
-      incomplete_investigations: 0, reason_codes: [], dynamic_validation: "not_executed", review_completeness: "complete",
+      incomplete_investigations: 0, reason_codes: [], review_completeness: "complete",
       runtime_reliability: "reliable",
       historical_discussion: { status: "timed_out", collected: 2, checked: 1, unchecked: 1, verified_defects: [],
         termination_reason: "deadline", limitations: ["history_recheck:deadline"],

@@ -4,7 +4,6 @@ import pytest
 from pydantic import ValidationError
 
 from app.models.publication import PublicationPlan
-from app.models.review import TestRunResult as RunResult, ValidationSnapshot
 from app.models.review_runtime import DiscussionInvestigationSubmission, DiscussionInvestigationResult
 from app.services.publication.publication_planner import PublicationPlanner
 from tests.support.review_tasks import completed_task, discussion
@@ -38,19 +37,6 @@ def test_metering_does_not_hide_missing_results_or_incomplete_execution(update):
     plan = PublicationPlanner().build(completed_task(usage_integrity="unknown", **update))
     assert plan.digest.merge_decision.status != "conditional_merge"
     assert plan.digest.merge_decision.label != "已检查范围内未发现已确认问题"
-
-
-@pytest.mark.parametrize("stage,sha", [("base", "c"), ("head", "d")])
-@pytest.mark.parametrize("passed", [True, False])
-def test_reference_validations_never_compete_with_current_head(stage, sha, passed):
-    task = completed_task()
-    original = PublicationPlanner().build(task)
-    task.validation_snapshots = [ValidationSnapshot(stage=stage, sha=sha * 40, passed=passed,
-        command_results=[RunResult(tool="test_runner", command="pytest", exit_code=0 if passed else 1, passed=passed)])]
-    plan = PublicationPlanner().build(task)
-    assert plan.digest.validation_state == plan.outcome.dynamic_validation == "not_executed"
-    assert plan.digest.merge_decision == original.digest.merge_decision
-    assert len(plan.digest.validations) == 1
 
 
 @pytest.mark.parametrize("severity,status,priority", [
@@ -107,26 +93,6 @@ def test_history_metadata_requires_valid_schema_and_survives_checkpoint_shape():
     assert DiscussionInvestigationResult.model_validate_json(result.model_dump_json()).severity == "low"
     with pytest.raises(ValidationError):
         DiscussionInvestigationSubmission.model_validate({**submission.model_dump(), "severity": "arbitrary"})
-
-
-@pytest.mark.parametrize("passed", [True, False])
-def test_base_results_do_not_override_current_head_results(passed):
-    task = completed_task()
-    task.validation_snapshots = [ValidationSnapshot(stage=stage, sha=sha * 40, passed=ok,
-        command_results=[RunResult(tool="test_runner", command="pytest", exit_code=0 if ok else 1, passed=ok)])
-        for stage, sha, ok in [("base", "c", not passed), ("head", "a", passed)]]
-    plan = PublicationPlanner().build(task)
-    assert plan.outcome.dynamic_validation == ("passed" if passed else "failed")
-
-
-def test_patch_snapshot_never_claims_current_head_was_checked():
-    task = completed_task()
-    task.validation_snapshots = [ValidationSnapshot(stage="head", sha="a" * 40, patch_id="patch-1", passed=True,
-        command_results=[RunResult(tool="test_runner", command="pytest", exit_code=0, passed=True)])]
-    plan = PublicationPlanner().build(task)
-    assert plan.outcome.dynamic_validation == "not_executed"
-    assert plan.digest.validations[0].stage == "patched"
-    assert plan.digest.merge_decision.status == "conditional_merge"
 
 
 def test_missing_runtime_report_is_not_reclassified_as_metering_only():

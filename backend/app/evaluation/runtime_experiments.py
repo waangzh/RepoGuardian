@@ -19,7 +19,7 @@ from app.tools.git_tool import DIFF_CONTEXT_LINES, GitTool
 __all__ = ["GROUPS", "FIXED_SETTINGS", "compare_fixed_scope", "first_sample_gate"]
 FIXED_SETTINGS = {
     "repoguardian_provider": "deepseek", "repoguardian_model": "deepseek-flash",
-    "repoguardian_review_engine": "task_review_v1", "repoguardian_unit_input_mode": "canonical",
+    "repoguardian_review_engine": "task_review_v1",
     "repoguardian_review_unit_concurrency": 4,
     "repoguardian_model_request_timeout_seconds": 60.0, "repoguardian_model_request_attempts": 2,
     "repoguardian_task_review_timeout_seconds": 1800.0,

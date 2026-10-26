@@ -31,7 +31,7 @@ const chapters = computed(() => props.plan ? reportChapters(props.plan) : [{ id:
       <button type="button" class="rd-text-button rd-space" :disabled="!available" @click="emit('full')">查看完整 Markdown</button>
     </section>
     <section v-if="mode === 'comment'" class="rd-aside-card"><h3>发布或复制到 GitHub</h3><p>复制评论只写入剪贴板；直接发布需要独立授权、服务端预检和二次确认。</p><button type="button" class="btn secondary rd-full" :disabled="!canPublish" @click="emit('publish')">打开交付选项<AppIcon name="arrow-right" :size="15" /></button></section>
-    <section v-else class="rd-aside-card"><h3>事实边界</h3><div class="rd-safety"><AppIcon name="info" :size="17" /><div><strong>证据支持 ≠ 动态验证</strong><small>已读测试代码不代表通过 CI</small></div></div></section>
+    <section v-else class="rd-aside-card"><h3>事实边界</h3><div class="rd-safety"><AppIcon name="info" :size="17" /><div><strong>证据支持 ≠ 项目 CI</strong><small>已读测试代码不代表通过 CI</small></div></div></section>
     <p class="rd-context-tip">RepoGuardian · 证据可追溯<br />结论仅适用于本次审查快照。</p>
   </aside>
 </template>

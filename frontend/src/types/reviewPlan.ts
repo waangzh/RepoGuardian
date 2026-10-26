@@ -30,7 +30,7 @@ export interface FindingView {
   recommendation: string | null; category: string | null;
   location: FindingLocation | null; verification: FindingVerification;
   severity: string | null; anchor: Record<string, unknown> | null; source_ids: string[];
-  human_confirmation_reason: string | null; dynamic_validation_status: string;
+  human_confirmation_reason: string | null;
   limitations: string[]; disposition: FindingDisposition | null; updated_at: string | null;
 }
 export interface FindingLocation {
@@ -39,5 +39,4 @@ export interface FindingLocation {
 export interface FindingVerification {
   method: 'static_model_review';
   evidence_status: FindingView['evidence_status'];
-  dynamic_validation_status: 'not_executed' | 'passed' | 'failed' | 'unknown';
 }

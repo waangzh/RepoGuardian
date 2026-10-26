@@ -20,22 +20,15 @@ from app.graph.checkpointer import (
 from app.graph.state import ReviewState
 from app.models.review import (
     ExecutionBudget,
-    PatchStatus,
-    PatchValidationResult,
     ReviewCreateRequest,
-    RepositorySnapshot,
     ReviewPreviewRequest,
     ReviewPreviewResponse,
-    ValidationBackendPreview,
     ReviewPhase,
     ReviewTask,
     StepStatus,
     TaskStatus,
     TaskStep,
     TaskStepProgress,
-    ValidationBackend,
-    ValidationResult,
-    ValidationStatus,
 )
 from app.models.review_runtime import TaskRuntimeRetryResult, TaskRuntimeReport
 from app.services.review.report_service import ReportService
@@ -48,13 +41,11 @@ from app.services.review.review_run_budget import (
 )
 from app.services.review.review_repository import ReviewRepository
 from app.services.review.task_queue import ClaimedJob, DatabaseTaskQueue, NonRetryableJobError, ReviewWorker
-from app.services.review.patch_presentation import build_patch_presentation
 from app.tools.diff_parser import DiffParser
 from app.tools.git_tool import GitTool
 from app.tools.github.github_tool import GitHubTool
 from app.tools.repo_indexer import RepoIndexer
 from app.tools.workspace_cleanup import cleanup_workspace
-from app.validation.selector import ValidationBackendSelector
 
 logger = logging.getLogger("RepoGuardian.Service")
 
@@ -104,7 +95,6 @@ class ReviewService:
         diff_parser: DiffParser,
         provider: LLMProvider,
         report_service: ReportService,
-        validation_backend_selector: ValidationBackendSelector | None = None,
         repository: ReviewRepository | None = None,
         task_queue: DatabaseTaskQueue | None = None,
     ) -> None:
@@ -113,7 +103,6 @@ class ReviewService:
         self._diff_parser = diff_parser
         self._provider = provider
         self._report_service = report_service
-        self._validation_backend_selector = validation_backend_selector or ValidationBackendSelector()
         self._repository = repository
         self._task_queue = task_queue or (DatabaseTaskQueue() if repository else None)
         self._worker = ReviewWorker(self._task_queue, self._handle_job) if self._task_queue else None
@@ -140,10 +129,7 @@ class ReviewService:
             task_runtime_configuration=frozen_configuration,
             incremental=(frozen_configuration or {}).get("incremental"),
             mode=request.mode,
-            validation_backend=request.validation_backend,
-            validation_profile=request.validation_profile,
             review={"mode": request.mode, "status": TaskStatus.queued, "completed": False},
-            validation=[],
             steps=[TaskStep(name="queued", message="任务已创建")],
         )
         logger.info("📋 创建审查任务 %s（PR: %s, 模型: %s）", task.id[:8], request.pr_url, request.model or "默认")
@@ -296,113 +282,6 @@ class ReviewService:
 
     def get_issue_detail(self, task_id: str, issue_id: str):
         return self._repository.get_issue(task_id, issue_id) if self._repository else None
-
-    def get_patch_detail(self, task_id: str, patch_id: str):
-        return self._repository.get_patch(task_id, patch_id) if self._repository else None
-
-    def get_validation_detail(self, task_id: str, validation_id: str):
-        return self._repository.get_validation(task_id, validation_id) if self._repository else None
-
-    def apply_user_runner_result(
-        self,
-        task_id: str,
-        patch_id: str,
-        result: PatchValidationResult,
-    ) -> None:
-        """把已由 UserRunnerService 验真的结果原子地回写到内存任务。"""
-        task = self.get_task(task_id)
-        if task is None:
-            raise KeyError(task_id)
-        if task.status == TaskStatus.cancelled:
-            raise ValueError("cancelled review cannot accept validation results")
-        patch = next((item for item in task.patches if item.id == patch_id), None)
-        if patch is None:
-            raise KeyError(patch_id)
-        if (
-            result.backend != ValidationBackend.user_runner.value
-            or not result.trusted
-            or result.trust_source != "user_runner"
-            or result.head_sha != patch.head_sha
-            or result.patch_sha != patch.patch_sha
-        ):
-            raise ValueError("runner result does not match the candidate patch")
-
-        if result.status == ValidationStatus.passed:
-            patch.status = PatchStatus.verified
-        elif result.status == ValidationStatus.failed:
-            patch.status = PatchStatus.validation_failed
-        else:
-            patch.status = PatchStatus.validation_inconclusive
-        patch.validation_backend = result.backend
-        patch.validation_result_id = result.id
-        patch.presentation = build_patch_presentation(patch)
-
-        validation = ValidationResult.model_validate({
-            **result.model_dump(mode="json"),
-            "patch_id": patch.id,
-        })
-        task.validation = [
-            item for item in task.validation
-            if not (
-                item.patch_id == patch.id
-                and item.backend == ValidationBackend.user_runner.value
-            )
-        ]
-        task.validation.append(validation)
-        self._touch(task)
-        self._persist(task)
-
-    def apply_project_ci_result(
-        self,
-        task_id: str,
-        patch_id: str,
-        result: PatchValidationResult,
-    ) -> None:
-        """仅接受完成了全部 CI 身份绑定校验的结构化结果。"""
-        task = self.get_task(task_id)
-        if task is None:
-            raise KeyError(task_id)
-        patch = next((item for item in task.patches if item.id == patch_id), None)
-        if patch is None:
-            raise KeyError(patch_id)
-        if (
-            result.backend != ValidationBackend.project_ci.value
-            or result.head_sha != patch.head_sha
-            or result.patch_sha != patch.patch_sha
-        ):
-            raise ValueError("project CI result does not match the candidate patch")
-        if result.status in {ValidationStatus.passed, ValidationStatus.failed} and (
-            not result.trusted
-            or not (result.trust_source or "").startswith("project_ci:")
-        ):
-            raise ValueError("untrusted project CI result cannot decide candidate correctness")
-        if not (result.trust_source or "").startswith("project_ci"):
-            raise ValueError("project CI trust source is missing")
-
-        if result.status == ValidationStatus.passed:
-            patch.status = PatchStatus.verified
-        elif result.status == ValidationStatus.failed:
-            patch.status = PatchStatus.validation_failed
-        else:
-            patch.status = PatchStatus.validation_inconclusive
-        patch.validation_backend = result.backend
-        patch.validation_result_id = result.id
-        patch.presentation = build_patch_presentation(patch)
-
-        validation = ValidationResult.model_validate({
-            **result.model_dump(mode="json"),
-            "patch_id": patch.id,
-        })
-        task.validation = [
-            item for item in task.validation
-            if not (
-                item.patch_id == patch.id
-                and item.backend == ValidationBackend.project_ci.value
-            )
-        ]
-        task.validation.append(validation)
-        self._touch(task)
-        self._persist(task)
 
     async def _prepare_preview_inputs(self, pr, configuration, progress, cancel_event):
         from app.services.preview.preview_input_cache import PreviewInputCache, input_cache_key
@@ -608,23 +487,6 @@ class ReviewService:
         reused_paths = {path for unit in decision.reused_units for path in unit.primary_files}
         active_units = [unit for unit in plan.review_units
                         if not set(unit.primary_files) <= reused_paths]
-        backend = self._validation_backend_selector.select(
-            request.validation_backend.value,
-            request.mode,
-        )
-        capabilities = await backend.capabilities(RepositorySnapshot(
-            language=index.get("project_meta", {}).get("language", "unknown"),
-            languages=list(index.get("project_meta", {}).get("languages") or []),
-            language_counts=dict(
-                index.get("project_meta", {}).get("language_counts") or {}
-            ),
-            is_mixed_language=bool(
-                index.get("project_meta", {}).get("is_mixed_language", False)
-            ),
-            framework=index.get("project_meta", {}).get("framework"),
-            test_framework=index.get("project_meta", {}).get("test_framework"),
-            total_files=len(index["file_index"]),
-        ))
         response = ReviewPreviewResponse(
             force_full_review=request.force_full_review,
             continuation=continuation_preview if not decision.applicable and not saved_result_id else None,
@@ -651,14 +513,6 @@ class ReviewService:
                 planner.max_model_calls(unit) for unit in active_units
             ),
             estimated_tokens=sum(unit.estimated_tokens for unit in active_units),
-            # Repair is an independent workflow and never part of previewed
-            # production Review Plane capacity.
-            patch_generation_enabled=False,
-            validation_backend=ValidationBackendPreview(
-                name=ValidationBackend(backend.name),
-                available=capabilities.available,
-                unavailable_reason=capabilities.unavailable_reason,
-            ),
             incremental=incremental_preview,
             warnings=[*plan.warnings, *incremental_warnings],
         )
@@ -734,17 +588,7 @@ class ReviewService:
             "status": TaskStatus.planning.value,
             "created_at": task.created_at.isoformat(),
             "updated_at": task.updated_at.isoformat(),
-            "generate_patches": task.generate_patches,
-            "validation_backend": task.validation_backend.value,
-            "validation_profile": task.validation_profile,
-            "validation_results": [item.model_dump(mode="json") for item in task.validation],
-            "warnings": (
-                [
-                    "修复与动态验证已从主 Review lifecycle 解耦；本次任务仅执行严格只读审查"
-                ]
-                if task.generate_patches or task.validation_backend != ValidationBackend.none
-                else []
-            ),
+            "warnings": [],
             "pr_url": task.pr_url,
             "model": (task.task_runtime_configuration or {}).get("model", task.model),
             "execution_budget": ExecutionBudget().model_dump(),
@@ -753,7 +597,6 @@ class ReviewService:
             "_git_tool": self._git_tool,
             "_diff_parser": self._diff_parser,
             "_provider": self._provider,
-            "_validation_backend_selector": self._validation_backend_selector,
             "_repo_prepared_callback": lambda path: self._repo_paths.__setitem__(
                 task_id, Path(path)
             ),
@@ -761,12 +604,10 @@ class ReviewService:
         if self._repository:
             for key in (
                 "_github_tool", "_git_tool", "_diff_parser", "_provider",
-                "_validation_backend_selector",
                 "_repo_prepared_callback",
             ):
                 initial_state.pop(key, None)
             initial_state["_persistence_enabled"] = True
-            initial_state["_report_purpose_model_enabled"] = True
 
         result = None
         interrupted = False
@@ -1150,9 +991,6 @@ class ReviewService:
         task.status = rebuilt.status
         task.phase = rebuilt.phase
         task.mode = rebuilt.mode
-        task.generate_patches = rebuilt.generate_patches
-        task.validation_backend = rebuilt.validation_backend
-        task.validation_profile = rebuilt.validation_profile
         task.review = rebuilt.review
         task.pr = rebuilt.pr
         task.changed_files = rebuilt.changed_files
@@ -1171,13 +1009,6 @@ class ReviewService:
         task.context_snippets = rebuilt.context_snippets
         task.repo_snapshot = rebuilt.repo_snapshot
         task.project_profile = rebuilt.project_profile
-        task.static_results = rebuilt.static_results
-        task.validation_snapshots = rebuilt.validation_snapshots
-        task.validation_deltas = rebuilt.validation_deltas
-        task.validation = rebuilt.validation
-        task.patch_eligibility = rebuilt.patch_eligibility
-        task.patches = rebuilt.patches
-        task.test_results = rebuilt.test_results
         task.agent_events = rebuilt.agent_events
         task.human_request = rebuilt.human_request
         task.report_markdown = rebuilt.report_markdown

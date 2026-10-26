@@ -53,7 +53,7 @@ def frozen_runtime_spec(state, configuration, budget, *, readable_files=()):
     discussion_fields = {}
     if configuration.get("discussion_contract") == "pr-discussion-context-v1":
         from app.llm.model_request_budgeter import PreparedModelRequest
-        from app.services.discussions.pr_discussions import select_discussions
+        from app.review.discussion_selection import select_discussions
 
         metadata = state.get("pr_discussion") or {}
         if not metadata.get("manifest_hash"):

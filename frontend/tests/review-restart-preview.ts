@@ -16,9 +16,9 @@ task.confirmed_plan = { version: "review-plan-v1", depth: "deep", focus: ["secur
   scope: { mode: "selected", primary_files: ["old.py"] }, limits };
 task.snapshot = { head_sha: "a".repeat(40), effective_base_sha: "c".repeat(40), declared_base_sha: "c".repeat(40) };
 task.plan_hash = "old-confirmation";
-task.mode = "review_suggest_and_validate";
+task.mode = "review";
 task.generate_patches = true;
-task.validation_backend = "project_ci";
+task.validation_backend = "none";
 if (params.has("legacy")) { task.confirmed_plan = null; task.model = null; task.engine = "legacy_units"; }
 if (params.has("invalid")) task.pr_url = "https://evil.test/o/r/pull/1";
 const requests: { path: string; method: string; body: unknown }[] = [];

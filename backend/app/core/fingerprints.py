@@ -63,28 +63,4 @@ def unit_fingerprint(
         "model": model,
         "provider": provider,
         "pr_intent_hash": pr_intent_hash,
-        "unit_input_mode": settings.repoguardian_unit_input_mode,
-    })
-
-
-def patch_fingerprint(
-    *, head_sha: str, issue_evidence_hash: str, unified_diff: str, patch_policy_version: str
-) -> tuple[str, str]:
-    diff_hash = hashlib.sha256(normalize_unified_diff(unified_diff).encode("utf-8")).hexdigest()
-    return stable_hash({
-        "head_sha": head_sha,
-        "issue_evidence_hash": issue_evidence_hash,
-        "unified_diff_hash": diff_hash,
-        "patch_policy_version": patch_policy_version,
-    }), diff_hash
-
-
-def validation_fingerprint(
-    *, patch_hash: str, backend: str, validation_profile: str, environment_fingerprint: str
-) -> str:
-    return stable_hash({
-        "patch_hash": patch_hash,
-        "backend": backend,
-        "validation_profile": validation_profile,
-        "environment_fingerprint": environment_fingerprint,
     })

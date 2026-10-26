@@ -16,8 +16,8 @@ from pydantic import (
 
 from app.core.paths import validate_repo_relative_path
 from app.models.review.common import (
-    RetrievalRelevanceType, ReviewMode, StepStatus, TaskStatus, ValidationBackend,
-    _default_review_engine, _default_review_mode, _default_validation_backend, _default_validation_profile,
+    RetrievalRelevanceType, ReviewMode, StepStatus, TaskStatus,
+    _default_review_engine, _default_review_mode,
 )
 from app.models.review_plan import ReviewPlanOptions, PlanSnapshot
 
@@ -236,8 +236,6 @@ class ReviewCreateRequest(BaseModel):
     expected_effective_base_sha: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
     engine: Literal["task_review_v1"] = Field(default_factory=_default_review_engine)
     mode: ReviewMode = Field(default_factory=_default_review_mode)
-    validation_backend: ValidationBackend = Field(default_factory=_default_validation_backend)
-    validation_profile: str = Field(default_factory=_default_validation_profile)
 
     model_config = ConfigDict(extra="forbid")
 
@@ -246,17 +244,6 @@ class ReviewCreateRequest(BaseModel):
         confirmation = [self.preview_id, self.plan_hash, self.expected_head_sha, self.expected_effective_base_sha]
         if any(confirmation) and not all(confirmation):
             raise ValueError("preview confirmation requires preview_id, plan_hash and both expected SHAs")
-        if self.validation_backend != ValidationBackend.none:
-            raise ValueError("task_review_v1 only supports read-only inspect tasks")
-        if self.mode == ReviewMode.review:
-            self.validation_backend = ValidationBackend.none
-        elif self.mode == ReviewMode.review_and_suggest:
-            self.validation_backend = ValidationBackend.none
-        elif self.validation_backend == ValidationBackend.user_runner:
-            from app.core.config import registered_runner_profiles
-
-            if self.validation_profile not in registered_runner_profiles():
-                raise ValueError("validation_profile is not registered by server policy")
         return self
 
 
@@ -279,23 +266,13 @@ class ReviewPreviewRequest(BaseModel):
     plan: ReviewPlanOptions = Field(default_factory=ReviewPlanOptions)
     engine: Literal["task_review_v1"] = Field(default_factory=_default_review_engine)
     mode: ReviewMode = Field(default_factory=_default_review_mode)
-    validation_backend: ValidationBackend = Field(default_factory=_default_validation_backend)
-    validation_profile: str = Field(default_factory=_default_validation_profile)
+
     model_config = ConfigDict(extra="forbid")
 
     @model_validator(mode="after")
     def validate_product_policy(self) -> "ReviewPreviewRequest":
         if self.force_full_review and self.reuse_review_id:
             raise ValueError("full review cannot specify a reuse source")
-        normalized = ReviewCreateRequest(
-            pr_url=self.pr_url,
-            engine=self.engine,
-            mode=self.mode,
-            validation_backend=self.validation_backend,
-            validation_profile=self.validation_profile,
-        )
-        self.validation_backend = normalized.validation_backend
-        self.validation_profile = normalized.validation_profile
         return self
 
 

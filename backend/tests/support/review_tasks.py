@@ -4,10 +4,20 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from app.models.review import (
-    EvidenceAnchor, ResolvedIssueLocation, ReviewIssue, ReviewRunManifest, ReviewTask, ReviewUnit,
+    EvidenceAnchor, PullRequestInfo, PullRequestRef, ResolvedIssueLocation, ReviewIssue,
+    ReviewRunManifest, ReviewTask, ReviewUnit,
 )
 from app.models.review_runtime import Candidate, VerificationResult
 from app.services.publication.review_publication import publication_view, verification_subject_hash
+
+
+def pull_request(*, body: str | None = None) -> PullRequestInfo:
+    return PullRequestInfo(
+        owner="o", repo="r", number=1, title="fix(stats): keep the point estimate inside its interval",
+        body=body, html_url="https://github.com/o/r/pull/1", clone_url="https://github.com/o/r.git",
+        base=PullRequestRef(ref="main", sha="a" * 40, repo_clone_url="https://github.com/o/r.git"),
+        head=PullRequestRef(ref="fix", sha="b" * 40, repo_clone_url="https://github.com/o/r.git"),
+    )
 
 
 def completed_task(**report_updates):

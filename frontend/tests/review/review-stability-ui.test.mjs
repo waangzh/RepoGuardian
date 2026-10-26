@@ -60,8 +60,8 @@ test('强制全新标记与续查快照从客户端传到 API', async () => {
   };
   try {
     const { createReview, resumeReview } = await server.ssrLoadModule('/src/api/client.ts');
-    const preview = { preview_id: 'preview', plan_hash: 'plan', force_full_review: true, mode: 'review', validation_backend: { name: 'none' }, snapshot: { head_sha: 'head', effective_base_sha: 'base' } };
-    await createReview('https://github.com/o/r/pull/1', '', 'review', 'none', preview);
+    const preview = { preview_id: 'preview', plan_hash: 'plan', force_full_review: true, mode: 'review', snapshot: { head_sha: 'head', effective_base_sha: 'base' } };
+    await createReview('https://github.com/o/r/pull/1', '', 'review', preview);
     assert.equal(sent[0].body.force_full_review, true);
     await resumeReview('source', 'https://github.com/o/r/pull/1', preview);
     assert.match(sent[1].url, /\/source\/resume$/);

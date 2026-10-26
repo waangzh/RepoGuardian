@@ -13,7 +13,6 @@ from app.models.review import (
     ReviewPhase,
     ReviewTask,
     TaskStatus,
-    ValidationBackend,
 )
 
 
@@ -37,7 +36,6 @@ async def test_checkpoint_reopen_preserves_review_types(tmp_path, monkeypatch, l
             if legacy:
                 for model in (
                     ExecutionBudget, ReviewMode, ReviewPhase, ReviewTask, TaskStatus,
-                    ValidationBackend,
                 ):
                     names.setattr(model, "__module__", "app.models.review")
             await saver.aput(

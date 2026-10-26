@@ -8,7 +8,6 @@ import pytest
 
 from app.api import reviews
 from app.main import app
-from app.models.review import TestRunResult as RunResult, ValidationSnapshot, ValidationResult
 from app.services.publication.publication_planner import PublicationPlanner
 from app.services.publication.publication_renderer import render_review_comment
 from app.services.review.runtime.review_runtime import TaskReviewRuntime
@@ -111,32 +110,6 @@ async def test_structured_intent_keeps_zero_budget_and_stale_evidence_rejection(
     assert not messages and not step.budget.attempts
     step.executor.evidence_catalog["e1"]["head_sha"] = "d" * 40
     assert step.executor.evidence_error(["e1"]) == "stale_evidence_snapshot"
-
-
-@pytest.mark.parametrize("stage,sha,passed,expected", [("head", "a", True, "passed"),
-    ("head", "a", False, "failed"), ("head", "d", True, "not_executed"),
-    ("base", "c", True, "not_executed")])
-def test_validation_stage_identity_and_failure_remain_separate(stage, sha, passed, expected):
-    task = completed_task()
-    task.validation_snapshots = [ValidationSnapshot(stage=stage, sha=sha * 40, passed=passed,
-        command_results=[RunResult(tool="test_runner", command="pytest", exit_code=0 if passed else 1, passed=passed)])]
-    plan = PublicationPlanner().build(task)
-    assert plan.digest.validation_state == plan.outcome.dynamic_validation == expected
-    assert plan.digest.validations[0].stage == stage
-    assert plan.digest.merge_decision.status == ("resolve_unknowns" if expected == "failed" else "conditional_merge")
-
-
-@pytest.mark.parametrize("trusted,bound", [(True, True), (False, True), (True, False)])
-def test_patch_success_never_becomes_head_success(trusted, bound):
-    from app.services.review.review_validation_digest import validation_digest
-    result = ValidationResult(id="v", backend="user_runner", status="passed", trusted=trusted,
-        trust_source="user_runner", head_sha="a" * 40, patch_sha="hash", patch_id="p")
-    task = SimpleNamespace(run_manifest=SimpleNamespace(head_sha="a" * 40, effective_base_sha="c" * 40),
-        validation_snapshots=[], validation=[result], patches=[SimpleNamespace(id="p", head_sha="a" * 40,
-            patch_sha="hash" if bound else "other", validation_result_id="v")])
-    state, records = validation_digest(task)
-    assert state == "not_executed" and records[0].stage == "patched"
-    assert records[0].trusted is (trusted and bound)
 
 
 def test_blockers_withheld_and_human_resolved_do_not_disappear():

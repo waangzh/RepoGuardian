@@ -20,19 +20,17 @@ test("变更理解只呈现三个结论性问题，不展开证据审计面板",
   } finally { await server.close(); }
 });
 
-test("概览使用统一合并建议并区分补丁结果与 Head 验证", async () => {
+test("概览使用统一合并建议并保留服务端限制", async () => {
   const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   try {
     const { default: component } = await server.ssrLoadModule("/src/components/review/publication/ReviewOutcomePanel.vue");
-    const plan = { outcome: { kind: "clean", dynamic_validation: "independent_results", reason_codes: [], examined_goals: 2, total_goals: 2,
+    const plan = { outcome: { kind: "clean", reason_codes: [], examined_goals: 2, total_goals: 2,
       unresolved_count: 0, review_completeness: "complete", finding_conclusion: "no_confirmed_findings", runtime_reliability: "reliable" }, withheld_findings: [],
       digest: { merge_decision: { status: "conditional_merge", label: "有改进建议，暂无高优先级问题", advice: "统一事实要求补查缓存路径",
-        blocking_finding_keys: [], nonblocking_finding_keys: [], limits: ["调用方尚未核验"] },
-        validations: [{ id: "v", source: "user_runner", stage: "patched", status: "passed", reason: "不代表当前 Head 已通过" }] } };
+        blocking_finding_keys: [], nonblocking_finding_keys: [], limits: ["调用方尚未核验"] } } };
     const html = await renderToString(createSSRApp(component, { plan }));
     // 主结论直接使用后端保存的合并建议标签，前端不再另造标题。
-    for (const value of ["独立结果 · Head 未知", "有改进建议，暂无高优先级问题", "本结论仅覆盖已检查范围",
-      "不代表当前 Head 已通过", "调用方尚未核验"]) assert.ok(html.includes(value));
+    for (const value of ["有改进建议，暂无高优先级问题", "本结论仅覆盖已检查范围", "调用方尚未核验"]) assert.ok(html.includes(value));
     assert.equal(html.match(/有改进建议，暂无高优先级问题/g)?.length, 1);
     // 只展示当前情景结论；不出现其他情景或旧合并标签。
     assert.equal(html.match(/class="(?:success|info|warning|danger) outcome-verdict"/g)?.length, 1);

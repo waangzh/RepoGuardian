@@ -7,9 +7,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.api import reviews
-from app.models.orm import (ArtifactOrm, GitHubSummarySlotOrm, PatchOrm, PublicationAttemptOrm,
-                            ReviewTaskOrm, ValidationOrm, WorkerJobOrm)
-from app.models.review import PatchProposal, ReviewUnitResult, TaskStatus
+from app.models.orm import (ArtifactOrm, GitHubSummarySlotOrm, PublicationAttemptOrm,
+                            ReviewTaskOrm, WorkerJobOrm)
+from app.models.review import ReviewUnitResult, TaskStatus
 from app.services.publication.publication_repository import PublicationConflict
 from app.services.publication.publication_service import PublicationService
 from app.services.review.review_repository import ReviewRepository
@@ -23,9 +23,6 @@ def completed(repository, status=TaskStatus.completed):
     task.status = status
     task.report_markdown = "# saved report"
     task.review_units = [_unit()]
-    task.patches = [PatchProposal(issue_ids=["issue"], title="fix", rationale="fix",
-        unified_diff="--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-a\n+b\n",
-        touched_files=["app.py"], risk="low", head_sha="a" * 40)]
     repository.create_task(task)
     repository.save_task(task)
     return task
@@ -36,22 +33,13 @@ def completed(repository, status=TaskStatus.completed):
 def test_manual_delete_is_persistent_idempotent_and_hides_children(persistence, status):
     repository, _, sessions = persistence
     task = completed(repository, status)
-    with sessions.begin() as session:
-        patch = session.scalar(select(PatchOrm).where(PatchOrm.task_id == task.id))
-        session.add(ValidationOrm(task_id=task.id, patch_id=patch.id, validation_id="validation",
-            backend="user_runner", environment_fingerprint="fixture", patch_hash="fixture",
-            validation_profile="fixture", fingerprint="fixture", status="passed"))
-    assert repository.get_validation(task.id, "validation") is not None
     assert repository.get_unit(task.id, task.review_units[0].id) is not None
-    assert repository.get_patch(task.id, task.patches[0].id) is not None
     assert repository.delete_task(task.id)
     assert repository.delete_task(task.id)
     restarted = ReviewRepository(sessions, repository._artifacts, require_migration=False)
     assert restarted.get_task(task.id) is None
     assert restarted.list_tasks().total == 0
     assert restarted.get_unit(task.id, task.review_units[0].id) is None
-    assert restarted.get_patch(task.id, task.patches[0].id) is None
-    assert restarted.get_validation(task.id, "validation") is None
     assert not restarted.delete_task("missing")
     with sessions() as session:
         row = session.get(ReviewTaskOrm, task.id)
@@ -193,9 +181,8 @@ def test_delete_http_contract_and_related_endpoints(persistence, monkeypatch):
         assert stream.status_code == 200 and "event: done" in stream.text
         assert client.delete(path).status_code == 204
         assert client.delete(path).content == b""
-        for suffix in ["", "/units/ru-test", "/issues/issue", "/patches/" + task.patches[0].id,
-                       "/validations/validation", "/publication-plan", "/publication-summary", "/discussions",
-                       "/report", "/stream", "/files/0/diff", "/files/0/context"]:
+        for suffix in ["", "/units/ru-test", "/issues/issue", "/publication-plan", "/publication-summary",
+                       "/discussions", "/report", "/stream", "/files/0/diff", "/files/0/context"]:
             assert client.get(path + suffix).status_code == 404, suffix
         assert client.delete("/api/reviews/missing").status_code == 404
         running = _task()

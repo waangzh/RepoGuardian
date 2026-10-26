@@ -586,7 +586,7 @@ def test_renamed_history_and_original_read_share_the_context_cap():
 
 
 def test_long_discussion_keeps_readable_id_when_full_text_does_not_fit():
-    from app.services.discussions.pr_discussions import select_discussions
+    from app.review.discussion_selection import select_discussions
     from app.llm.model_request_budgeter import PreparedModelRequest, ModelRequestProfile
     item = thread_input(snapshot(body="Potential retry issue. " + "x" * 20_000).threads[0])
     request = PreparedModelRequest(model="fixture", operation="task_review_v1", system="source", prompt="source", output_tokens=4096)

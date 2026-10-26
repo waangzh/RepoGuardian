@@ -34,27 +34,6 @@ class ReviewMode(str, Enum):
     """产品级审查模式；默认路径永远不执行目标仓库代码。"""
 
     review = "review"
-    review_and_suggest = "review_and_suggest"
-    review_suggest_and_validate = "review_suggest_and_validate"
-
-
-class ValidationBackend(str, Enum):
-    """允许由 API 选择的验证后端名称，而不是任意命令或 Docker 参数。"""
-
-    none = "none"
-    user_runner = "user_runner"
-    project_ci = "project_ci"
-    gvisor = "gvisor"
-
-
-class ValidationStatus(str, Enum):
-    passed = "passed"
-    failed = "failed"
-    unsupported = "unsupported"
-    infrastructure_error = "infrastructure_error"
-    timed_out = "timed_out"
-    cancelled = "cancelled"
-    inconclusive = "inconclusive"
 
 
 class ReviewPhase(str, Enum):
@@ -227,44 +206,6 @@ class AgentActionName(str, Enum):
     task_done = "task_done"
 
 
-class CommandId(str, Enum):
-    """服务端注册的逻辑命令标识，不能由模型扩展为任意 Shell 文本。"""
-
-    python_static_default = "python.static.default"
-    python_test_collect = "python.test.collect"
-    python_test_targeted = "python.test.targeted"
-    python_test_full = "python.test.full"
-
-
-class ValidationStage(str, Enum):
-    """同一工作树在补丁前后的三个验证阶段。"""
-
-    base = "base"
-    head = "head"
-    patched = "patched"
-
-
-class PatchStatus(str, Enum):
-    """候选补丁在独立验证生命周期中的受验证状态。"""
-
-    suggested = "suggested"
-    unverified = "unverified"
-    validation_pending = "validation_pending"
-    verified = "verified"
-    validation_failed = "validation_failed"
-    validation_inconclusive = "validation_inconclusive"
-    abandoned = "abandoned"
-    superseded = "superseded"
-
-
-class PatchApplyCheckStatus(str, Enum):
-    """候选补丁的确定性可应用性检查状态，不代表功能验证。"""
-
-    not_checked = "not_checked"
-    passed = "passed"
-    failed = "failed"
-
-
 class RetrievalRelevanceType(str, Enum):
     """服务端支持的、可审计的上下文关联类型。"""
 
@@ -286,17 +227,6 @@ class FixRisk(str, Enum):
     high = "high"
 
 
-class FailureKind(str, Enum):
-    """验证失败的受控分类。"""
-
-    dependency_missing = "dependency_missing"
-    test_collection_error = "test_collection_error"
-    timeout = "timeout"
-    infrastructure = "infrastructure"
-    code_regression = "code_regression"
-    unknown = "unknown"
-
-
 ModelCallValue = TypeVar("ModelCallValue")
 
 
@@ -312,15 +242,3 @@ def _default_review_engine() -> Literal["task_review_v1"]:
     from app.core.config import settings
 
     return settings.repoguardian_review_engine
-
-
-def _default_validation_backend() -> ValidationBackend:
-    from app.core.config import settings
-
-    return ValidationBackend(settings.repoguardian_default_validation_backend)
-
-
-def _default_validation_profile() -> str:
-    from app.core.config import settings
-
-    return settings.repoguardian_default_validation_profile

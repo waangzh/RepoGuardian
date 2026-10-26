@@ -41,7 +41,6 @@ test("状态文案区分事实、合并影响与可执行入口", async t => {
       assert.deepEqual(situationActionTarget("view_unresolved"), { section: "findings", findingFilter: "unresolved" });
       assert.deepEqual(situationActionTarget("view_gaps"), { section: "scope", scopeFilter: "incomplete" });
       assert.deepEqual(situationActionTarget("view_investigations"), { section: "scope", investigations: true });
-      assert.deepEqual(situationActionTarget("view_validation"), { section: "activity", activityFocus: "validation" });
       assert.deepEqual(situationActionTarget("view_limits"), { section: "activity", activityFocus: "limits" });
     });
     await t.test("发现页入口实际筛选后端阻断键、建议和未决记录", async () => {
@@ -62,7 +61,7 @@ test("状态文案区分事实、合并影响与可执行入口", async t => {
         for (const row of rows) assert.equal(html.includes(row.title), visible.includes(row.key), `${filter}:${row.key}`);
       }
     });
-    await t.test("范围入口筛选未检查目标并展开调查，验证入口展示真实绑定记录", async () => {
+    await t.test("范围入口筛选未检查目标并展开调查", async () => {
       const { default: Scope } = await server.ssrLoadModule("/src/components/pages/ReviewScopePage.vue");
       const runtime = { ...fixtures.clean.task.task_runtime_report, initial_scope_coverage: [
         { goal_id: "done", target_ref: "already-examined.py", status: "examined" },
@@ -76,19 +75,12 @@ test("状态文案区分事实、合并影响与可执行入口", async t => {
       assert.match(html, /<details[^>]*open/);
       const { default: Activity } = await server.ssrLoadModule("/src/components/pages/ReviewActivityPage.vue");
       const summary = structuredClone(fixtures.clean.summary);
-      summary.digest.validations = [{ id: "check-1", source: "受控外部执行端", stage: "head", status: "failed",
-        reason: "仅检查缓存模块", trusted: true, snapshot_matches: true }];
-      const activity = await render(Activity, { task: fixtures.clean.task, runtime: null, summary, duration: "", initialFocus: "validation" });
-      assert.ok(activity.includes("仅检查缓存模块") && activity.includes("已绑定本次快照"));
-      assert.ok(activity.includes("不代表整个项目 CI 全部通过"));
       const legacySummary = structuredClone(summary);
       delete legacySummary.digest.merge_decision;
-      delete legacySummary.digest.validations;
       for (const optionalSummary of [null, legacySummary]) {
-        const missing = await render(Activity, { task: { ...fixtures.clean.task, validation: [] }, runtime: null,
+        const missing = await render(Activity, { task: fixtures.clean.task, runtime: null,
           summary: optionalSummary, duration: "", initialFocus: "limits" });
         assert.ok(missing.includes("未保存明确的限制条目"));
-        assert.ok(missing.includes("尚无可核对的动态验证结果"));
       }
     });
     await t.test("摘要失败可重试，无问题时先阅读报告再准备交付", async () => {
@@ -103,14 +95,10 @@ test("状态文案区分事实、合并影响与可执行入口", async t => {
       assert.match(clean, /class="btn primary ov-main-action">查看完整报告/);
       assert.ok(!clean.includes("请点击“复制 PR 评论”"), "结论区不再重复操作教学");
     });
-    await t.test("执行完成不是质量结论，验证通过只覆盖已记录检查", async () => {
-      const { reportValidationLabel } = await server.ssrLoadModule("/src/utils/reportPresentation.ts");
-      assert.equal(reportValidationLabel("passed"), "当前 PR 版本已记录的对应检查通过");
+    await t.test("执行完成不是质量结论", async () => {
       const { default: Badge } = await server.ssrLoadModule("/src/components/common/StatusBadge.vue");
       const completed = await render(Badge, { status: "completed" });
       assert.ok(completed.includes("执行已完成") && completed.includes("不代表 PR 安全或可以合并"));
-      const passed = await render(Badge, { status: "passed" });
-      assert.ok(passed.includes("所选检查通过") && passed.includes("不代表整个项目 CI 全部通过"));
       const { default: Confirmation } = await server.ssrLoadModule("/src/components/review/publication/ReviewCommentConfirmation.vue");
       const unknown = await render(Confirmation, { pending: { status: "unknown", reviewed_head_sha: "a".repeat(40) }, feedback: "" });
       assert.ok(unknown.includes("暂时无法确认 PR 是否有新提交") && unknown.includes("重新检查 PR 版本"));

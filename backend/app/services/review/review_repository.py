@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 from uuid import uuid4
 
-from sqlalchemy import delete, func, select, update, or_
+from sqlalchemy import func, select, update, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -19,13 +19,10 @@ from app.models.orm import (
     ArtifactOrm,
     HumanRequestOrm,
     IncrementalWebhookDeliveryOrm,
-    PatchIssueLinkOrm,
-    PatchOrm,
     ReviewIssueOrm,
     ReviewTaskOrm,
     ReviewUnitOrm,
     SideEffectOrm,
-    ValidationOrm,
     WorkerJobOrm,
     PublicationAttemptOrm,
     GitHubSummarySlotOrm,
@@ -38,11 +35,9 @@ from app.models.persistence import (
     HumanRequestDetail,
     HumanRequestOption,
     HumanRequestStatus,
-    PatchDetail,
     ReviewIssueDetail,
     ReviewTaskListResponse,
     ReviewUnitDetail,
-    ValidationDetail,
 )
 from app.models.review import (
     IssueStatus,
@@ -54,7 +49,7 @@ from app.models.review import (
     TaskStatus,
 )
 from app.services.review.artifact_store import LocalArtifactStore
-from app.core.fingerprints import patch_fingerprint, stable_hash, validation_fingerprint
+from app.core.fingerprints import stable_hash
 from app.services.review.planning.review_planner import PLANNER_VERSION
 from app.services.review.review_task_access import lock_live_review
 from app.review.unit_completion import is_reusable_review_unit_result
@@ -252,8 +247,6 @@ class ReviewRepository:
             self._record_artifact(session, task.id, "task-snapshot", snapshot_uri)
             self._sync_units(session, row, task)
             self._sync_issues(session, row, task)
-            self._sync_patches(session, row, task)
-            self._sync_validations(session, row, task)
             if enqueue_key:
                 from app.services.review.task_queue import DatabaseTaskQueue
                 DatabaseTaskQueue(self._session_factory).enqueue(task_id=task.id,
@@ -455,53 +448,6 @@ class ReviewRepository:
                 verifier_decision=row.verifier_decision,
                 dedup_source=row.dedup_source,
                 publication_status=row.publication_status,
-            )
-
-    def get_patch(self, task_id: str, patch_id: str) -> PatchDetail | None:
-        with self._session_factory() as session:
-            row = session.scalar(select(PatchOrm).where(
-                PatchOrm.task_id == task_id, PatchOrm.patch_id == patch_id,
-            ).join(ReviewTaskOrm, ReviewTaskOrm.id == PatchOrm.task_id).where(
-                ReviewTaskOrm.deleted_at.is_(None)
-            ))
-            if row is None:
-                return None
-            payload = dict(row.patch_snapshot)
-            if row.unified_diff is None and row.diff_artifact_uri:
-                payload["diff_content"] = self._artifacts.read_text(row.diff_artifact_uri)
-            return PatchDetail(
-                patch=payload,
-                diff_artifact_uri=row.diff_artifact_uri,
-                fingerprint=row.fingerprint,
-                revision=row.revision,
-                policy_result=row.policy_result,
-            )
-
-    def get_validation(self, task_id: str, validation_id: str) -> ValidationDetail | None:
-        with self._session_factory() as session:
-            row = session.scalar(select(ValidationOrm).where(
-                ValidationOrm.task_id == task_id,
-                ValidationOrm.validation_id == validation_id,
-            ).join(ReviewTaskOrm, ReviewTaskOrm.id == ValidationOrm.task_id).where(
-                ReviewTaskOrm.deleted_at.is_(None)
-            ))
-            if row is None:
-                return None
-            patch = session.get(PatchOrm, row.patch_id)
-            return ValidationDetail(
-                validation_id=row.validation_id,
-                task_id=row.task_id,
-                patch_id=patch.patch_id if patch else "",
-                backend=row.backend,
-                request=row.request,
-                result=row.result,
-                environment_fingerprint=row.environment_fingerprint,
-                trust_source=row.trust_source,
-                patch_hash=row.patch_hash,
-                fingerprint=row.fingerprint,
-                status=row.status,
-                requested_at=row.requested_at,
-                completed_at=row.completed_at,
             )
 
     def find_reusable_unit(
@@ -1186,107 +1132,6 @@ class ReviewRepository:
             row.publication_status = "published" if issue.status == IssueStatus.published else "unpublished"
             row.updated_at = utcnow()
 
-    def _sync_patches(self, session: Session, task_row: ReviewTaskOrm, task: ReviewTask) -> None:
-        issues = {
-            row.issue_id: row for row in session.scalars(
-                select(ReviewIssueOrm).where(ReviewIssueOrm.task_id == task.id)
-            )
-        }
-        existing = {
-            row.patch_id: row for row in session.scalars(
-                select(PatchOrm).where(PatchOrm.task_id == task.id)
-            )
-        }
-        for patch in task.patches:
-            payload = patch.model_dump(mode="json")
-            diff = patch.diff_content
-            evidence_hash = stable_hash(sorted(patch.issue_ids))
-            fingerprint, diff_hash = patch_fingerprint(
-                head_sha=patch.head_sha,
-                issue_evidence_hash=evidence_hash,
-                unified_diff=diff,
-                patch_policy_version=settings.repoguardian_patch_policy_version,
-            )
-            inline, artifact_uri = self._externalize_text(task.id, "patch", diff)
-            row = existing.get(patch.id)
-            if row is None:
-                row = PatchOrm(
-                    task_id=task.id,
-                    patch_id=patch.id,
-                    diff_hash=diff_hash,
-                    fingerprint=fingerprint,
-                    head_sha=patch.head_sha,
-                    issue_evidence_hash=evidence_hash,
-                    status=patch.status.value,
-                    patch_snapshot=payload,
-                )
-                session.add(row)
-                session.flush()
-            elif row.diff_hash != diff_hash:
-                row.revision += 1
-            row.unified_diff = inline
-            row.diff_artifact_uri = artifact_uri
-            row.diff_hash = diff_hash
-            row.fingerprint = fingerprint
-            row.head_sha = patch.head_sha
-            row.issue_evidence_hash = evidence_hash
-            row.status = patch.status.value
-            row.policy_result = _model_dump(getattr(patch, "apply_check", None))
-            row.patch_snapshot = payload
-            row.updated_at = utcnow()
-            self._record_artifact(session, task.id, "patch", artifact_uri)
-            session.flush()
-            session.execute(delete(PatchIssueLinkOrm).where(PatchIssueLinkOrm.patch_id == row.id))
-            for issue_id in patch.issue_ids:
-                issue = issues.get(issue_id)
-                if issue:
-                    session.add(PatchIssueLinkOrm(patch_id=row.id, issue_id=issue.id))
-
-    def _sync_validations(self, session: Session, task_row: ReviewTaskOrm, task: ReviewTask) -> None:
-        del task_row
-        patches = {
-            row.patch_id: row for row in session.scalars(
-                select(PatchOrm).where(PatchOrm.task_id == task.id)
-            )
-        }
-        existing = {
-            row.validation_id: row for row in session.scalars(
-                select(ValidationOrm).where(ValidationOrm.task_id == task.id)
-            )
-        }
-        for validation in task.validation:
-            payload = validation.model_dump(mode="json")
-            patch = patches.get(validation.patch_id)
-            if patch is None or validation.patch_sha != patch.diff_hash:
-                continue
-            environment = str(payload.get("environment_fingerprint") or "unknown")
-            fingerprint = validation_fingerprint(
-                patch_hash=patch.diff_hash,
-                backend=validation.backend,
-                validation_profile=str(payload.get("profile") or task.validation_profile),
-                environment_fingerprint=environment,
-            )
-            row = existing.get(validation.id)
-            if row is None:
-                row = ValidationOrm(
-                    task_id=task.id,
-                    patch_id=patch.id,
-                    validation_id=validation.id,
-                    backend=validation.backend,
-                    environment_fingerprint=environment,
-                    patch_hash=patch.diff_hash,
-                    validation_profile=str(payload.get("profile") or task.validation_profile),
-                    fingerprint=fingerprint,
-                    status=validation.status.value,
-                )
-                session.add(row)
-            row.request = {"profile": row.validation_profile, "patch_id": patch.patch_id}
-            row.result = payload
-            row.trust_source = validation.trust_source
-            row.status = validation.status.value
-            row.completed_at = utcnow()
-            row.updated_at = utcnow()
-
     def _serialize_task_snapshot(self, task: ReviewTask) -> tuple[dict[str, Any], str | None]:
         payload = task.model_dump(mode="json")
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -1318,13 +1163,15 @@ class ReviewRepository:
         })
         review = dict(payload.get("review") or {})
         review.update({
-            "mode": row.mode,
+            "mode": "review",
             "status": row.status,
             "completed": row.status in {
                 TaskStatus.completed.value, TaskStatus.completed_with_warnings.value
             },
         })
         payload["review"] = review
+        # 旧快照可能保存已退役的产品模式；读取时统一为当前唯一模式。
+        payload["mode"] = "review"
         if row.status == TaskStatus.waiting_for_human.value:
             # 仅转换读取视图；保留历史快照和审计记录，不伪造完成或人工回答。
             payload.update(status=TaskStatus.failed.value, phase="failed",

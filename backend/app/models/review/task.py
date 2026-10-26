@@ -10,21 +10,19 @@ from pydantic import (
     ConfigDict,
     Field,
     computed_field,
-    field_validator,
 )
 
 from app.models.review_plan import ReviewPlanOptions, PlanSnapshot
 from app.models.review.common import (
     ReviewFileStatus, ReviewMode, ReviewPhase, ReviewUnitStatus, ReviewUnitTerminalReason, TaskStatus,
-    UnitPlanStatus, ValidationBackend, _default_validation_profile,
+    UnitPlanStatus,
 )
 from app.models.review.diff import ChangedFile, ExcludedReviewFile, PullRequestInfo
 from app.models.review.evidence import ContextSnippet, UnitActiveEvidenceSet, UnitBudgetRejection, UnitContextSelection, UnitCoverageLedger, UnitDiffBatch, UnitDiffManifest, UnitEvidenceStore
-from app.models.review.issues import AgentEvent, CrossUnitCoordinationPlan, CrossUnitRiskAssessment, CrossUnitRuntimeMetrics, IssueMetrics, ProjectProfile, ReviewIssue, ReviewUnitToolEvent, TestRunResult, UnitInputCoverage, UnitReviewPlan, UnitReviewSummary
+from app.models.review.issues import AgentEvent, CrossUnitCoordinationPlan, CrossUnitRiskAssessment, CrossUnitRuntimeMetrics, IssueMetrics, ProjectProfile, ReviewIssue, ReviewUnitToolEvent, UnitInputCoverage, UnitReviewPlan, UnitReviewSummary
 from app.models.review.plan import ReviewUnit
 from app.models.review.requests import ExecutionBudget, HumanReviewRequest, TaskStep
 from app.models.review.usage import ModelUsage, ModelUsageSummary
-from app.models.review.validation import PatchEligibilityDecision, PatchProposal, ValidationDelta, ValidationResult, ValidationSnapshot
 
 class ReviewUnitResult(BaseModel):
     review_unit_id: str
@@ -165,32 +163,12 @@ class RepoSnapshot(BaseModel):
     total_files: int
 
 
-class RepositorySnapshot(RepoSnapshot):
-    """传给验证后端的只读仓库能力快照。"""
-
-
 class ReviewSummary(BaseModel):
     """API 中与 issues/patches/validation 并列的只读审查结果摘要。"""
 
     mode: ReviewMode = ReviewMode.review
     status: TaskStatus = TaskStatus.queued
     completed: bool = False
-
-
-class PRPurposeSummary(BaseModel):
-    """模型生成的 PR 作用中文概括。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    summary: str = Field(min_length=1, max_length=800)
-
-    @field_validator("summary")
-    @classmethod
-    def require_chinese_summary(cls, value: str) -> str:
-        normalized = value.strip()
-        if not any("\u4e00" <= char <= "\u9fff" for char in normalized):
-            raise ValueError("PR purpose summary must contain Chinese text")
-        return normalized
 
 
 class ReviewTask(BaseModel):
@@ -209,9 +187,6 @@ class ReviewTask(BaseModel):
     pr_discussion: dict | None = None
     task_runtime_retry_unit_id: str | None = None
     mode: ReviewMode = ReviewMode.review
-    generate_patches: bool = False
-    validation_backend: ValidationBackend = ValidationBackend.none
-    validation_profile: str = Field(default_factory=_default_validation_profile)
     review: ReviewSummary = Field(default_factory=ReviewSummary)
     # 增量审查冻结绑定；None 表示本轮按完整 PR 审查。
     incremental: dict | None = None
@@ -233,13 +208,6 @@ class ReviewTask(BaseModel):
     context_snippets: list[ContextSnippet] = Field(default_factory=list)
     repo_snapshot: RepoSnapshot | None = None
     project_profile: ProjectProfile | None = None
-    static_results: list[TestRunResult] = Field(default_factory=list)
-    validation_snapshots: list[ValidationSnapshot] = Field(default_factory=list)
-    validation_deltas: list[ValidationDelta] = Field(default_factory=list)
-    validation: list[ValidationResult] = Field(default_factory=list)
-    patch_eligibility: list[PatchEligibilityDecision] = Field(default_factory=list)
-    patches: list[PatchProposal] = Field(default_factory=list)
-    test_results: list[TestRunResult] = Field(default_factory=list)
     agent_events: list[AgentEvent] = Field(default_factory=list)
     human_request: HumanReviewRequest | None = None
     report_markdown: str | None = None

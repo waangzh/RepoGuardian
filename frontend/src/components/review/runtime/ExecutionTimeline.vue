@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import type { AgentEvent, TaskStatus, TaskStep, TestRunResult } from "../../../types/review";
+import type { AgentEvent, TaskStatus, TaskStep } from "../../../types/review";
 import PanelHeader from "../../common/PanelHeader.vue";
 import StatusBadge from "../../common/StatusBadge.vue";
 
@@ -8,8 +8,6 @@ const props = defineProps<{
   steps: TaskStep[];
   taskStatus?: TaskStatus;
   events: AgentEvent[];
-  staticResults: TestRunResult[];
-  testResults: TestRunResult[];
 }>();
 
 interface FlowItem {
@@ -33,10 +31,7 @@ const flow: FlowItem[] = [
   { title: "跨组风险筛查", description: "检查跨组契约、关联与覆盖疑点", aliases: ["cross_unit_risk"] },
   { title: "协调与定向补查", description: "生成有界计划，补查并独立验证候选", aliases: ["cross_unit_coordination"] },
   { title: "问题去重", description: "合并重复发现并统一结论", aliases: ["issue_deduplication"] },
-  { title: "固化验证结论", description: "固化 Head 基线与自动修复边界", aliases: ["verification"] },
-  { title: "评估修复策略", description: "判断问题是否满足候选修复条件", aliases: ["repair_policy"] },
-  { title: "生成候选补丁", description: "为符合条件的问题生成修复", aliases: ["generate_patch", "patch_generate", "candidate_check", "mark_unverified", "patch_finalize"] },
-  { title: "补丁验证", description: "使用受控后端验证候选补丁", aliases: ["validation", "optional_validation", "patched_validation", "repair_assessment", "repair_accept", "repair_abandon"] },
+  { title: "固化验证结论", description: "固化 Head 基线与审查结论", aliases: ["verification"] },
   { title: "生成报告", description: "汇总结论与 Markdown 报告", aliases: ["report", "complete"] },
 ];
 
@@ -128,13 +123,10 @@ function progressScale(percent?: number | null): number {
         <StatusBadge :status="item.status" />
       </li>
     </ol>
-    <details v-if="events.length || staticResults.length || testResults.length" class="activity-log">
-      <summary>查看执行记录（{{ events.length + staticResults.length + testResults.length }}）</summary>
+    <details v-if="events.length" class="activity-log">
+      <summary>查看执行记录（{{ events.length }}）</summary>
       <div v-for="event in events" :key="`${event.created_at}:${event.action}`" class="activity-log__row">
         <strong>{{ event.action }}</strong><StatusBadge :status="event.status" /><p>{{ event.reason }}</p>
-      </div>
-      <div v-for="result in [...staticResults, ...testResults]" :key="`${result.tool}:${result.command}`" class="activity-log__row">
-        <strong>{{ result.command }}</strong><StatusBadge :status="result.passed ? 'passed' : 'failed'" /><p>exit {{ result.exit_code }} · {{ result.duration.toFixed(2) }}s</p>
       </div>
     </details>
   </section>

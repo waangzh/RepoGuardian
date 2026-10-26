@@ -14,19 +14,9 @@ export type KnownTaskStatus =
   | "failed"
   | "cancelled";
 export type TaskStatus = KnownTaskStatus | (string & {});
-export type ReviewMode = "review" | "review_and_suggest" | "review_suggest_and_validate";
+export type ReviewMode = "review";
 // 新任务恒为 task_review_v1；legacy_units 只出现在历史任务快照中。
 export type ReviewEngine = "legacy_units" | "task_review_v1";
-export type ValidationBackend = "none" | "user_runner" | "project_ci" | "gvisor";
-export type ValidationStatus =
-  | "passed"
-  | "failed"
-  | "unsupported"
-  | "infrastructure_error"
-  | "timed_out"
-  | "inconclusive"
-  | "cancelled"
-  | (string & {});
 export type ReviewPhase =
   | "prepare"
   | "project_detection"
@@ -197,12 +187,6 @@ export interface ReviewPreviewResponse {
   estimated_model_calls: number;
   max_model_calls: number;
   estimated_tokens: number;
-  patch_generation_enabled: boolean;
-  validation_backend: {
-    name: ValidationBackend;
-    available: boolean;
-    unavailable_reason?: string | null;
-  };
   /** 增量审查投影；status=applied 表示复用了前序未变更 Unit。 */
   incremental?: IncrementalPreview | null;
   warnings: string[];
@@ -363,138 +347,10 @@ export interface RepoSnapshot {
   total_files: number;
 }
 
-export interface TestRunResult {
-  tool: string;
-  command: string;
-  exit_code: number;
-  stdout: string;
-  stderr: string;
-  passed: boolean;
-  duration: number;
-}
-
-export interface FailureFingerprint {
-  tool: string;
-  identity: string;
-  test_node_id?: string | null;
-  error_type?: string | null;
-  file_path?: string | null;
-  line_no?: number | null;
-  column?: number | null;
-  rule_code?: string | null;
-  message?: string | null;
-  normalized_summary: string;
-}
-
-export type FailureKind =
-  | "dependency_missing"
-  | "test_collection_error"
-  | "timeout"
-  | "infrastructure"
-  | "code_regression"
-  | "unknown";
-
 export interface ProjectProfile {
   adapter_id: string;
   language: string;
   detected_files: string[];
-  validation_command_ids: string[];
-}
-
-export interface ValidationSnapshot {
-  id: string;
-  stage: "base" | "head" | "patched";
-  sha: string;
-  patch_id?: string | null;
-  command_results: TestRunResult[];
-  collected_test_count?: number | null;
-  failure_fingerprints: FailureFingerprint[];
-  passed: boolean;
-  failure_kind?: FailureKind | null;
-  failure_detail?: string | null;
-}
-
-export interface ValidationDelta {
-  from_stage: "base" | "head" | "patched";
-  to_stage: "head" | "patched";
-  patch_id?: string | null;
-  previous_passed: boolean;
-  current_passed: boolean;
-  failure_kind?: FailureKind | null;
-  introduced_failure: boolean;
-  resolved_failure: boolean;
-  introduced_failures: FailureFingerprint[];
-  resolved_failures: FailureFingerprint[];
-}
-
-export interface ValidationResult {
-  id: string;
-  patch_id?: string | null;
-  backend: string;
-  status: ValidationStatus;
-  head_sha: string;
-  patch_sha: string;
-  checks: Array<{
-    name: string;
-    status: ValidationStatus;
-    detail?: string | null;
-  }>;
-  resolved_failures: string[];
-  new_failures: string[];
-  environment_fingerprint?: string | null;
-  trusted: boolean;
-  trust_source?: string | null;
-  runner_id?: string | null;
-  validation_request_id?: string | null;
-  profile?: string | null;
-  exit_status?: number | null;
-  duration_ms?: number | null;
-  log_summary?: string | null;
-  artifact_references: string[];
-  started_at?: string | null;
-  completed_at?: string | null;
-}
-
-export interface PatchResult {
-  id: string;
-  issue_ids: string[];
-  title: string;
-  rationale: string;
-  unified_diff: string;
-  touched_files: string[];
-  risk: "low" | "medium" | "high";
-  assumptions: string[];
-  status:
-    | "suggested"
-    | "unverified"
-    | "validation_pending"
-    | "verified"
-    | "validation_failed"
-    | "validation_inconclusive"
-    | "abandoned"
-    | "superseded"
-    | (string & {});
-  revision_of?: string | null;
-  attempt_number: number;
-  head_sha: string;
-  patch_sha?: string | null;
-  validation_snapshot_id?: string | null;
-  validation_backend?: string | null;
-  validation_result_id?: string | null;
-  apply_check: {
-    status: "not_checked" | "passed" | "failed";
-    detail: string;
-    checked_head_sha?: string | null;
-    worktree_clean?: boolean | null;
-  };
-  presentation?: {
-    inline_suggestion?: string | null;
-    full_diff?: string | null;
-    warning: string;
-  } | null;
-  stale: boolean;
-  error?: string | null;
-  created_at: string;
 }
 
 export interface AgentEvent {
@@ -1022,9 +878,6 @@ export interface ReviewTask {
   pr_discussion?: Record<string, unknown> | null;
   task_runtime_retry_unit_id?: string | null;
   mode: ReviewMode;
-  generate_patches: boolean;
-  validation_backend: ValidationBackend;
-  validation_profile: string;
   review: ReviewSummary;
   steps: TaskStep[];
   pr?: PullRequestInfo | null;
@@ -1041,9 +894,6 @@ export interface ReviewTask {
   run_manifest?: ReviewRunManifest | null;
   issues: ReviewIssue[];
   issue_metrics: IssueMetrics;
-  static_results: TestRunResult[];
-  patches: PatchResult[];
-  test_results: TestRunResult[];
   agent_events: AgentEvent[];
   human_request?: HumanReviewRequest | null;
   report_markdown?: string | null;
@@ -1053,17 +903,6 @@ export interface ReviewTask {
   context_snippets?: ContextSnippet[];
   repo_snapshot?: RepoSnapshot | null;
   project_profile?: ProjectProfile | null;
-  validation_snapshots: ValidationSnapshot[];
-  validation_deltas: ValidationDelta[];
-  validation: ValidationResult[];
-  patch_eligibility: Array<{
-    issue_id: string;
-    eligible: boolean;
-    reasons: string[];
-    allowed_files: string[];
-    max_files: number;
-    max_changed_lines: number;
-  }>;
   warnings: string[];
 }
 

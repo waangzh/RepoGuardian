@@ -8,14 +8,12 @@ import { renderToString } from "@vue/server-renderer";
 test("用户用语保留版本、范围与未发布记录的语义", async () => {
   const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   try {
-    const { reviewScopeLabel, reviewStatusLabel, reportValidationLabel } = await server.ssrLoadModule("/src/utils/reportPresentation.ts");
+    const { reviewScopeLabel, reviewStatusLabel } = await server.ssrLoadModule("/src/utils/reportPresentation.ts");
     assert.equal(reviewScopeLabel(12, 14), "已检查 12/14 项约定范围，2 项待补查");
     assert.equal(reviewScopeLabel(0, 14), "已检查 0/14 项约定范围，14 项待补查");
     assert.equal(reviewScopeLabel(null, 14), "检查范围尚不明确");
     assert.equal(reviewScopeLabel(14, 14), "已检查 14/14 项约定范围");
     assert.equal(reviewStatusLabel("confirmed"), "代码问题已确认，但暂不能生成可发布评论");
-    assert.equal(reportValidationLabel("passed"), "当前 PR 版本已记录的对应检查通过");
-    assert.equal(reportValidationLabel("unknown"), "未知");
     const { default: Summary } = await server.ssrLoadModule("/src/components/review/diff/PrChangeSummary.vue");
     const { default: Discussion } = await server.ssrLoadModule("/src/components/review/PrDiscussionContext.vue");
     const fixtures = JSON.parse(await readFile(new URL("../fixtures/publication-plans.json", import.meta.url), "utf8"));

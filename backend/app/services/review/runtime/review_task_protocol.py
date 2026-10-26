@@ -389,7 +389,7 @@ class TaskReviewV1Protocol:
                 schema.get("$defs", {}).pop("DiscussionMatch", None)
         self.visible_discussions = []
         if self.spec.discussion_manifest_hash:
-            from app.services.discussions.pr_discussions import select_discussions
+            from app.review.discussion_selection import select_discussions
             from app.llm.model_request_budgeter import ModelRequestProfile
             base = PreparedModelRequest(model=self.spec.model_name, operation="task_review_v1",
                 system=system, prompt=json.dumps(payload, ensure_ascii=False), output_tokens=4096)

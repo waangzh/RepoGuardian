@@ -1,4 +1,4 @@
-import type { ReviewMode, ReviewPreviewResponse, ValidationBackend } from './review';
+import type { ReviewMode, ReviewPreviewResponse } from './review';
 import type { ReviewPlanOptions } from './reviewPlan';
 
 export interface PreviewRequest {
@@ -7,7 +7,6 @@ export interface PreviewRequest {
   reuse_review_id?: string | null;
   force_full_review?: boolean;
   mode: ReviewMode;
-  validation_backend: ValidationBackend;
   plan?: ReviewPlanOptions;
 }
 export interface PreviewJob {

@@ -7,7 +7,6 @@ from pydantic import ValidationError
 from app.models.publication import ChangeUnderstanding, DigestGoal, DigestInvestigation, DigestIntent
 from app.models.review_runtime import IntentAssessment
 from app.services.review.planning.review_intent import author_targets, matched_author_targets
-from app.services.review.review_validation_digest import validation_digest
 from app.services.review.review_findings import finding_views
 from app.core.fingerprints import stable_hash
 from app.services.publication.review_prose import author_goal_text, concise_text
@@ -214,7 +213,6 @@ def enrich_review_digest(digest, task, report, dispositions):
             if digest.author_context_status == "unknown":
                 digest.author_context_limitation = ("历史审查未记录作者声明是否完整输入，无法确认是否遗漏作者目标；"
                     "保留输入范围未知，不据此推断代码风险或要求重新审查。")
-        digest.validation_state, digest.validations = validation_digest(task)
         if report.pr_intent_context:
             digest.author_goal = report.pr_intent_context
             digest.intent_alignment = ("本轮静态检查已提供冻结的作者声明，具体目标对照及证据缺口见已检查行为的理由。"

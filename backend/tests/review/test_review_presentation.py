@@ -184,7 +184,7 @@ def test_ready_summary_preserves_saved_observations_without_keyword_rewriting(te
     overview = markdown.split("### 本次 PR 主要变更\n\n", 1)[1].split("\n\n### 审查结果", 1)[0]
     assert overview == markdown_text(implementation, 1200)
     assert "测试源码变化" not in overview and "不表示测试已运行" not in overview
-    assert "动态验证：未执行目标仓库代码、测试或构建" in markdown
+    assert "静态审查边界：未执行目标仓库代码、测试或构建" in markdown
     assert plan.digest.change_understanding.test_observations == tests
     assert plan.model_dump(mode="json") == before
 
@@ -299,7 +299,7 @@ def test_investigation_is_one_actionable_item_not_a_finding_or_generic_warning()
     assert "129–158" not in markdown and "定义范围 390-464" not in markdown and "calls 命题" not in markdown
     assert "P2" not in markdown and "P3" not in markdown
     assert "静态目标已检查 2/2" in markdown
-    assert "动态验证：未执行目标仓库代码、测试或构建。" in markdown
+    assert "静态审查边界：未执行目标仓库代码、测试或构建。" in markdown
     assert "建议先补齐上述待核实事项所需证据" in markdown
     audit = render_technical_audit(plan, execution_record(task.task_runtime_report))
     assert "calls 命题" in audit and "weighted_posterior" in audit
@@ -463,42 +463,6 @@ def test_default_findings_keep_full_list_and_action_without_duplicate_editorial_
     assert "具备发布资格" in full
     assert "不会自动创建 GitHub" in full
     assert plan.model_dump(mode="json") == before
-
-
-def test_short_output_keeps_combined_blocker_and_head_validation_failure():
-    from app.models.review import TestRunResult as RunResult, ValidationSnapshot
-    from app.services.publication.publication_renderer import render_review_comment, render_summary
-
-    task = publishable_task(severity="high", claim="权限绕过导致未授权数据访问")
-    task.task_runtime_report["findings"][0]["issue"]["confidence"] = 0.99
-    task.validation_snapshots = [ValidationSnapshot(
-        stage="head", sha=task.run_manifest.head_sha, passed=False, failure_kind="code_regression",
-        command_results=[RunResult(tool="test_runner", command="pytest", exit_code=1, passed=False)])]
-    plan = PublicationPlanner().build(new_output(task))
-    for markdown in (render_summary(plan), render_review_comment(plan)):
-        assert "发现 1 项高优先级问题，另有当前版本动态检查未通过" in markdown
-        assert "与当前 Head 绑定的验证失败记录" in markdown
-        assert "先修复上述高优先级问题，并在新快照重新核验" in markdown
-        assert "已检查范围内未发现已确认问题" not in markdown
-
-
-@pytest.mark.parametrize(("state", "expected"), [
-    ("not_executed", "未执行目标仓库代码、测试或构建"),
-    ("passed", "与当前 Head 绑定的受控验证通过记录"),
-    ("failed", "与当前 Head 绑定的验证失败记录"),
-    ("independent_results", "补丁通过不代表当前 PR Head 已通过测试"),
-    ("unknown", "动态验证状态未知"),
-])
-def test_short_validation_section_preserves_all_validation_states(state, expected):
-    from app.services.publication.publication_renderer import render_summary
-
-    plan = PublicationPlanner().build(new_output(completed_task()))
-    plan.digest.validation_state = state
-    plan.presentation.validation_state = state
-    markdown = render_summary(plan)
-    validation = markdown.split("### 验证与合并建议", 1)[1]
-    assert expected in validation
-    assert "未获取的 GitHub CI 状态" not in validation
 
 
 def test_unknown_scope_is_not_presented_as_zero_of_zero_completed():

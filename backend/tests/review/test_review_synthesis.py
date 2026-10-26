@@ -94,7 +94,6 @@ async def test_once_frozen_and_repeated_reads_never_call_model(persistence):
         assert "调整了返回值处理" in plan.summary_markdown
         assert "调整了返回值处理" in plan.review_comment_markdown
         assert plan.presentation.verdict == plan.digest.merge_decision
-        assert plan.presentation.validation_state == "not_executed"
         assert summary_projection(plan).presentation.findings == []
         assert restored.model_usage_summary.overall.actual_total_tokens == 50
         assert restored.model_usages[-1].operation == "review_synthesis_v1"
@@ -105,7 +104,6 @@ async def test_once_frozen_and_repeated_reads_never_call_model(persistence):
 
 @pytest.mark.parametrize("change", [
     lambda value: value.update(severity="high"),
-    lambda value: value.update(validation_state="passed"),
     lambda value: value.update(verdict="approve"),
     lambda value: value.update(confirmed_count=0),
     lambda value: value["change_summary"].update(source_refs=["nonexistent"]),
@@ -168,7 +166,6 @@ async def test_editorial_words_do_not_overwrite_authoritative_review_state(persi
     # 权威状态、问题等级与合并建议不因编辑文本改变。
     assert after.outcome == before.outcome
     assert after.digest.merge_decision == before.digest.merge_decision
-    assert after.presentation.validation_state == "not_executed"
     assert after.presentation.verdict == before.presentation.verdict
     assert after.presentation.findings == before.presentation.findings
     # 问题概述不再由模型改写，越权结论不能借该字段进入交付。
@@ -195,7 +192,6 @@ async def test_failed_synthesis_delivers_only_deterministic_diff_metadata(persis
         overview = markdown.split("### 本次 PR 主要变更\n\n", 1)[1].split("\n\n### 审查结果", 1)[0]
         assert overview == markdown_text(plan.presentation.change_summary, 1200)
         assert "符合作者描述" not in overview
-    assert plan.presentation.validation_state == "not_executed"
 
 
 @pytest.mark.asyncio
@@ -328,7 +324,6 @@ async def test_failures_preserve_findings_and_unknown_cost(persistence, case):
     restored = repo.get_task(task.id)
     plan = PublicationPlanner().build(restored)
     assert plan.outcome.confirmed_count == 1 and plan.presentation.synthesis_status == "fallback"
-    assert plan.presentation.validation_state == "not_executed"
     assert len(calls) <= 1
     await freeze_review_synthesis(task, repo, provider)
     assert len(calls) <= 1

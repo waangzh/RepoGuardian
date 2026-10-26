@@ -32,7 +32,6 @@ export interface SystemDiagnostics {
   worker_status: "running" | "idle";
   artifact_directory_writable: boolean;
   langsmith_enabled: boolean;
-  security_mode: "restricted" | "unsafe_local";
   retention_days: number;
   configured_secrets: Record<string, boolean>;
   versions: VersionDiagnostics;

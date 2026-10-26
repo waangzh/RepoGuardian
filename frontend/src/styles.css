@@ -411,7 +411,6 @@ input:disabled { background: var(--surface-muted); }
 .history-row__metrics div:last-child { grid-column: 1 / -1; }
 .history-row__metrics div { padding-left: 9px; border-left: 1px solid var(--border); }
 .history-row__metrics dt { color: var(--text-muted); font-size: .8125rem; }.history-row__metrics dd { margin: 2px 0 0; font-size: .9375rem; font-weight: 600; font-variant-numeric: tabular-nums; }
-.history-row__metrics dd.history-validation { color: var(--primary); font-size: .8125rem; line-height: 1.45; overflow-wrap: anywhere; }
 .history-row__time span, .history-row__time small { display: block; }.history-row__time span { font-size: .875rem; font-weight: 700; }.history-row__time small { margin-top: 3px; color: var(--text-muted); font-size: .8125rem; }
 .pagination { display: flex; align-items: center; justify-content: center; gap: 14px; padding-top: 16px; }.pagination span { color: var(--text-secondary); font-size: .875rem; }
 

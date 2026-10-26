@@ -21,12 +21,10 @@ from app.models.review import (
 )
 from app.models.review_runtime import TaskRuntimeRetryResult
 from app.models.persistence import (
-    PatchDetail,
     ReviewIssueDetail,
     ReviewTaskListResponse,
     ReviewHistoryResult,
     ReviewUnitDetail,
-    ValidationDetail,
 )
 from app.services.publication.publication_planner import PublicationPlanner
 
@@ -104,16 +102,8 @@ async def cancel_review(task_id: str) -> dict[str, str]:
             status_code=status.HTTP_409_CONFLICT,
             detail="Terminal review tasks cannot be cancelled",
         )
-    graph_cancelled = service.cancel_task(task_id)
-    from app.bootstrap.dependencies import get_project_ci_service
-
-    project_ci = get_project_ci_service()
-    ci_cancelled = await project_ci.cancel_for_task(task_id) if project_ci else False
-    if not graph_cancelled and not ci_cancelled:
+    if not service.cancel_task(task_id):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Task is not running")
-    from app.validation.user_runner import get_user_runner_service
-
-    get_user_runner_service().cancel_for_task(task_id)
     return {"task_id": task_id, "status": "cancelled"}
 
 
@@ -163,22 +153,6 @@ async def get_review_issue(task_id: str, issue_id: str) -> ReviewIssueDetail:
     detail = _reviews.get_review_service().get_issue_detail(task_id, issue_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="Issue not found")
-    return detail
-
-
-@router.get("/{task_id}/patches/{patch_id}", response_model=PatchDetail)
-async def get_review_patch(task_id: str, patch_id: str) -> PatchDetail:
-    detail = _reviews.get_review_service().get_patch_detail(task_id, patch_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="Patch not found")
-    return detail
-
-
-@router.get("/{task_id}/validations/{validation_id}", response_model=ValidationDetail)
-async def get_review_validation(task_id: str, validation_id: str) -> ValidationDetail:
-    detail = _reviews.get_review_service().get_validation_detail(task_id, validation_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="Validation not found")
     return detail
 
 

@@ -15,7 +15,6 @@ def test_public_finding_is_self_contained_and_disposition_is_independent():
     assert item.location.model_dump() == {"path": "src/a.py", "start_line": 7, "end_line": 7, "side": "left"}
     assert item.review_status == "confirmed" and item.disposition.status == "ignored"
     assert item.verification.evidence_status == "verified"
-    assert item.verification.dynamic_validation_status == "not_executed"
     assert task.task_runtime_report == before
 
 

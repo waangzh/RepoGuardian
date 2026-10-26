@@ -94,6 +94,6 @@ createApp({ setup() { return () => h("div", [
     h("label", ["场景 ", h("select", { value: choice.value, "aria-label": "验收场景", style: "width:180px;min-height:32px;padding:4px", onChange: (event: Event) => change((event.target as HTMLSelectElement).value) },
       [ ["runtime-mixed", "当前引擎 · 混合发现"], ["runtime-zero", "当前引擎 · 零发现与未决"], ["runtime-failed", "当前引擎 · 失败"], ["runtime-cancelled", "当前引擎 · 取消"], ["completed", "补查完成"], ["running", "补查进行中"], ["uncertain", "关系未决"], ["skip", "跳过补查"], ["failed", "预算不足"], ["cancelled", "已取消"], ["legacy", "旧记录缺失"], ["published", "去重后已发布"], ["candidate", "候选待核验"], ["stale-base", "Base快照变更"], ["evidence-legacy", "旧证据缺字段"] ].map(([value, label]) => h("option", { value }, label)))]),
   ]),
-  h(ReviewViewer, { task: task.value, report: task.value.report_markdown, statusText: ({ completed_with_warnings: "存在警告", verifying_issues: "验证问题", cancelled: "已取消" } as Record<string, string>)[task.value.status] || task.value.status, taskDuration: "42 秒", cancelling: false, retryingUnitId: null,
-    onCancel: () => change("cancelled"), onNewReview: () => change("completed"), onRetry: () => {} }),
+  h(ReviewViewer, { task: task.value, report: task.value.report_markdown, statusText: ({ completed_with_warnings: "存在警告", verifying_issues: "验证问题", cancelled: "已取消" } as Record<string, string>)[task.value.status] || task.value.status, taskDuration: "42 秒",
+    onNewReview: () => change("completed") }),
 ]); } }).mount("#preview");

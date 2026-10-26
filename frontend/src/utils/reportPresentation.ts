@@ -63,11 +63,6 @@ const WITHHELD_REASON_LABELS: Record<string, string> = {
 };
 export const withheldReasonLabel = (value: string): string => WITHHELD_REASON_LABELS[value] || value;
 
-export function reportValidationLabel(value?: ReviewOutcome['dynamic_validation']): string {
-  return ({ not_executed: '当前 PR 版本未执行', passed: '当前 PR 版本已记录的对应检查通过', failed: '本次记录的动态检查未通过',
-    independent_results: '独立结果 · Head 未知', unknown: '未知' })[value || 'unknown'];
-}
-
 export function reviewScopeLabel(examined: number | null, total: number | null): string {
   if (examined === null || total === null) return "检查范围尚不明确";
   const remaining = total - examined;

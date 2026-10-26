@@ -15,9 +15,9 @@ test("Outcome 显示后端数量，不根据问题列表推断 Clean", async () 
       const plan = { schema_version: "review-summary-v1",
         outcome: { kind, coverage: "partial", confirmed_count: 3, publishable_count: 2, unresolved_count: 1,
         examined_goals: 8, total_goals: 10, incomplete_investigations: 1, reason_codes: ["scope_incomplete"],
-        dynamic_validation: "not_executed", review_completeness: "partial", finding_conclusion: "confirmed", runtime_reliability: "reliable" },
+        review_completeness: "partial", finding_conclusion: "confirmed", runtime_reliability: "reliable" },
         digest: { merge_decision: { status, label: title, advice: "服务端建议", blocking_finding_keys: status === "fix_blockers" ? ["k"] : [],
-          nonblocking_finding_keys: [], limits: [] }, validations: [] },
+          nonblocking_finding_keys: [], limits: [] } },
         withheld_findings: [{ candidate_id: "c1", reason_code: "snapshot_mismatch" }] };
       const html = await renderToString(createSSRApp(component, { plan }));
       // 后端标签只出现一次；技术细节收进折叠区。
@@ -76,11 +76,11 @@ test("完整范围和计量限制分开展示；历史维度缺失保持未知",
   try {
     const { default: component } = await server.ssrLoadModule("/src/components/review/publication/ReviewOutcomePanel.vue");
     const plan = { outcome: { kind: 'inconclusive', coverage: 'partial', review_completeness: 'complete',
-      runtime_reliability: 'unreliable', dynamic_validation: 'not_executed', finding_conclusion: 'no_confirmed_findings',
+      runtime_reliability: 'unreliable', finding_conclusion: 'no_confirmed_findings',
       reason_codes: [], examined_goals: 3, total_goals: 3, unresolved_count: 0 },
       digest: { merge_decision: { status: 'resolve_unknowns', label: '需要补充检查', advice: '先补齐限制' } }, withheld_findings: [] };
     const html = await renderToString(createSSRApp(component, { plan }));
-    for (const text of ['审查完整性：完整', '存在计量或执行限制', '未发现已确认缺陷', '未执行']) assert.ok(html.includes(text));
+    for (const text of ['审查完整性：完整', '存在计量或执行限制', '未发现已确认缺陷', '只读静态审查']) assert.ok(html.includes(text));
     assert.ok(!html.includes('覆盖部分完成'));
   } finally { await server.close(); }
 });

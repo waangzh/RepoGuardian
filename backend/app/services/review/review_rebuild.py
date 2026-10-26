@@ -11,9 +11,6 @@ from app.models.review import (
     AgentEvent,
     ChangedFile,
     ContextSnippet,
-    PatchResult,
-    PatchEligibilityDecision,
-    PatchStatus,
     ProjectProfile,
     PullRequestInfo,
     PullRequestRef,
@@ -34,11 +31,6 @@ from app.models.review import (
     IssueStatus,
     ReviewSummary,
     ReviewTask,
-    TestRunResult,
-    ValidationDelta,
-    ValidationBackend,
-    ValidationResult,
-    ValidationSnapshot,
 )
 from app.llm.model_usage import summarize_model_usage
 
@@ -60,9 +52,6 @@ def rebuild_task_from_state(state: ReviewState) -> ReviewTask:
         pr_discussion=state.get("pr_discussion"),
         task_runtime_retry_unit_id=state.get("task_runtime_retry_unit_id"),
         mode=rebuild_review_mode(state.get("mode")),
-        generate_patches=bool(state.get("generate_patches", False)),
-        validation_backend=rebuild_validation_backend(state.get("validation_backend")),
-        validation_profile=str(state.get("validation_profile") or "unit"),
         review=ReviewSummary(
             mode=rebuild_review_mode(state.get("mode")),
             status=state.get("status", "completed"),
@@ -88,21 +77,11 @@ def rebuild_task_from_state(state: ReviewState) -> ReviewTask:
         context_snippets=rebuild_context_snippets(state.get("context_snippets") or []),
         repo_snapshot=rebuild_repo_snapshot(state.get("project_meta") or {}),
         project_profile=rebuild_project_profile(state.get("project_profile")),
-        static_results=rebuild_test_results(state.get("static_results") or []),
-        validation_snapshots=rebuild_validation_snapshots(state.get("validation_snapshots") or []),
-        validation_deltas=rebuild_validation_deltas(state.get("validation_deltas") or []),
-        validation=rebuild_validation_results(state.get("validation_results") or []),
-        patch_eligibility=[
-            PatchEligibilityDecision.model_validate(item)
-            for item in state.get("patch_eligibility") or []
-        ],
         coverage=ReviewCoverage.model_validate(state.get("review_coverage") or {}),
         run_manifest=(
             ReviewRunManifest.model_validate(state["run_manifest"])
             if state.get("run_manifest") else None
         ),
-        patches=rebuild_patches(state.get("patches") or [], state.get("head_sha")),
-        test_results=rebuild_test_results(state.get("test_results") or []),
         agent_events=rebuild_agent_events(state.get("agent_events") or []),
         human_request=state.get("human_request"),
         report_markdown=state.get("report_markdown"),
@@ -170,13 +149,6 @@ def rebuild_review_mode(value: object) -> ReviewMode:
         return ReviewMode.review
 
 
-def rebuild_validation_backend(value: object) -> ValidationBackend:
-    try:
-        return ValidationBackend(value or ValidationBackend.none)
-    except ValueError:
-        return ValidationBackend.none
-
-
 def rebuild_changed_files(data: list[dict]) -> list[ChangedFile]:
     """按领域模型完整恢复文件、hunk、ordered diff 与二进制标记。"""
     return [ChangedFile.model_validate(item) for item in data]
@@ -228,39 +200,6 @@ def rebuild_review_unit_results(data: list[dict]) -> list[ReviewUnitResult]:
             ],
         }))
     return results
-
-
-def rebuild_test_results(data: list[dict]) -> list[TestRunResult]:
-    """从 dict 列表重建 TestRunResult。"""
-    return [TestRunResult.model_validate(item) for item in data]
-
-
-def rebuild_validation_snapshots(data: list[dict]) -> list[ValidationSnapshot]:
-    """从图状态恢复三个验证阶段的快照。"""
-    return [ValidationSnapshot.model_validate(item) for item in data]
-
-
-def rebuild_validation_deltas(data: list[dict]) -> list[ValidationDelta]:
-    """从图状态恢复阶段间的验证差异。"""
-    return [ValidationDelta.model_validate(item) for item in data]
-
-
-def rebuild_validation_results(data: list[dict]) -> list[ValidationResult]:
-    """读取新的 API 验证结论；旧 state 没有该字段时保持空列表。"""
-    return [ValidationResult.model_validate(item) for item in data]
-
-
-def rebuild_patches(data: list[dict], current_head_sha: str | None = None) -> list[PatchResult]:
-    """从 dict 列表重建 PatchResult。"""
-    patches = [PatchResult.model_validate(item) for item in data]
-    if current_head_sha:
-        for patch in patches:
-            if patch.head_sha != current_head_sha:
-                patch.stale = True
-                if patch.status in {PatchStatus.suggested, PatchStatus.unverified}:
-                    patch.status = PatchStatus.superseded
-                    patch.error = "PR Head 已更新，候选补丁必须重新生成或重新检查"
-    return patches
 
 
 def rebuild_agent_events(data: list[dict]) -> list[AgentEvent]:

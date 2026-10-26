@@ -47,7 +47,6 @@ async def stream_review(task_id: str, request: Request) -> EventSourceResponse:
 
     async def event_generator():
         last_step_signature: tuple[tuple[object, ...], ...] = ()
-        last_patch_signature: tuple[tuple[str, str], ...] = ()
         while True:
             if await request.is_disconnected():
                 break
@@ -84,27 +83,6 @@ async def stream_review(task_id: str, request: Request) -> EventSourceResponse:
                         }),
                     }
                 last_step_signature = current_signature
-
-            patch_signature = tuple((patch.id, patch.status.value) for patch in task.patches)
-            if patch_signature != last_patch_signature:
-                for patch in task.patches:
-                    yield {
-                        "event": "patch_update",
-                        "data": json.dumps({
-                            "id": patch.id,
-                            "issue_ids": patch.issue_ids,
-                            "status": patch.status,
-                            "touched_files": patch.touched_files,
-                            "risk": patch.risk,
-                            "apply_check": patch.apply_check.model_dump(mode="json"),
-                            "head_sha": patch.head_sha,
-                            "stale": patch.stale,
-                            "warning": (
-                                patch.presentation.warning if patch.presentation else None
-                            ),
-                        }),
-                    }
-                last_patch_signature = patch_signature
 
             if task.status.value in {
                 "completed",

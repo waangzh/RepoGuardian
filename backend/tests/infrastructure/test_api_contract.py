@@ -30,15 +30,11 @@ def test_openapi_exposes_preview_and_retry_contracts() -> None:
     assert "/api/reviews/{task_id}/publication-summary" in schema["paths"]
     assert "/api/reviews/{task_id}/publication-plan" in schema["paths"]
     assert "/api/reviews/{task_id}/units/{unit_id}/retry" in schema["paths"]
-    assert "/api/validation-requests/{request_id}/claim" in schema["paths"]
-    assert "/api/validation-requests/{request_id}/result" in schema["paths"]
-    assert "/api/validation-requests/{request_id}/cancel" in schema["paths"]
-    assert "/api/runners/register" in schema["paths"]
     preview = schema["components"]["schemas"]["ReviewPreviewResponse"]
     assert {
         "mode", "changed_file_count", "included_file_count", "changed_files",
         "review_units", "planning_model_calls", "estimated_model_calls",
-        "max_model_calls", "patch_generation_enabled", "validation_backend",
+        "max_model_calls",
     } <= set(preview["properties"])
 
 
@@ -54,14 +50,14 @@ def test_publication_interfaces_cover_backend_fields() -> None:
     from app.models.publication import (PublicationPlan, PublicationFinding, PublicationAnchor,
         PublicationSnapshot, ReviewOutcome, WithheldFinding, PublicationAttempt, PublicationItem,
         PublicationSelection, PublicationPreflightResult, PublicationAccepted, ReviewDigest, DigestGoal, DigestExcludedFile, ReviewCommentCheck,
-        DigestInvestigation, DigestIntent, DigestValidation, MergeDecision, ReviewCommentOptions,
+        DigestInvestigation, DigestIntent, MergeDecision, ReviewCommentOptions,
         ChangeUnderstanding, ReviewSummary, ReviewSummaryDigest, HistoricalFindingView, HistoricalDiscussionOutcome,
         ReviewPresentation, SummaryInputCoverage, PresentationDelivery)
     source = FRONTEND_TYPES.with_name("publication.ts").read_text(encoding="utf-8")
     for model in (PublicationPlan, PublicationFinding, PublicationAnchor, PublicationSnapshot, ReviewOutcome, WithheldFinding,
                   PublicationAttempt, PublicationItem, PublicationSelection, PublicationPreflightResult, PublicationAccepted,
                   ReviewDigest, DigestGoal, DigestExcludedFile, ReviewCommentCheck, DigestInvestigation,
-                  DigestIntent, DigestValidation, MergeDecision, ReviewCommentOptions,
+                  DigestIntent, MergeDecision, ReviewCommentOptions,
                   ChangeUnderstanding, ReviewSummary, ReviewSummaryDigest, HistoricalFindingView, HistoricalDiscussionOutcome,
                   ReviewPresentation, SummaryInputCoverage, PresentationDelivery):
         body = _interface_body(source, model.__name__)

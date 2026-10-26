@@ -16,12 +16,11 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.api import reviews as reviews_api
-from app.models.orm import PatchOrm, ReviewTaskOrm, SideEffectOrm, WorkerJobOrm, utcnow
+from app.models.orm import ReviewTaskOrm, SideEffectOrm, WorkerJobOrm, utcnow
 from app.models.review import (
     ChangedFile,
     DiffHunk,
     HumanReviewRequest,
-    PatchProposal,
     ReviewIssue,
     ReviewTask,
     TaskStatus,
@@ -31,7 +30,6 @@ from app.models.review import (
     UnitPlanStatus,
     UnitReviewPlan,
 )
-from app.core.fingerprints import patch_fingerprint, validation_fingerprint
 from app.services.review.planning.review_planner import DeterministicReviewPlanner
 from app.services.review.review_repository import ReviewRepository
 from tests.support.persistence import _task, _unit
@@ -310,51 +308,6 @@ def test_unit_fingerprint_changes_with_diff_prompt_and_model(monkeypatch: pytest
                 changed_prompt.fingerprint}) == 4
 
 
-def test_patch_and_validation_fingerprints_bind_correct_inputs() -> None:
-    diff = "--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-old\n+new\n"
-    patch_a, hash_a = patch_fingerprint(
-        head_sha="head-a", issue_evidence_hash="evidence", unified_diff=diff,
-        patch_policy_version="policy-1",
-    )
-    patch_b, _ = patch_fingerprint(
-        head_sha="head-b", issue_evidence_hash="evidence", unified_diff=diff,
-        patch_policy_version="policy-1",
-    )
-    assert patch_a != patch_b
-    assert validation_fingerprint(
-        patch_hash=hash_a, backend="user_runner", validation_profile="unit",
-        environment_fingerprint="linux-py312",
-    ) != validation_fingerprint(
-        patch_hash="other", backend="user_runner", validation_profile="unit",
-        environment_fingerprint="linux-py312",
-    )
-
-
-def test_large_patch_is_externalized_and_bound_to_head(persistence, monkeypatch) -> None:
-    repository, _, sessions = persistence
-    monkeypatch.setattr(settings, "repoguardian_artifact_inline_max_bytes", 1024)
-    task = _task()
-    issue_id = "issue-1"
-    patch = PatchProposal(
-        issue_ids=[issue_id],
-        title="修复",
-        rationale="修复错误",
-        unified_diff="--- a/app.py\n+++ b/app.py\n" + "+x\n" * 600,
-        touched_files=["app.py"],
-        risk="low",
-        head_sha="head-a",
-    )
-    task.patches = [patch]
-    repository.create_task(task)
-    repository.save_task(task)
-    with sessions() as session:
-        row = session.scalar(select(PatchOrm).where(PatchOrm.patch_id == patch.id))
-        assert row is not None
-        assert row.head_sha == "head-a"
-        assert row.unified_diff is None
-        assert row.diff_artifact_uri and row.diff_artifact_uri.startswith("file:///")
-
-
 def test_legacy_waiting_task_is_readable_without_resuming_or_claiming_completion(persistence) -> None:
     repository, _, sessions = persistence
     task = _task()
@@ -518,16 +471,21 @@ def test_alembic_migration_upgrades_and_rolls_back(tmp_path: Path) -> None:
         "review_units",
         "human_requests",
         "worker_jobs",
+        "review_previews",
+        "finding_dispositions",
+    } <= tables
+    assert {"preview_jobs", "preview_input_cache", "incremental_webhook_deliveries", "prepared_workspaces"} <= tables
+    assert not {
         "runner_registrations",
         "user_validation_requests",
         "runner_result_idempotency",
         "project_ci_requests",
         "project_ci_webhook_deliveries",
-        "review_previews",
-        "finding_dispositions",
-    } <= tables
-    assert {"preview_jobs", "preview_input_cache", "incremental_webhook_deliveries", "prepared_workspaces"} <= tables
-    assert version == ("20261024_0008",)
+        "patches",
+        "patch_issue_links",
+        "validations",
+    } & tables
+    assert version == ("20261026_0009",)
     subprocess.run(
         [sys.executable, "-m", "alembic", "downgrade", "base"],
         cwd=backend, env=env, check=True, capture_output=True, text=True, encoding="utf-8",

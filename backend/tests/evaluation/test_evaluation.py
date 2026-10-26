@@ -19,9 +19,6 @@ from tests.support.runtime_harness import production_input as production_input
 class ScriptedProvider(LLMProvider):
     """评测编排测试的占位 Provider；不实现任何模型能力。"""
 
-    async def summarize_pr_purpose(self, pr, changed_files, model):
-        raise AssertionError("scripted evaluation provider never summarizes")
-
 
 DIFF = '''diff --git a/sample.py b/sample.py
 index 1111111..2222222 100644

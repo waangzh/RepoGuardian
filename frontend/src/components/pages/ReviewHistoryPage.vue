@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } fro
 import { deleteReview, listReviews } from "../../api/client";
 import type { ReviewTask } from "../../types/review";
 import type { ReviewHistoryTask } from "../../types/operations";
-import { historyConclusion, historyValidation } from "../../utils/reviewHistoryPresentation";
+import { historyConclusion } from "../../utils/reviewHistoryPresentation";
 import AppSelect from "../common/AppSelect.vue";
 import EmptyState from "../common/EmptyState.vue";
 import StatusBadge from "../common/StatusBadge.vue";
@@ -244,7 +244,6 @@ onMounted(load);
             <div><dt>覆盖</dt><dd>{{ taskCoverage(task) }}</dd></div>
             <div><dt>发现记录</dt><dd>{{ task.engine === 'task_review_v1' ? runtimeReport(task)?.findings.length ?? '未知' : task.issues.length }}</dd></div>
             <div><dt>未确认</dt><dd>{{ unresolvedCount(task) }}</dd></div>
-            <div><dt>动态验证</dt><dd class="history-validation">{{ historyValidation(task) }}</dd></div>
           </dl>
           <div class="history-row__time"><span>{{ formatDate(task.updated_at) }}</span><small>最近更新</small></div>
           <div class="history-row__actions">

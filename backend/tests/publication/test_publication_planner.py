@@ -147,11 +147,11 @@ def test_old_frozen_plan_keeps_saved_body_and_uses_unknown_defaults():
     from app.models.publication import PublicationPlan
     saved = PublicationPlanner().build(publishable_task()).model_dump(mode="json")
     saved.pop("digest")
-    for field in ("finding_conclusion", "review_completeness", "runtime_reliability", "dynamic_validation"):
+    for field in ("finding_conclusion", "review_completeness", "runtime_reliability"):
         saved["outcome"].pop(field)
     for field in ("category", "evidence_summary", "evidence_ids"):
         saved["inline_drafts"][0].pop(field)
     restored = PublicationPlan.model_validate(saved)
     assert restored.summary_markdown == saved["summary_markdown"]
     assert restored.inline_drafts[0].body_markdown == saved["inline_drafts"][0]["body_markdown"]
-    assert restored.digest.validation_state == "unknown" and restored.outcome.runtime_reliability == "unknown"
+    assert restored.outcome.runtime_reliability == "unknown"

@@ -4,7 +4,7 @@
 
 输入 GitHub PR URL，先了解变更并确认审查方案，再由 Agent 探索关联代码、核验候选问题，输出可追溯的审查结论、覆盖与限制，以及可复制到 PR 的交付摘要。
 
-**RepoGuardian Server 永远不执行目标仓库代码。** 默认进行只读静态审查；测试与构建需另行配置 GitHub Project CI 或外部 User Runner。
+**RepoGuardian Server 永远不执行目标仓库代码。** 只进行只读静态审查；测试与构建请使用项目自身的 CI。
 
 [快速开始](#快速开始) · [如何使用](#如何使用) · [开发与验证](#开发与验证) · [反馈问题](https://github.com/waangzh/RepoGuardian/issues)
 
@@ -168,7 +168,7 @@ PR 总结评论复用同一 PR、同一发布身份的主评论；代码行评�
 
 配置写入 `backend/.env`，修改后重启后端；完整变量说明见 [环境变量示例](.env.example)。以下为常用配置：
 
-系统设置页也可以在本地单用户部署中修改补丁大小、记录保留天数，以及 OpenAI-compatible 模型服务 URL 和默认模型名；API Key 仍只从后端环境变量读取，不在页面显示。修改后只影响新建审查，已有任务继续使用冻结配置。
+系统设置页也可以在本地单用户部署中修改记录保留天数，以及 OpenAI-compatible 模型服务 URL 和默认模型名；API Key 仍只从后端环境变量读取，不在页面显示。修改后只影响新建审查，已有任务继续使用冻结配置。
 
 ```env
 GITHUB_TOKEN="" # GitHub 读取凭据，私有仓库需授权访问；与发布凭据分开
@@ -181,7 +181,6 @@ REPOGUARDIAN_RUN_MAX_TOKENS=1000000 # 整次运行的累计 Token 上限
 REPOGUARDIAN_TASK_REVIEW_TIMEOUT_SECONDS=1800 # 整次运行时限，单位为秒
 REPOGUARDIAN_MODEL_REQUEST_TIMEOUT_SECONDS=60 # 单次模型 HTTP 请求超时，单位为秒
 REPOGUARDIAN_MODEL_REQUEST_PROFILES={} # 按模型名覆盖单次请求窗口，默认使用自动解析
-REPOGUARDIAN_DEFAULT_VALIDATION_BACKEND=none # 默认不发起外部动态验证
 REPOGUARDIAN_INCREMENTAL_REVIEW_ENABLED=true # 复用前序未变更文件的 Unit 结论
 REPOGUARDIAN_INCREMENTAL_REVIEW_WEBHOOK_ENABLED=false # synchronize 事件自动创建增量审查
 REPOGUARDIAN_INCREMENTAL_REVIEW_WEBHOOK_REPOSITORIES= # 自动审查仓库 allowlist，如 owner/repo
@@ -193,7 +192,6 @@ REPOGUARDIAN_LANGSMITH_INCLUDE_CONTENT=false # 启用追踪时，默认不上传
 - **模型窗口与运行预算是两个概念**：接入自定义模型或非标准服务地址时，可用 `REPOGUARDIAN_MODEL_REQUEST_PROFILES` 按实际模型名指定窗口，或用 `REPOGUARDIAN_MODEL_REQUEST_PROFILE` 设置通用窗口。`context_window` 是单次请求可容纳的 Token 数；`input_output_shared=true` 表示输入与输出共用该窗口，需要为输出和安全余量预留空间。窗口应按供应商实际限制设置，调大整次运行预算不能解决单次请求超长。
 - **预算包含核验与重试**：`REPOGUARDIAN_RUN_MAX_CALLS` 按实际发送尝试计数，`REPOGUARDIAN_RUN_MAX_TOKENS` 覆盖整次运行，`REPOGUARDIAN_TASK_REVIEW_TIMEOUT_SECONDS` 限制运行时间。各深度据此生成资源预设，单次方案不能超过服务端上限；恢复或重试继续使用原预算和期限。
 - **价格与费用上限使用不同单位**：`REPOGUARDIAN_MODEL_PRICING_JSON` 按 `provider:model` 配置输入、输出及可选缓存输入价格，单位为美元/百万 Token；`REPOGUARDIAN_RUN_MAX_COST_MICROUSD` 则以微美元设置费用上限，1 USD = 1,000,000 微美元。启用费用上限需要可信的模型价格；实际用量缺失时费用保持未知，不能当作零成本。
-- **选择验证后端不等于执行端已就绪**：`REPOGUARDIAN_DEFAULT_VALIDATION_BACKEND` 默认是 `none`。改为 `project_ci` 或 `user_runner` 后仍需配置对应工作流或外部 Runner；不可用时不会回退到 RepoGuardian Server 执行目标仓库代码。CI 状态与审查完成状态分别记录。
 
 ## 工作流程
 
@@ -207,20 +205,18 @@ REPOGUARDIAN_LANGSMITH_INCLUDE_CONTENT=false # 启用追踪时，默认不上传
 
 配置 `REPOGUARDIAN_INCREMENTAL_REVIEW_WEBHOOK_ENABLED=true`、`REPOGUARDIAN_GITHUB_WEBHOOK_SECRET` 与仓库 allowlist 后，GitHub `pull_request synchronize` 事件会通过 `POST /api/incremental/webhook` 自动创建审查，并在满足条件时采用增量复用；同一 delivery 幂等，fork PR、草稿与已合并/关闭 PR 不触发。事件中的仓库、PR 地址和 Base/Head 必须与确认快照一致，过时事件不会审查另一个 Head；回执的 `completed` 表示任务创建完成，不代表审查完成。
 
-动态验证独立于审查流程，Review 完成时 CI 仍可能运行中。新请求使用 `review`；旧 API 模式值仅作兼容，仍按只读审查处理。
-
 ## 安全边界
 
 - 模型只能使用受限的只读工具，文件读取经过路径、符号链接、敏感文件与预算校验；补查不能绕过这些边界。
 - RepoGuardian 不执行目标仓库的安装、测试或构建，不自动 commit、push、创建 PR。GitHub 评论写入只由独立 Publisher 在用户预检和确认后执行，Review Agent 没有写权限。
-- 动态验证只通过显式配置的 Project CI / User Runner 发起，不接受模型生成的 shell 命令；执行端不可用时不会回退到宿主机。Fork PR 默认不触发 Project CI。
-- 审查所需的代码内容会发送给配置的模型服务。使用前确认模型服务、外部执行端与凭据的数据边界。
+- 不提供任何动态执行入口：不发起 Project CI、不接收外部 Runner 结果，也不接受模型生成的命令。
+- 审查所需的代码内容会发送给配置的模型服务。使用前确认模型服务与凭据的数据边界。
 - 本地 SQLite 与运行产物用于持久化和恢复，不构成多租户或生产级安全隔离。
 
 ## 当前限制
 
 - 只支持 GitHub PR 输入；可显式配置本地单用户手动 Summary / Inline 发布，不自动 Approve / Request Changes，不创建 Check Run 或修复 PR。
-- 不提供本地 Sandbox 或通用命令执行能力。
+- 不提供本地 Sandbox、通用命令执行或外部验证集成能力。
 - 超大变更可能因输入、时间或模型预算限制而部分完成，需要结合覆盖范围复核。
 - 尚未完成真实样本上的协作效果对照与人工核验，不承诺召回、误报或成本收益。
 
@@ -245,7 +241,7 @@ git diff --check
 
 - 后端逻辑变更运行相关 pytest 测试与 Ruff，可在 `uv run pytest` 后指定测试文件；前端变更运行相关测试与 `npm run build`（包含类型检查）。
 - 默认选择与改动直接相关的测试；文档变更核对命令、字段、链接和最终差异，无需运行业务测试。上面的 `uv run pytest` 不带路径时会执行完整后端测试集。
-- 修改配置时同步 `.env.example`；修改 API 响应时同步前端类型与调用方，覆盖输入校验、拒绝路径和旧数据兼容性。
+- 修改配置时同步 `.env.example`；修改 API 响应时同步前端类型与调用方，覆盖输入校验与拒绝路径。本项目为个人项目，不为旧接口或旧数据保留兼容。
 - 开发测试可执行本项目代码，RepoGuardian Server 仍不得执行被审查的目标仓库代码。
 - 不提交 `.env`、API Key、Token、数据库或任务运行产物。
 

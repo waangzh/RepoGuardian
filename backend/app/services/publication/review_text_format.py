@@ -164,18 +164,8 @@ def _comment_risks(plan, *, include_history=True, include_investigations=True):
     pending = [item for item in plan.digest.investigations if item.answer == "unresolved"]
     if pending and include_investigations:
         risks.append(f"{len(pending)} 项调查未得到充分答案，相关调用链结论仍需补充证据。")
-    if plan.digest.validation_state == "failed":
-        risks.append(_validation_sentence(plan))
     return [f"- {value}" for value in dict.fromkeys(risks)]
 
 
-def _validation_sentence(plan) -> str:
-    state = plan.digest.validation_state
-    return {
-        "not_executed": ("当前 Head 未执行受控动态验证；Base 参考与独立补丁结果仅适用于各自对象。"
-            if plan.digest.validations else "未执行目标仓库代码、测试或构建。"),
-        "passed": "已有与当前 Head 绑定的受控验证通过记录；不代替完整 CI 或审批。",
-        "failed": "已有与当前 Head 绑定的验证失败记录，需核对失败原因。",
-        "independent_results": "已有独立补丁验证结果；补丁通过不代表当前 PR Head 已通过测试。",
-        "unknown": "动态验证状态未知；不能据此宣称目标仓库测试或构建已通过。",
-    }[state]
+# 只读审查的事实边界；所有报告正文共用同一措辞。
+STATIC_BOUNDARY = "未执行目标仓库代码、测试或构建。"

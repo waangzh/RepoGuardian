@@ -4,14 +4,14 @@ import { independentFindingCount } from "./findingWorkbench";
 
 /** 展示层情景：由后端内部状态组合成用户可理解的单一结论，不新增后端顶层状态。 */
 export type SituationKey =
-  | "stale" | "failed" | "cancelled" | "validation_failed" | "blockers"
+  | "stale" | "failed" | "cancelled" | "blockers"
   | "evidence_gaps" | "scope_incomplete" | "runtime_limits" | "nonblocking" | "clean";
 
 export type SituationTone = "success" | "info" | "warning" | "danger";
 
 export type SituationActionKey =
   | "view_blockers" | "view_unresolved" | "view_findings" | "view_gaps"
-  | "view_validation" | "view_error" | "view_activity" | "view_retained"
+  | "view_error" | "view_activity" | "view_retained"
   | "view_report" | "view_investigations" | "view_limits" | "rereview";
 
 export interface SituationAction {
@@ -57,7 +57,6 @@ const ACTION_META: Record<SituationActionKey, { label: string; icon: string }> =
   view_unresolved: { label: "查看未确认事项", icon: "search" },
   view_findings: { label: "查看建议", icon: "search" },
   view_gaps: { label: "查看未检查范围", icon: "shield" },
-  view_validation: { label: "查看失败记录", icon: "flask" },
   view_error: { label: "查看错误", icon: "alert" },
   view_activity: { label: "查看技术记录", icon: "activity" },
   view_retained: { label: "查看已保留结果", icon: "search" },
@@ -82,7 +81,6 @@ const EVIDENCE_REASONS = new Set([
 const RUNTIME_REASONS = new Set([
   "budget_exhausted", "deadline_exceeded", "usage_integrity_unknown", "termination_incomplete",
   "snapshot_missing", "runtime_report_missing", "runtime_report_invalid", "unsupported_legacy_projection",
-  "head_validation_failed", "head_validation_unknown",
 ]);
 
 export function reviewLimitationKind(outcome: ReviewOutcome, extraReasons: string[] = []) {
@@ -106,7 +104,7 @@ export interface SituationTarget {
   findingFilter?: FindingEntryFilter;
   scopeFilter?: "incomplete";
   investigations?: boolean;
-  activityFocus?: "limits" | "validation" | "error";
+  activityFocus?: "limits" | "error";
 }
 export function situationActionTarget(key: Exclude<SituationActionKey, "rereview">): SituationTarget {
   const targets: Record<Exclude<SituationActionKey, "rereview">, SituationTarget> = {
@@ -116,7 +114,6 @@ export function situationActionTarget(key: Exclude<SituationActionKey, "rereview
     view_retained: { section: "findings", findingFilter: "all" },
     view_gaps: { section: "scope", scopeFilter: "incomplete" },
     view_investigations: { section: "scope", investigations: true },
-    view_validation: { section: "activity", activityFocus: "validation" },
     view_error: { section: "activity", activityFocus: "error" },
     view_limits: { section: "activity", activityFocus: "limits" },
     view_activity: { section: "activity" },
@@ -196,21 +193,13 @@ export function reviewSituation(
   // 与后端决策同序：已确认的 High/Critical 问题优先，验证失败作为并列事实而不是覆盖结论。
   if ((blockingCount ?? 0) > 0 || status === "fix_blockers") {
     const extra: SituationActionKey[] = unresolvedCount > 0 ? ["view_unresolved"] : [];
-    if (outcome.dynamic_validation === "failed") extra.push("view_validation");
     return { ...counts, key: "blockers",
       title: titleOf(blockingCount ? `发现 ${blockingCount} 项高优先级问题，建议修复后复审` : "发现高优先级问题，建议修复后复审"),
-      description: "这些问题已有代码证据支持，按 RepoGuardian 审查策略建议在合并前处理；该建议不是 GitHub Mergeability 状态或分支保护结论。"
-        + (outcome.dynamic_validation === "failed" ? "当前 Head 另有动态检查未通过，需一并核对。" : ""),
+      description: "这些问题已有代码证据支持，按 RepoGuardian 审查策略建议在合并前处理；该建议不是 GitHub Mergeability 状态或分支保护结论。",
       nextStep: "查看高优先级问题的证据并修复，然后基于新提交重新审查。",
       tone: "danger", icon: "alert",
       // 历史风险已进入问题工作台，可直接按来源核对，不再降级为只看报告。
       actions: actions("view_blockers", ...extra), copy: COPY_REVIEW };
-  }
-  if (outcome.dynamic_validation === "failed") {
-    return { ...counts, key: "validation_failed", title: titleOf("本次记录的动态检查未通过"),
-      description: "失败记录只覆盖与本次 Head 绑定的受控检查，不能泛化为整个项目 CI 失败，也不能据此宣称验证通过。",
-      nextStep: "查看失败记录，核对检查范围、来源与失败原因。", tone: "danger", icon: "flask",
-      actions: actions("view_validation", "rereview"), copy: COPY_RECORD };
   }
   if (status === "resolve_unknowns" || status === "unavailable"
       || (outcome.kind === "inconclusive" && !meteringOnly)) {

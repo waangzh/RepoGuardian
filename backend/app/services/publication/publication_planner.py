@@ -25,7 +25,6 @@ def build_review_digest(task, report):
             if (safe := safe_discussion_url(url, task.pr_url))}
     if report is None:
         return digest
-    digest.validation_state = "not_executed"
     digest.termination_reason = report.termination_reason
     areas = set()
     file_goals = {}
@@ -59,8 +58,7 @@ def summary_projection(plan: PublicationPlan) -> ReviewSummary:
             author_context_limitation=digest.author_context_limitation,
             change_understanding=digest.change_understanding, actual_changes=digest.actual_changes,
             intent_alignment=digest.intent_alignment, merge_decision=digest.merge_decision,
-            excluded_files=digest.excluded_files, validation_state=digest.validation_state,
-            validations=digest.validations, checked_areas=digest.checked_areas,
+            excluded_files=digest.excluded_files, checked_areas=digest.checked_areas,
             termination_reason=digest.termination_reason),
         review_comment_markdown=plan.review_comment_markdown, withheld_findings=plan.withheld_findings,
         content_eligible=plan.content_eligible, blocking_reasons=plan.blocking_reasons,

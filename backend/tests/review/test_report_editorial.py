@@ -155,28 +155,6 @@ def test_detailed_report_states_conclusion_limits_and_steps_once():
     assert report.count("仍以审查范围与验证边界为准") <= 1
 
 
-def test_blockers_with_failed_head_validation_share_one_combined_conclusion():
-    """同一审查的阻断问题与验证失败必须由一个后端标签表达，避免前端各自覆盖主结论。"""
-    from app.models.review import TestRunResult as RunResult, ValidationSnapshot
-
-    task = publishable_task(severity="high", claim="权限绕过导致未授权数据访问")
-    task.task_runtime_report["findings"][0]["issue"]["confidence"] = 0.9
-    task.validation_snapshots = [ValidationSnapshot(stage="head", sha=task.run_manifest.head_sha, passed=False,
-        failure_kind="code_regression", command_results=[RunResult(tool="test_runner", command="pytest", exit_code=1, passed=False)])]
-    plan = PublicationPlanner().build(task)
-    decision = plan.digest.merge_decision
-    assert decision.status == "fix_blockers"
-    assert decision.label == "发现 1 项高优先级问题，另有当前版本动态检查未通过"
-    # 主结论只出现一次，且同一标签进入评论、详细报告与轻量摘要。
-    for markdown in (plan.review_comment_markdown, plan.user_report_markdown, plan.summary_markdown):
-        assert markdown.count(decision.label) == 1
-    assert "当前版本存在受控验证失败记录" not in plan.review_comment_markdown
-    assert "动态检查失败" in decision.advice
-    assert summary_projection(plan).digest.merge_decision.label == decision.label
-    # 阻断建议仍保留修复与重新核验的顺序。
-    assert plan.review_comment_markdown.index(decision.label) < plan.review_comment_markdown.index("## 需要处理的问题")
-
-
 def test_audit_source_text_never_becomes_author_goal():
     from app.models.review import PullRequestInfo, PullRequestRef
 
@@ -219,19 +197,6 @@ def test_clean_comment_is_brief_and_keeps_one_validation_boundary():
     assert markdown.count("不替代 CI 与人工审批") == 1
     assert [line for line in markdown.splitlines() if line.startswith("## ")] == ["## 变更理解", "## 下一步"]
     assert "作者声明（未经独立验证）：" not in markdown
-    for state in ("passed", "failed", "independent_results", "unknown"):
-        changed = plan.model_copy(deep=True)
-        changed.digest.validation_state = state
-        result = render_review_comment(changed)
-        assert "没有本轮独立运行的测试或构建结果" not in result
-        if state == "passed":
-            assert "受控验证通过记录" in result
-        elif state == "independent_results":
-            assert "补丁通过不代表当前 PR Head 已通过测试" in result
-        elif state == "unknown":
-            assert result.count("动态验证状态未知") == 1
-        elif state == "failed":
-            assert result.count("已有与当前 Head 绑定的验证失败记录，需核对失败原因。") == 1
 
 
 def test_author_goal_is_plain_text_and_legacy_wrapping_is_display_only():
@@ -265,8 +230,7 @@ def test_multiple_findings_share_one_document_validation_boundary():
     assert plan.outcome.publishable_count == 2
     for markdown in (plan.user_report_markdown, render_review_comment(plan, detail="full")):
         assert "缓存读取失败" in markdown and "刷新路径失败" in markdown
-        assert sum(markdown.count(text) for text in (
-            "未执行目标仓库代码", "当前 Head 未执行受控动态验证")) == 1
+        assert markdown.count("未执行目标仓库代码") == 1
         assert markdown.count("来源与验证边界") <= 1
 
 

@@ -1,15 +1,12 @@
-import asyncio
 import logging
 from datetime import datetime, timezone
 
-from app.llm.providers import LLMProviderError, build_provider
-from app.core.config import settings
 from app.graph.nodes._events import append_step
 from app.graph.state import ReviewState
 from app.models.review import ReviewPhase
 from app.services.review.review_rebuild import rebuild_task_from_state
 from app.services.review.report_service import ReportService
-from app.llm.model_usage import append_usage, unpack_model_call
+from app.llm.model_usage import append_usage
 from app.services.review.review_manifest import build_review_manifest, coordination_coverage
 from app.models.review import ReviewUnitResult
 from app.review.unit_completion import review_unit_coverage_warning
@@ -32,33 +29,7 @@ async def report_node(state: ReviewState) -> ReviewState:
         "phase": final_phase,
         "updated_at": updated_at,
     })
-    task = rebuild_task_from_state(report_state)
-    purpose_summary = None
     model_usages = append_usage(state.get("model_usages") or [], None)
-    if task.pr and task.engine != "task_review_v1":
-        provider = state.get("_provider")
-        if provider is None and state.get("_report_purpose_model_enabled"):
-            provider = build_provider(
-                settings.repoguardian_provider,
-                settings.openai_api_key,
-                settings.openai_base_url,
-                settings.repoguardian_model,
-            )
-        if provider is not None:
-            try:
-                async with asyncio.timeout(
-                    settings.repoguardian_report_purpose_timeout_seconds
-                ):
-                    raw_result = await provider.summarize_pr_purpose(
-                        task.pr, task.changed_files, task.model
-                    )
-                purpose_summary, usage = unpack_model_call(raw_result)
-                model_usages = append_usage(model_usages, usage)
-            except (LLMProviderError, TimeoutError) as exc:
-                model_usages = append_usage(
-                    model_usages, getattr(exc, "usage", None)
-                )
-                logger.warning("PR 作用中文概括生成失败，使用确定性中文兜底：%s", exc)
     completed_at = datetime.fromisoformat(updated_at)
     manifest_state = {
         **report_state,
@@ -72,7 +43,7 @@ async def report_node(state: ReviewState) -> ReviewState:
         "warnings": manifest.warnings,
     })
     task = rebuild_task_from_state(report_state)
-    markdown = ReportService().generate(task, purpose_summary=purpose_summary)
+    markdown = ReportService().generate(task)
     logger.info("📝 [报告] 报告生成完成（%d 字符 Markdown）", len(markdown))
     return ReviewState(
         engine=report_state.get("engine"),

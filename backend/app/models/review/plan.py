@@ -12,7 +12,7 @@ from pydantic import (
 
 from app.models.incremental import IncrementalPreview
 from app.models.review_plan import ReviewPlanOptions, PlanSnapshot
-from app.models.review.common import ReviewMode, ReviewUnitComplexity, ValidationBackend
+from app.models.review.common import ReviewMode, ReviewUnitComplexity
 from app.models.review.diff import ContextProvenance, ExcludedReviewFile, PlannedChangedFile
 
 class ReviewUnit(BaseModel):
@@ -104,13 +104,5 @@ class ReviewPreviewResponse(BaseModel):
     estimated_model_calls: int = Field(ge=0)
     max_model_calls: int = Field(ge=0)
     estimated_tokens: int = Field(ge=0)
-    patch_generation_enabled: bool
-    validation_backend: "ValidationBackendPreview"
     incremental: "IncrementalPreview | None" = None
     warnings: list[str] = Field(default_factory=list)
-
-
-class ValidationBackendPreview(BaseModel):
-    name: ValidationBackend
-    available: bool
-    unavailable_reason: str | None = None

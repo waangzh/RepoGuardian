@@ -18,7 +18,7 @@ import { reviewSections, type ReviewSection } from "./types/workspace";
 import { validPullRequestUrl } from "./utils/workspacePresentation";
 import { rereviewInput } from "./utils/reviewRestart";
 import type { AppPage, ProviderModelInfo } from "./types/operations";
-import type { ReviewMode, ReviewPreviewResponse, ReviewTask, ValidationBackend } from "./types/review";
+import type { ReviewMode, ReviewPreviewResponse, ReviewTask } from "./types/review";
 import { reviewCompletionMessage } from "./utils/taskRuntimePresentation";
 import { usePreferences } from "./composables/usePreferences";
 const { initialReviewPlan } = usePreferences();
@@ -46,7 +46,6 @@ const defaultModel = ref("");
 const modelsLoading = ref(false);
 const modelsError = ref<string | null>(null);
 const mode = ref<ReviewMode>("review");
-const validationBackend = ref<ValidationBackend>("none");
 import type { ReviewCapabilities, ReviewPlanOptions } from './types/reviewPlan';
 const capabilities = ref<ReviewCapabilities | null>(null);
 const draftPlan = ref<ReviewPlanOptions | undefined>();
@@ -98,12 +97,7 @@ let trackingTaskId: string | null = null;
 let previewRequestId = 0;
 const terminalNotifiedTaskIds = new Set<string>();
 
-watch(mode, (next) => {
-  if (restoringPreview) return;
-  validationBackend.value = "none";
-});
-
-watch([prUrl, mode, validationBackend], () => {
+watch([prUrl, mode], () => {
   if (restoringPreview) return;
   preview.value = null;
   cancelPreview();
@@ -167,7 +161,7 @@ async function submitReview() {
   submitting.value = true;
   reviewSection.value = "overview";
   try {
-    const created = await createReview(prUrl.value.trim(), model.value.trim(), mode.value, validationBackend.value, preview.value);
+    const created = await createReview(prUrl.value.trim(), model.value.trim(), mode.value, preview.value);
     createdTaskId.value = created.task_id;
     previewTracker.detach(true);
     trackingTaskId = created.task_id;
@@ -216,7 +210,6 @@ async function loadPreview() {
   const requestId = ++previewRequestId;
   try {
     const next = await previewTracker.start({ pr_url: prUrl.value.trim(), mode: mode.value,
-      validation_backend: validationBackend.value,
       model: model.value.trim() || null, force_full_review: forceFullReview.value,
       plan: draftPlan.value ?? initialReviewPlan(capabilities.value) });
     if (previewRequestId === requestId && next) applyPreviewJob(next);
@@ -264,7 +257,6 @@ async function restorePreview() {
         model.value = current.request.model || '';
         forceFullReview.value = current.request.force_full_review ?? false;
         mode.value = current.request.mode;
-        validationBackend.value = current.request.validation_backend;
         draftPlan.value = current.request.plan;
         await nextTick();
       } finally { restoringPreview = false; }
@@ -354,7 +346,6 @@ function subscribeOrPoll(taskId: string) {
   try {
     eventSource = subscribeToEvents(taskId, {
       onStepProgress: () => scheduleRefresh(taskId),
-      onPatchUpdate: () => scheduleRefresh(taskId),
       onDone: () => {
         clearScheduledRefresh();
         void refreshTask(taskId).then((current) => {
@@ -534,7 +525,6 @@ function startNewReview() {
   model.value = "";
   forceFullReview.value = false;
   mode.value = "review";
-  validationBackend.value = "none";
   rereviewContext.value = null;
   draftPlan.value = undefined;
   planDirty.value = false;

@@ -5,7 +5,7 @@ import re
 from app.models.publication import PresentationDelivery, ReviewPresentation, SummaryInputCoverage
 from app.services.publication.review_prose import author_goal_text
 from app.services.publication.review_text_format import (
-    _comment_risks, _finding_location_text, _ordered_findings, _sentence, _validation_sentence,
+    _comment_risks, _finding_location_text, _ordered_findings, _sentence, STATIC_BOUNDARY,
     markdown_text,
 )
 
@@ -120,8 +120,7 @@ def _review_conclusion(plan):
 
     outcome = plan.outcome
     if (outcome.kind in {"failed", "cancelled"} or outcome.confirmed_count
-            or outcome.historical_discussion.affects_risk
-            or plan.digest.validation_state in {"failed", "unknown"}):
+            or outcome.historical_discussion.affects_risk):
         return merge_verdict_line(plan)
     if outcome.kind == "clean" and outcome.finding_conclusion == "no_confirmed_findings":
         return "✅ 结论：已检查范围内未发现已确认问题"
@@ -204,7 +203,7 @@ def build_presentation(plan, synthesis=None):
         delivery=PresentationDelivery(confirmed=plan.outcome.confirmed_count, eligible=len(findings),
             selected=len(findings), inline_ready=len(plan.inline_drafts),
             summary_only=len(plan.summary_findings), not_selected=0),
-        validation_state=plan.digest.validation_state, limitations=limitations,
+        limitations=limitations,
         summary_input_coverage=input_coverage)
 
 
@@ -309,22 +308,21 @@ def render_presentation(plan, *, copy=False, detail="compact", exclude_resolved=
                  if plan.outcome.total_goals else "缺少有效目标记录，检查范围未知。")
         lines += ["", "### 验证与合并建议", "",
             f"- 静态审查：{scope}",
-            "- 动态验证：" + _validation_sentence(plan),
+            "- 静态审查边界：" + STATIC_BOUNDARY,
             "- 合并建议：" + markdown_text(advice), "", "---", "",
             f"审查快照：`{markdown_text(plan.snapshot.head_sha or '未记录', 64)}`。"]
     else:
         scope = (f"静态目标已检查 {plan.outcome.examined_goals}/{plan.outcome.total_goals}"
                  if plan.outcome.total_goals else "静态检查范围未知")
-        dynamic = _validation_sentence(plan)
+        dynamic = STATIC_BOUNDARY
         if pending and presentation.verdict.status == "resolve_unknowns" \
-                and plan.outcome.kind not in {"failed", "cancelled"} \
-                and plan.digest.validation_state not in {"failed", "unknown"}:
+                and plan.outcome.kind not in {"failed", "cancelled"}:
             advice = "建议先补齐上述待核实事项所需证据，再结合 CI 和人工评审决定是否合并。"
         else:
             advice = " ".join(_comment_next_steps(
                 plan, has_findings=bool(_ordered_findings(plan) or history_risks)))
         lines += ["", "### 验证与合并建议", "",
-            f"{scope}；动态验证：{dynamic} {markdown_text(advice)}", "", "---", "",
+            f"{scope}；静态审查边界：{dynamic} {markdown_text(advice)}", "", "---", "",
             f"审查快照：`{markdown_text(plan.snapshot.head_sha or '未记录', 64)}`"
             + (" · 本次未纳入历史讨论" if plan.digest.discussion_review_enabled is False else "")
             + " · 结论仅适用于当前快照。"]

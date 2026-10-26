@@ -5,11 +5,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.incremental import router as incremental_router
-from app.api.project_ci import router as project_ci_router
 from app.api.publications import router as publications_router
 from app.api.reviews import router as reviews_router
 from app.api.system import router as system_router
-from app.api.validation_requests import router as validation_requests_router
 from app.bootstrap.dependencies import lifespan
 
 
@@ -40,8 +38,6 @@ app.add_middleware(
 
 app.include_router(reviews_router, prefix="/api")
 app.include_router(publications_router, prefix="/api")
-app.include_router(validation_requests_router, prefix="/api")
-app.include_router(project_ci_router, prefix="/api")
 app.include_router(incremental_router, prefix="/api")
 app.include_router(system_router, prefix="/api")
 

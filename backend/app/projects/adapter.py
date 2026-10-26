@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Protocol
 
-from app.models.review import CommandId, CommandSpec, ProjectProfile
+from app.models.review import ProjectProfile
 
 
 class ProjectValidationAdapter(Protocol):
@@ -13,9 +13,6 @@ class ProjectValidationAdapter(Protocol):
 
     def detect(self, repo_path: Path) -> ProjectProfile | None:
         """识别项目；未匹配时返回 None。"""
-
-    def command_spec(self, command_id: CommandId) -> CommandSpec:
-        """只返回本适配器预注册的命令定义。"""
 
 
 class ProjectAdapterRegistry:

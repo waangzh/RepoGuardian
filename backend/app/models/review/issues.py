@@ -15,7 +15,7 @@ from pydantic import (
 )
 
 from app.core.paths import validate_repo_relative_path
-from app.models.review.common import AgentActionName, CommandId, CommentPlacement, FixRisk, IssueCategory, IssueStatus, Severity
+from app.models.review.common import AgentActionName, CommentPlacement, FixRisk, IssueCategory, IssueStatus, Severity
 from app.models.review.evidence import AuditableReasoningSummary, EvidenceAnchor, UnitContractDependency, UnitEvidenceReference, UnitFileChangeCheck, UnitHypothesisCheck, UnitObligationUpdate, UnitQuestionUpdate, UnitTargetCheck, UnitUnresolvedQuestion
 from app.models.review.requests import CodeSearchRequest, ContextRetrievalPlan, ExecutionBudget, FileFindRequest, FileReadDiffRequest, FileReadRequest, HumanReviewRequest
 
@@ -128,14 +128,8 @@ class AgentAction(BaseModel):
     @model_validator(mode="after")
     def reject_free_form_shell_command(self) -> "AgentAction":
         """模型可选命令 ID，但不能把任意 Shell 命令带入工具调用。"""
-        if "command" in self.tool_args:
-            raise ValueError("tool_args.command is not supported; use command_id")
-        command_id = self.tool_args.get("command_id")
-        if command_id is not None:
-            try:
-                CommandId(command_id)
-            except ValueError as exc:
-                raise ValueError(f"unknown command_id: {command_id}") from exc
+        if "command" in self.tool_args or "command_id" in self.tool_args:
+            raise ValueError("tool_args.command is not supported")
         if self.action == AgentActionName.retrieve_context:
             if set(self.tool_args) != {"plan"}:
                 raise ValueError("retrieve_context requires tool_args.plan only")
@@ -230,48 +224,12 @@ class ReviewUnitToolEvent(BaseModel):
     detail: str | None = None
 
 
-class TestRunResult(BaseModel):
-    """命令行工具执行结果（静态分析 / 测试共用）。"""
-    tool: str            # 工具名：static_analyzer / test_runner
-    command: str         # 执行的命令
-    exit_code: int
-    stdout: str = ""
-    stderr: str = ""
-    passed: bool         # exit_code == 0
-    duration: float = 0.0
-
-
-class FailureFingerprint(BaseModel):
-    """由受控验证输出提取的、可集合比较的单个失败。"""
-
-    tool: str
-    identity: str
-    test_node_id: str | None = None
-    error_type: str | None = None
-    file_path: str | None = None
-    line_no: int | None = None
-    column: int | None = None
-    rule_code: str | None = None
-    message: str | None = None
-    normalized_summary: str
-
-
-class CommandSpec(BaseModel):
-    """仅由服务端适配器注册的命令定义。"""
-
-    command_id: CommandId
-    argv: tuple[str, ...] = Field(min_length=1)
-    tool: str
-    timeout_seconds: int = Field(default=60, gt=0, le=600)
-
-
 class ProjectProfile(BaseModel):
     """项目适配器检测出的、可安全公开的项目元数据。"""
 
     adapter_id: str
     language: str
     detected_files: list[str] = Field(default_factory=list)
-    validation_command_ids: list[CommandId] = Field(default_factory=list)
 
 
 class UnitReviewRecord(BaseModel):

@@ -18,8 +18,8 @@ from app.llm.model_request_budgeter import (
 from app.services.discussions.pr_discussion_store import DiscussionStore
 from app.services.discussions.pr_discussions import (
     add_limitation, discussion_page, frozen_provider, metadata, prepare_discussions_node,
-    select_discussions,
 )
+from app.review.discussion_selection import select_discussions
 from app.services.review.review_run_budget import ReviewRunBudget, activate_run_budget
 
 

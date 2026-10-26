@@ -66,9 +66,6 @@ def merge_decision(plan):
         unresolved.append("confirmed_findings_withheld")
     if any(item.severity not in {"critical", "high", "medium", "low"} for item in views):
         unresolved.append("finding_severity_unknown")
-    # 作者声明对照是辅助分析：未逐项核验不构成合并阻断，明确矛盾只在评论风险中展示。
-    if plan.digest.validation_state in {"failed", "unknown"}:
-        unresolved.append("head_validation_" + plan.digest.validation_state)
     reasons = sorted(set(unresolved))
     decision = MergeDecision(blocking_finding_keys=blocking, nonblocking_finding_keys=suggestions,
                              unresolved_reasons=reasons,

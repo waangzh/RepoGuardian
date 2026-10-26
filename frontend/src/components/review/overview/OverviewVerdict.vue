@@ -5,7 +5,7 @@ import type { ReviewSummary } from "../../../types/publication";
 import type { ReviewSituation } from "../../../utils/reviewSituation";
 import type { ReviewSection } from "../../../types/workspace";
 import { overviewConclusionDescription, overviewFacts } from "../../../utils/overviewPresentation";
-import { coverageLabel, reportValidationLabel, reviewScopeLabel } from "../../../utils/reportPresentation";
+import { coverageLabel, reviewScopeLabel } from "../../../utils/reportPresentation";
 import AppIcon from "../../common/AppIcon.vue";
 
 const props = defineProps<{
@@ -27,7 +27,6 @@ const kicker = computed(() => ({
   evidence_gaps: "需要补充核实", scope_incomplete: "范围未完整覆盖",
   runtime_limits: "结果可靠性需核对",
   stale: "PR 已更新", failed: "审查中断", cancelled: "用户已停止",
-  validation_failed: "动态检查未通过",
 })[props.situation?.key || "evidence_gaps"]);
 function navigate(section: ReviewSection) {
   explanationOpen.value = false;
@@ -46,7 +45,7 @@ function navigate(section: ReviewSection) {
         <div class="ov-verdict__meta">
           <span><AppIcon name="activity" :size="15" />{{ execution }}</span>
           <span><AppIcon name="units" :size="15" />{{ reviewScopeLabel(facts.examined, facts.total) }}</span>
-          <span><AppIcon name="flask" :size="15" />{{ facts.validation === "not_executed" ? "仅静态审查" : reportValidationLabel(facts.validation) }}</span>
+          <span><AppIcon name="shield" :size="15" />只读静态审查</span>
         </div>
         <button type="button" class="ov-link" @click="explanationOpen = true">结论如何得出 <AppIcon name="arrow-right" :size="15" /></button>
       </div>
@@ -62,12 +61,11 @@ function navigate(section: ReviewSection) {
           <button type="button" class="ov-icon-button" aria-label="关闭结论说明" @click="explanationOpen = false"><AppIcon name="x" :size="19" /></button>
         </header>
         <div class="ov-dialog__body">
-          <p>结论结合实际检查范围、问题证据、未决事项、运行可靠性和动态验证形成，不能仅凭问题数量或目标完成率判断。</p>
+          <p>结论结合实际检查范围、问题证据、未决事项和运行可靠性形成，不能仅凭问题数量或目标完成率判断。</p>
           <template v-if="plan">
             <dl class="ov-explanation">
               <div><dt>审查完整性</dt><dd>{{ coverageLabel(plan.outcome.review_completeness) }}</dd></div>
               <div><dt>运行可靠性</dt><dd>{{ ({ reliable: "可靠", unreliable: "存在限制", unknown: "未知" })[plan.outcome.runtime_reliability] || "未知" }}</dd></div>
-              <div><dt>动态验证</dt><dd>{{ reportValidationLabel(facts.validation) }}</dd></div>
             </dl>
             <h3>后端记录的限制</h3>
             <ul v-if="facts.limitations.length"><li v-for="item in facts.limitations" :key="item">{{ item }}</li></ul>
@@ -75,7 +73,7 @@ function navigate(section: ReviewSection) {
             <details v-if="technicalReasons.length"><summary>技术原因代码</summary><ul><li v-for="reason in technicalReasons" :key="reason"><code>{{ reason }}</code></li></ul></details>
             <details v-if="plan.withheld_findings?.length"><summary>保留但未交付的问题记录</summary><ul><li v-for="item in plan.withheld_findings" :key="`${item.candidate_id}:${item.reason_code}`">{{ item.candidate_id }} · {{ item.reason_code }}</li></ul></details>
           </template>
-          <p v-else>摘要尚未取得，完整性、问题数量与验证状态保持未知。</p>
+          <p v-else>摘要尚未取得，完整性与问题数量保持未知。</p>
           <h3>阅读时需要区分</h3>
           <p>静态审查不能证明代码完全正确，也不能代替项目 CI 或人工审批。</p>
           <ul><li>目标已检查：仅描述约定静态目标的检查记录。</li><li>未核验线索：调查提示，不等于已确认缺陷。</li><li>验证未执行或未知：不能推断项目测试、构建或 CI 已通过。</li></ul>

@@ -88,27 +88,3 @@ class ReviewIssueDetail(BaseModel):
     verifier_decision: dict | None = None
     dedup_source: dict | None = None
     publication_status: str
-
-
-class PatchDetail(BaseModel):
-    patch: dict
-    diff_artifact_uri: str | None = None
-    fingerprint: str
-    revision: int
-    policy_result: dict | None = None
-
-
-class ValidationDetail(BaseModel):
-    validation_id: str
-    task_id: str
-    patch_id: str
-    backend: str
-    request: dict
-    result: dict | None = None
-    environment_fingerprint: str
-    trust_source: str | None = None
-    patch_hash: str
-    fingerprint: str
-    status: str
-    requested_at: datetime
-    completed_at: datetime | None = None

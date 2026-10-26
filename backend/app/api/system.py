@@ -83,18 +83,11 @@ async def get_system_diagnostics() -> SystemDiagnostics:
         worker_status="running" if worker_running else "idle",
         artifact_directory_writable=writable_target.exists() and os.access(writable_target, os.W_OK),
         langsmith_enabled=settings.repoguardian_langsmith_tracing,
-        security_mode=(
-            "unsafe_local"
-            if settings.repoguardian_executor == "local"
-            and settings.repoguardian_allow_unsafe_local_execution
-            else "restricted"
-        ),
         retention_days=settings.repoguardian_retention_days,
         configured_secrets={
             "github": bool(settings.github_token),
             "llm_provider": bool(settings.openai_api_key),
             "langsmith": bool(settings.langsmith_api_key),
-            "runner_admin": bool(settings.repoguardian_runner_registration_token),
             "github_webhook": bool(settings.repoguardian_github_webhook_secret),
         },
         versions=VersionDiagnostics(
@@ -103,7 +96,6 @@ async def get_system_diagnostics() -> SystemDiagnostics:
             rule=settings.repoguardian_rule_version,
             tool_schema=settings.repoguardian_tool_schema_version,
             review_policy=settings.repoguardian_review_policy_version,
-            patch_policy=settings.repoguardian_patch_policy_version,
         ),
     )
 

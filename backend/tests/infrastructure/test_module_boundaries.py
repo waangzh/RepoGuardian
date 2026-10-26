@@ -29,10 +29,7 @@ def _modules(*prefixes: str) -> list[Path]:
     return matched
 
 
-# 已知接缝：discussion 选择需要流程层的容量裁剪，只在该契约分支内延迟导入。
-SERVICES_IMPORT_EXCEPTIONS = {
-    ("app/review/runtime_spec.py", "app.services.discussions.pr_discussions"),
-}
+SERVICES_IMPORT_EXCEPTIONS: set[tuple[str, str]] = set()
 
 
 @pytest.mark.parametrize("path", _modules("app.models", "app.core", "app.evidence", "app.review"), ids=str)
@@ -43,7 +40,7 @@ def test_foundation_does_not_depend_on_services(path: Path) -> None:
     assert offenders == []
 
 
-@pytest.mark.parametrize("path", _modules("app.services", "app.validation", "app.graph", "app.review", "app.llm"), ids=str)
+@pytest.mark.parametrize("path", _modules("app.services", "app.graph", "app.review", "app.llm"), ids=str)
 def test_services_validation_and_rules_do_not_depend_on_api(path: Path) -> None:
     offenders = [(line, name) for line, name in _module_imports(path) if name.startswith("app.api")]
     assert offenders == []

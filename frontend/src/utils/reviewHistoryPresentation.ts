@@ -10,7 +10,7 @@ export function historyConclusion(task: ReviewHistoryTask) {
   const situation = reviewSituation({ outcome: result.outcome, digest: { merge_decision: result.merge_decision } })!;
   const titles: Record<string, string> = {
     failed: "审查中断", cancelled: "审查已停止", blockers: "存在高优先级问题",
-    validation_failed: "动态检查未通过", evidence_gaps: "仍有事项需确认",
+evidence_gaps: "仍有事项需确认",
     scope_incomplete: "检查范围未完整覆盖", runtime_limits: "结果可靠性需核对",
     nonblocking: "有改进建议，暂无高优先级问题", clean: "未发现需在合并前处理的问题",
   };
@@ -18,15 +18,4 @@ export function historyConclusion(task: ReviewHistoryTask) {
     && situation.key === "evidence_gaps";
   return { title: historical ? "历史问题经核验仍存在" : titles[situation.key] || "结论未知",
     tone: situation.tone, description: situation.title };
-}
-
-export function historyValidation(task: ReviewHistoryTask): string {
-  const labels: Record<string, string> = {
-    not_executed: "未执行目标仓库动态验证",
-    passed: "审查 Head · 已记录检查通过",
-    failed: "审查 Head · 已记录检查失败",
-    independent_results: "独立补丁验证 · 不代表 Head 通过",
-    unknown: "验证结果或适用范围未知",
-  };
-  return labels[task.history_result?.outcome.dynamic_validation || "unknown"] || labels.unknown!;
 }

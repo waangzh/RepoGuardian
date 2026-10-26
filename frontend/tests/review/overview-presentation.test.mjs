@@ -15,11 +15,10 @@ test("概览保留未知计数、真实限制及独立验证边界", async () =>
     assert.equal(unknown.unresolved, null);
     assert.equal(unknown.examined, null);
     assert.equal(unknown.boundaries[0].tone, "neutral");
-    assert.equal(unknown.boundaries[2].value, "未知");
+    assert.equal(unknown.boundaries.length, 2);
     const incomplete = structuredClone(fixtures.inconclusive.summary);
     incomplete.outcome.examined_goals = 2;
     incomplete.outcome.total_goals = 2;
-    incomplete.outcome.dynamic_validation = "not_executed";
     incomplete.outcome.reason_codes = ["investigation_incomplete"];
     incomplete.outcome.incomplete_investigations = 1;
     incomplete.digest.merge_decision.limits = ["真实限制：关联返回值消费路径未核验"];
@@ -28,13 +27,6 @@ test("概览保留未知计数、真实限制及独立验证边界", async () =>
     assert.equal(facts.unresolved, incomplete.outcome.unresolved_count);
     assert.equal(facts.boundaries[1].tone, "warning");
     assert.ok(facts.limitations.includes("真实限制：关联返回值消费路径未核验"));
-    assert.equal(facts.boundaries[2].value, "当前 PR 版本未执行");
-    assert.equal(facts.boundaries[2].tone, "neutral");
-    for (const validation of ["passed", "failed", "independent_results", "unknown"]) {
-      incomplete.outcome.dynamic_validation = validation;
-      const row = overviewFacts(incomplete, null).boundaries[2];
-      assert.equal(row.tone, validation === "passed" ? "success" : validation === "failed" ? "danger" : "neutral");
-    }
     incomplete.outcome.review_completeness = "unknown";
     incomplete.outcome.reason_codes = [];
     assert.equal(overviewFacts(incomplete, null).boundaries[0].tone, "neutral");
@@ -77,13 +69,9 @@ test("概览分层阅读，具体限制按需展开", async () => {
     const fixture = structuredClone(fixtures.clean);
     fixture.summary.digest.merge_decision.limits = [];
     fixture.summary.digest.merge_decision.unresolved_reasons = [];
-    fixture.summary.outcome.dynamic_validation = "not_executed";
     const facts = overviewFacts(fixture.summary, null);
     assert.equal(facts.boundaries[0].description, "");
     assert.equal(facts.boundaries[1].description, "");
-    assert.equal(facts.boundaries[2].description, "");
-    assert.equal(facts.boundaries[2].tone, "neutral");
-    assert.equal(facts.boundaries[2].value, "当前 PR 版本未执行");
     assert.equal(overviewConclusionDescription(null), "");
     for (const name of ["clean", "findings", "inconclusive", "failed", "cancelled", "runtime_limits"]) {
       const situation = reviewSituation(fixtures[name].summary);
@@ -98,7 +86,7 @@ test("概览分层阅读，具体限制按需展开", async () => {
     assert.equal((html.match(/查看完整报告/g) || []).length, 1);
     assert.doesNotMatch(html, /阅读详细审查报告/);
     assert.doesNotMatch(html, /ov-note|ov-verdict__limitation/);
-    assert.doesNotMatch(html, /<dt>动态验证<\/dt>/, "快照不再重复验证状态");
+    assert.doesNotMatch(html, /动态验证/, "只读静态审查不展示动态验证维度");
     fixture.summary.digest.merge_decision.limits = ["具体限制：下游消费路径尚未核验"];
     props.warnings = ["具体限制：下游消费路径尚未核验", "独立提示：模型用量尚不完整", "独立提示：模型用量尚不完整"];
     const limited = await renderToString(createSSRApp(Overview, props));
@@ -107,10 +95,6 @@ test("概览分层阅读，具体限制按需展开", async () => {
     const stale = await renderToString(createSSRApp(Overview, { ...props, stale: true }));
     assert.match(stale, /以上数量来自旧快照，不适用于最新 Head/);
     assert.match(stale, /复制历史审查记录/);
-    fixture.summary.outcome.dynamic_validation = "unknown";
-    assert.match(overviewFacts(fixture.summary, null).boundaries[2].description, /未知/);
-    fixture.summary.outcome.dynamic_validation = "failed";
-    assert.match(overviewFacts(fixture.summary, null).boundaries[2].description, /失败/);
   } finally { await server.close(); }
 });
 

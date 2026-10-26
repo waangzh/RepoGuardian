@@ -243,7 +243,6 @@ async def test_findings_disposition_history_and_diff_api(plan_service, monkeypat
         response = await client.patch("/api/reviews/task/findings/f1/disposition", json={"status": "confirmed", "reason": "人工核对"})
         item = response.json()["items"][0]
         assert item["disposition"]["status"] == "confirmed" and item["evidence_status"] == "insufficient"
-        assert item["dynamic_validation_status"] == "not_executed"
         assert (await client.patch("/api/reviews/task/findings/missing/disposition", json={"status": "ignored", "reason": "why"})).status_code == 404
         assert (await client.patch("/api/reviews/task/findings/f1/disposition", json={"status": "ignored", "reason": ""})).status_code == 422
         assert (await client.get("/api/reviews?q=absent")).json()["total"] == 0

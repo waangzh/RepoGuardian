@@ -21,7 +21,6 @@ from app.tools.diff_parser import DiffParser
 from app.tools.git_tool import GitTool
 from app.tools.github.github_publisher import GitHubPublisher
 from app.tools.github.github_tool import GitHubTool
-from app.validation.project_ci import build_project_ci_service
 
 
 @lru_cache
@@ -46,14 +45,6 @@ def get_review_service() -> ReviewService:
 @lru_cache
 def get_preview_jobs() -> PreviewJobs:
     return PreviewJobs(get_review_service())
-
-
-@lru_cache
-def get_project_ci_service():
-    def apply_result(summary, result) -> None:
-        get_review_service().apply_project_ci_result(summary.task_id, summary.patch_id, result)
-
-    return build_project_ci_service(on_result=apply_result)
 
 
 @lru_cache
@@ -85,9 +76,6 @@ async def lifespan(_app: FastAPI):
     publication = get_publication_service() if settings.repoguardian_github_publish_enabled else None
     if publication:
         publication.start()
-    project_ci = get_project_ci_service()
-    if project_ci is not None:
-        project_ci.start_pending_polling()
     try:
         yield
     finally:
@@ -96,8 +84,6 @@ async def lifespan(_app: FastAPI):
             await publication.close()
         maintenance.stop()
         await maintenance_task
-        if project_ci is not None:
-            await project_ci.close()
         await service.close()
         await asyncio.to_thread(close_parser_workers)
         await close_checkpointer()

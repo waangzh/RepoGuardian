@@ -197,7 +197,6 @@ async def test_reference_failure_is_safe_persisted_and_never_resends(persistence
     assert plan.outcome == before.outcome
     assert plan.presentation.synthesis_status == "fallback"
     assert plan.presentation.summary_source == "metadata"
-    assert plan.presentation.validation_state == "not_executed"
     assert "private-model-data" not in plan.summary_markdown
     again = await freeze_review_synthesis(restored, repo, provider)
     assert again.reference_failure == diagnostic and len(calls) == 1

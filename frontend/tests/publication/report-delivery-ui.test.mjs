@@ -15,7 +15,7 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
     const { default: Workspace } = await server.ssrLoadModule('/src/components/review/ReviewWorkspace.vue');
     const { default: Modes } = await server.ssrLoadModule('/src/components/report/ReportModeTabs.vue');
     const { default: Sidebar } = await server.ssrLoadModule('/src/components/report/ReportDeliverySidebar.vue');
-    const { reportSourceLink, reportValidationLabel, coverageLabel, reportLimitations } = await server.ssrLoadModule('/src/utils/reportPresentation.ts');
+    const { reportSourceLink, coverageLabel, reportLimitations } = await server.ssrLoadModule('/src/utils/reportPresentation.ts');
     await t.test('报告名称与密度说明匹配实际输出，技术记录保持高级入口', async () => {
       const { task, plan } = fixtures.clean;
       const html = await renderToString(createSSRApp(Modes, { modelValue: 'comment', panelId: 'report' }))
@@ -40,7 +40,6 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
         for (const id of ['conclusion', 'changes', 'evidence', 'gaps', 'actions', 'appendix']) assert.ok(html.includes(`id="rd-detail-${id}"`));
         assert.ok(html.includes('<h4>PR 目标</h4>'));
         assert.ok(html.includes('来源与验证边界'));
-        assert.ok(html.includes(reportValidationLabel(plan.outcome.dynamic_validation)));
         const audit = await renderToString(createSSRApp(Audit, { task, plan }));
         assert.ok(audit.includes('查看原始结构化记录'));
         assert.ok(audit.includes(plan.snapshot.head_sha));
@@ -109,9 +108,8 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
       assert.match(panelSource, /<AuditSummaryView[^>]*:stale="snapshotStale"/);
       assert.match(panelSource, /reportView === 'comment' && snapshotStale[\s\S]*历史快照评论草稿/);
     });
-    await t.test('旧字段与缺失验证保留未知，文本按 Vue 转义', async () => {
+    await t.test('旧字段缺失保留未知，文本按 Vue 转义', async () => {
       assert.equal(coverageLabel(undefined), '未知');
-      assert.equal(reportValidationLabel(undefined), '未知');
       const plan = structuredClone(fixtures.clean.plan);
       plan.digest.change_understanding = null;
       plan.digest.author_goal = '<img src=x onerror="alert(1)">';
@@ -164,7 +162,6 @@ test('报告交付保留状态、快照与原始边界，代码依据不会将�
       assert.ok(!html.includes('作者声明（未经独立验证）：'));
       assert.equal(html.split('作者输入已截断，尾部尚未核验。').length - 1, 1);
       assert.ok(html.indexOf('来源与验证边界') < html.indexOf('作者输入已截断'));
-      assert.equal(html.split('当前 Head 未执行受控动态验证').length - 1, 1);
       assert.ok(html.includes('不代表目标已实现'));
       assert.equal(JSON.stringify(plan), before);
     });

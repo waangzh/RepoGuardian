@@ -13,7 +13,6 @@ from sqlalchemy import (
     Boolean,
     BigInteger,
     JSON,
-    LargeBinary,
     DateTime,
     ForeignKey,
     Index,
@@ -208,8 +207,6 @@ class ReviewTaskOrm(Base):
 
     units: Mapped[list[ReviewUnitOrm]] = relationship(cascade="all, delete-orphan")
     issues: Mapped[list[ReviewIssueOrm]] = relationship(cascade="all, delete-orphan")
-    patches: Mapped[list[PatchOrm]] = relationship(cascade="all, delete-orphan")
-    validations: Mapped[list[ValidationOrm]] = relationship(cascade="all, delete-orphan")
     human_requests: Mapped[list[HumanRequestOrm]] = relationship(cascade="all, delete-orphan")
 
 
@@ -260,62 +257,6 @@ class ReviewIssueOrm(Base):
     final_status: Mapped[str] = mapped_column(String(32), nullable=False)
     publication_status: Mapped[str] = mapped_column(String(32), default="unpublished", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
-class PatchOrm(Base):
-    __tablename__ = "patches"
-    __table_args__ = (
-        UniqueConstraint("task_id", "patch_id", name="uq_patches_task_patch"),
-        Index("ix_patches_fingerprint_status", "fingerprint", "status"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    task_id: Mapped[str] = mapped_column(ForeignKey("review_tasks.id", ondelete="CASCADE"), index=True)
-    patch_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    unified_diff: Mapped[str | None] = mapped_column(Text)
-    diff_artifact_uri: Mapped[str | None] = mapped_column(String(1024))
-    diff_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
-    head_sha: Mapped[str] = mapped_column(String(64), nullable=False)
-    issue_evidence_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False)
-    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    policy_result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
-    patch_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
-class PatchIssueLinkOrm(Base):
-    __tablename__ = "patch_issue_links"
-    patch_id: Mapped[int] = mapped_column(ForeignKey("patches.id", ondelete="CASCADE"), primary_key=True)
-    issue_id: Mapped[int] = mapped_column(ForeignKey("review_issues.id", ondelete="CASCADE"), primary_key=True)
-
-
-class ValidationOrm(Base):
-    __tablename__ = "validations"
-    __table_args__ = (
-        UniqueConstraint("task_id", "validation_id", name="uq_validations_task_validation"),
-        Index("ix_validations_reuse", "fingerprint", "status"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    task_id: Mapped[str] = mapped_column(ForeignKey("review_tasks.id", ondelete="CASCADE"), index=True)
-    patch_id: Mapped[int] = mapped_column(ForeignKey("patches.id", ondelete="CASCADE"), index=True)
-    validation_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    backend: Mapped[str] = mapped_column(String(64), nullable=False)
-    request: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
-    result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
-    environment_fingerprint: Mapped[str] = mapped_column(String(512), nullable=False)
-    trust_source: Mapped[str | None] = mapped_column(String(256))
-    patch_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    validation_profile: Mapped[str] = mapped_column(String(128), nullable=False)
-    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False)
-    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -413,98 +354,3 @@ class ArtifactOrm(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     retention_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-
-class RunnerRegistrationOrm(Base):
-    __tablename__ = "runner_registrations"
-
-    runner_id: Mapped[str] = mapped_column(String(128), primary_key=True)
-    display_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    public_key: Mapped[str] = mapped_column(String(256), nullable=False)
-    allowed_repositories: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    allowed_profiles: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    api_token_hash: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    encrypted_hmac_secret: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
-class UserValidationRequestOrm(Base):
-    __tablename__ = "user_validation_requests"
-    __table_args__ = (
-        UniqueConstraint(
-            "task_id", "patch_id", "profile", name="uq_user_validation_request_key"
-        ),
-        Index("ix_user_validation_requests_status_expiry", "status", "expires_at"),
-    )
-
-    request_id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    task_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    patch_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    repository_id: Mapped[str] = mapped_column(String(512), nullable=False)
-    clone_url: Mapped[str] = mapped_column(String(1024), nullable=False)
-    fetch_ref: Mapped[str | None] = mapped_column(String(512))
-    base_sha: Mapped[str] = mapped_column(String(64), nullable=False)
-    head_sha: Mapped[str] = mapped_column(String(64), nullable=False)
-    patch_sha: Mapped[str] = mapped_column(String(64), nullable=False)
-    patch_content: Mapped[str] = mapped_column(Text, nullable=False)
-    profile: Mapped[str] = mapped_column(String(128), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    runner_id: Mapped[str | None] = mapped_column(
-        ForeignKey("runner_registrations.runner_id", ondelete="SET NULL"), index=True
-    )
-    result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
-class RunnerResultIdempotencyOrm(Base):
-    __tablename__ = "runner_result_idempotency"
-    __table_args__ = (
-        UniqueConstraint("runner_id", "idempotency_key", name="uq_runner_result_key"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    runner_id: Mapped[str] = mapped_column(
-        ForeignKey("runner_registrations.runner_id", ondelete="CASCADE"), nullable=False
-    )
-    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
-    request_id: Mapped[str] = mapped_column(
-        ForeignKey("user_validation_requests.request_id", ondelete="CASCADE"), nullable=False
-    )
-    fingerprint: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    receipt: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
-class ProjectCIRequestOrm(Base):
-    __tablename__ = "project_ci_requests"
-    __table_args__ = (Index("ix_project_ci_requests_status_expiry", "status", "expires_at"),)
-
-    request_id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    task_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    patch_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    repository: Mapped[str] = mapped_column(String(512), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    summary: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    workflow: Mapped[dict[str, Any] | None] = mapped_column(JSON)
-    result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
-    run_id: Mapped[int | None] = mapped_column(Integer, index=True)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
-class ProjectCIWebhookDeliveryOrm(Base):
-    __tablename__ = "project_ci_webhook_deliveries"
-
-    delivery_id: Mapped[str] = mapped_column(String(128), primary_key=True)
-    request_id: Mapped[str] = mapped_column(
-        ForeignKey("project_ci_requests.request_id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
