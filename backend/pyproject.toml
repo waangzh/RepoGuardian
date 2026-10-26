@@ -10,7 +10,8 @@ dependencies = [
     "pydantic-settings>=2.4.0",
     "unidiff>=0.7.5",
     "uvicorn[standard]>=0.30.0",
-    "langgraph>=0.2.0",
+    "langchain>=1.0.0,<2",
+    "langgraph>=1.0.0,<2",
     "langgraph-checkpoint-sqlite>=3.0.0",
     "langchain-openai>=0.3.0",
     "langsmith>=0.3.0",
@@ -52,3 +53,4 @@ include = ["app*"]
 
 [tool.setuptools.package-data]
 "app.llm" = ["tokenizer/tokenizer.json"]
+"app.review" = ["prompts/*.md"]

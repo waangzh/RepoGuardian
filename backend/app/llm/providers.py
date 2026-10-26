@@ -482,6 +482,14 @@ class OpenAICompatibleProvider(LLMProvider):
             options["extra_body"] = {"thinking": {"type": "disabled"}}
         return ChatOpenAI(**options)
 
+    def agent_model(self, model: str | None = None, *, output_tokens: int = 4096):
+        """Build a native tool-calling model without forcing JSON mode."""
+        if not self._api_key:
+            raise LLMProviderError("agent_credentials_unavailable")
+        chat = self._build_chat_model(model, output_tokens)
+        chat.model_kwargs = {}
+        return chat
+
     @staticmethod
     def _error_status_code(exc: Exception) -> int | None:
         value = getattr(exc, "status_code", None)
