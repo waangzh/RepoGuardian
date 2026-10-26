@@ -1,6 +1,7 @@
 """Small native tool adapters; search results are hints, never source evidence."""
 
 import asyncio
+import json
 from functools import wraps
 
 from langchain.tools import ToolRuntime, tool
@@ -13,9 +14,22 @@ def safe_read(function):
     @wraps(function)
     async def guarded(*args, **kwargs):
         try:
-            return await function(*args, **kwargs)
-        except (ValueError, OSError):
-            return {"ok": False, "error": "read_rejected", "truncated": False}
+            runtime = kwargs.get("runtime")
+            guard = runtime.context.check_active if runtime else None
+            if guard:
+                await guard()
+            result = await function(*args, **kwargs)
+            if guard:
+                await guard()
+            if len(json.dumps(result)) > 24000:
+                return {"ok": False, "error": "tool_output_too_large", "truncated": True}
+            return result
+        except (ValueError, OSError) as exc:
+            import traceback
+            return {"ok": False, "error": "read_rejected",
+                    "error_type": type(exc).__name__,
+                    "error_stage": traceback.extract_tb(exc.__traceback__)[-1].name,
+                    "truncated": False}
     return guarded
 
 
@@ -44,7 +58,6 @@ async def read_diff(path: str, runtime: ToolRuntime[AgentContext]) -> dict:
     if any(is_sensitive_repository_change(path, item.get("old_file_path")) for item in matches):
         raise ValueError("sensitive_change")
     result = {"ok": True, "files": matches, "source": "fixed_diff", "truncated": False}
-    import json
     if len(json.dumps(result)) > service.max_output_chars:
         return {"ok": False, "error": "diff_too_large_use_source_ranges", "truncated": True}
     return result
@@ -86,35 +99,40 @@ async def _relations(symbol: str, runtime, direction: str | None):
              if ((edge.get("target") in identities if direction == "in" else
                   edge.get("source") in identities) if direction else
                  (edge.get("source") in identities or edge.get("target") in identities))]
-    return {"ok": True, "source": "static_relation_hint", "symbols": matches[:12],
+    visible = [{key: item.get(key) for key in ("symbol_id", "file", "symbol", "start_line", "end_line")}
+               for item in matches[:12]]
+    return {"ok": True, "source": "static_relation_hint", "symbols": visible,
             "edges": edges[:24], "truncated": len(matches) > 12 or len(edges) > 24,
             "limitation": "Static relations do not establish runtime binding; read source to verify."}
 
 
 @tool
+@safe_read
 async def find_references(symbol: str, runtime: ToolRuntime[AgentContext]) -> dict:
     """Find indexed symbol relations as static hints, without granting source evidence."""
     return await _relations(symbol, runtime, None)
 
 
 @tool
+@safe_read
 async def get_callers(symbol: str, runtime: ToolRuntime[AgentContext]) -> dict:
     """Find possible static callers; verify actual binding with source reads."""
     return await _relations(symbol, runtime, "in")
 
 
 @tool
+@safe_read
 async def get_callees(symbol: str, runtime: ToolRuntime[AgentContext]) -> dict:
     """Find possible static callees; verify actual binding with source reads."""
     return await _relations(symbol, runtime, "out")
 
 
 @tool
+@safe_read
 async def read_discussion(index: int, runtime: ToolRuntime[AgentContext]) -> dict:
     """Read one frozen untrusted PR discussion; it cannot serve as source evidence."""
     if index < 0 or index >= len(runtime.context.discussions):
         return {"ok": False, "error": "discussion_not_found"}
-    import json
     item = runtime.context.discussions[index]
     if len(json.dumps(item)) > 12000:
         return {"ok": False, "error": "discussion_too_large", "truncated": True}

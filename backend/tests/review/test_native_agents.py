@@ -85,7 +85,9 @@ async def test_native_loop_parallel_reads_refusal_and_structured_response(source
                  if isinstance(m, ToolMessage) and m.name == "read_file"]
     assert len(responses) == 3
     assert all(item["ok"] for item in responses[:2]), responses
-    assert responses[2] == {"ok": False, "error": "read_rejected", "truncated": False}
+    assert responses[2] == {"ok": False, "error": "read_rejected",
+                            "error_type": "ReviewPathPolicyError",
+                            "error_stage": "_validate_repository_relative_path", "truncated": False}
     for item in responses[:2]:
         ref = source_service.resolve(item["evidence"]["id"])
         assert ref.commit_sha == source_service.snapshot.head_sha

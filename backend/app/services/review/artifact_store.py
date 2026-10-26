@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -12,6 +13,8 @@ from tempfile import NamedTemporaryFile
 from urllib.parse import unquote
 
 from app.core.config import settings
+
+_write_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -27,6 +30,12 @@ class LocalArtifactStore:
         self.root = (root or settings.repoguardian_artifact_dir).resolve()
 
     def put_text(self, *, task_id: str, kind: str, content: str) -> StoredArtifact:
+        # Parallel native tools can produce the same evidence simultaneously.
+        # Serialize publication of blobs so Windows readers never race a replace.
+        with _write_lock:
+            return self._put_text(task_id=task_id, kind=kind, content=content)
+
+    def _put_text(self, *, task_id: str, kind: str, content: str) -> StoredArtifact:
         if not re.fullmatch(r"[a-zA-Z0-9_-]+", kind):
             raise ValueError("invalid artifact kind")
         data = content.encode("utf-8")

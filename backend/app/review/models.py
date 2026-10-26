@@ -36,6 +36,16 @@ class ReviewAssignment(ReviewModel):
         return [validate_repo_relative_path(path) for path in paths]
 
 
+class ReviewGoal(ReviewModel):
+    id: str
+    path: str
+    side: Literal["head", "base"]
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    status: Literal["not_examined", "examined", "blocked"] = "not_examined"
+    reason: str | None = None
+
+
 class EvidenceRef(ReviewModel):
     id: str = Field(pattern=r"^[0-9a-f]{64}$")
     review_id: str
@@ -111,7 +121,7 @@ class AgentResult(ReviewModel):
     output: dict = Field(default_factory=dict)
     evidence_ids: list[str] = Field(default_factory=list)
     error: str | None = None
-    model_calls: int = 0
+    model_calls: int | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
 
@@ -130,3 +140,16 @@ class ReviewLimits(ReviewModel):
     tool_calls: int = Field(default=80, ge=1, le=500)
     timeout_seconds: float = Field(default=1800, ge=1, le=86400)
     output_tokens: int = Field(default=4096, ge=256, le=32768)
+
+
+class ReviewReport(ReviewModel):
+    snapshot: ReviewSnapshot
+    assignments: list[ReviewAssignment]
+    goals: list[ReviewGoal]
+    discovery_results: list[AgentResult]
+    verification_results: list[AgentResult]
+    candidates: list[CandidateFinding]
+    decisions: list[VerificationResult]
+    findings: list[VerifiedFinding]
+    complete: bool
+    termination: Literal["completed", "partial", "cancelled", "deadline", "failed"]
