@@ -149,7 +149,7 @@ class ScopedContextTool:
     @staticmethod
     def normalize_diff_hunk_ids(target, hunk_ids):
         """只转换当前授权文件正文可重建的原始 ID 与 manifest ID。"""
-        from app.services.review.review_planner import DeterministicReviewPlanner
+        from app.services.review.planning.review_planner import DeterministicReviewPlanner
         from app.core.fingerprints import stable_hash
 
         aliases = {}
@@ -210,7 +210,7 @@ class ScopedContextTool:
                 f"{target.old_file_path or target.file_path} -> {target.file_path}"
             )
         selected = set(self.normalize_diff_hunk_ids(target, hunk_ids))
-        from app.services.review.review_planner import DeterministicReviewPlanner
+        from app.services.review.planning.review_planner import DeterministicReviewPlanner
 
         rendered: list[str] = [f"--- a/{target.old_file_path or file_path}", f"+++ b/{file_path}"]
         included = 0

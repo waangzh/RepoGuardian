@@ -6,7 +6,7 @@ from app.models.preview_confirmation import PreviewConfirmation
 from app.models.review import ReviewPlan, ReviewPreviewResponse
 from app.core.fingerprints import stable_hash
 from app.services.review.review_input_context import build_pr_intent
-from app.services.review.review_plan import DEPTHS, configure_runtime, maxima, normalize_plan, preview_hash
+from app.services.review.planning.review_plan import DEPTHS, configure_runtime, maxima, normalize_plan, preview_hash
 
 
 def pr_fingerprint(pr):
@@ -25,7 +25,7 @@ def request_fingerprint(request):
 
 def policy_fingerprint():
     from app.languages.isolation import parser_fingerprint
-    from app.services.review.review_planner import PLANNER_VERSION
+    from app.services.review.planning.review_planner import PLANNER_VERSION
     from app.services.preview.preview_input_cache import INDEX_CACHE_VERSION
     from app.tools.git_tool import DIFF_POLICY_VERSION, DIFF_CONTEXT_LINES
     names = ("repoguardian_config_version", "repoguardian_rule_version", "repoguardian_prompt_version",

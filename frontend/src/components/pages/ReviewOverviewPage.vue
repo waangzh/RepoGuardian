@@ -8,11 +8,11 @@ import type { FindingEntryFilter, SituationActionKey } from "../../utils/reviewS
 import type { FindingSource } from "../../utils/findingWorkbench";
 import { reviewSituation } from "../../utils/reviewSituation";
 import { runtimeLabel } from "../../utils/taskRuntimePresentation";
-import OverviewVerdict from "../review/OverviewVerdict.vue";
-import OverviewResults from "../review/OverviewResults.vue";
-import OverviewNextSteps from "../review/OverviewNextSteps.vue";
-import OverviewDetails from "../review/OverviewDetails.vue";
-import PrChangeSummary from "../review/PrChangeSummary.vue";
+import OverviewVerdict from "../review/overview/OverviewVerdict.vue";
+import OverviewResults from "../review/overview/OverviewResults.vue";
+import OverviewNextSteps from "../review/overview/OverviewNextSteps.vue";
+import OverviewDetails from "../review/overview/OverviewDetails.vue";
+import PrChangeSummary from "../review/diff/PrChangeSummary.vue";
 import AppIcon from "../common/AppIcon.vue";
 import "../../styles/review-overview.css";
 

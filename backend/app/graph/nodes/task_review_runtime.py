@@ -23,17 +23,17 @@ from app.review.tool_scope import (validate_repository_base_file, validate_repos
 from app.core.fingerprints import stable_hash
 from app.llm.model_request_budgeter import ModelRequestProfile, RequestAdmissionError
 from app.services.review.review_run_budget import current_run_budget, ReviewRepositoryRunBudgetStore, ReviewRunBudget
-from app.services.review.review_runtime import TaskReviewRuntime
+from app.services.review.runtime.review_runtime import TaskReviewRuntime
 from app.review.runtime_goals import plan_runtime_goals
 from app.services.review.review_task_derivation import (TaskReviewDerivation, build_task_risk_catalog,
                                                 dangling_deleted_references)
-from app.services.review.review_task_executor import ReviewTaskExecutor
-from app.services.review.review_task_step import InspectTaskStep
+from app.services.review.runtime.review_task_executor import ReviewTaskExecutor
+from app.services.review.runtime.review_task_step import InspectTaskStep
 from app.services.review.task_runtime_checkpoint import TaskRuntimeCheckpoint
 from app.services.review.task_context_pages import build_context_pages
 from app.services.review.task_review_projection import project_task_runtime, task_runtime_issues, task_runtime_coverage
 from app.tools.git_tool import GitTool
-from app.services.review.review_planner import DeterministicReviewPlanner
+from app.services.review.planning.review_planner import DeterministicReviewPlanner
 from app.services.review.review_input_context import build_context_evidence
 
 
@@ -286,7 +286,7 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
             items.append(item)
     experiment = configuration.get("experiment") or {}
     strategy = configuration.get("effective_plan") or {}
-    from app.services.review.review_plan import DEPTHS
+    from app.services.review.planning.review_plan import DEPTHS
     queue = TaskReviewRuntime(items, concurrency=configuration["concurrency"],
                              unit_timeout_seconds=experiment.get("unit_timeout_seconds"))
     try:
@@ -327,7 +327,7 @@ async def task_review_runtime_node(state: ReviewState, config: RunnableConfig = 
         else:
             remaining = configuration["deadline_seconds"]
         if strategy:
-            from app.services.review.review_plan import remaining_review_seconds
+            from app.services.review.planning.review_plan import remaining_review_seconds
             remaining = min(remaining, remaining_review_seconds(configuration, state["created_at"]))
         retry_id = state.get("task_runtime_retry_unit_id")
         if retry_id:

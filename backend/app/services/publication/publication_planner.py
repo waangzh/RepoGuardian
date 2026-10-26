@@ -133,7 +133,7 @@ class PublicationPlanner:
             for finding in [*plan.inline_drafts, *plan.summary_findings]:
                 finding.legacy_body_markdown = finding.body_markdown
                 finding.body_markdown = compact_finding(finding)
-            from app.services.review.review_synthesis_binding import bound_synthesis
+            from app.services.review.synthesis.review_synthesis_binding import bound_synthesis
             plan.presentation = build_presentation(plan, bound_synthesis(task, plan))
         if include_markdown:
             plan.summary_markdown = render_summary(plan)

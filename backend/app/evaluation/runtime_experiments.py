@@ -10,7 +10,7 @@ from app.evaluation.diff_inputs import DiffInputLock
 from app.evaluation.runtime_baseline import reconcile_wire_usage
 from app.evaluation.runtime_shared import GROUPS, compare_fixed_scope, first_sample_gate, implementation_digest
 from app.tools.diff_parser import DiffParser
-from app.services.review.review_planner import DeterministicReviewPlanner
+from app.services.review.planning.review_planner import DeterministicReviewPlanner
 from app.review.tool_scope import is_sensitive_repository_path, list_git_tracked_files
 from app.core.fingerprints import stable_hash
 from app.tools.git_tool import DIFF_CONTEXT_LINES, GitTool

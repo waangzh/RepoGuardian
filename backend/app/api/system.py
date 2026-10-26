@@ -23,7 +23,7 @@ from app.models.operations import (
 from app.services.workspaces.maintenance_service import workspace_cleanup_lock, workspace_ttl_seconds
 from app.llm.model_catalog import ModelCatalogError, fetch_model_catalog
 from app.models.review_plan import ReviewCapabilities
-from app.services.review.review_plan import capabilities
+from app.services.review.planning.review_plan import capabilities
 from app.tools.workspace_cleanup import inspect_orphaned_workspaces, reap_orphaned_workspaces
 
 

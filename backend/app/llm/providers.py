@@ -198,7 +198,7 @@ class OpenAICompatibleProvider(LLMProvider):
 
     async def synthesize_review(self, facts, model, *, output_tokens=1800):
         from app.models.review_synthesis import ReviewSynthesisOutput
-        from app.services.review.review_synthesis_validator import synthesis_output_schema
+        from app.services.review.synthesis.review_synthesis_validator import synthesis_output_schema
         if not self._api_key:
             raise LLMProviderError("review synthesis credentials unavailable")
         response = await self._request_json_content(

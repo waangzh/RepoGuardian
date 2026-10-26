@@ -1,0 +1,539 @@
+import os
+import sqlite3
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
+from pathlib import Path
+from typing import TypedDict
+
+import pytest
+from fastapi import HTTPException
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.graph import END, StateGraph
+from langgraph.types import Command, interrupt
+from sqlalchemy import select
+
+from app.core.config import settings
+from app.api import reviews as reviews_api
+from app.models.orm import PatchOrm, ReviewTaskOrm, SideEffectOrm, WorkerJobOrm, utcnow
+from app.models.review import (
+    ChangedFile,
+    DiffHunk,
+    HumanReviewRequest,
+    PatchProposal,
+    ReviewIssue,
+    ReviewTask,
+    TaskStatus,
+    ReviewUnitResult,
+    ReviewUnitStatus,
+    ReviewUnitTerminalReason,
+    UnitPlanStatus,
+    UnitReviewPlan,
+)
+from app.core.fingerprints import patch_fingerprint, validation_fingerprint
+from app.services.review.planning.review_planner import DeterministicReviewPlanner
+from app.services.review.review_repository import ReviewRepository
+from tests.support.persistence import _task, _unit
+from tests.support.persistence import persistence as persistence
+
+
+def _registered_paths(router) -> set[str]:
+    paths, stack = set(), [router]
+    while stack:
+        current = stack.pop()
+        for route in getattr(current, "routes", ()):
+            if hasattr(route, "path"):
+                paths.add(route.path)
+            if hasattr(route, "routes"):
+                stack.append(route)
+    return paths
+
+
+
+
+
+
+
+
+def test_task_survives_repository_restart_and_api_does_not_need_memory_dict(persistence) -> None:
+    repository, _, sessions = persistence
+    task = _task()
+    repository.create_task(task)
+
+    restarted = ReviewRepository(
+        sessions, repository._artifacts, require_migration=False  # type: ignore[attr-defined]
+    )
+    loaded = restarted.get_task(task.id)
+    assert loaded is not None and loaded.id == task.id
+    assert restarted.list_tasks(status="queued", page=1, page_size=10).total == 1
+
+
+def test_unit_record_and_cross_unit_risk_survive_task_and_unit_snapshot_restart(persistence) -> None:
+    from app.models.review import (
+        CrossUnitRiskAssessment, CrossUnitCoordinationPlan, CrossUnitFollowupRequest,
+        CrossUnitFollowupResult, UnitReviewRecord, UnitReviewSummary,
+    )
+
+    repository, _, sessions = persistence
+    task = _task()
+    unit = _unit()
+    result = ReviewUnitResult(review_unit_id=unit.id, status="completed", terminal_reason="no_issue",
+                              review_summary=UnitReviewSummary(status="reported", record=UnitReviewRecord(
+                                  change_summary="修改实现", unresolved_questions=[{"question": "边界条件未知"}],
+                              )))
+    task.review_units = [unit]
+    task.review_unit_results = [result]
+    task.cross_unit_risk = CrossUnitRiskAssessment(decision="uncertain", execution_status="not_implemented")
+    task.coordination_plan = CrossUnitCoordinationPlan(followups=[CrossUnitFollowupRequest(
+        id="check-1", question="检查返回值", unit_ids=[unit.id], primary_files=["app.py"],
+        counterevidence_goal="查找空值防护", stop_condition="找到完整调用路径或预算耗尽",
+    )])
+    task.coordination_plan.status = "unresolved"
+    task.coordination_plan.execution_budget.model_calls = 5
+    task.followup_results = [CrossUnitFollowupResult(request_id="check-1", outcome="unresolved", reason="未执行")]
+    repository.create_task(task)
+    repository.record_unit_result(task_id=task.id, unit=unit, result=result)
+    restarted = ReviewRepository(sessions, repository._artifacts, require_migration=False)
+    loaded = restarted.get_task(task.id)
+    assert loaded.cross_unit_risk.decision == "uncertain"
+    assert loaded.review_unit_results[0].review_summary.record.unresolved_questions[0].question == "边界条件未知"
+    detail = restarted.get_unit(task.id, unit.id)
+    assert detail.result.review_summary.status == "reported"
+    assert loaded.coordination_plan.followups[0].primary_files == ["app.py"]
+    assert loaded.coordination_plan.status == "unresolved"
+    assert loaded.coordination_plan.execution_budget.model_calls == 5
+    assert loaded.followup_results[0].request_id == "check-1"
+
+
+def test_issue_detail_only_exposes_current_aggregate_issue(persistence) -> None:
+    repository, _, _ = persistence
+    task = _task()
+    issue = ReviewIssue(
+        id="issue-current",
+        review_unit_id="ru-test",
+        title="返回值错误",
+        category="correctness",
+        severity="medium",
+        confidence=0.9,
+        affected_behavior="调用方收到错误返回值",
+        failure_scenario="有效输入稳定返回错误结果",
+        recommendation="修复返回条件",
+        primary_evidence={"file_path": "app.py", "existing_code": "return wrong"},
+        status="confirmed",
+    )
+    task.issues = [issue]
+    repository.create_task(task)
+    repository.save_task(task)
+    assert repository.get_issue(task.id, issue.id) is not None
+
+    task.issues = []
+    repository.save_task(task)
+
+    assert repository.get_issue(task.id, issue.id) is None
+
+
+@pytest.mark.parametrize(
+    "terminal_status",
+    [TaskStatus.completed, TaskStatus.completed_with_warnings, TaskStatus.failed],
+)
+def test_terminal_review_cannot_be_cancelled(persistence, terminal_status: TaskStatus) -> None:
+    repository, _, _ = persistence
+    task = _task()
+    repository.create_task(task)
+    task.status = terminal_status
+    repository.save_task(task)
+
+    assert repository.cancel_task(task.id) is False
+    assert repository.get_task(task.id).status == terminal_status
+
+
+@pytest.mark.asyncio
+async def test_cancel_api_rejects_terminal_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = _task().model_copy(update={"status": TaskStatus.completed})
+
+    class TerminalService:
+        def get_task(self, task_id: str) -> ReviewTask | None:
+            return task if task_id == task.id else None
+
+        def cancel_task(self, task_id: str) -> bool:
+            raise AssertionError(f"terminal task {task_id} must not reach cancellation")
+
+    monkeypatch.setattr(reviews_api, "get_review_service", lambda: TerminalService())
+
+    with pytest.raises(HTTPException) as raised:
+        await reviews_api.cancel_review(task.id)
+    assert raised.value.status_code == 409
+
+
+def test_completed_unit_reuses_but_failed_unit_and_version_mismatch_do_not(persistence) -> None:
+    repository, _, _ = persistence
+    source = _task()
+    repository.create_task(source)
+    unit = _unit()
+    completed = ReviewUnitResult(review_unit_id=unit.id, status=ReviewUnitStatus.completed,
+        review_summary={"status": "reported", "record": {"change_summary": "完成检查"},
+                        "input_protocol": "canonical-evidence-v3", "latest_attempt_status": "reported"})
+    repository.record_unit_result(task_id=source.id, unit=unit, result=completed)
+
+    matched = repository.find_reusable_unit(
+        fingerprint=unit.fingerprint,
+        model="model-a",
+        provider=settings.repoguardian_provider,
+        prompt_version=settings.repoguardian_prompt_version,
+        rule_version=settings.repoguardian_rule_version,
+        tool_schema_version=settings.repoguardian_tool_schema_version,
+        review_policy_version=settings.repoguardian_review_policy_version,
+    )
+    assert matched is not None
+    assert repository.find_reusable_unit(
+        fingerprint=unit.fingerprint,
+        model="model-b",
+        provider=settings.repoguardian_provider,
+        prompt_version=settings.repoguardian_prompt_version,
+        rule_version=settings.repoguardian_rule_version,
+        tool_schema_version=settings.repoguardian_tool_schema_version,
+        review_policy_version=settings.repoguardian_review_policy_version,
+    ) is None
+    assert repository.find_reusable_unit(
+        fingerprint=unit.fingerprint,
+        model="model-a",
+        provider=settings.repoguardian_provider,
+        prompt_version="new-prompt",
+        rule_version=settings.repoguardian_rule_version,
+        tool_schema_version=settings.repoguardian_tool_schema_version,
+        review_policy_version=settings.repoguardian_review_policy_version,
+    ) is None
+
+    failed_task = _task()
+    repository.create_task(failed_task)
+    failed_unit = _unit("e" * 64).model_copy(update={"id": "ru-failed"})
+    repository.record_unit_result(
+        task_id=failed_task.id,
+        unit=failed_unit,
+        result=ReviewUnitResult(
+            review_unit_id=failed_unit.id,
+            status=ReviewUnitStatus.failed,
+            error="retry me",
+        ),
+    )
+    assert repository.find_reusable_unit(
+        fingerprint=failed_unit.fingerprint,
+        model="model-a",
+        provider=settings.repoguardian_provider,
+        prompt_version=settings.repoguardian_prompt_version,
+        rule_version=settings.repoguardian_rule_version,
+        tool_schema_version=settings.repoguardian_tool_schema_version,
+        review_policy_version=settings.repoguardian_review_policy_version,
+    ) is None
+
+
+def test_budget_exhausted_unit_is_not_reusable(persistence) -> None:
+    repository, _, _ = persistence
+    source = _task()
+    repository.create_task(source)
+    unit = _unit()
+    repository.record_unit_result(
+        task_id=source.id,
+        unit=unit,
+        result=ReviewUnitResult(
+            review_unit_id=unit.id,
+            status=ReviewUnitStatus.completed,
+            terminal_reason=ReviewUnitTerminalReason.model_budget_exhausted,
+        ),
+    )
+
+    assert repository.find_reusable_unit(
+        fingerprint=unit.fingerprint,
+        model="model-a",
+        provider=settings.repoguardian_provider,
+        prompt_version=settings.repoguardian_prompt_version,
+        rule_version=settings.repoguardian_rule_version,
+        tool_schema_version=settings.repoguardian_tool_schema_version,
+        review_policy_version=settings.repoguardian_review_policy_version,
+    ) is None
+
+
+def test_unit_result_snapshot_preserves_plan_observability(persistence) -> None:
+    repository, _, _ = persistence
+    task = _task()
+    repository.create_task(task)
+    unit = _unit()
+    plan = UnitReviewPlan.model_validate({
+        "change_summary": "检查公开接口兼容性",
+        "review_objectives": ["验证调用方"],
+        "risk_hypotheses": [],
+        "coverage_targets": ["公开接口"],
+        "initial_action": {"action": "report_issue", "reason": "进入审查"},
+    })
+    repository.record_unit_result(
+        task_id=task.id,
+        unit=unit,
+        result=ReviewUnitResult(
+            review_unit_id=unit.id,
+            status=ReviewUnitStatus.completed,
+            plan=plan,
+            plan_status=UnitPlanStatus.planned,
+        ),
+    )
+
+    loaded = repository.get_unit(task.id, unit.id)
+
+    assert loaded is not None
+    assert loaded.result is not None
+    result = loaded.result
+    assert result.plan_status == UnitPlanStatus.planned
+    assert result.plan and result.plan.change_summary == "检查公开接口兼容性"
+
+
+def test_unit_fingerprint_changes_with_diff_prompt_and_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    changed = [ChangedFile(
+        file_path="app.py",
+        change_type="modified",
+        additions=1,
+        deletions=1,
+        hunks=[DiffHunk(
+            old_start=1, old_length=1, new_start=1, new_length=1,
+            added_lines=[{"line_no": 1, "content": "new"}],
+            removed_lines=[{"line_no": 1, "content": "old"}],
+        )],
+    )]
+    planner = DeterministicReviewPlanner()
+    first = planner.plan(changed, base_sha="b", head_sha="h", model="m1").review_units[0]
+    changed_head = planner.plan(changed, base_sha="b", head_sha="h2", model="m1").review_units[0]
+    changed_model = planner.plan(changed, base_sha="b", head_sha="h", model="m2").review_units[0]
+    monkeypatch.setattr(settings, "repoguardian_prompt_version", "review-v2")
+    changed_prompt = planner.plan(changed, base_sha="b", head_sha="h", model="m1").review_units[0]
+    assert len({first.fingerprint, changed_head.fingerprint, changed_model.fingerprint,
+                changed_prompt.fingerprint}) == 4
+
+
+def test_patch_and_validation_fingerprints_bind_correct_inputs() -> None:
+    diff = "--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-old\n+new\n"
+    patch_a, hash_a = patch_fingerprint(
+        head_sha="head-a", issue_evidence_hash="evidence", unified_diff=diff,
+        patch_policy_version="policy-1",
+    )
+    patch_b, _ = patch_fingerprint(
+        head_sha="head-b", issue_evidence_hash="evidence", unified_diff=diff,
+        patch_policy_version="policy-1",
+    )
+    assert patch_a != patch_b
+    assert validation_fingerprint(
+        patch_hash=hash_a, backend="user_runner", validation_profile="unit",
+        environment_fingerprint="linux-py312",
+    ) != validation_fingerprint(
+        patch_hash="other", backend="user_runner", validation_profile="unit",
+        environment_fingerprint="linux-py312",
+    )
+
+
+def test_large_patch_is_externalized_and_bound_to_head(persistence, monkeypatch) -> None:
+    repository, _, sessions = persistence
+    monkeypatch.setattr(settings, "repoguardian_artifact_inline_max_bytes", 1024)
+    task = _task()
+    issue_id = "issue-1"
+    patch = PatchProposal(
+        issue_ids=[issue_id],
+        title="修复",
+        rationale="修复错误",
+        unified_diff="--- a/app.py\n+++ b/app.py\n" + "+x\n" * 600,
+        touched_files=["app.py"],
+        risk="low",
+        head_sha="head-a",
+    )
+    task.patches = [patch]
+    repository.create_task(task)
+    repository.save_task(task)
+    with sessions() as session:
+        row = session.scalar(select(PatchOrm).where(PatchOrm.patch_id == patch.id))
+        assert row is not None
+        assert row.head_sha == "head-a"
+        assert row.unified_diff is None
+        assert row.diff_artifact_uri and row.diff_artifact_uri.startswith("file:///")
+
+
+def test_legacy_waiting_task_is_readable_without_resuming_or_claiming_completion(persistence) -> None:
+    repository, _, sessions = persistence
+    task = _task()
+    task.status = TaskStatus.waiting_for_human
+    task.human_request = HumanReviewRequest(missing_information=["业务规则"], known_evidence=["两个合理解释"],
+        questions=["采用哪个解释？"], prohibited_operations=["不得自动修复"])
+    repository.create_task(task)
+    loaded = repository.get_task(task.id)
+    assert loaded.status == TaskStatus.failed
+    assert loaded.review.completed is False
+    assert loaded.human_request.questions == task.human_request.questions
+    assert loaded.warnings and "人工" in loaded.error
+    with sessions() as session:
+        assert session.get(ReviewTaskOrm, task.id).status == "waiting_for_human"
+
+
+@pytest.mark.asyncio
+async def test_api_reads_persistence_without_human_answer_routes(
+    persistence, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository, _, _ = persistence
+    task = _task()
+    repository.create_task(task)
+
+    class PersistentOnlyService:
+        def get_task(self, task_id: str):
+            return repository.get_task(task_id)
+
+    service = PersistentOnlyService()
+    monkeypatch.setattr(reviews_api, "get_review_service", lambda: service)
+    loaded = await reviews_api.get_review(task.id)
+    assert loaded.id == task.id
+    assert not any("human-requests" in path for path in _registered_paths(reviews_api.router))
+    assert not hasattr(repository, "answer_human_request")
+
+
+def test_two_workers_cannot_claim_same_job_and_expired_lease_is_reclaimed(persistence) -> None:
+    repository, queue, sessions = persistence
+    task = _task()
+    repository.create_task(task)
+    job_id = queue.enqueue(task_id=task.id)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        claims = list(executor.map(
+            lambda worker: queue.claim(worker_id=worker, lease_seconds=5),
+            ["worker-a", "worker-b"],
+        ))
+    assert sum(item is not None for item in claims) == 1
+    first = next(item for item in claims if item is not None)
+    assert first.id == job_id
+    with sessions.begin() as session:
+        row = session.get(WorkerJobOrm, job_id)
+        row.lease_until = utcnow() - timedelta(seconds=1)
+    reclaimed = queue.claim(worker_id="worker-b", lease_seconds=5)
+    assert reclaimed is not None and reclaimed.id == job_id
+    assert reclaimed.attempts == 2
+
+
+def test_failed_job_retries_then_dead_letters_and_side_effect_is_idempotent(persistence) -> None:
+    repository, queue, sessions = persistence
+    task = _task()
+    repository.create_task(task)
+    job_id = queue.enqueue(task_id=task.id)
+    claimed = queue.claim(worker_id="worker")
+    assert claimed
+    assert queue.fail(job_id, "worker", "boom", retry=True) == "retry"
+    with sessions.begin() as session:
+        row = session.get(WorkerJobOrm, job_id)
+        row.available_at = utcnow() - timedelta(seconds=1)
+    assert queue.claim(worker_id="worker") is not None
+
+    key, completed = repository.begin_side_effect(
+        task_id=task.id, effect_type="github_comment", target="pr:7", payload={"body": "x"}
+    )
+    assert completed is False
+    repository.complete_side_effect(key, {"comment_id": 9})
+    replay_key, replay_completed = repository.begin_side_effect(
+        task_id=task.id, effect_type="github_comment", target="pr:7", payload={"body": "x"}
+    )
+    assert replay_key == key and replay_completed is True
+    with sessions() as session:
+        assert session.scalar(select(SideEffectOrm).where(
+            SideEffectOrm.effect_type == "github_comment"
+        )) is not None
+
+
+def test_retention_prevents_early_delete(persistence) -> None:
+    repository, _, sessions = persistence
+    task = _task()
+    repository.create_task(task)
+    with pytest.raises(ValueError, match="terminal"):
+        repository.delete_task_if_retention_elapsed(task.id)
+    task.status = TaskStatus.completed
+    repository.save_task(task)
+    with pytest.raises(ValueError, match="retention"):
+        repository.delete_task_if_retention_elapsed(task.id)
+    with sessions.begin() as session:
+        row = session.get(ReviewTaskOrm, task.id)
+        row.retention_until = utcnow() - timedelta(seconds=1)
+    assert repository.delete_task_if_retention_elapsed(task.id)
+    assert repository.get_task(task.id) is None
+
+
+class _InterruptState(TypedDict, total=False):
+    answer: dict
+
+
+@pytest.mark.asyncio
+async def test_langgraph_interrupt_resumes_after_checkpointer_reopen(tmp_path: Path) -> None:
+    async def wait_for_answer(_state: _InterruptState) -> _InterruptState:
+        return {"answer": interrupt({"question": "continue?"})}
+
+    def build():
+        graph = StateGraph(_InterruptState)
+        graph.add_node("wait", wait_for_answer)
+        graph.set_entry_point("wait")
+        graph.add_edge("wait", END)
+        return graph
+
+    config = {"configurable": {"thread_id": "task-1", "checkpoint_ns": "review"}}
+    db = (tmp_path / "checkpoint.db").as_posix()
+    async with AsyncSqliteSaver.from_conn_string(db) as saver:
+        await saver.setup()
+        paused = await build().compile(checkpointer=saver).ainvoke({}, config=config)
+        assert paused["__interrupt__"]
+    async with AsyncSqliteSaver.from_conn_string(db) as saver:
+        await saver.setup()
+        resumed = await build().compile(checkpointer=saver).ainvoke(
+            Command(resume={"text": "yes"}), config=config
+        )
+        assert resumed["answer"] == {"text": "yes"}
+
+
+def test_alembic_migration_upgrades_and_rolls_back(tmp_path: Path) -> None:
+    database = tmp_path / "migration.db"
+    env = {**os.environ, "REPOGUARDIAN_DB_PATH": str(database), "PYTHONIOENCODING": "utf-8"}
+    backend = Path(__file__).parents[2]
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "20260801_0001"],
+        cwd=backend, env=env, check=True, capture_output=True, text=True, encoding="utf-8",
+    )
+    with sqlite3.connect(database) as connection:
+        tables = {row[0] for row in connection.execute(
+            "select name from sqlite_master where type='table'"
+        )}
+        version = connection.execute("select version_num from alembic_version").fetchone()
+    assert {"review_tasks", "review_units", "human_requests", "worker_jobs"} <= tables
+    assert "runner_registrations" not in tables
+    assert version == ("20260801_0001",)
+
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=backend, env=env, check=True, capture_output=True, text=True, encoding="utf-8",
+    )
+    with sqlite3.connect(database) as connection:
+        tables = {row[0] for row in connection.execute(
+            "select name from sqlite_master where type='table'"
+        )}
+        version = connection.execute("select version_num from alembic_version").fetchone()
+    assert {
+        "review_tasks",
+        "review_units",
+        "human_requests",
+        "worker_jobs",
+        "runner_registrations",
+        "user_validation_requests",
+        "runner_result_idempotency",
+        "project_ci_requests",
+        "project_ci_webhook_deliveries",
+        "review_previews",
+        "finding_dispositions",
+    } <= tables
+    assert {"preview_jobs", "preview_input_cache", "incremental_webhook_deliveries", "prepared_workspaces"} <= tables
+    assert version == ("20261024_0008",)
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "base"],
+        cwd=backend, env=env, check=True, capture_output=True, text=True, encoding="utf-8",
+    )
+    with sqlite3.connect(database) as connection:
+        tables = {row[0] for row in connection.execute(
+            "select name from sqlite_master where type='table'"
+        )}
+    assert "review_tasks" not in tables

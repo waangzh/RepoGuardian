@@ -13,9 +13,9 @@ from app.models.review_runtime import (Candidate, VerificationResult, ReviewWork
 from app.review.tool_scope import is_sensitive_repository_path
 from app.core.fingerprints import stable_hash
 from app.services.review.issue_policy import IssuePolicyService
-from app.services.review.review_runtime import EvidenceIdentityConflict
-from app.services.review.review_task_executor import ReviewTaskExecutor
-from app.services.review.review_task_step import InspectTaskStep
+from app.services.review.runtime.review_runtime import EvidenceIdentityConflict
+from app.services.review.runtime.review_task_executor import ReviewTaskExecutor
+from app.services.review.runtime.review_task_step import InspectTaskStep
 from app.services.publication.review_publication import verification_subject_hash, publication_view
 
 

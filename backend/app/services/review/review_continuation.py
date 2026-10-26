@@ -5,7 +5,7 @@ import time
 from pydantic import ValidationError
 
 from app.models.review_runtime import TaskRuntimeReport
-from app.services.review.review_plan import remaining_review_seconds
+from app.services.review.planning.review_plan import remaining_review_seconds
 from app.services.review.review_run_budget import ReviewRunBudget
 
 ALL_PENDING = "__all_pending__"

@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import type { ReviewTask, TaskRuntimeReport } from "../../types/review";
 import { runtimeLabel, taskRuntimeSummary, retryableRuntimeUnits } from "../../utils/taskRuntimePresentation";
-import TaskRuntimePanel from "../review/TaskRuntimePanel.vue";
+import TaskRuntimePanel from "../review/runtime/TaskRuntimePanel.vue";
 import EmptyState from "../common/EmptyState.vue";
 const props = defineProps<{ task: ReviewTask; runtime: TaskRuntimeReport | null; terminal: boolean; retryingUnitId: string | null; initialFilter?: "all" | "incomplete"; investigationsOpen?: boolean }>();
 const emit = defineEmits<{ retry: [unitId: string] }>();

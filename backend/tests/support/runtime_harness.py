@@ -4,12 +4,12 @@ from app.llm.providers import OpenAICompatibleProvider
 from app.models.review import ReviewToolScope
 from app.models.review_runtime import ReviewGoal, ReviewRunSpec, ReviewWorkItem
 from app.models.review_runtime import TaskRuntimeReport
-from app.services.review.review_planner import DeterministicReviewPlanner
+from app.services.review.planning.review_planner import DeterministicReviewPlanner
 from app.services.review.review_run_budget import ReviewRunBudget
-from app.services.review.review_runtime import TaskReviewRuntime
+from app.services.review.runtime.review_runtime import TaskReviewRuntime
 from app.services.review.review_task_derivation import TaskReviewDerivation
-from app.services.review.review_task_executor import ReviewTaskExecutor
-from app.services.review.review_task_step import InspectTaskStep
+from app.services.review.runtime.review_task_executor import ReviewTaskExecutor
+from app.services.review.runtime.review_task_step import InspectTaskStep
 from app.tools.diff_parser import DiffParser
 from datetime import datetime, timezone
 from langchain_core.messages import AIMessage

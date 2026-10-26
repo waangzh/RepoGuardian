@@ -1,7 +1,7 @@
 <!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>PR discussions integration fixture</title><style>:root{--border:#deded7;--surface:#fff;--radius-md:10px;--text-muted:#62665f;--primary:#164d3d}body{margin:24px;background:#f6f6f0;color:#203629;font:15px Georgia,serif}main{max-width:1100px;margin:auto}button{padding:7px 12px;cursor:pointer}label{display:block}small{display:block}pre{white-space:pre-wrap;overflow-wrap:anywhere}*{box-sizing:border-box}</style><main id="app"></main><script type="module">
 import {createApp,h} from 'vue';
 import Discussions from '/src/components/review/PrDiscussionContext.vue';
-import Publish from '/src/components/review/GitHubPublicationPanel.vue';
+import Publish from '/src/components/review/publication/GitHubPublicationPanel.vue';
 const nativeFetch=window.fetch.bind(window);
 window.fetch=(url,init)=>nativeFetch(typeof url==='string' && url.startsWith('/api/') ? 'http://127.0.0.1:8878'+url : url,init);
 const info=await(await fetch('http://127.0.0.1:8878/test/task')).json();

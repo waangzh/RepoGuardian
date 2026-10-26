@@ -55,7 +55,7 @@ from app.models.review import (
 )
 from app.services.review.artifact_store import LocalArtifactStore
 from app.core.fingerprints import patch_fingerprint, stable_hash, validation_fingerprint
-from app.services.review.review_planner import PLANNER_VERSION
+from app.services.review.planning.review_planner import PLANNER_VERSION
 from app.services.review.review_task_access import lock_live_review
 from app.review.unit_completion import is_reusable_review_unit_result
 
@@ -266,7 +266,7 @@ class ReviewRepository:
                 return None
             snapshot = self._load_task_snapshot(row)
             task = ReviewTask.model_validate(snapshot)
-            from app.services.review.review_synthesis_repository import load_synthesis
+            from app.services.review.synthesis.review_synthesis_repository import load_synthesis
             task.review_synthesis = load_synthesis(session, task_id)
             if task.review_synthesis:
                 from app.models.review import ModelUsage

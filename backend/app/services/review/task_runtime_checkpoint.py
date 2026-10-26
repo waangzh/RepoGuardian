@@ -16,7 +16,7 @@ from app.models.review_runtime import DiscussionRuntimeReadResponse
 from app.models.review_runtime import DiscussionInvestigationResult
 from app.services.review.coordination_runtime import CoordinationLeaseLost
 from app.services.review.review_run_budget import AttemptState
-from app.services.review.review_task_executor import TaskProjection
+from app.services.review.runtime.review_task_executor import TaskProjection
 from app.services.review.task_context_pages import ContextPage
 from app.core.fingerprints import stable_hash
 

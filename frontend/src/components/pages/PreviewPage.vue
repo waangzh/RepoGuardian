@@ -4,7 +4,7 @@ import type { PreviewJob } from '../../types/previewJob';
 import AppIcon from '../common/AppIcon.vue';
 import ReviewStepper from '../common/ReviewStepper.vue';
 import StatusBadge from '../common/StatusBadge.vue';
-import PreviewProgress from '../review/PreviewProgress.vue';
+import PreviewProgress from '../review/runtime/PreviewProgress.vue';
 
 const props = defineProps<{
   job: PreviewJob | null;

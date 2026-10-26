@@ -2,7 +2,7 @@
 
 from app.core.fingerprints import stable_hash
 from app.models.review_runtime import ReviewGoal
-from app.services.review.review_planner import DeterministicReviewPlanner
+from app.review.hunk_identity import hunk_identity
 
 
 def plan_runtime_goals(changed, plan):
@@ -15,7 +15,7 @@ def plan_runtime_goals(changed, plan):
                 continue
             owned.add(file.file_path)
             selected = [(index, hunk) for index, hunk in enumerate(file.hunks)
-                        if not unit.diff_hunk_ids or DeterministicReviewPlanner.hunk_id(
+                        if not unit.diff_hunk_ids or hunk_identity(
                             file.file_path, index, hunk.model_dump(mode="json")) in unit.diff_hunk_ids]
             if file.is_binary or not selected:
                 goals.append(ReviewGoal(goal_id="file-" + stable_hash([unit.id, file.model_dump(mode="json")])[:32],
@@ -26,14 +26,14 @@ def plan_runtime_goals(changed, plan):
                 # 整文件删除与文件清空只有 Base 侧文本；unidiff 会同样判为 deleted。
                 # 范围按删除前行号，不构造 Head 零长度区间。
                 for index, hunk in selected:
-                    identity = DeterministicReviewPlanner.hunk_id(file.file_path, index, hunk.model_dump(mode="json"))
+                    identity = hunk_identity(file.file_path, index, hunk.model_dump(mode="json"))
                     goals.append(ReviewGoal(goal_id="goal-" + stable_hash([unit.id, identity])[:32],
                         unit_id=unit.id, kind="inspect", target_ref=file.file_path,
                         target_kind="base_source_range", start_line=max(1, hunk.old_start),
                         end_line=max(1, hunk.old_start + hunk.old_length - 1)))
                 continue
             for index, hunk in selected:
-                identity = DeterministicReviewPlanner.hunk_id(file.file_path, index, hunk.model_dump(mode="json"))
+                identity = hunk_identity(file.file_path, index, hunk.model_dump(mode="json"))
                 if hunk.new_length == 0 or hunk.new_start < 1:
                     # 纯删除 hunk 没有 Head 行；改在 Base 侧核对被删原文。
                     goals.append(ReviewGoal(goal_id="goal-" + stable_hash([unit.id, identity])[:32],

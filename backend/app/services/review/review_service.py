@@ -40,7 +40,7 @@ from app.models.review import (
 from app.models.review_runtime import TaskRuntimeRetryResult, TaskRuntimeReport
 from app.services.review.report_service import ReportService
 from app.services.review.review_rebuild import rebuild_task_from_state
-from app.services.review.review_planner import DeterministicReviewPlanner
+from app.services.review.planning.review_planner import DeterministicReviewPlanner
 from app.services.review.review_run_budget import (
     ReviewRepositoryRunBudgetStore,
     ReviewRunBudget,
@@ -479,7 +479,7 @@ class ReviewService:
         """只执行 PR 获取、diff 解析和确定性规划。"""
         pr_url = str(request.pr_url)
         from app.review.runtime_spec import task_runtime_configuration
-        from app.services.review.review_plan import normalize_plan
+        from app.services.review.planning.review_plan import normalize_plan
         configuration = task_runtime_configuration(request.model)
         options = normalize_plan(request.plan, configuration["model"])
         if progress:
@@ -524,7 +524,7 @@ class ReviewService:
         return list(delta.get("files") or []), True, True
 
     async def _build_preview(self, request, pr_url, pr, configuration, options, prepared, persist):
-        from app.services.review.review_plan import apply_scope, configure_runtime, preview_hash
+        from app.services.review.planning.review_plan import apply_scope, configure_runtime, preview_hash
         from app.services.review.review_input_context import build_pr_intent
         from app.services.preview.preview_confirmation import policy_fingerprint
         planning_policy = policy_fingerprint()
@@ -860,7 +860,7 @@ class ReviewService:
                     if result is None:
                         configuration = task.task_runtime_configuration or {}
                         if configuration.get("effective_plan"):
-                            from app.services.review.review_plan import remaining_review_seconds
+                            from app.services.review.planning.review_plan import remaining_review_seconds
                             remaining = remaining_review_seconds(configuration, task.created_at)
                             if remaining <= 0:
                                 raise ReviewDeadlineExceeded("review_deadline")
@@ -884,7 +884,7 @@ class ReviewService:
             self._persist(task)
             if self._repository:
                 self._repository.save_issue_lifecycle(task_id, result)
-                from app.services.review.review_synthesis_service import freeze_review_synthesis
+                from app.services.review.synthesis.review_synthesis_service import freeze_review_synthesis
                 try:
                     await freeze_review_synthesis(task, self._repository, self._provider, lease={
                         "job_id": job.id, "owner": job.lease_owner, "attempt": job.attempts,

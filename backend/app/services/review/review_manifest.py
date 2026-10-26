@@ -27,7 +27,7 @@ from app.review.unit_completion import (
     review_unit_input_coverage,
     review_unit_coverage_warning,
 )
-from app.services.review.unit_coverage import unsupported_hunk_ids, NO_HUNK_CHANGE_REASON
+from app.review.unit_coverage import unsupported_hunk_ids, NO_HUNK_CHANGE_REASON
 
 
 def build_review_manifest(state: dict[str, Any], completed_at: datetime) -> ReviewRunManifest:

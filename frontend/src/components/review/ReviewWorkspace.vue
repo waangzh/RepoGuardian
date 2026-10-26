@@ -10,7 +10,7 @@ import ReviewScopePage from "../pages/ReviewScopePage.vue";
 import ReviewFilesPage from "../pages/ReviewFilesPage.vue";
 import ReviewActivityPage from "../pages/ReviewActivityPage.vue";
 import ReviewProgressPage from "../pages/ReviewProgressPage.vue";
-import GitHubPublicationPanel from "./GitHubPublicationPanel.vue";
+import GitHubPublicationPanel from "./publication/GitHubPublicationPanel.vue";
 import ReviewViewer from "./ReviewViewer.vue";
 import ReportPanel from "../ReportPanel.vue";
 import StatusBadge from "../common/StatusBadge.vue";

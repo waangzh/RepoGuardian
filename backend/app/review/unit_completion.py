@@ -8,6 +8,7 @@ from app.models.review import (
     ReviewUnitTerminalReason,
     UnitInputCoverage,
 )
+from app.review.unit_coverage import coverage_gaps
 
 
 BUDGET_EXHAUSTED_TERMINAL_REASONS = frozenset({
@@ -73,7 +74,6 @@ def is_review_unit_complete(result: ReviewUnitResult) -> bool:
             or summary.latest_attempt_status in {"missing", "invalid", "failed", "not_executed", "unknown"}):
         return False
     if result.diff_manifest is not None or result.coverage_ledger is not None:
-        from app.services.review.unit_coverage import coverage_gaps
         active = result.active_evidence_set if result.diff_manifest and result.diff_manifest.review_unit_id != result.review_unit_id else None
         if coverage_gaps(result.diff_manifest, result.coverage_ledger, active, result.plan):
             return False

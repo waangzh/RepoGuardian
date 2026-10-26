@@ -6,7 +6,7 @@ from app.core.config import settings
 from app.graph.nodes._events import append_step
 from app.graph.state import ReviewState
 from app.review.diff_base import review_diff_base
-from app.services.review.review_planner import DeterministicReviewPlanner
+from app.services.review.planning.review_planner import DeterministicReviewPlanner
 from app.services.review.review_input_context import build_pr_intent
 
 
@@ -26,7 +26,7 @@ async def review_plan_node(state: ReviewState) -> ReviewState:
     configuration = state.get("task_runtime_configuration") or {}
     if configuration.get("effective_plan"):
         from app.models.review_plan import ReviewPlanOptions
-        from app.services.review.review_plan import apply_scope
+        from app.services.review.planning.review_plan import apply_scope
         from app.core.fingerprints import stable_hash
         options = ReviewPlanOptions.model_validate(configuration["effective_plan"])
         plan = apply_scope(plan, options)

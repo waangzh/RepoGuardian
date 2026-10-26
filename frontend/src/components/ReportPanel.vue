@@ -13,7 +13,7 @@ import ReportDeliverySidebar from './report/ReportDeliverySidebar.vue';
 import ReportReadableView from './report/ReportReadableView.vue';
 import AuditSummaryView from './report/AuditSummaryView.vue';
 import PrCommentPreview from './report/PrCommentPreview.vue';
-import ReviewCommentConfirmation from './review/ReviewCommentConfirmation.vue';
+import ReviewCommentConfirmation from './review/publication/ReviewCommentConfirmation.vue';
 import '../styles/report-delivery.css';
 
 const props = defineProps<{

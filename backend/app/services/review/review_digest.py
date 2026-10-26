@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from app.models.publication import ChangeUnderstanding, DigestGoal, DigestInvestigation, DigestIntent
 from app.models.review_runtime import IntentAssessment
-from app.services.review.review_intent import author_targets, matched_author_targets
+from app.services.review.planning.review_intent import author_targets, matched_author_targets
 from app.services.review.review_validation_digest import validation_digest
 from app.services.review.review_findings import finding_views
 from app.core.fingerprints import stable_hash

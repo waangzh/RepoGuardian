@@ -12,9 +12,9 @@ from app.review.tool_scope import list_git_tracked_files, is_sensitive_repositor
 from app.core.fingerprints import stable_hash
 from app.services.discussions.pr_discussions import open_store, frozen_provider, metadata
 from app.services.review.review_run_budget import current_run_budget
-from app.services.review.review_runtime import TaskReviewRuntime
-from app.services.review.review_task_executor import ReviewTaskExecutor
-from app.services.review.review_task_step import InspectTaskStep
+from app.services.review.runtime.review_runtime import TaskReviewRuntime
+from app.services.review.runtime.review_task_executor import ReviewTaskExecutor
+from app.services.review.runtime.review_task_step import InspectTaskStep
 from app.services.review.task_runtime_checkpoint import TaskRuntimeCheckpoint
 from app.tools.git_tool import GitTool
 
@@ -181,7 +181,7 @@ async def recheck_discussions_node(state, runtime=None, config=None):
     if steps:
         checkpoint = TaskRuntimeCheckpoint(queue, steps, DiscussionCheckpointRepository(store), lease=store.lease)
         await checkpoint.restore()
-        from app.services.review.review_plan import remaining_review_seconds
+        from app.services.review.planning.review_plan import remaining_review_seconds
         remaining = remaining_review_seconds(configuration, state["created_at"])
         if remaining <= 0:
             termination = "deadline"

@@ -6,7 +6,7 @@
 from fastapi import APIRouter
 
 from app.bootstrap.dependencies import get_preview_jobs, get_review_service
-from app.services.review.file_context import FileContextError, load_file_context
+from app.services.review.evidence.file_context import FileContextError, load_file_context
 from app.tools.github.github_tool import GitHubTool, GitHubToolError
 
 # 端点函数保持包级导出，便于按原路径调用与打桩。
