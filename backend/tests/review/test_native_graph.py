@@ -9,7 +9,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.errors import NodeCancelledError
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from app.graph.checkpointer import _checkpoint_serializer
+from app.review.checkpointer import _checkpoint_serializer
 from app.review.context import AgentContext, ReviewContext
 from app.review.findings import candidate_gate, collect_candidates, verify_finding
 from app.review.graph import build_review_graph
@@ -95,8 +95,9 @@ async def test_native_graph_discovery_union_independent_verification_and_coverag
     assert len(report.candidates) == len(report.findings) == 1
     assert len(report.candidates[0].assignment_ids) == 2
     assert report.findings[0].inline_line == 1
-    assert [sorted(item) for item in model.observed] == [
-        ["assignment", "goals"], ["assignment", "goals"], ["candidate"]]
+    assert len(model.observed) == 3
+    assert all("assignment" in item and "candidate" not in item for item in model.observed[:2])
+    assert "candidate" in model.observed[-1] and "assignment" not in model.observed[-1]
     assert "messages" not in result
 
 
@@ -172,7 +173,7 @@ async def test_verifier_cannot_confirm_head_bug_using_only_base(source_service):
         expected_behavior="正常", actual_behavior="失败", impact="丢失", recommendation="修复",
         severity="high", affected_path="safe.py", line=1, evidence_ids=[identity],
         attribution="introduced")
-    result = {"evidence_ids": [identity], "output": {
+    result = {"status": "completed", "evidence_ids": [identity], "output": {
         "decision": "confirmed", "explanation": "模型声称已确认", "evidence_ids": [identity],
         "attribution": "introduced"}}
     with pytest.raises(ValueError, match="head_failure_source_missing"):
@@ -226,3 +227,66 @@ async def test_sqlite_reopen_restores_completed_native_branches(source_service, 
     assert len(model.observed) == 3
     assert result["report"]["complete"]
     assert len(result["report"]["findings"]) == 1
+
+
+async def test_empty_scope_terminates_without_agents_or_false_clean(source_service):
+    model = ReviewModel()
+    async def load():
+        return AgentContext(evidence=source_service, changed_files=[])
+    result = await build_review_graph().ainvoke({"review_id": "review"},
+        context=ReviewContext(load=load, model=model))
+    assert not result["report"]["complete"]
+    assert result["report"]["termination"] == "partial"
+    assert model.observed == []
+
+
+async def test_verifier_preserves_insufficient_without_fabricating_source(source_service):
+    candidate = CandidateFinding(id="candidate", assignment_ids=["discover"], title="待核实",
+        trigger="输入", expected_behavior="正常", actual_behavior="错误", impact="未知",
+        recommendation="补查", severity="high", affected_path="safe.py", line=1,
+        evidence_ids=["unknown"], attribution="uncertain")
+    output = {"status": "completed", "output": {"decision": "insufficient_evidence", "explanation": "关键前提尚未找到",
+        "evidence_ids": [], "counterevidence_ids": [], "attribution": "uncertain"}, "evidence_ids": []}
+    decision, finding = verify_finding(candidate, output, source_service, [CHANGE])
+    assert decision.decision == "insufficient_evidence" and finding is None
+    output["output"]["decision"] = "refuted"
+    with pytest.raises(ValueError, match="refutation_source_missing"):
+        verify_finding(candidate, output, source_service, [CHANGE])
+
+
+def test_investigation_routes_only_once_for_high_impact_uncertainty():
+    from app.review.graph import route_investigation
+    state = {"review_id": "review", "decisions": [{"candidate_id": "a", "decision": "insufficient_evidence"}],
+             "eligible_candidates": [{"id": "a"}], "candidates": [{"id": "a", "severity": "high"}]}
+    assert len(route_investigation(state)) == 1
+    assert route_investigation({**state, "investigation_round": 1}) == "report"
+
+
+def test_native_structured_outputs_survive_safe_checkpoint_serialization():
+    from app.review.models import DiscoveryOutput, VerificationOutput
+    serializer = _checkpoint_serializer()
+    outputs = [DiscoveryOutput(), VerificationOutput(decision="insufficient_evidence",
+               explanation="未取得必要前提", attribution="uncertain")]
+    for output in outputs:
+        restored = serializer.loads_typed(serializer.dumps_typed(output))
+        assert restored == output
+    assert not serializer.pickle_fallback
+
+
+async def test_replayed_agent_work_does_not_reset_unknown_prior_usage_to_zero(source_service):
+    context = review_context(source_service, ReviewModel(), replaying_nodes=frozenset({"discover"}))
+    result = await build_review_graph().ainvoke({"review_id": "review"}, context=context)
+    assert result["report"]["discovery_results"]
+    assert all(item["model_calls"] is None and item["input_tokens"] is None
+               for item in result["report"]["discovery_results"])
+
+
+async def test_tool_read_limitations_do_not_turn_complete_coverage_into_complete_conclusion(source_service):
+    from langgraph.runtime import Runtime
+    from app.review.graph import report
+    context = review_context(source_service, ReviewModel())
+    state = await build_review_graph().ainvoke({"review_id": "review"}, context=context)
+    state["discovery_results"][0]["read_errors"] = 1
+    result = await report(state, Runtime(context=context))
+    assert result["report"]["complete"]
+    assert result["report"]["termination"] == "partial"

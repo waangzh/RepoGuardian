@@ -1,12 +1,9 @@
-import type { ReviewMode, ReviewPreviewResponse } from './review';
+import type { ReviewPreviewResponse } from './review';
 import type { ReviewPlanOptions } from './reviewPlan';
 
 export interface PreviewRequest {
   pr_url: string;
   model?: string | null;
-  reuse_review_id?: string | null;
-  force_full_review?: boolean;
-  mode: ReviewMode;
   plan?: ReviewPlanOptions;
 }
 export interface PreviewJob {

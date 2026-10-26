@@ -34,7 +34,6 @@ class RetryAfterJobError(ValueError):
 class ClaimedJob:
     id: str
     task_id: str
-    unit_id: int | None
     kind: str
     payload: dict[str, Any]
     attempts: int
@@ -52,14 +51,13 @@ class DatabaseTaskQueue:
         *,
         task_id: str,
         kind: str = "review",
-        unit_id: int | None = None,
         payload: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
         priority: int = 0,
         available_at: datetime | None = None,
         session=None,
     ) -> str:
-        key = idempotency_key or f"{kind}:{task_id}:{unit_id or 'task'}"
+        key = idempotency_key or f"{kind}:{task_id}"
         with (self._session_factory.begin() if session is None else nullcontext(session)) as session:
             if not lock_live_review(session, task_id):
                 raise KeyError(task_id)
@@ -76,7 +74,6 @@ class DatabaseTaskQueue:
             row = WorkerJobOrm(
                 id=uuid4().hex,
                 task_id=task_id,
-                unit_id=unit_id,
                 kind=kind,
                 status="queued",
                 idempotency_key=key,
@@ -142,7 +139,6 @@ class DatabaseTaskQueue:
                 return ClaimedJob(
                     id=row.id,
                     task_id=row.task_id,
-                    unit_id=row.unit_id,
                     kind=row.kind,
                     payload=dict(row.payload),
                     attempts=row.attempts,
@@ -214,7 +210,7 @@ class DatabaseTaskQueue:
                 update(WorkerJobOrm)
                 .where(
                     WorkerJobOrm.task_id == task_id,
-                    WorkerJobOrm.kind.in_(["review", "unit_retry"]),
+                    WorkerJobOrm.kind.in_(["review"]),
                     WorkerJobOrm.status.in_(["queued", "retry", "leased"]),
                 )
                 .values(status="cancelled", lease_owner=None, lease_until=None, updated_at=utcnow())
@@ -229,7 +225,7 @@ class ReviewWorker:
         handler: Callable[[ClaimedJob], Awaitable[None]],
         *,
         worker_id: str | None = None,
-        kinds: tuple[str, ...] = ("review", "unit_retry"),
+        kinds: tuple[str, ...] = ("review",),
     ) -> None:
         self.queue = queue
         self.handler = handler

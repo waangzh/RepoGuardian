@@ -4,8 +4,13 @@ import json
 
 from app.review.evidence import digest
 from app.review.models import (
-    CandidateFinding, DiscoveryOutput, VerificationOutput, VerificationResult, VerifiedFinding,
+    CandidateFinding, CandidateProposal, DiscoveryOutput, VerificationOutput, VerificationResult, VerifiedFinding,
 )
+
+
+def candidate_identity(candidate):
+    fields = set(CandidateProposal.model_fields) - {"evidence_ids"}
+    return digest(json.dumps(candidate.model_dump(include=fields), sort_keys=True, ensure_ascii=False))
 
 
 def collect_candidates(results: list[dict]) -> list[dict]:
@@ -15,8 +20,7 @@ def collect_candidates(results: list[dict]) -> list[dict]:
             continue
         output = DiscoveryOutput.model_validate(result["output"])
         for proposal in output.findings:
-            text = proposal.model_dump(exclude={"evidence_ids"})
-            identity = digest(json.dumps(text, sort_keys=True, ensure_ascii=False))
+            identity = candidate_identity(proposal)
             if identity not in candidates:
                 candidates[identity] = CandidateFinding(
                     **proposal.model_dump(), id=identity, assignment_ids=[result["id"]])
@@ -35,22 +39,33 @@ def source_refs(service, identities, issued_ids):
 
 def candidate_gate(candidate, service, results, changed_files):
     issued = {identity for result in results if result["id"] in candidate.assignment_ids
+              and result["status"] == "completed"
               for identity in result["evidence_ids"]}
     refs = source_refs(service, candidate.evidence_ids, issued)
-    if not any(candidate.affected_path == item["file_path"] for item in changed_files):
+    if candidate.id != candidate_identity(candidate):
+        raise ValueError("candidate_subject_mismatch")
+    change = next((item for item in changed_files if candidate.affected_path == item["file_path"]), None)
+    if change is None:
         raise ValueError("candidate_outside_changed_files")
-    if not any(ref.path == candidate.affected_path
+    anchor_path = (change.get("old_file_path") or candidate.affected_path
+                   if change.get("change_type") == "deleted" else candidate.affected_path)
+    if not any(ref.path == anchor_path
                and ref.start_line <= candidate.line <= ref.end_line for ref in refs):
         raise ValueError("candidate_anchor_not_read")
     return refs
 
 
 def verify_finding(candidate, result, service, changed_files):
+    if result.get("status") != "completed":
+        raise ValueError("verification_not_completed")
     output = VerificationOutput.model_validate(result["output"])
-    refs = source_refs(service, output.evidence_ids, result["evidence_ids"])
+    refs = (source_refs(service, output.evidence_ids, result["evidence_ids"])
+            if output.evidence_ids else [])
     if output.counterevidence_ids:
         source_refs(service, output.counterevidence_ids, result["evidence_ids"])
     decision = output.decision
+    if decision == "refuted" and not (refs or output.counterevidence_ids):
+        raise ValueError("refutation_source_missing")
     if decision == "confirmed":
         if output.attribution == "uncertain" or output.attribution != candidate.attribution:
             raise ValueError("finding_attribution_unverified")

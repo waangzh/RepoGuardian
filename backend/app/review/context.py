@@ -12,9 +12,11 @@ from app.review.models import ReviewLimits
 class AgentContext:
     evidence: EvidenceService
     changed_files: list[dict] = field(default_factory=list)
+    denied_paths: frozenset[str] = frozenset()
     symbols: list[dict] = field(default_factory=list)
     repository_graph: dict = field(default_factory=dict)
     discussions: list[dict] = field(default_factory=list)
+    author_context: dict = field(default_factory=dict)
     check_active: Callable[[], Awaitable[None]] | None = None
 
 
@@ -24,7 +26,9 @@ class ReviewContext:
     model: Any
     limits: ReviewLimits = field(default_factory=ReviewLimits)
     depth: str = "standard"
+    focus: tuple[str, ...] = ("correctness", "security", "performance", "compatibility")
     selected_paths: frozenset[str] | None = None
+    replaying_nodes: frozenset[str] = frozenset()
     check_active: Callable[[], Awaitable[None]] | None = None
     progress: Callable[[dict], Awaitable[None]] | None = None
     _agent_context: AgentContext | None = None

@@ -11,9 +11,9 @@ from app.tools.github.github_publisher import GitHubPublishError
 
 
 class PublicationService:
-    def __init__(self, repository, github, config, task_loader, queue=None):
+    def __init__(self, repository, github, config, task_loader, queue=None, artifacts=None):
         self.repo, self.config, self.task_loader = repository, config, task_loader
-        self.preflight_checker = PublicationPreflight(github, config)
+        self.preflight_checker = PublicationPreflight(github, config, artifacts)
         self.delivery = PublicationDelivery(repository, github, self.preflight_checker, task_loader)
         self.worker = PublicationWorker(queue or DatabaseTaskQueue(), self.delivery)
         self.worker_task = None

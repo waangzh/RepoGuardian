@@ -7,29 +7,27 @@ from functools import wraps
 from langchain.tools import ToolRuntime, tool
 
 from app.review.context import AgentContext
+from app.review.evidence import source_lines
 from app.review.tool_scope import is_sensitive_repository_change, is_sensitive_repository_path
 
 
 def safe_read(function):
     @wraps(function)
     async def guarded(*args, **kwargs):
+        runtime = kwargs.get("runtime")
+        guard = runtime.context.check_active if runtime else None
+        if guard:
+            await guard()
         try:
-            runtime = kwargs.get("runtime")
-            guard = runtime.context.check_active if runtime else None
-            if guard:
-                await guard()
             result = await function(*args, **kwargs)
-            if guard:
-                await guard()
             if len(json.dumps(result)) > 24000:
                 return {"ok": False, "error": "tool_output_too_large", "truncated": True}
-            return result
         except (ValueError, OSError) as exc:
-            import traceback
             return {"ok": False, "error": "read_rejected",
-                    "error_type": type(exc).__name__,
-                    "error_stage": traceback.extract_tb(exc.__traceback__)[-1].name,
-                    "truncated": False}
+                    "error_type": type(exc).__name__, "truncated": False}
+        if guard:
+            await guard()
+        return result
     return guarded
 
 
@@ -37,6 +35,8 @@ def safe_read(function):
 @safe_read
 async def read_file(path: str, start: int, end: int, runtime: ToolRuntime[AgentContext]) -> dict:
     """Read a bounded range from the frozen HEAD; returns trusted source evidence."""
+    if path in runtime.context.denied_paths:
+        raise ValueError("path_not_authorized")
     return await runtime.context.evidence.read(path, start, end)
 
 
@@ -44,6 +44,8 @@ async def read_file(path: str, start: int, end: int, runtime: ToolRuntime[AgentC
 @safe_read
 async def read_base_file(path: str, start: int, end: int, runtime: ToolRuntime[AgentContext]) -> dict:
     """Read frozen BASE source, including files deleted by the PR."""
+    if path in runtime.context.denied_paths:
+        raise ValueError("path_not_authorized")
     return await runtime.context.evidence.read(path, start, end, "base")
 
 
@@ -52,7 +54,8 @@ async def read_base_file(path: str, start: int, end: int, runtime: ToolRuntime[A
 async def read_diff(path: str, runtime: ToolRuntime[AgentContext]) -> dict:
     """Read the fixed PR diff for an authorized path. Diff text is not source evidence."""
     service = runtime.context.evidence
-    if path not in service.allowed_paths or is_sensitive_repository_path(path):
+    if (path not in service.allowed_paths or path in runtime.context.denied_paths
+            or is_sensitive_repository_path(path)):
         raise ValueError("path_not_authorized")
     matches = [item for item in runtime.context.changed_files if item["file_path"] == path]
     if any(is_sensitive_repository_change(path, item.get("old_file_path")) for item in matches):
@@ -67,6 +70,8 @@ async def read_diff(path: str, runtime: ToolRuntime[AgentContext]) -> dict:
 @safe_read
 async def read_symbol(path: str, symbol: str, runtime: ToolRuntime[AgentContext]) -> dict:
     """Read a unique HEAD symbol definition. Use a symbol ID for overloaded names."""
+    if path in runtime.context.denied_paths:
+        raise ValueError("path_not_authorized")
     matches = [item for item in runtime.context.symbols if item.get("file") == path
                and symbol in {item.get("symbol"), item.get("symbol_id")}]
     if len(matches) != 1:
@@ -77,26 +82,57 @@ async def read_symbol(path: str, symbol: str, runtime: ToolRuntime[AgentContext]
 
 @tool
 @safe_read
-async def search_code(query: str, path: str, runtime: ToolRuntime[AgentContext]) -> dict:
-    """Literal search in one authorized frozen HEAD file. Read matching ranges for evidence."""
+async def search_code(query: str, runtime: ToolRuntime[AgentContext], path: str = "") -> dict:
+    """Literal search in authorized frozen HEAD files. Read matching ranges for evidence."""
     if not query or len(query) > 200:
         raise ValueError("invalid_search")
     service = runtime.context.evidence
-    _, source = await asyncio.to_thread(service._source, path, "head")
-    matches = [{"path": path, "line": i, "text": text[:300]}
-               for i, text in enumerate(source.splitlines(), 1) if query in text]
+    if path and path in runtime.context.denied_paths:
+        raise ValueError("path_not_authorized")
+    paths = [path] if path else sorted(service.allowed_paths - runtime.context.denied_paths)
+    matches, unreadable, searched = [], 0, 0
+    for selected in paths[:120]:
+        if runtime.context.check_active:
+            await runtime.context.check_active()
+        try:
+            _, source = await asyncio.to_thread(service._source, selected, "head")
+        except (ValueError, OSError):
+            unreadable += 1
+            continue
+        searched += 1
+        matches.extend({"path": selected, "line": i, "text": text[:300]}
+                       for i, text in enumerate(source_lines(source), 1) if query in text)
+        if len(matches) > 12:
+            break
     return {"ok": True, "source": "search_hint", "matches": matches[:12],
-            "truncated": len(matches) > 12}
+            "searched_files": searched, "unreadable_files": unreadable,
+            "truncated": len(matches) > 12 or searched + unreadable < len(paths)}
+
+
+@tool
+@safe_read
+async def find_files(runtime: ToolRuntime[AgentContext], query: str = "") -> dict:
+    """Find authorized repository paths by literal substring; does not read source."""
+    paths = sorted(path for path in runtime.context.evidence.allowed_paths
+                   if query in path and path not in runtime.context.denied_paths
+                   and not is_sensitive_repository_path(path))
+    return {"ok": True, "source": "path_hint", "paths": paths[:80],
+            "truncated": len(paths) > 80}
 
 
 async def _relations(symbol: str, runtime, direction: str | None):
     context = runtime.context
     matches = [item for item in context.symbols
                if symbol in {item.get("symbol_id"), item.get("symbol")}
-               and item.get("file") in context.evidence.allowed_paths]
-    identities = {item.get("symbol_id") for item in matches}
+               and item.get("file") in context.evidence.allowed_paths
+               and item.get("file") not in context.denied_paths]
+    identities = {item.get("symbol_id") or f"{item['file']}::{item['symbol']}" for item in matches}
     edges = [edge for edge in context.repository_graph.get("edges", [])
-             if ((edge.get("target") in identities if direction == "in" else
+             if edge.get("source_file") not in context.denied_paths
+             and edge.get("target_file") not in context.denied_paths
+             and not any(is_sensitive_repository_path(str(edge.get(key)))
+                         for key in ("source_file", "target_file") if edge.get(key))
+             and ((edge.get("target") in identities if direction == "in" else
                   edge.get("source") in identities) if direction else
                  (edge.get("source") in identities or edge.get("target") in identities))]
     visible = [{key: item.get(key) for key in ("symbol_id", "file", "symbol", "start_line", "end_line")}
@@ -140,6 +176,6 @@ async def read_discussion(index: int, runtime: ToolRuntime[AgentContext]) -> dic
 
 
 REVIEW_TOOLS = [
-    read_file, read_base_file, read_diff, read_symbol, search_code,
+    read_file, read_base_file, read_diff, read_symbol, search_code, find_files,
     find_references, get_callers, get_callees, read_discussion,
 ]

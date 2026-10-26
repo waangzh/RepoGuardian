@@ -2,7 +2,7 @@
 
 import re
 
-from app.models.publication import PresentationDelivery, ReviewPresentation, SummaryInputCoverage
+from app.models.publication import PresentationDelivery, ReviewPresentation
 from app.services.publication.review_prose import author_goal_text
 from app.services.publication.review_text_format import (
     _comment_risks, _finding_location_text, _ordered_findings, _sentence, STATIC_BOUNDARY,
@@ -33,7 +33,7 @@ def _overview_sentences(text):
 def _editorial_markdown(presentation, text, limit=2000):
     rendered = markdown_text(text, limit)
     # Preserve literal URLs without letting GFM create model-supplied links.
-    return rendered.replace(":", "&#58;") if presentation.schema_version == "review-presentation-v2" else rendered
+    return rendered.replace(":", "&#58;")
 
 
 def _trim_summary(text, limit=600):
@@ -54,8 +54,7 @@ def _change_overview(presentation):
     summary = _trim_summary(summary)
     seen = {part.strip().rstrip("。；; .") for part in _overview_sentences(summary)}
     tests = []
-    # Frozen v1 plans retain their original body for publication recovery.
-    for value in presentation.test_changes if presentation.schema_version == "review-presentation-v1" else []:
+    for value in presentation.test_changes:
         text = _observation_text(value)
         key = text.rstrip("。；; .")
         if key and key not in seen:
@@ -155,7 +154,7 @@ def _review_summary(plan):
     findings = _ordered_findings(plan)
     if not findings:
         return ""
-    titles = "；".join((item.raw_title or item.title)[:120] for item in findings[:3])
+    titles = "；".join(item.title[:120] for item in findings[:3])
     more = f" 等 {len(findings)} 项" if len(findings) > 3 else ""
     return f"本轮已确认 {len(findings)} 项问题：{titles}{more}。"
 
@@ -173,29 +172,18 @@ def _fallback_summary(plan):
     return "未保存足以概括主要变更的代码观察，请结合固定快照 Diff 人工核对。", "unavailable"
 
 
-def build_presentation(plan, synthesis=None):
+def build_presentation(plan):
     understanding = plan.digest.change_understanding
     purpose = (author_goal_text(understanding.author_goal) if understanding else "") or None
     summary, summary_source = _fallback_summary(plan)
-    draft = synthesis.synthesis if synthesis and synthesis.status == "ready" else None
-    if draft:
-        purpose = author_goal_text(draft.pr_purpose.text) or None
-        summary = draft.change_summary.text
-        summary_source = "model"
     findings = _ordered_findings(plan)
     limitations = list(dict.fromkeys(_comment_risks(plan, include_investigations=False)))
-    input_coverage = None
-    if synthesis and (synthesis.input_truncated or synthesis.truncation_reasons):
-        input_coverage = SummaryInputCoverage(
-            truncation_reasons=synthesis.truncation_reasons,
-            omitted_files=synthesis.omitted_files,
-            omitted_hunks=synthesis.omitted_hunks)
     return ReviewPresentation(
-        schema_version="review-presentation-v2", review_id=plan.review_id, snapshot=plan.snapshot,
-        synthesis_status=synthesis.status if synthesis else "fallback",
+        review_id=plan.review_id, snapshot=plan.snapshot,
+        synthesis_status="fallback",
         summary_source=summary_source,
         purpose_text=purpose,
-        purpose_source=draft.pr_purpose.source_kind if draft else "author_claim" if purpose else "unknown",
+        purpose_source="author_claim" if purpose else "unknown",
         change_summary=summary or "未保存足以概括主要变更的代码观察，请结合固定快照 Diff 人工核对。",
         # 问题概述只由确定性 finding 生成；编辑摘要不再改写问题结论。
         review_summary=_review_summary(plan),
@@ -203,8 +191,7 @@ def build_presentation(plan, synthesis=None):
         delivery=PresentationDelivery(confirmed=plan.outcome.confirmed_count, eligible=len(findings),
             selected=len(findings), inline_ready=len(plan.inline_drafts),
             summary_only=len(plan.summary_findings), not_selected=0),
-        limitations=limitations,
-        summary_input_coverage=input_coverage)
+        limitations=limitations)
 
 
 def selected_presentation(plan, selected, fallback=(), *, already_published=0, actual_published=None):
@@ -298,10 +285,6 @@ def render_presentation(plan, *, copy=False, detail="compact", exclude_resolved=
                 f"**建议：** {view['action']}", ""]
         if len(pending) > 5:
             lines += [f"- 另有 {len(pending) - 5} 项待核实事项；完整命题、证据与请求范围见内部技术审计记录。", ""]
-    coverage = presentation.summary_input_coverage
-    # 覆盖披露只取决于事实包是否截断，不因摘要来源变化而消失。
-    if coverage and coverage.limits_diff_summary:
-        lines += ["变更概述仅覆盖已纳入的 Diff 片段；这不表示静态审查范围不完整。", ""]
     if detail == "full":
         advice = presentation.verdict.advice
         scope = (f"约定目标已检查 {plan.outcome.examined_goals} / {plan.outcome.total_goals}。"

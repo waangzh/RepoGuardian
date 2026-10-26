@@ -6,7 +6,7 @@ import { renderToString } from "@vue/server-renderer";
 
 // 颜色语义：执行状态、证据状态、风险等级互不复用；成功色只表示正向完成。
 test("状态徽章按执行/证据/风险三条语义轴着色", async () => {
-  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, optimizeDeps: { noDiscovery: true, entries: [], include: [] }, appType: "custom" });
   try {
     const { default: StatusBadge } = await server.ssrLoadModule("/src/components/common/StatusBadge.vue");
     const toneOf = async (status, label) => {

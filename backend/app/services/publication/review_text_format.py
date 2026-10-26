@@ -28,7 +28,7 @@ REASON_LABELS = {
     "finding_status_unknown": "存在未知的问题状态", "investigation_incomplete": "仍有未完成或证据不足的调查",
     "unscheduled_investigation": "仍有未处理的调查线索", "usage_integrity_unknown": "模型请求计量不完整或不一致",
     "snapshot_missing": "审查快照缺失或身份无效", "runtime_report_missing": "缺少任务运行报告",
-    "runtime_report_invalid": "任务运行报告格式无效", "unsupported_legacy_projection": "历史引擎不支持此发布协议，请查看原始审计报告",
+    "runtime_report_invalid": "任务运行报告格式无效",
     "historical_discussion_unresolved": "历史讨论复核确认原问题在当前代码中仍存在，需核对",
 }
 
@@ -66,7 +66,7 @@ _EVIDENCE_REASONS = {
 
 _RUNTIME_REASONS = {
     "budget_exhausted", "deadline_exceeded", "usage_integrity_unknown", "termination_incomplete",
-    "snapshot_missing", "runtime_report_missing", "runtime_report_invalid", "unsupported_legacy_projection",
+    "snapshot_missing", "runtime_report_missing", "runtime_report_invalid",
     "head_validation_failed", "head_validation_unknown",
 }
 

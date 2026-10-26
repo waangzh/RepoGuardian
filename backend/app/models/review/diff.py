@@ -87,7 +87,6 @@ class FileChangeSide(BaseModel):
 class FileChangeEvidence(BaseModel):
     """独立非行证据：由服务端在固定 Base/Head 上读取并核验。"""
     model_config = ConfigDict(extra="forbid")
-    schema_version: Literal["file-change-evidence-v1"] = "file-change-evidence-v1"
     id: str
     file_path: str
     base_sha: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")

@@ -8,7 +8,7 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from app.core.config import settings
-from app.graph.checkpointer import (
+from app.review.checkpointer import (
     compact_checkpoints_if_needed,
     delete_thread_checkpoints,
     list_checkpoint_thread_ids,

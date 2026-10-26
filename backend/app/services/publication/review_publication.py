@@ -1,121 +1,47 @@
-"""绑定被核验的原主张与发布文本；哈希只证明身份，不证明语义。"""
+"""Revalidate saved graph findings and immutable evidence before publication."""
 
-from types import SimpleNamespace
-
-from pydantic import ValidationError
-
-from app.models.review import ReviewIssue
-from app.models.review_runtime import Candidate, VerificationResult
-from app.services.review.issue_policy import IssuePolicyService
-from app.core.fingerprints import stable_hash
+from app.review.evidence import EvidenceArchive
+from app.review.findings import candidate_gate, verify_finding
+from app.services.review.artifact_store import LocalArtifactStore
 
 
-TEXT_FIELDS = ("claim", "affected_behavior", "failure_scenario", "recommendation")
-
-
-def verification_subject_hash(candidate, spec):
-    return stable_hash({"head_sha": spec.snapshot_head_sha, "base_sha": spec.snapshot_base_sha,
-        "candidate": candidate.model_dump(mode="json", exclude={"source_result_ids"})})
-
-
-def publication_view(candidate, verification, spec, *, usage_known):
-    expected = verification_subject_hash(candidate, spec)
-    if verification.subject_hash != expected or verification.candidate_id != candidate.candidate_id:
-        raise ValueError("publication_subject_mismatch")
-    if ((verification.decision.value == "supported" and verification.publication_action not in {"retain", "narrow"})
-            or (verification.decision.value != "supported" and verification.publication_action != "none")
-            or (verification.publication_action == "narrow") != (verification.narrowing is not None)):
-        raise ValueError("publication_decision_mismatch")
-    original = {key: getattr(candidate, key) for key in TEXT_FIELDS}
-    display = dict(original)
-    if verification.narrowing is not None:
-        for key in ("affected_behavior", "recommendation"):
-            value = getattr(verification.narrowing, key)
-            if value is not None:
-                display[key] = value
-    publishable = usage_known and verification.decision.value == "supported"
-    return {"version": "claim-publication-v1", "original_candidate_id": candidate.candidate_id,
-        "subject_hash": expected, "original_text": original, "verified_core": {
-            "claim": candidate.claim, "failure_scenario": candidate.failure_scenario},
-        "verified_text": display if verification.decision.value == "supported" else None,
-        "published_text": display if publishable else None,
-        "action": verification.publication_action, "decision": verification.decision.value,
-        "basis": verification.narrowing.basis if verification.narrowing else verification.reason,
-        "evidence_ids": verification.evidence_ids, "request_id": verification.request_id,
-        "attempt_id": verification.attempt_id, "work_item_id": verification.work_item_id,
-        "head_sha": spec.snapshot_head_sha, "base_sha": spec.snapshot_base_sha,
-        "usage_known": usage_known}
-
-
-def publication_issue(task, record):
-    """重验保存的发布视图与 Issue 策略；只读且不加载目标仓库。"""
-    if record.get("status") != "confirmed":
-        return None, "finding_not_confirmed"
-    view = record.get("publication")
-    if not isinstance(view, dict) or view.get("version") != "claim-publication-v1":
-        return None, "publication_contract_missing"
-    if view.get("decision") != "supported":
-        return None, "verification_not_supported"
-    if view.get("usage_known") is not True:
-        return None, "publication_usage_unknown"
-    text = view.get("published_text")
-    if not isinstance(text, dict) or any(not isinstance(text.get(key), str) or not text[key].strip() for key in TEXT_FIELDS):
-        return None, "publication_text_missing"
-    manifest = task.run_manifest
-    if not manifest or (view.get("head_sha"), view.get("base_sha")) != (manifest.head_sha, manifest.effective_base_sha):
-        return None, "snapshot_mismatch"
-    try:
-        candidate = Candidate.model_validate(record.get("candidate"))
-        verification = VerificationResult.model_validate(record.get("verification"))
-        spec = SimpleNamespace(snapshot_head_sha=manifest.head_sha, snapshot_base_sha=manifest.effective_base_sha)
-        if verification.snapshot_head_sha != manifest.head_sha or publication_view(candidate, verification, spec, usage_known=True) != view:
-            return None, "publication_subject_mismatch"
-    except (ValidationError, ValueError):
-        return None, "publication_subject_mismatch"
-    if not verification.evidence_ids or not str(view.get("basis") or "").strip():
-        return None, "publication_evidence_missing"
-    try:
-        issue = ReviewIssue.model_validate(record.get("issue"))
-    except ValidationError:
-        return None, "issue_policy_failed"
-    if issue.placement not in {"inline", "summary"}:
-        return None, "placement_not_publishable"
-    check = IssuePolicyService().check(issue, task.review_units)
-    if not check.passed or issue.id != candidate.candidate_id:
-        return None, "issue_policy_failed"
-    if (issue.title != text["claim"] or any(getattr(issue, key) != text[key] for key in TEXT_FIELDS[1:])):
-        return None, "publication_subject_mismatch"
-    location = issue.resolved_location
-    evidence = issue.primary_evidence
-    if issue.placement == "inline" and (not location or
-            (location.file_path, location.start_line, location.end_line, location.side) !=
-            (evidence.file_path, evidence.resolved_start_line, evidence.resolved_end_line, evidence.resolved_side)):
-        return None, "issue_policy_failed"
-    return issue.model_copy(update={"severity": check.normalized_severity}), None
-
-
-def select_publication_findings(task, findings):
-    """同一快照内去重；相同 key 的冲突记录一律扣留。"""
-    groups = {}
-    for record in findings:
-        candidate = record.get("candidate")
-        candidate_id = candidate.get("candidate_id") if isinstance(candidate, dict) else None
-        key = record.get("key") or candidate_id or stable_hash(record)
-        groups.setdefault(str(key), []).append(record)
-    selected, withheld = [], []
-    for key, records in sorted(groups.items()):
-        if len({stable_hash(record) for record in records}) != 1:
-            for record in records:
-                candidate = record.get("candidate")
-                identity = candidate.get("candidate_id") if isinstance(candidate, dict) else None
-                withheld.append((str(identity or key), "duplicate_finding_conflict"))
+def validated_findings(task, artifacts=None):
+    report = task.review_report
+    if report is None:
+        return [], []
+    expected = report.snapshot
+    if (expected.review_id != task.id or expected.head_sha != task.snapshot.head_sha
+            or expected.base_sha != task.snapshot.effective_base_sha
+            or expected.repository != f"{task.pr.owner}/{task.pr.repo}"
+            or expected.pr_number != task.pr.number):
+        return [], [(finding.id, "snapshot_mismatch") for finding in report.findings]
+    archive = EvidenceArchive(snapshot=expected, artifacts=artifacts or LocalArtifactStore())
+    candidates = {candidate.id: candidate for candidate in report.candidates}
+    decisions = {decision.candidate_id: decision for decision in report.decisions}
+    results = {result.id: result.model_dump() for result in report.verification_results
+               if result.status == "completed"}
+    discovery = [result.model_dump() for result in report.discovery_results]
+    changed = [item.model_dump(mode="json") for item in task.changed_files]
+    if task.configuration.options.scope.mode == "selected":
+        selected_paths = set(task.configuration.options.scope.primary_files)
+        changed = [item for item in changed if item["file_path"] in selected_paths]
+    selected, withheld, seen = [], [], set()
+    for finding in report.findings:
+        if finding.id in seen:
+            withheld.append((finding.id, "duplicate_finding_conflict"))
+            selected = [item for item in selected if item.id != finding.id]
             continue
-        record = records[0]
-        issue, reason = publication_issue(task, record)
-        candidate = record.get("candidate")
-        identity = candidate.get("candidate_id") if isinstance(candidate, dict) else None
-        if issue is None:
-            withheld.append((str(identity or key), reason))
-        else:
-            selected.append((key, record, issue))
+        seen.add(finding.id)
+        try:
+            candidate = candidates[finding.id]
+            if (candidate != finding.candidate or decisions[finding.id] != finding.verification
+                    or finding.verification.decision != "confirmed"):
+                raise ValueError("finding_subject_mismatch")
+            candidate_gate(candidate, archive, discovery, changed)
+            decision, rebuilt = verify_finding(candidate, results[finding.id], archive, changed)
+            if rebuilt != finding or decision != finding.verification:
+                raise ValueError("finding_subject_mismatch")
+            selected.append(finding)
+        except (KeyError, ValueError, OSError):
+            withheld.append((finding.id, "publication_evidence_invalid"))
     return selected, sorted(set(withheld))

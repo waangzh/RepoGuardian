@@ -23,12 +23,9 @@ _CONFIG_NAMES = {
 
 
 def build_repository_graph(
-    file_index: list[dict[str, Any]], symbol_index: list[dict[str, Any]], *,
-    call_resolution_version: str = "import-evidence-v3",
+    file_index: list[dict[str, Any]], symbol_index: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Build a serializable graph without granting any additional file access."""
-    if call_resolution_version not in {"import-evidence-v3", "import-evidence-v4", "import-evidence-v5", "import-evidence-v6"}:
-        raise ValueError("unsupported call resolution version")
     files = {str(item["path"]): item for item in file_index if item.get("path")}
     symbols = [item for item in symbol_index if item.get("file") in files]
     lookup = _build_lookup(files)
@@ -36,7 +33,7 @@ def build_repository_graph(
 
     for source, item in files.items():
         import_refs = item.get("import_refs") or [
-            {"module": imported, "confidence": 1.0, "parser_id": "legacy"}
+            {"module": imported, "confidence": 1.0, "parser_id": "text_hint"}
             for imported in item.get("imports", [])
         ]
         for import_ref in import_refs:
@@ -67,12 +64,11 @@ def build_repository_graph(
         for call_ref in call_refs:
             call = str(call_ref.get("callee", ""))
             simple = str(call_ref.get("simple_name") or call.rsplit(".", 1)[-1])
-            if call_resolution_version in {"import-evidence-v4", "import-evidence-v5", "import-evidence-v6"} and caller_language == "python":
+            if caller_language == "python":
                 if call_ref.get("scope_start_line") != caller.get("start_line"):
                     continue  # 嵌套函数的调用不能归属外层定义。
-                modern = call_resolution_version in {"import-evidence-v5", "import-evidence-v6"}
                 target, bound, reason = _python_call_target(call_ref, caller, files, symbols, lookup,
-                                                           submodules=modern)
+                                                           submodules=True)
                 if target is not None:
                     candidates = {(_symbol_id(target),): target}
                 else:
@@ -87,12 +83,10 @@ def build_repository_graph(
                         source_file=str(caller["file"]), target_file=str(callee["file"]),
                         resolution_status="resolved" if bound else "unresolved",
                         resolution_basis="python_lexical_import" if bound else reason,
-                        relationship_level=("symbol" if (target is not None if modern else call_ref.get("import_binding")
-                            and reason != "import_module_external_or_missing") else "search_hint"),
+                        relationship_level=("symbol" if target is not None else "search_hint"),
                         call_expression=call, call_sites=[{"line": call_ref.get("line"),
                             "expression": call, "import_binding": call_ref.get("import_binding"),
-                            **({"call_range": call_ref.get("call_range")}
-                               if call_resolution_version == "import-evidence-v6" else {})}]))
+                            "call_range": call_ref.get("call_range")}]))
                 continue
             candidates = {
                 _symbol_id(item): item
@@ -150,7 +144,6 @@ def build_repository_graph(
 
     deduped_edges = _dedupe_edges(edges)
     return {
-        "version": 2,
         "files": [
             {
                 "id": path,
@@ -179,7 +172,6 @@ def build_repository_graph(
             "symbol_count": len(symbols),
             "edge_count": len(deduped_edges),
             "supported_edges": ["imports", "calls", "test_of", "configures"],
-            "call_resolution_version": call_resolution_version,
         },
     }
 

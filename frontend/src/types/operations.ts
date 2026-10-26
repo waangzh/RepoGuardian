@@ -14,15 +14,6 @@ export interface ReviewTaskListResponse {
   page_size: number;
 }
 
-export interface VersionDiagnostics {
-  config: string;
-  prompt: string;
-  rule: string;
-  tool_schema: string;
-  review_policy: string;
-  patch_policy: string;
-}
-
 export interface SystemDiagnostics {
   version: string;
   provider: string;
@@ -34,7 +25,6 @@ export interface SystemDiagnostics {
   langsmith_enabled: boolean;
   retention_days: number;
   configured_secrets: Record<string, boolean>;
-  versions: VersionDiagnostics;
 }
 
 export interface SystemSettingsUpdate {

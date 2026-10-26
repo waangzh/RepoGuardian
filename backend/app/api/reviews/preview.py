@@ -13,7 +13,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 
 from app.api import reviews as _reviews
-from app.models.review import (
+from app.review.contracts import (
     ReviewPreviewRequest,
     ReviewPreviewResponse,
 )
@@ -72,7 +72,7 @@ async def quick_preview_review(request: QuickPreviewRequest) -> QuickPreviewResp
 
 @router.post("/preview", response_model=ReviewPreviewResponse)
 async def preview_review(request: ReviewPreviewRequest) -> ReviewPreviewResponse:
-    """返回确定性 Review Unit 计划；不会调用 LLM、执行器或目标代码。"""
+    """返回确定性 Agent 任务和源码范围；不会调用模型或运行目标代码。"""
     try:
         return await _reviews.get_review_service().preview(request)
     except _reviews.GitHubToolError as exc:

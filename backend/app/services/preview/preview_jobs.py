@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.models.orm import PreviewJobOrm, utcnow
 from app.models.preview_job import PreviewJobResponse
-from app.models.review import ReviewPreviewRequest
+from app.review.contracts import ReviewPreviewRequest
 from app.tools.git_tool import GitToolError, GitToolTimeout, DiffPreparationError
 
 logger = logging.getLogger("RepoGuardian.Preview")

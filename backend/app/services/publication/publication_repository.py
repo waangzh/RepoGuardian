@@ -10,6 +10,7 @@ from sqlalchemy.dialects.sqlite import insert
 from app.core.database import sync_session
 from app.models.orm import (PublicationAttemptOrm as Attempt, PublicationItemOrm as Item,
     PublicationRequestOrm as RequestKey, PublicationBatchOrm as Batch, GitHubSummarySlotOrm as Slot, WorkerJobOrm, utcnow)
+from app.models.orm import ReviewTaskOrm
 from app.models.publication import PublicationAttempt, PublicationItem, GitHubSummarySlot
 from app.core.fingerprints import stable_hash
 from app.services.review.review_task_access import lock_live_review
@@ -29,11 +30,12 @@ class PublicationLease:
     owner: str
     revision: int
     job: object = None
+    review_id: str | None = None
 
 
 def finding_fingerprint(finding):
     return stable_hash({"anchor": finding.anchor.model_dump(mode="json"),
-                        "body": finding.legacy_body_markdown or finding.body_markdown,
+                        "body": finding.body_markdown,
                         "severity": finding.severity})
 
 
@@ -51,6 +53,9 @@ class PublicationRepository:
         with self.sessions.begin() as session:
             if not lock_live_review(session, plan.review_id):
                 raise PublicationConflict("review_unavailable")
+            review = session.get(ReviewTaskOrm, plan.review_id)
+            if review.status not in {"completed", "completed_with_warnings"}:
+                raise PublicationConflict("review_not_publishable")
             # 先 INSERT，避免 SQLite read→write 升级竞争；唯一键处理并发重复请求。
             session.execute(insert(Attempt).values(id=identity, review_id=plan.review_id,
                 repository_id=context["repository_id"], pr_number=context["pr_number"],
@@ -114,6 +119,9 @@ class PublicationRepository:
         slot_id = stable_hash([attempt.repository_id, attempt.pr_number, attempt.publisher_identity])
         now = utcnow()
         with self.sessions.begin() as session:
+            review = session.get(ReviewTaskOrm, attempt.review_id)
+            if review is None or review.status not in {"completed", "completed_with_warnings"}:
+                raise PublicationConflict("review_not_publishable")
             session.execute(insert(Slot).values(id=slot_id, repository_id=attempt.repository_id,
                 pr_number=attempt.pr_number, publisher_identity=attempt.publisher_identity).on_conflict_do_nothing())
             result = session.execute(update(Slot).where(Slot.id == slot_id,
@@ -122,7 +130,7 @@ class PublicationRepository:
             if result.rowcount != 1:
                 raise PublicationConflict("publication_busy")
             revision = session.get(Slot, slot_id).revision
-        return PublicationLease(slot_id, owner, revision, job)
+        return PublicationLease(slot_id, owner, revision, job, attempt.review_id)
 
     @contextmanager
     def locked(self, lease):
@@ -138,6 +146,10 @@ class PublicationRepository:
             result = session.execute(update(Slot).where(*condition).values(lease_until=now + timedelta(seconds=300)))
             if result.rowcount != 1:
                 raise PublicationLeaseLost("publication_lease_lost")
+            if lease.review_id is not None:
+                review = session.get(ReviewTaskOrm, lease.review_id)
+                if review is None or review.status not in {"completed", "completed_with_warnings"}:
+                    raise PublicationLeaseLost("review_not_publishable")
             yield session
 
     def slot(self, lease):
@@ -213,6 +225,9 @@ class PublicationRepository:
             if job is None or (job.status == "leased" and job.lease_until and job.lease_until.replace(tzinfo=utcnow().tzinfo) > utcnow()):
                 raise PublicationConflict("publication_busy")
             row = session.get(Attempt, identity)
+            review = session.get(ReviewTaskOrm, row.review_id)
+            if review.status not in {"completed", "completed_with_warnings"}:
+                raise PublicationConflict("review_not_publishable")
             if row.state not in {"failed", "partial", "uncertain"}:
                 raise PublicationConflict("publication_not_retryable")
             job.status, job.available_at, job.max_attempts = "retry", utcnow(), job.attempts + 5

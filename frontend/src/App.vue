@@ -1,640 +1,109 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { getReviewCapabilities, cancelReview, createReview, deleteReview, getAvailableModels, getReport, getReview, resumeReview, retryReviewUnit, subscribeToEvents } from "./api/client";
-import { hasSavedPreview, usePreviewJob } from './composables/usePreviewJob';
-import PreviewPage from './components/pages/PreviewPage.vue';
-import QuickPreviewPage from './components/pages/QuickPreviewPage.vue';
-import { useQuickPreview } from './composables/useQuickPreview';
-import type { PreviewJob } from './types/previewJob';
-import AppIcon from "./components/common/AppIcon.vue";
-import AppHeader from "./components/layout/AppHeader.vue";
-import AppSidebar from "./components/layout/AppSidebar.vue";
-import ReviewHistoryPage from "./components/pages/ReviewHistoryPage.vue";
-import SettingsPage from "./components/pages/SettingsPage.vue";
-import NewReviewPage from "./components/pages/NewReviewPage.vue";
-import ReviewPlanPage from "./components/pages/ReviewPlanPage.vue";
-import ReviewWorkspace from "./components/review/ReviewWorkspace.vue";
-import { reviewSections, type ReviewSection } from "./types/workspace";
-import { validPullRequestUrl } from "./utils/workspacePresentation";
-import { rereviewInput } from "./utils/reviewRestart";
-import type { AppPage, ProviderModelInfo } from "./types/operations";
-import type { ReviewMode, ReviewPreviewResponse, ReviewTask } from "./types/review";
-import { reviewCompletionMessage } from "./utils/taskRuntimePresentation";
-import { usePreferences } from "./composables/usePreferences";
-const { initialReviewPlan } = usePreferences();
+import { computed, onBeforeUnmount, onMounted, ref, toRaw } from 'vue';
+import { cancelReview, createReview, deleteReview, getAvailableModels, getReview, getReviewCapabilities, listReviews, resumeReview, subscribeToReview } from './api/client';
+import type { ReviewPreviewResponse, ReviewTask } from './types/review';
+import type { ReviewPlanOptions, ReviewCapabilities } from './types/reviewPlan';
+import { usePreviewJob } from './composables/usePreviewJob';
+import { phaseLabel, terminal } from './utils/nativeReview';
+import NativeReview from './components/review/NativeReview.vue';
+import NativeSettings from './components/pages/NativeSettings.vue';
+import StatusBadge from './components/common/StatusBadge.vue';
 
-type NoticeTone = "info" | "success" | "warning" | "danger";
-interface TaskNotice {
-  tone: NoticeTone;
-  title: string;
-  message: string;
-  actionLabel?: string;
-}
-
-const activePage = ref<AppPage>("dashboard");
-const reviewSection = ref<ReviewSection>("overview");
-const mobileOpen = ref(false);
-const opening = ref(false);
-const pageTitle = computed(() => activePage.value === 'history' ? '审查历史' : activePage.value === 'settings' ? '系统设置' : task.value ? reviewSections.find(item => item.id === reviewSection.value)?.label || '当前审查' : preview.value ? '审查方案' : previewStage.value ? '准备审查方案' : quickOverview.value || quickLoading.value || quickError.value ? 'PR 概览' : '新建审查');
-watch([activePage, reviewSection], () => { mobileOpen.value = false; });
-function navigateReview(section: ReviewSection) { activePage.value = 'dashboard'; reviewSection.value = section; mobileOpen.value = false; }
-const prUrl = ref("");
-const model = ref("");
-const forceFullReview = ref(false);
-const models = ref<ProviderModelInfo[]>([]);
-const defaultModel = ref("");
-const modelsLoading = ref(false);
-const modelsError = ref<string | null>(null);
-const mode = ref<ReviewMode>("review");
-import type { ReviewCapabilities, ReviewPlanOptions } from './types/reviewPlan';
+const page = ref('review');
+const prUrl = ref('');
+const model = ref('');
+const models = ref<string[]>([]);
 const capabilities = ref<ReviewCapabilities | null>(null);
-const draftPlan = ref<ReviewPlanOptions | undefined>();
-const rereviewContext = ref<ReturnType<typeof rereviewInput>>(null);
-let reviewInputGeneration = 0;
-const planDirty = ref(false);
-let restoringPreview = false;
-watch(model, () => { if (!restoringPreview) { planDirty.value = true; cancelPreview(); } });
-watch(forceFullReview, () => { if (!restoringPreview) { planDirty.value = true; cancelPreview(); } });
-watch(prUrl, () => { if (!restoringPreview) { draftPlan.value = undefined; rereviewContext.value = null; planDirty.value = true; } });
+const options = ref<ReviewPlanOptions>({depth:'standard',focus:['correctness','security','performance','compatibility'],scope:{mode:'all',primary_files:[]},limits:{model_calls:null,tool_calls:null,concurrency:null,timeout_seconds:null,output_tokens:null},include_pr_discussions:true});
+const selectedPaths = ref('');
 const preview = ref<ReviewPreviewResponse | null>(null);
-function changePlan(plan: ReviewPlanOptions) { draftPlan.value = plan; planDirty.value = true; }
-const previewTracker = usePreviewJob();
-const quickTracker = useQuickPreview();
-const { overview: quickOverview, loading: quickLoading, error: quickError } = quickTracker;
-const { job: previewJob, tracking: previewing, connectionError: previewConnectionError } = previewTracker;
-const resumingPreview = ref(hasSavedPreview());
-let restoredOnce = false;
-const createdTaskId = ref<string | null>(null);
-// completed-with-result 和 consumed-with-task 都交给后续页面，避免预览页残留。
-const previewStage = computed(() => {
-  if (activePage.value !== 'dashboard' || task.value || opening.value || preview.value || submitting.value) return false;
-  if (resumingPreview.value || previewing.value || previewConnectionError.value) return true;
-  // 刷新时首帧尚未发起恢复请求：有本地标识就先进入预览页，避免闪回新建页。
-  if (!restoredOnce) return hasSavedPreview();
-  const job = previewJob.value;
-  if (!job) return false;
-  if (job.status === 'completed') return !job.result;
-  if (job.status === 'consumed') return !job.consumed_task_id;
-  return true;
-});
-const retryingUnitId = ref<string | null>(null);
 const task = ref<ReviewTask | null>(null);
-const report = ref<string | null>(null);
-const error = ref<string | null>(null);
-const errorDialog = ref<HTMLDialogElement | null>(null);
-const submitting = ref(false);
-const cancelling = ref(false);
-const notice = ref<TaskNotice | null>(null);
-let pollTimer: number | undefined;
-let refreshTimer: number | undefined;
-let noticeTimer: number | undefined;
-let eventSource: EventSource | undefined;
-let refreshPromise: Promise<ReviewTask | null> | null = null;
-let refreshTaskId: string | null = null;
-let reportPromise: Promise<string | null> | null = null;
-let reportTaskId: string | null = null;
-let trackingTaskId: string | null = null;
-let previewRequestId = 0;
-const terminalNotifiedTaskIds = new Set<string>();
-
-watch([prUrl, mode], () => {
-  if (restoringPreview) return;
-  preview.value = null;
-  cancelPreview();
-});
-
-async function loadAvailableModels() {
-  modelsLoading.value = true;
-  modelsError.value = null;
-  try {
-    const catalog = await getAvailableModels();
-    models.value = catalog.models;
-    defaultModel.value = catalog.default_model;
-  } catch {
-    models.value = [];
-    modelsError.value = "模型列表加载失败，将使用后端默认模型";
-  } finally {
-    modelsLoading.value = false;
-  }
+const error = ref('');
+const busy = ref(false);
+const history = ref<ReviewTask[]>([]);
+const historyPage = ref(1);
+const historyTotal = ref(0);
+const search = ref('');
+const tracker = usePreviewJob();
+const {job,tracking,connectionError} = tracker;
+let controller: AbortController | null = null;
+let timer: ReturnType<typeof setTimeout> | null = null;
+let closeStream: (() => void) | null = null;
+let generation = 0;
+let historyGeneration = 0;
+const validUrl = computed(() => /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9][0-9]*\/?$/.test(prUrl.value));
+const selectedMode = computed({get:()=>options.value.scope.mode,set:(value:'all'|'selected')=>{options.value.scope.mode=value;preview.value=null;}});
+const limitLabels: Record<keyof ReviewPlanOptions['limits'],string> = {model_calls:'每个 Agent 模型调用上限',tool_calls:'每个 Agent 工具调用上限',concurrency:'Agent 并发上限',timeout_seconds:'总期限（秒）',output_tokens:'单次输出 Token 上限'};
+const focusLabels = {correctness:'正确性',security:'安全',performance:'性能',compatibility:'跨模块契约'};
+function forgetTask() {
+ generation++;controller?.abort();closeStream?.();closeStream=null;if(timer) clearTimeout(timer);timer=null;busy.value=false;
+ task.value=null;try{localStorage.removeItem('rg-review-task');}catch{/* Session-only operation. */}
 }
-
-onMounted(() => { void restorePreview(); void loadAvailableModels(); void getReviewCapabilities().then(value => { capabilities.value = value; }).catch(() => { error.value = '能力声明加载失败，请刷新后重试。'; }); });
-
-const statusText = computed(() => {
-  if (!task.value) {
-    if (submitting.value) return "正在创建审查任务";
-    if (opening.value) return "正在打开审查记录";
-    if (quickLoading.value) return "正在读取 PR 概览";
-    if (quickOverview.value) return "等待准备完整审查方案";
-    if (previewStage.value) {
-      if (!previewJob.value) return "正在连接预览服务";
-      return previewJob.value.status === "running" || previewJob.value.status === "queued" ? "正在准备审查方案" : "预览需要关注";
-    }
-    return "等待输入";
-  }
-  const labels: Record<string, string> = {
-    pending: "等待审查", queued: "等待审查", planning: "正在准备", reviewing: "正在审查",
-    resolving_evidence: "解析证据", verifying_issues: "核验问题", generating_patches: "生成补丁",
-    validating: "验证补丁", waiting_for_human: "历史审查已中止", completed: "审查执行已完成",
-    completed_with_warnings: "已结束 · 有限制", failed: "任务失败", cancelled: "任务已取消",
-  };
-  return labels[task.value.status] ?? `未知状态：${task.value.status}`;
-});
-
-const taskActive = computed(() => Boolean(task.value && !isTerminalStatus(task.value.status)));
-const taskTerminal = computed(() => Boolean(task.value && isTerminalStatus(task.value.status)));
-const taskDuration = computed(() => {
-  if (!task.value || !taskTerminal.value) return "";
-  const start = new Date(task.value.created_at).getTime();
-  const end = new Date(task.value.updated_at).getTime();
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return "";
-  const seconds = Math.max(0, Math.round((end - start) / 1000));
-  return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
-});
-
-async function submitReview() {
-  if (submitting.value || previewing.value || taskActive.value || createdTaskId.value || !preview.value || planDirty.value || !preview.value.preview_id || !validPullRequestUrl(prUrl.value)) return;
-  clearAll(false);
-  error.value = null;
-  report.value = null;
-  task.value = null;
-  submitting.value = true;
-  reviewSection.value = "overview";
-  try {
-    const created = await createReview(prUrl.value.trim(), model.value.trim(), mode.value, preview.value);
-    createdTaskId.value = created.task_id;
-    previewTracker.detach(true);
-    trackingTaskId = created.task_id;
-    showNotice({
-      tone: "info",
-      title: "审查任务已创建",
-      message: `任务 ${created.task_id.slice(0, 8)} 已进入队列，正在准备审查。`,
-    });
-    const currentTask = await refreshTask(created.task_id);
-    if (currentTask !== null && !isTerminalStatus(currentTask.status)) subscribeOrPoll(created.task_id);
-    window.scrollTo({ top: 0 });
-  } catch (err) {
-    // 方案版本或快照变化后，必须先重新校验才能再次提交。
-    if (err instanceof Error && err.message.includes("方案已失效")) planDirty.value = true;
-    error.value = err instanceof Error ? err.message : "创建任务失败";
-  } finally {
-    submitting.value = false;
-  }
+function newReview() {forgetTask();tracker.detach(true);preview.value=null;error.value='';page.value='review';}
+function rereview() {const url=task.value?.pr_url;const plan=task.value?.configuration.options;newReview();if(url)prUrl.value=url;if(plan)options.value=structuredClone(toRaw(plan));}
+async function follow(id:string) {
+ tracker.detach(true);
+ closeStream?.();closeStream=null;
+ const owner=++generation;controller?.abort();if(timer)clearTimeout(timer);
+ const abort=new AbortController();controller=abort;
+ let refreshing = false;
+ try{localStorage.setItem('rg-review-task',id);}catch{/* Session-only operation. */}
+ async function refresh(){
+  if(owner!==generation||refreshing)return;
+  refreshing=true;if(timer)clearTimeout(timer);timer=null;
+  try{const result=await getReview(id,abort.signal);if(owner!==generation)return;task.value=result;error.value='';if(!terminal(result.status))timer=setTimeout(refresh,1200);else {closeStream?.();closeStream=null;}}
+  catch(e){if(owner!==generation||abort.signal.aborted)return;error.value=e instanceof Error?e.message:'连接中断';timer=setTimeout(refresh,3000);}
+  finally{refreshing=false;}
+ }
+ await refresh();
+ if(owner===generation&&task.value&&!terminal(task.value.status))closeStream=subscribeToReview(id,()=>{void refresh();});
 }
-
-async function cancelCurrentReview() {
-  if (!task.value || !taskActive.value) return;
-  cancelling.value = true;
-  try {
-    await cancelReview(task.value.id);
-    showNotice({ tone: "warning", title: "取消请求已提交", message: "正在停止当前审查任务。" });
-    await refreshTask(task.value.id);
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : "取消任务失败";
-  } finally {
-    cancelling.value = false;
-  }
+async function prepare() {
+ if(!validUrl.value||tracking.value)return;
+ const owner = generation;
+ preview.value=null;error.value='';busy.value=true;
+ try{
+  const plan=structuredClone(toRaw(options.value));
+  plan.scope.primary_files=plan.scope.mode==='selected'?selectedPaths.value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean):[];
+  const result=await tracker.start({pr_url:prUrl.value,model:model.value||undefined,plan});
+  if(owner!==generation)return;
+  if(result?.status==='completed'&&result.result){preview.value=result.result;options.value=structuredClone(toRaw(result.result.effective_plan));}
+  else if(result?.error)error.value=result.error;
+ }catch(e){if(owner===generation)error.value=e instanceof Error?e.message:'准备失败';}finally{if(owner===generation)busy.value=false;}
 }
-
-async function loadQuickPreview() {
-  if (quickLoading.value || previewing.value || submitting.value || taskActive.value || !validPullRequestUrl(prUrl.value)) return;
-  error.value = null;
-  cancelPreview();
-  await quickTracker.load(prUrl.value.trim());
-}
-
-async function loadPreview() {
-  if (previewing.value || submitting.value || taskActive.value || !validPullRequestUrl(prUrl.value)) return;
-  error.value = null;
-  cancelPreview();
-  const requestId = ++previewRequestId;
-  try {
-    const next = await previewTracker.start({ pr_url: prUrl.value.trim(), mode: mode.value,
-      model: model.value.trim() || null, force_full_review: forceFullReview.value,
-      plan: draftPlan.value ?? initialReviewPlan(capabilities.value) });
-    if (previewRequestId === requestId && next) applyPreviewJob(next);
-  } catch (err) {
-    if (previewRequestId !== requestId) return;
-    error.value = err instanceof Error ? err.message : "Preview 失败";
-  }
-}
-
-async function prepareFreshReview() {
-  if (!preview.value?.existing_review_id || previewing.value || submitting.value || createdTaskId.value || taskActive.value) return;
-  forceFullReview.value = true;
-  // Let the input watcher invalidate the previous confirmation before starting its replacement.
-  await nextTick();
-  await loadPreview();
-}
-
-function applyPreviewJob(value: PreviewJob) {
-  if (value.status === 'completed' && value.result) {
-    preview.value = value.result;
-    draftPlan.value = value.result.effective_plan || undefined;
-    planDirty.value = false;
-  } else if (value.status === 'consumed' && value.consumed_task_id) {
-    previewTracker.detach(true);
-    void openHistoricalReview(value.consumed_task_id);
-  } else if (value.status === 'completed') {
-    error.value = '预览已完成但未返回方案，请重新准备审查方案。';
-  }
-  // failed/cancelled/expired 由预览页展示 job.error，避免顶部重复报错；
-  // 方案页重新校验失败时 preview 仍存在，才把错误交给页面顶部。
-  else if (preview.value) {
-    error.value = value.error || (value.status === 'cancelled' ? '预览已取消，可重新分析。' : null);
-  }
-}
-
 async function restorePreview() {
-  const requestId = ++previewRequestId;
-  error.value = null;
-  resumingPreview.value = true;
-  try {
-    const value = await previewTracker.resume(async current => {
-      restoringPreview = true;
-      try {
-        prUrl.value = current.request.pr_url;
-        model.value = current.request.model || '';
-        forceFullReview.value = current.request.force_full_review ?? false;
-        mode.value = current.request.mode;
-        draftPlan.value = current.request.plan;
-        await nextTick();
-      } finally { restoringPreview = false; }
-    });
-    if (previewRequestId === requestId && value) applyPreviewJob(value);
-  } catch (err) {
-    // 预览页会展示连接状态，避免顶部与页内重复报错；失败后仍停留在预览页。
-    if (previewRequestId === requestId && preview.value) error.value = err instanceof Error ? err.message : '恢复预览失败';
-  } finally {
-    if (previewRequestId === requestId) { resumingPreview.value = false; restoredOnce = true; }
-  }
+ try{const result=await tracker.resume(async value=>{prUrl.value=value.request.pr_url;model.value=value.request.model||'';if(value.request.plan)options.value=structuredClone(toRaw(value.request.plan));});
+  if(result?.status==='completed')preview.value=result.result;
+  else if(result?.status==='consumed'&&result.consumed_task_id)await follow(result.consumed_task_id);
+ }catch(e){error.value=e instanceof Error?e.message:'恢复预览失败';}
 }
-
-async function cancelPreviewJob() {
-  try { await previewTracker.cancel(); }
-  catch (err) { showNotice({ tone: 'danger', title: '取消预览失败', message: err instanceof Error ? err.message : '请稍后重试。' }); }
+async function start() {
+ if(!preview.value)return;busy.value=true;error.value='';
+ try{const result=await createReview(prUrl.value,preview.value);tracker.detach(true);preview.value=null;await follow(result.task_id);}
+ catch(e){error.value=e instanceof Error?e.message:'启动失败';}finally{busy.value=false;}
 }
-
-function backToInput() {
-  quickTracker.reset();
-  // 仅解绑本地跟踪；按现有约定，只有显式取消才调用服务端取消接口。
-  previewTracker.detach(true);
-  preview.value = null;
-  if (!rereviewContext.value) draftPlan.value = undefined;
-  planDirty.value = false;
-  error.value = null;
-  createdTaskId.value = null;
-}
-
-async function retryUnit(unitId: string) {
-  if (!task.value) return;
-  if (task.value.task_runtime_configuration?.stability_contract === 'review-stability-v2') {
-    await rereviewCurrentPr();
-    if (!task.value && rereviewContext.value) await loadPreview();
-    return;
-  }
-  retryingUnitId.value = unitId;
-  error.value = null;
-  try {
-    await retryReviewUnit(task.value.id, unitId);
-    await refreshTask(task.value.id);
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : "Unit 重试失败";
-  } finally {
-    retryingUnitId.value = null;
-  }
-}
-
-async function continueReview() {
-  const plan = preview.value;
-  const source = plan?.continuation;
-  if (!plan || !source?.can_resume || submitting.value || previewing.value || planDirty.value) return;
-  submitting.value = true;
-  error.value = null;
-  try {
-    await resumeReview(source.review_id, prUrl.value.trim(), plan);
-    createdTaskId.value = source.review_id;
-    previewTracker.detach(true);
-  } catch (err) {
-    if (err instanceof Error && err.message.includes('方案已失效')) planDirty.value = true;
-    error.value = err instanceof Error ? err.message : '继续审查失败，请更新方案。';
-  } finally { submitting.value = false; }
-  if (createdTaskId.value === source.review_id) await openHistoricalReview(source.review_id);
-}
-
-async function openHistoricalReview(taskId: string) {
-  if (submitting.value || opening.value) return;
-  reviewInputGeneration++;
-  rereviewContext.value = null;
-  opening.value = true;
-  reviewSection.value = 'overview';
-  clearAll(false);
-  preview.value = null;
-  createdTaskId.value = null;
-  trackingTaskId = taskId;
-  activePage.value = "dashboard";
-  error.value = null;
-  report.value = null;
-  task.value = null;
-  const currentTask = await refreshTask(taskId, false);
-  if (currentTask !== null && !isTerminalStatus(currentTask.status)) subscribeOrPoll(taskId);
-  opening.value = false;
-}
-
-function subscribeOrPoll(taskId: string) {
-  trackingTaskId = taskId;
-  try {
-    eventSource = subscribeToEvents(taskId, {
-      onStepProgress: () => scheduleRefresh(taskId),
-      onDone: () => {
-        clearScheduledRefresh();
-        void refreshTask(taskId).then((current) => {
-          if (current && !isTerminalStatus(current.status)) scheduleRefresh(taskId, 300);
-        });
-      },
-      onError: () => {
-        if (!task.value || !isTerminalStatus(task.value.status)) startPolling(taskId);
-      },
-    });
-  } catch {
-    startPolling(taskId);
-  }
-}
-
-function scheduleRefresh(taskId: string, delay = 250) {
-  if (refreshTimer !== undefined) return;
-  refreshTimer = window.setTimeout(() => {
-    refreshTimer = undefined;
-    void refreshTask(taskId);
-  }, delay);
-}
-
-function clearScheduledRefresh() {
-  if (refreshTimer !== undefined) {
-    window.clearTimeout(refreshTimer);
-    refreshTimer = undefined;
-  }
-}
-
-function startPolling(taskId: string) {
-  if (pollTimer !== undefined) return;
-  pollTimer = window.setInterval(() => void refreshTask(taskId), 1800);
-}
-
-function isTerminalStatus(status: ReviewTask["status"]) {
-  return ["completed", "completed_with_warnings", "failed", "cancelled", "waiting_for_human"].includes(status);
-}
-
-function refreshTask(taskId: string, notifyLifecycle = true): Promise<ReviewTask | null> {
-  if (refreshPromise && refreshTaskId === taskId) return refreshPromise;
-  refreshTaskId = taskId;
-  const pending = performRefresh(taskId, notifyLifecycle).finally(() => {
-    if (refreshPromise === pending) {
-      refreshPromise = null;
-      refreshTaskId = null;
-    }
-  });
-  refreshPromise = pending;
-  return pending;
-}
-
-async function performRefresh(taskId: string, notifyLifecycle: boolean): Promise<ReviewTask | null> {
-  try {
-    if (trackingTaskId !== taskId) return null;
-    const previousStatus = task.value?.id === taskId ? task.value.status : null;
-    const next = await getReview(taskId);
-    if (trackingTaskId !== taskId) return null;
-    task.value = next;
-    if (next.status === "completed" || next.status === "completed_with_warnings") {
-      clearPolling();
-      await loadReportOnce(next);
-    }
-    if (next.status === "failed") {
-      clearPolling();
-      error.value = next.error || "任务失败";
-    }
-    if (next.status === "cancelled") clearPolling();
-    if (
-      notifyLifecycle
-      && isTerminalStatus(next.status)
-      && !isTerminalStatus(previousStatus || "")
-      && !terminalNotifiedTaskIds.has(next.id)
-    ) {
-      terminalNotifiedTaskIds.add(next.id);
-      showTerminalNotice(next);
-    }
-    return next;
-  } catch (err) {
-    if (trackingTaskId !== taskId) return null;
-    clearPolling();
-    error.value = err instanceof Error ? err.message : "读取任务失败";
-    return null;
-  }
-}
-
-const errorTitle = computed(() => {
-  if (task.value?.status === "failed") return "审查任务失败";
-  if (previewStage.value) return "预览未完成";
-  if (task.value) return "操作未完成";
-  return "请求未完成";
+async function stop(){if(!task.value)return;try{await cancelReview(task.value.id);await follow(task.value.id);}catch(e){error.value=e instanceof Error?e.message:'停止失败';}}
+async function resume(){if(!task.value)return;try{const result=await resumeReview(task.value.id);await follow(result.id);}catch(e){error.value=e instanceof Error?e.message:'继续失败';}}
+async function loadHistory(){const owner=++historyGeneration;try{const result=await listReviews(search.value,historyPage.value);if(owner!==historyGeneration)return;history.value=result.items;historyTotal.value=result.total;}catch(e){if(owner===historyGeneration)error.value=e instanceof Error?e.message:'历史读取失败';}}
+async function remove(id:string){if(!confirm('删除该审查记录？正在发布或等待对账的记录不能删除。'))return;try{await deleteReview(id);if(task.value?.id===id)forgetTask();await loadHistory();}catch(e){error.value=e instanceof Error?e.message:'删除失败';}}
+function goHistory(){page.value='history';void loadHistory();}
+onMounted(async()=>{
+ try{capabilities.value=await getReviewCapabilities();options.value.include_pr_discussions=capabilities.value.pr_discussions_default??false;}catch(e){error.value=e instanceof Error?e.message:'能力读取失败';}
+ getAvailableModels().then(value=>{models.value=value.models.map(m=>m.id);}).catch(()=>{});
+ let saved:string|null=null;try{saved=localStorage.getItem('rg-review-task');}catch{/* Session-only operation. */}
+ if(saved&&/^[a-f0-9]{32}$/.test(saved))await follow(saved);else await restorePreview();
 });
-// 统一用模态展示页面级错误：写入 error 时打开原生 dialog，清空时关闭。
-watch(error, (value) => {
-  if (!value) {
-    if (errorDialog.value?.open) errorDialog.value.close();
-    return;
-  }
-  void nextTick(() => { if (!errorDialog.value?.open) errorDialog.value?.showModal(); });
-});
-
-function dismissError() {
-  errorDialog.value?.close();
-  error.value = null;
-}
-
-async function loadReportOnce(next: ReviewTask): Promise<void> {
-  if (next.report_markdown) {
-    report.value = next.report_markdown;
-    reportTaskId = next.id;
-    return;
-  }
-  if (reportTaskId === next.id && report.value) return;
-  if (reportPromise && reportTaskId === next.id) {
-    await reportPromise;
-    return;
-  }
-  reportTaskId = next.id;
-  reportPromise = getReport(next.id)
-    .then((markdown) => {
-      if (trackingTaskId === next.id) report.value = markdown;
-      return markdown;
-    })
-    .catch((err) => {
-      if (trackingTaskId === next.id) error.value = err instanceof Error ? `任务已完成，但报告加载失败：${err.message}` : "任务已完成，但报告加载失败";
-      return null;
-    })
-    .finally(() => { if (reportTaskId === next.id) reportPromise = null; });
-  await reportPromise;
-}
-
-function showTerminalNotice(next: ReviewTask) {
-  const completed = ["completed", "completed_with_warnings"].includes(next.status);
-  showNotice({
-    tone: next.status === "failed" ? "danger" : next.status === "completed" ? "info" : "warning",
-    title: next.status === "failed" ? "审查执行失败" : next.status === "cancelled" ? "审查已由用户停止" : "审查执行已结束",
-    message: completed
-      ? reviewCompletionMessage(next)
-      : (next.error || "任务已停止。"),
-    actionLabel: completed ? "查看结果" : undefined,
-  }, 7000);
-  document.title = completed ? "审查执行已结束 · RepoGuardian" : "任务需要关注 · RepoGuardian";
-}
-
-function showNotice(next: TaskNotice, duration = 5000) {
-  if (noticeTimer !== undefined) window.clearTimeout(noticeTimer);
-  notice.value = next;
-  noticeTimer = window.setTimeout(() => {
-    notice.value = null;
-    noticeTimer = undefined;
-  }, duration);
-}
-
-function dismissNotice() {
-  if (noticeTimer !== undefined) window.clearTimeout(noticeTimer);
-  noticeTimer = undefined;
-  notice.value = null;
-}
-
-function showReviewResult() {
-  activePage.value = "dashboard";
-  reviewSection.value = "overview";
-  window.scrollTo({ top: 0, behavior: "smooth" });
-  dismissNotice();
-}
-
-function startNewReview() {
-  if (taskActive.value || submitting.value || opening.value) return;
-  reviewInputGeneration++;
-  clearAll();
-  dismissNotice();
-  task.value = null;
-  report.value = null;
-  preview.value = null;
-  error.value = null;
-  prUrl.value = "";
-  model.value = "";
-  forceFullReview.value = false;
-  mode.value = "review";
-  rereviewContext.value = null;
-  draftPlan.value = undefined;
-  planDirty.value = false;
-  createdTaskId.value = null;
-  activePage.value = "dashboard";
-  reviewSection.value = "overview";
-  mobileOpen.value = false;
-}
-
-async function deleteHistoricalReview(taskId: string, signal?: AbortSignal) {
-  await deleteReview(taskId, signal);
-  onReviewDeleted(taskId);
-}
-
-function onReviewDeleted(taskId: string) {
-  if (task.value?.id !== taskId) return;
-  reviewInputGeneration++;
-  clearAll(false);
-  dismissNotice();
-  task.value = null;
-  report.value = null;
-  createdTaskId.value = null;
-  error.value = null;
-  reviewSection.value = "overview";
-  activePage.value = "history";
-}
-
-async function rereviewCurrentPr() {
-  if (!task.value || taskActive.value || submitting.value || opening.value) return;
-  const input = rereviewInput(task.value);
-  if (!input) {
-    error.value = "原审查未保存有效的 GitHub PR 链接，请使用新建审查输入链接。";
-    return;
-  }
-  startNewReview();
-  const generation = reviewInputGeneration;
-  prUrl.value = input.prUrl;
-  model.value = input.model;
-  // Let input watchers invalidate the old plan before applying the new editable draft.
-  await nextTick();
-  if (generation !== reviewInputGeneration || task.value || prUrl.value !== input.prUrl) return;
-  draftPlan.value = input.plan;
-  planDirty.value = true;
-  rereviewContext.value = input;
-  await loadQuickPreview();
-}
-
-function clearPolling() {
-  if (pollTimer !== undefined) {
-    window.clearInterval(pollTimer);
-    pollTimer = undefined;
-  }
-  if (eventSource) {
-    eventSource.close();
-    eventSource = undefined;
-  }
-  clearScheduledRefresh();
-}
-
-function clearAll(forgetPreview = true) {
-  cancelPreview(forgetPreview);
-  clearPolling();
-  trackingTaskId = null;
-  reportTaskId = null;
-  reportPromise = null;
-  document.title = "RepoGuardian";
-}
-
-function cancelPreview(forget = true) {
-  quickTracker.reset();
-  previewRequestId += 1;
-  previewTracker.detach(forget);
-}
-onBeforeUnmount(() => {
-  clearAll(false);
-  dismissNotice();
-});
+onBeforeUnmount(()=>{generation++;historyGeneration++;controller?.abort();closeStream?.();if(timer)clearTimeout(timer);tracker.detach();});
 </script>
-
 <template>
-  <div class="app rg-app" @keydown.esc="mobileOpen = false">
-    <div class="toast-region" aria-live="polite" aria-atomic="true">
-      <section v-if="notice" class="task-toast" :data-tone="notice.tone">
-        <span class="task-toast__icon"><AppIcon :name="notice.tone === 'success' ? 'check-circle' : notice.tone === 'info' ? 'info' : 'alert'" :size="19" /></span>
-        <div><strong>{{ notice.title }}</strong><p>{{ notice.message }}</p></div>
-        <button v-if="notice.actionLabel" type="button" class="button button--ghost button--compact" @click="showReviewResult">{{ notice.actionLabel }}</button>
-        <button type="button" class="icon-button task-toast__close" aria-label="关闭通知" @click="dismissNotice"><AppIcon name="x" :size="15" /></button>
-      </section>
-    </div>
-    <button v-if="mobileOpen" type="button" class="rg-nav-backdrop" aria-label="关闭导航遮罩" @click="mobileOpen = false" />
-    <AppSidebar v-model="activePage" :section="reviewSection" :has-review="Boolean(task)" :task-active="taskActive" :mobile-open="mobileOpen" :busy="submitting || opening" @section="navigateReview" @create="startNewReview" @close="mobileOpen = false" />
-    <div class="main">
-      <AppHeader :title="pageTitle" :status-text="statusText" :menu-open="mobileOpen" @menu="mobileOpen = !mobileOpen" />
-      <main v-if="activePage === 'dashboard'" id="workspace-content" class="page">
-        <ReviewWorkspace v-if="task" :key="task.id" :task="task" :report="report" :section="reviewSection" :status-text="statusText" :duration="taskDuration" :cancelling="cancelling" :retrying-unit-id="retryingUnitId" @navigate="navigateReview" @cancel="cancelCurrentReview" @create="startNewReview" @rereview="rereviewCurrentPr" @retry="retryUnit" />
-        <ReviewPlanPage v-else-if="preview" v-model:model="model" v-model:force-full-review="forceFullReview" @resume="continueReview" @open-existing="openHistoricalReview($event)" @fresh-review="prepareFreshReview" :preview="preview" :capabilities="capabilities" :dirty="planDirty" :previewing="previewing" @change="changePlan" @repreview="loadPreview" :pr-url="prUrl" :models="models" :default-model="defaultModel" :models-loading="modelsLoading" :models-error="modelsError" :submitting="submitting || Boolean(createdTaskId && !task)" :created="Boolean(createdTaskId && !task && !submitting)" :preview-job="previewJob" @submit="submitReview" @back="backToInput" @open-created="createdTaskId && openHistoricalReview(createdTaskId)" />
-        <section v-else-if="opening" class="card card-pad workspace-loading" role="status" aria-live="polite">正在打开审查记录…</section>
-        <QuickPreviewPage v-else-if="quickOverview || quickLoading || quickError" :overview="quickOverview" :loading="quickLoading" :error="quickError" :pr-url="prUrl" @prepare="loadPreview" @retry="loadQuickPreview" @back="backToInput" />
-        <PreviewPage v-else-if="previewStage" :job="previewJob" :tracking="previewing" :connection-error="previewConnectionError" :pr-url="prUrl" :model="model" :default-model="defaultModel" @resume="restorePreview" @cancel="cancelPreviewJob" @retry="loadPreview" @back="backToInput" />
-        <NewReviewPage v-else v-model:pr-url="prUrl" :loading="quickLoading" :busy="submitting || opening" @preview="loadQuickPreview" @open="openHistoricalReview" @history="activePage = 'history'" />
-      </main>
-      <ReviewHistoryPage v-else-if="activePage === 'history'" :busy="submitting || opening || taskActive" :delete-task="deleteHistoricalReview" @open="openHistoricalReview" @create="startNewReview" />
-      <SettingsPage v-else :capabilities="capabilities" @settings-saved="loadAvailableModels" />
-    </div>
-    <dialog ref="errorDialog" class="rg-dialog rg-error-dialog" role="alertdialog" aria-labelledby="rg-error-title" @close="error = null" @click.self="dismissError">
-      <div class="rg-error-dialog__head">
-        <span class="rg-error-dialog__icon"><AppIcon name="alert" :size="20" /></span>
-        <div><h2 id="rg-error-title">{{ errorTitle }}</h2><p>{{ error }}</p></div>
-      </div>
-      <div class="rg-error-dialog__actions"><button type="button" class="btn primary" @click="dismissError">知道了</button></div>
-    </dialog>
-  </div>
+ <div class="native-app"><aside class="native-sidebar"><a class="native-brand" href="#" @click.prevent="newReview"><span>RG</span>RepoGuardian</a><p class="native-eyebrow">原生多视角代码审查</p><nav aria-label="主导航"><button :aria-current="page==='review'?'page':undefined" @click="page='review'">当前审查</button><button :aria-current="page==='history'?'page':undefined" @click="goHistory">审查历史</button><button :aria-current="page==='settings'?'page':undefined" @click="page='settings'">系统设置</button></nav><button class="button button--primary" @click="newReview">新建审查</button><p class="native-sidebar-note">固定快照 · 只读工具<br>独立核验 · 显式发布</p></aside>
+ <main class="native-main"><header class="native-topbar"><span>{{ page==='history'?'审查历史':page==='settings'?'系统设置':task?'当前审查':'新建审查' }}</span><small>LangGraph + LangChain</small></header><div class="native-content"><p v-if="error" role="alert" class="native-error">{{ error }}</p>
+ <NativeSettings v-if="page==='settings'" />
+ <section v-else-if="page==='history'" class="native-panel"><h1>审查历史</h1><form @submit.prevent="historyPage=1;loadHistory()" class="native-actions"><label class="native-grow">搜索 PR、标题或任务<input v-model="search" placeholder="仓库、PR 或关键词" /></label><button class="button button--secondary">搜索</button></form><div class="native-table-wrap"><table><thead><tr><th>审查</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody><tr v-for="item in history" :key="item.id"><td><button class="native-link" @click="page='review';preview=null;tracker.detach();follow(item.id)">{{ item.pr.title }}</button><small>{{ item.pr.owner }}/{{ item.pr.repo }} #{{ item.pr.number }}</small></td><td><StatusBadge :status="item.status" /></td><td>{{ new Date(item.created_at).toLocaleString() }}</td><td><button v-if="terminal(item.status)" class="button button--ghost" @click="remove(item.id)">删除</button></td></tr></tbody></table></div><div class="native-actions"><button class="button button--secondary" :disabled="historyPage===1" @click="historyPage--;loadHistory()">上一页</button><span>{{ historyPage }} 页 · 共 {{ historyTotal }} 条</span><button class="button button--secondary" :disabled="historyPage*20>=historyTotal" @click="historyPage++;loadHistory()">下一页</button></div></section>
+ <NativeReview v-else-if="task" :task="task" @cancel="stop" @resume="resume" @rereview="rereview" />
+ <template v-else><section class="native-intro"><p class="native-eyebrow">从真实源码出发</p><h1>让不同视角，<br>独立检查同一次变更。</h1><p>行为审查关注回归，契约审查追踪调用链，风险专家按需介入。只有通过可信证据和独立核验的问题，才进入交付草稿。</p></section>
+ <section v-if="!preview" class="native-panel"><h2>准备审查方案</h2><form @submit.prevent="prepare" class="native-form"><label>GitHub Pull Request<input v-model="prUrl" type="url" required placeholder="https://github.com/owner/repo/pull/123" :disabled="busy||tracking" /></label><label>模型（可选）<input v-model="model" list="native-models" placeholder="使用服务端默认模型" :disabled="busy||tracking" /><datalist id="native-models"><option v-for="id in models" :key="id" :value="id" /></datalist></label><div class="native-form-grid"><label>审查深度<select v-model="options.depth" :disabled="busy||tracking"><option value="quick">快速初筛</option><option value="standard">标准审查</option><option value="deep">深度核验</option></select></label><label>主审范围<select v-model="selectedMode" :disabled="busy||tracking"><option value="all">全部合格变更文件</option><option value="selected">指定变更文件</option></select></label></div><label v-if="selectedMode==='selected'">文件路径（每行一个）<textarea v-model="selectedPaths" required :disabled="busy||tracking" /></label><fieldset :disabled="busy||tracking"><legend>关注重点</legend><label v-for="(label,key) in focusLabels" :key="key" class="native-check"><input v-model="options.focus" type="checkbox" :value="key" />{{ label }}</label></fieldset><label class="native-check"><input v-model="options.include_pr_discussions" type="checkbox" :disabled="busy||tracking||!capabilities?.pr_discussions_available" />纳入冻结的 PR 讨论上下文</label><details><summary>运行保护上限（留空使用服务端默认）</summary><div class="native-form-grid"><label v-for="(label,key) in limitLabels" :key="key">{{ label }}<input :value="options.limits[key as keyof ReviewPlanOptions['limits']]??''" type="number" min="1" :disabled="busy||tracking" @input="options.limits[key as keyof ReviewPlanOptions['limits']]=($event.target as HTMLInputElement).value?Number(($event.target as HTMLInputElement).value):null" /></label></div></details><button class="button button--primary" :disabled="!validUrl||!options.focus.length||busy||tracking">{{ busy||tracking?'正在准备固定快照…':'生成审查方案' }}</button></form><p class="native-muted">此步骤只获取 PR、固定源码与静态索引，不调用审查模型。</p></section>
+ <section v-if="job&&!preview" class="native-panel" aria-live="polite"><h2>仓库准备进度</h2><p v-for="(stage,index) in job.stages" :key="index">{{ stage.message }} <span v-if="stage.percent!==null">{{ stage.percent }}%</span></p><p v-if="connectionError">{{ connectionError }}</p><div class="native-actions"><button v-if="tracking" class="button button--secondary" @click="tracker.cancel">取消预览</button><button v-if="connectionError" class="button button--secondary" @click="restorePreview">重新连接</button></div></section>
+ <section v-if="preview" class="native-panel"><p class="native-eyebrow">确认后才开始模型审查</p><h2>审查方案已准备</h2><p>{{ preview.changed_files.filter(f=>f.included).length }} 个主审文件 · {{ preview.assignments.length }} 个独立审查任务 · {{ preview.goals.length }} 个源码检查范围</p><dl class="native-facts"><div><dt>HEAD</dt><dd><code>{{ preview.snapshot.head_sha }}</code></dd></div><div><dt>有效 BASE</dt><dd><code>{{ preview.snapshot.effective_base_sha }}</code></dd></div><div><dt>期限 / 并发</dt><dd>{{ preview.limits.timeout_seconds }} 秒 / {{ preview.limits.concurrency }}</dd></div></dl><ul><li v-for="assignment in preview.assignments" :key="assignment.id">{{ phaseLabel(assignment.reviewer) }} · {{ assignment.focus_paths.join('、') }}</li></ul><p v-for="warning in preview.warnings" :key="warning">{{ warning }}</p><p class="native-muted">核验与必要补查会产生额外模型调用。用量由供应商实际返回记录，未知不计为零。方案有效至 {{ new Date(preview.expires_at).toLocaleTimeString() }}。</p><div class="native-actions"><button class="button button--primary" :disabled="busy" @click="start">{{ busy?'启动中…':'确认方案并开始审查' }}</button><button class="button button--secondary" :disabled="busy" @click="preview=null;tracker.detach(true)">修改方案</button></div></section>
+ </template></div></main></div>
 </template>

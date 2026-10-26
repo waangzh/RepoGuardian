@@ -3,6 +3,7 @@ import App from "./App.vue";
 import "./styles.css";
 import "./styles/prototype.css";
 import "./styles/workspace.css";
+import "./styles/native-review.css";
 
 createApp(App).mount("#app");
 

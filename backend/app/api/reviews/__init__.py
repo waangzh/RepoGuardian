@@ -20,8 +20,8 @@ from app.api.reviews.report import (  # noqa: E402
     check_review_comment, get_publication_plan, get_publication_summary, get_report, preview_review_comment,
 )
 from app.api.reviews.tasks import (  # noqa: E402
-    cancel_review, create_review, delete_review, get_review, get_review_issue,
-    get_review_unit, list_reviews, resume_review, retry_review_unit,
+    cancel_review, create_review, delete_review, get_review, get_review_assignment,
+    list_reviews, resume_review,
 )
 
 __all__ = [
@@ -31,9 +31,7 @@ __all__ = [
     "get_findings", "update_finding_disposition", "cancel_preview_job", "create_preview_job",
     "get_preview_job", "preview_review", "quick_preview_review", "check_review_comment",
     "get_publication_plan", "get_publication_summary", "get_report", "preview_review_comment",
-    "cancel_review", "create_review", "delete_review", "get_review", "get_review_issue",
-    "get_review_unit", "list_reviews",
-    "resume_review", "retry_review_unit",
+    "cancel_review", "create_review", "delete_review", "get_review", "get_review_assignment", "list_reviews", "resume_review",
 ]
 
 from app.api.reviews.events import router as events_router

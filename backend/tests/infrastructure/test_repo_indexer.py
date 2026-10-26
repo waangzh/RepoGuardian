@@ -410,7 +410,6 @@ def test_call_graph_rejects_python_builtins_linked_to_javascript_methods():
     assert {symbol["id"] for symbol in graph["symbols"]} == {
         "model.py::forward", "web.js::ZodNumber.int", "web.js::NodePos.range"}
     assert symbols[0]["calls"] == ["int", "range"]
-    assert graph["metadata"]["call_resolution_version"] == "import-evidence-v3"
 
 
 @pytest.mark.parametrize("source_language,target_language", [

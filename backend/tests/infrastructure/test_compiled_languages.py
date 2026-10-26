@@ -1,10 +1,7 @@
 import pytest
-from pydantic import ValidationError
 
 from app.languages.base import AnalysisLevel, SymbolRef
 from app.languages.registry import default_language_registry
-from app.models.review import ContextRetrievalPlan
-from app.tools.code_search import CodeSearchTool, ContextRetrievalPlanError
 from app.tools.repo_indexer import RepoIndexer
 
 
@@ -192,53 +189,16 @@ def test_failure_is_explicit_l1(language, failure, tmp_path, monkeypatch):
     assert all(symbol.confidence < 0.9 and symbol.symbol_id is None for symbol in result.symbols)
 
 
-def test_legacy_identity_is_omitted():
+def test_optional_symbol_identity_is_omitted():
     symbol = SymbolRef(file="a.py", name="f", kind="function", start_line=1, end_line=1,
                        confidence=0.98, parser_id="tree-sitter.python.v1")
     assert "symbol_id" not in symbol.to_index_entry()
 
 
-@pytest.mark.parametrize("name", ["Outer.Inner.read", "inner.Box.使用", "使用.方法", "Outer.$member"])
-def test_qualified_identifiers_are_literals(name):
-    assert ContextRetrievalPlan(reason="indexed", target_symbols=[name], relevance_types=["direct"])
 
 
-@pytest.mark.parametrize("name", ["Outer..read", "a();evil", "../a", "a::b", "a.1", "a\nb", "a b"])
-def test_symbol_expressions_remain_rejected(name):
-    with pytest.raises(ValidationError):
-        ContextRetrievalPlan(reason="unsafe", target_symbols=[name], relevance_types=["direct"])
 
 
-@pytest.mark.asyncio
-async def test_index_graph_search_integration(tmp_path):
-    for filename, source in SOURCES.values():
-        (tmp_path / filename).write_text(source, encoding="utf-8")
-    (tmp_path / "foreign.py").write_text("def convert(): pass\n", encoding="utf-8")
-    index = await RepoIndexer().execute(repo_path=str(tmp_path))
-    files = {item["path"]: item for item in index["file_index"]}
-    assert all(files[filename]["analysis_level"] == 2 for filename, _ in SOURCES.values())
-    assert all(files[filename]["diagnostics"] == [] for filename, _ in SOURCES.values())
-    graph = index["repository_graph"]
-    assert len({symbol["id"] for symbol in graph["symbols"]}) == len(graph["symbols"])
-    for edge in graph["edges"]:
-        if edge["type"] == "calls" and edge.get("source_file") != "foreign.py":
-            assert edge["resolution_status"] == "unresolved"
-            assert edge["relationship_level"] == "search_hint"
-            assert edge.get("target_file") != "foreign.py"
-    snippets = await CodeSearchTool().retrieve_context(changed_files=[], repo_path=str(tmp_path),
-        **{key: index[key] for key in ("file_index", "symbol_index", "repository_graph")},
-        plan=ContextRetrievalPlan(reason="overloads", target_files=["Outer.java"],
-            target_symbols=["Outer.Inner.same"], relevance_types=["direct"]))
-    assert len(snippets) == 2
-    assert snippets[0]["content"] == snippets[1]["content"]  # Two declarations share a source line.
-    types = await CodeSearchTool().retrieve_context(changed_files=[], repo_path=str(tmp_path),
-        **{key: index[key] for key in ("file_index", "symbol_index")},
-        plan=ContextRetrievalPlan(reason="types", target_files=["main.go"], relevance_types=["type_definition"]))
-    assert {snippet["symbol"] for snippet in types} == {"Box", "Reader", "Alias"}
-    with pytest.raises(ContextRetrievalPlanError, match="not in symbol index"):
-        await CodeSearchTool().retrieve_context(changed_files=[], repo_path=str(tmp_path),
-            file_index=index["file_index"], symbol_index=index["symbol_index"],
-            plan=ContextRetrievalPlan(reason="unknown", target_symbols=["Not.Indexed"], relevance_types=["direct"]))
 
 
 @pytest.mark.asyncio
@@ -260,43 +220,8 @@ async def test_downgrade_diagnostic_reaches_file_index(tmp_path):
     assert index[0]["diagnostics"]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("language,target,caller", [
-    ("go", "Echo", "使用"), ("java", "Outer.Inner.run", "Outer.Inner.使用"),
-    ("rust", "helper", "entry"),
-])
-async def test_call_search_is_language_bounded_and_unresolved(language, target, caller, tmp_path):
-    filename, source = SOURCES[language]
-    if language == "rust":
-        source = "fn entry() { helper(); }\nfn helper() {}\n"
-    (tmp_path / filename).write_text(source, encoding="utf-8")
-    simple = target.rsplit(".", 1)[-1]
-    (tmp_path / "foreign.py").write_text(f"def {simple}(): pass\ndef foreign(): {simple}()\n", encoding="utf-8")
-    index = await RepoIndexer().execute(repo_path=str(tmp_path))
-    async def retrieve(symbol, relation):
-        return await CodeSearchTool().retrieve_context(changed_files=[], repo_path=str(tmp_path),
-            file_index=index["file_index"], symbol_index=index["symbol_index"],
-            plan=ContextRetrievalPlan(reason="calls", target_files=[filename],
-                target_symbols=[symbol], relevance_types=[relation]))
-    callers = await retrieve(target, "caller")
-    assert any(item["symbol"] == caller for item in callers)
-    callees = await retrieve(caller, "callee")
-    assert any(item["symbol"] == target for item in callees)
-    assert all(item["file"] == filename for item in callers + callees)
-    assert all(item["resolution_status"] == "unresolved" and item["relationship_level"] == "search_hint"
-               for item in callers + callees)
 
 
-def test_cache_version_separates_old_indexes(monkeypatch):
-    from types import SimpleNamespace
-
-    from app.services.preview import preview_input_cache as cache
-    pr = SimpleNamespace(clone_url="https://example.test/repo", base=SimpleNamespace(sha="a" * 40),
-                         head=SimpleNamespace(sha="b" * 40))
-    configuration = {"call_resolution_version": "import-evidence-v5"}
-    current = cache.input_cache_key(pr, configuration)
-    monkeypatch.setattr(cache, "INDEX_CACHE_VERSION", "preview-input-v2")
-    assert cache.input_cache_key(pr, configuration) != current
 
 
 def test_go_grouped_types_aliases_and_source_order(tmp_path):
@@ -343,7 +268,6 @@ async def test_compiled_type_definition_kinds(language, filename, source, expect
     index = await RepoIndexer().execute(repo_path=str(tmp_path))
     assert index["file_index"][0]["analysis_level"] == 2
     assert index["file_index"][0]["language"] == language
-    snippets = await CodeSearchTool().retrieve_context(changed_files=[], repo_path=str(tmp_path),
-        file_index=index["file_index"], symbol_index=index["symbol_index"],
-        plan=ContextRetrievalPlan(reason="types", target_files=[filename], relevance_types=["type_definition"]))
-    assert {snippet["symbol"] for snippet in snippets} == expected
+    declarations = {symbol["symbol"] for symbol in index["symbol_index"]
+                    if symbol["type"] in {"interface", "enum", "record", "annotation", "struct", "trait", "type"}}
+    assert expected <= declarations

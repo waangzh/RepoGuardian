@@ -76,8 +76,8 @@ export interface ChangeUnderstanding {
 }
 export interface ReviewDigest {
   discussion_review_enabled?: boolean | null;
-  discussion_stats?: import("./prDiscussion").DiscussionStats | null;
-  discussion_rechecks?: import("./prDiscussion").DiscussionRecheck[];
+  discussion_stats?: {status:string;collected:number;checked:number;unchecked:number;limitations:string[]} | null;
+  discussion_rechecks?: {discussion_id:string;status:string;reason:string}[];
   discussion_links?: Record<string, string>;
   pr_url?: string | null;
   author_goal?: string | null;
@@ -110,8 +110,7 @@ export interface DigestIntent {
     evidence_ids: string[]; limitations: string[] }[];
 }
 export interface MergeDecision {
-  /** review_suggestions 仅用于兼容旧冻结计划；当前后端只生成三态。 */
-  status: "unavailable" | "fix_blockers" | "resolve_unknowns" | "review_suggestions" | "conditional_merge";
+  status: "unavailable" | "fix_blockers" | "resolve_unknowns" | "conditional_merge";
   label: string;
   advice: string;
   blocking_finding_keys: string[];
@@ -120,7 +119,6 @@ export interface MergeDecision {
   limits: string[];
   blocking_historical_keys?: string[];
   nonblocking_historical_keys?: string[];
-  /** 按严格重复关联去重后的独立缺陷数；缺失时（旧冻结计划）回退为来源相加。 */
   blocking_independent_count?: number | null;
   nonblocking_independent_count?: number | null;
   /** 与本轮问题指向同一缺陷、已在计数中合并的历史讨论。 */
@@ -147,6 +145,7 @@ export interface PublicationAnchor {
 }
 
 export interface PublicationFinding {
+  attribution: 'introduced' | 'exposed' | 'pre_existing' | 'uncertain';
   finding_key: string;
   default_selected?: boolean;
   default_selection_reason?: string | null;
@@ -157,10 +156,7 @@ export interface PublicationFinding {
   placement: "inline" | "summary";
   anchor: PublicationAnchor;
   title: string;
-  /** Plain text in new plans; missing on legacy plans whose title was Markdown-escaped. */
-  raw_title?: string | null;
   body_markdown: string;
-  legacy_body_markdown?: string | null;
   affected_behavior: string;
   failure_scenario: string;
   recommendation: string;
@@ -175,7 +171,6 @@ export interface WithheldFinding {
 }
 
 export interface PublicationPlan {
-  schema_version: "review-publication-v1";
   review_id: string;
   snapshot: PublicationSnapshot;
   outcome: ReviewOutcome;
@@ -193,7 +188,7 @@ export interface PublicationPlan {
 
 export interface ReviewSummaryDigest {
   discussion_review_enabled?: boolean | null;
-  discussion_stats?: import("./prDiscussion").DiscussionStats | null;
+  discussion_stats?: {status:string;collected:number;checked:number;unchecked:number;limitations:string[]} | null;
   author_goal?: string | null;
   author_context_status?: "complete" | "truncated" | "unknown" | "not_recorded";
   author_context_limitation?: string | null;
@@ -206,7 +201,6 @@ export interface ReviewSummaryDigest {
   termination_reason: string | null;
 }
 export interface ReviewSummary {
-  schema_version: "review-summary-v1";
   review_id: string;
   snapshot: PublicationSnapshot;
   outcome: ReviewOutcome;
@@ -229,18 +223,7 @@ export interface PresentationDelivery {
   actual_published: number | null;
 }
 
-export interface SummaryInputCoverage {
-  truncation_reasons: (
-    | "author_context_truncated" | "source_text_truncated" | "diff_hunk_truncated"
-    | "diff_hunk_omitted" | "diff_metadata_only" | "source_count_limited" | "input_size_limited"
-    | "review_scope_excluded" | "sensitive_or_binary_excluded" | "invalid_path_excluded"
-  )[];
-  omitted_files: number;
-  omitted_hunks: number;
-}
-
 export interface ReviewPresentation {
-  schema_version: "review-presentation-v1" | "review-presentation-v2";
   review_id: string;
   snapshot: PublicationSnapshot;
   language: "zh-CN";
@@ -255,7 +238,6 @@ export interface ReviewPresentation {
   findings: PublicationFinding[];
   delivery: PresentationDelivery;
   limitations: string[];
-  summary_input_coverage?: SummaryInputCoverage | null;
 }
 
 export interface ReviewCommentCheck {
@@ -265,7 +247,7 @@ export interface ReviewCommentCheck {
   latest_head_sha: string | null;
   checked_at: string;
   review_comment_markdown: string;
-  preview_markdown?: string | null;
+  preview_markdown: string;
   included_finding_keys: string[];
   omitted_finding_keys: string[];
   retained_blocking_keys: string[];

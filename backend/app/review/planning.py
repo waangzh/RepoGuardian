@@ -7,7 +7,7 @@ from app.review.models import ReviewAssignment, ReviewGoal
 from app.review.tool_scope import is_sensitive_repository_change
 
 
-def plan_review(changed_files: list[dict], *, depth: str, selected_paths=None):
+def plan_review(changed_files: list[dict], *, depth: str, selected_paths=None, focus=()):
     goals, assignments, excluded = [], [], []
     for change in changed_files:
         path = change["file_path"]
@@ -45,7 +45,7 @@ def plan_review(changed_files: list[dict], *, depth: str, selected_paths=None):
                     "behavior": "检查变更前后的行为差异、异常路径与边界回归",
                     "contract": "检查调用者、消费者、数据结构与跨模块契约",
                     "specialist": "检查本次变更中的权限、并发、事务和资源生命周期风险",
-                }[role] + f"；审查深度：{depth}",
+                }[role] + f"；审查深度：{depth}；重点：{', '.join(focus)}",
             ))
     unique_goals = {goal.id: goal for goal in goals}
     return list(unique_goals.values()), assignments, excluded

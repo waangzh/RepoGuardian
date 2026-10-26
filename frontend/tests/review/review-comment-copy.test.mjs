@@ -4,7 +4,7 @@ import { createServer } from "vite";
 import { effectScope, ref } from "vue";
 
 test("完整评论与单条评论共用快照、确认和请求生命周期边界", async t => {
-  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, optimizeDeps: { noDiscovery: true, entries: [], include: [] }, appType: "custom" });
   const previousNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
   const writes = [];
   let denyClipboard = false;
@@ -81,13 +81,13 @@ test("完整评论与单条评论共用快照、确认和请求生命周期边�
         });
       }
     }
-    await t.test("旧接口无独立预览正文时也必须先确认变化，来源变化清除更新后的预览", async () => {
+    await t.test("缺少独立预览正文时拒绝交付，来源变化仍清除检查状态", async () => {
       const c = setup();
       try {
         const copy = c.state.copyCheckedComment();
         c.requests[0].resolve(c.result("current", { preview_markdown: undefined, review_comment_markdown: "新版正文" }));
         await copy;
-        assert.deepEqual(writes, []); assert.equal(c.state.previewMarkdown.value, "新版正文");
+        assert.deepEqual(writes, []); assert.equal(c.state.previewMarkdown.value, "旧预览正文");
         c.markdown.value = "来源再次刷新";
         assert.equal(c.state.previewMarkdown.value, "来源再次刷新");
         assert.equal(c.state.headCheck.value, null);

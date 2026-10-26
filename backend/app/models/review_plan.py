@@ -1,4 +1,4 @@
-"""版本化的用户方案；权限和资源上限由服务端归一化。"""
+"""当前用户方案与只读产品投影；权限和资源上限由服务端归一化。"""
 from datetime import datetime
 from typing import Literal
 
@@ -10,10 +10,11 @@ class PlanModel(BaseModel):
 
 
 class ReviewLimits(PlanModel):
-    max_model_calls: int | None = Field(default=None, ge=0, strict=True)
-    max_tokens: int | None = Field(default=None, ge=0, strict=True)
-    max_cost_microusd: int | None = Field(default=None, ge=0, strict=True)
+    model_calls: int | None = Field(default=None, ge=1, le=100, strict=True)
+    tool_calls: int | None = Field(default=None, ge=1, le=500, strict=True)
+    concurrency: int | None = Field(default=None, ge=1, le=16, strict=True)
     timeout_seconds: int | None = Field(default=None, gt=0, strict=True)
+    output_tokens: int | None = Field(default=None, ge=256, le=32768, strict=True)
 
 
 class ReviewScope(PlanModel):
@@ -34,7 +35,6 @@ class ReviewScope(PlanModel):
 
 
 class ReviewPlanOptions(PlanModel):
-    version: Literal["review-plan-v1"] = "review-plan-v1"
     depth: Literal["quick", "standard", "deep"] = "standard"
     focus: list[Literal["correctness", "security", "performance", "compatibility"]] = Field(
         default_factory=lambda: ["correctness", "security", "performance", "compatibility"], min_length=1, max_length=4)
@@ -62,14 +62,10 @@ class PlanSnapshot(PlanModel):
 
 
 class ReviewCapabilities(PlanModel):
-    schema_version: Literal["review-capabilities-v1"] = "review-capabilities-v1"
-    engine: Literal["task_review_v1"] = "task_review_v1"
-    plan_version: Literal["review-plan-v1"] = "review-plan-v1"
-    policy_version: str
     depth_presets: list[dict]
     focus_categories: list[str]
     scope_selection_supported: bool = True
-    context_boundary: str = "repository-tracked-v1; sensitive paths and symlink escapes denied"
+    context_boundary: str = "fixed Git blobs; sensitive paths and symlink escapes denied"
     limits: dict
     preferences_sync_supported: bool = False
     pr_discussions_available: bool = False
@@ -114,7 +110,8 @@ class FindingVerification(PlanModel):
 
 class FindingView(PlanModel):
     id: str
-    # status 保留历史原值；消费者使用归一化 review_status 判断机器结论。
+    attribution: Literal["introduced", "exposed", "pre_existing", "uncertain"] = "uncertain"
+    # 机器结论与人工处理、远端投递分开。
     status: str
     review_status: Literal["candidate", "confirmed", "unresolved", "dismissed", "unknown"] = "unknown"
     title: str | None = None

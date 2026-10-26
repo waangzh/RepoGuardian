@@ -36,6 +36,8 @@ class LocalArtifactStore:
             return self._put_text(task_id=task_id, kind=kind, content=content)
 
     def _put_text(self, *, task_id: str, kind: str, content: str) -> StoredArtifact:
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", task_id):
+            raise ValueError("invalid artifact owner")
         if not re.fullmatch(r"[a-zA-Z0-9_-]+", kind):
             raise ValueError("invalid artifact kind")
         data = content.encode("utf-8")

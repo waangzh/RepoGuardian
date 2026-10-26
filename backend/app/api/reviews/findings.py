@@ -12,9 +12,7 @@ import asyncio
 from fastapi import APIRouter, HTTPException
 
 from app.api import reviews as _reviews
-from app.models.review import (
-    TaskStatus,
-)
+from app.review.contracts import TERMINAL_STATUSES
 from app.models.review_plan import FindingDisposition, FindingsResponse
 from app.services.review.review_findings import finding_views
 
@@ -28,7 +26,7 @@ async def get_findings(task_id: str) -> FindingsResponse:
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     saved = await asyncio.to_thread(service.finding_dispositions, task_id)
-    return FindingsResponse(items=finding_views(task, saved))
+    return FindingsResponse(items=await asyncio.to_thread(finding_views, task, saved, service._artifacts))
 
 
 @router.patch("/{task_id}/findings/{finding_id}/disposition", response_model=FindingsResponse)
@@ -37,9 +35,9 @@ async def update_finding_disposition(task_id: str, finding_id: str, value: Findi
     task = await asyncio.to_thread(service.get_task, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    if task.status not in {TaskStatus.completed, TaskStatus.completed_with_warnings, TaskStatus.failed, TaskStatus.cancelled}:
+    if task.status not in TERMINAL_STATUSES:
         raise HTTPException(status_code=409, detail="Review must be terminal before human disposition")
-    if finding_id not in {item.id for item in finding_views(task, {})}:
+    if finding_id not in {item.id for item in await asyncio.to_thread(finding_views, task, {}, service._artifacts)}:
         raise HTTPException(status_code=404, detail="Finding not found")
     try:
         await asyncio.to_thread(service.save_finding_disposition, task_id,

@@ -90,11 +90,7 @@ class PublicationDelivery:
             validate_comment(remote, context, review=True)
             expected = locations.get(finding.finding_key)
             if (valid_reviews.get(remote.get("pull_request_review_id")) != match[1]
-                    or remote["body"] not in {
-                        finding_body(finding, match[1]),
-                        finding_body(finding.model_copy(update={
-                            "body_markdown": finding.legacy_body_markdown or finding.body_markdown}), match[1]),
-                    } or not expected
+                    or remote["body"] != finding_body(finding, match[1]) or not expected
                     or any(remote.get(key) != value for key, value in expected.items())):
                 raise GitHubPublishError("inline_identity_conflict", uncertain=True)
             if finding.finding_key in matches:
@@ -191,8 +187,10 @@ class PublicationDelivery:
             await self.sticky.reconcile(attempt, lease)
             await self.recover_batches(attempt, lease, context)
             task = await asyncio.to_thread(self.task_loader, attempt.review_id)
-            if task is None:
+            if task is None or task.status not in {"completed", "completed_with_warnings"}:
                 raise GitHubPublishError("review_not_found")
+            if task.snapshot.head_sha != attempt.head_sha:
+                raise GitHubPublishError("publication_stale")
             checked = await self.preflight.check(task, selection["finding_keys"])
             if checked["plan_hash"] != attempt.plan_hash or checked["context"] != context:
                 raise GitHubPublishError("publication_plan_changed")

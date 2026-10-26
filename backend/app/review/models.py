@@ -16,7 +16,7 @@ class ReviewModel(BaseModel):
 
 
 class ReviewSnapshot(ReviewModel):
-    review_id: str
+    review_id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,64}$")
     repository: str
     pr_number: int = Field(ge=1)
     base_sha: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
@@ -124,6 +124,7 @@ class AgentResult(ReviewModel):
     model_calls: int | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
+    read_errors: int = Field(default=0, ge=0)
 
 
 class VerifiedFinding(ReviewModel):
@@ -138,7 +139,7 @@ class ReviewLimits(ReviewModel):
     concurrency: int = Field(default=4, ge=1, le=16)
     model_calls: int = Field(default=24, ge=1, le=100)
     tool_calls: int = Field(default=80, ge=1, le=500)
-    timeout_seconds: float = Field(default=1800, ge=1, le=86400)
+    timeout_seconds: int = Field(default=1800, ge=1, le=86400)
     output_tokens: int = Field(default=4096, ge=256, le=32768)
 
 

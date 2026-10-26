@@ -24,18 +24,34 @@ async def get_pr_discussions(task_id: str, page: int = Query(1, ge=1),
                              discussion_id: str | None = Query(None, max_length=256),
                              comment_offset: int = Query(0, ge=0),
                              comment_limit: int = Query(20, ge=1, le=100)):
-    from app.services.discussions.pr_discussions import discussion_page
     service = _reviews.get_review_service()
     task = await asyncio.to_thread(service.get_task, task_id)
     if task is None:
-        raise HTTPException(status_code=404, detail="Review not found")
+        raise HTTPException(404, "Review not found")
+    if not task.pr_discussion:
+        return {"items": [], "total": 0, "status": "not_included"}
     try:
-        return await discussion_page(task, service.repository, page=page, page_size=page_size,
-            discussion_id=discussion_id, comment_offset=comment_offset, comment_limit=comment_limit)
-    except LookupError:
-        raise HTTPException(status_code=404, detail="Discussion not found") from None
+        from app.models.pr_discussion import DiscussionSnapshot
+        raw = await asyncio.to_thread(service._artifacts.read_text, task.pr_discussion["artifact_uri"])
+        snapshot = DiscussionSnapshot.model_validate_json(raw)
+        if (snapshot.task_id != task_id or snapshot.head_sha != task.snapshot.head_sha
+                or snapshot.base_sha != task.snapshot.effective_base_sha):
+            raise ValueError("discussion_snapshot_mismatch")
     except (ValueError, OSError):
-        raise HTTPException(status_code=409, detail="Discussion snapshot is missing or invalid") from None
+        raise HTTPException(409, "Discussion snapshot is missing or invalid") from None
+    threads = snapshot.threads
+    if discussion_id:
+        threads = [thread for thread in threads if thread.id == discussion_id]
+        if not threads:
+            raise HTTPException(404, "Discussion not found")
+    start = (page - 1) * page_size
+    visible = []
+    for thread in threads[start:start + page_size]:
+        item = thread.model_dump(mode="json")
+        item["comments"] = item["comments"][comment_offset:comment_offset + comment_limit]
+        visible.append(item)
+    return {"items": visible, "total": len(threads), "page": page, "page_size": page_size,
+            "sources": snapshot.sources, "limitations": snapshot.limitations}
 
 
 @router.get("/{task_id}/stream")
@@ -46,7 +62,7 @@ async def stream_review(task_id: str, request: Request) -> EventSourceResponse:
         raise HTTPException(status_code=404, detail="Task not found")
 
     async def event_generator():
-        last_step_signature: tuple[tuple[object, ...], ...] = ()
+        last_step_signature: tuple[str, ...] = ()
         while True:
             if await request.is_disconnected():
                 break
@@ -56,14 +72,7 @@ async def stream_review(task_id: str, request: Request) -> EventSourceResponse:
                 break
 
             steps = [s.model_dump(mode="json") for s in task.steps]
-            current_signature = tuple(
-                (
-                    step["name"], step["status"], step.get("message"),
-                    json.dumps(step.get("progress"), sort_keys=True),
-                    step.get("started_at"), step.get("updated_at"), step.get("finished_at"),
-                )
-                for step in steps
-            )
+            current_signature = tuple(json.dumps(step, sort_keys=True) for step in steps)
             if current_signature != last_step_signature:
                 for index, step in enumerate(steps):
                     if (
@@ -77,14 +86,14 @@ async def stream_review(task_id: str, request: Request) -> EventSourceResponse:
                             "node": step["name"],
                             "status": step["status"],
                             "message": step.get("message", ""),
-                            "progress": step.get("progress"),
+                            "progress": step.get("data"),
                             "started_at": step.get("started_at"),
                             "updated_at": step.get("updated_at"),
                         }),
                     }
                 last_step_signature = current_signature
 
-            if task.status.value in {
+            if task.status in {
                 "completed",
                 "completed_with_warnings",
                 "failed",

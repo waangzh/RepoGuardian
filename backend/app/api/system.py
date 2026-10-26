@@ -15,7 +15,6 @@ from app.models.operations import (
     PublicationCapability,
     SystemDiagnostics,
     SystemSettingsUpdate,
-    VersionDiagnostics,
     WorkspaceCleanupPreview,
     WorkspaceCleanupRequest,
     WorkspaceCleanupResponse,
@@ -23,7 +22,7 @@ from app.models.operations import (
 from app.services.workspaces.maintenance_service import workspace_cleanup_lock, workspace_ttl_seconds
 from app.llm.model_catalog import ModelCatalogError, fetch_model_catalog
 from app.models.review_plan import ReviewCapabilities
-from app.services.review.planning.review_plan import capabilities
+from app.review.configuration import capabilities
 from app.tools.workspace_cleanup import inspect_orphaned_workspaces, reap_orphaned_workspaces
 
 
@@ -70,7 +69,7 @@ async def get_system_diagnostics() -> SystemDiagnostics:
         app_version = "0.1.0"
 
     service = get_review_service()
-    worker_running = service.worker_running
+    worker_running = service.worker_running()
     artifact_path = settings.repoguardian_artifact_dir.resolve()
     writable_target = artifact_path if artifact_path.exists() else artifact_path.parent
 
@@ -90,13 +89,7 @@ async def get_system_diagnostics() -> SystemDiagnostics:
             "langsmith": bool(settings.langsmith_api_key),
             "github_webhook": bool(settings.repoguardian_github_webhook_secret),
         },
-        versions=VersionDiagnostics(
-            config=settings.repoguardian_config_version,
-            prompt=settings.repoguardian_prompt_version,
-            rule=settings.repoguardian_rule_version,
-            tool_schema=settings.repoguardian_tool_schema_version,
-            review_policy=settings.repoguardian_review_policy_version,
-        ),
+
     )
 
 

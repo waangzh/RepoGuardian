@@ -15,7 +15,7 @@ import re
 
 from app.core.config import settings
 from app.models.incremental import IncrementalWebhookReceipt
-from app.models.review import ReviewCreateRequest, ReviewPreviewRequest, ReviewMode
+from app.review.contracts import ReviewCreateRequest, ReviewPreviewRequest
 from app.models.review_plan import ReviewPlanOptions
 
 
@@ -120,7 +120,7 @@ class IncrementalWebhookService:
             await self._finish(delivery_id, status="failed", reason=type(exc).__name__)
             raise
         await self._finish(delivery_id, status="completed", task_id=task.id,
-                           reason=(task.incremental or {}).get("version"))
+                           reason="review_created")
         return IncrementalWebhookReceipt(delivery_id=delivery_id, status="completed",
                                          task_id=task.id, reason="review_created")
 
@@ -151,14 +151,13 @@ class IncrementalWebhookService:
             raise ValueError("unsupported_pr_url")
         # 复用同一套“预览 → 确认”流程，确保方案、快照与增量绑定一起冻结。
         preview = await service.preview(ReviewPreviewRequest(
-            pr_url=pr_url, mode=ReviewMode.review,
+            pr_url=pr_url,
             plan=ReviewPlanOptions(depth="standard")))
         if (preview.snapshot.head_sha != parsed["head_sha"]
                 or preview.snapshot.declared_base_sha != parsed["base_sha"]):
             raise ValueError("webhook_snapshot_changed")
         request = ReviewCreateRequest(
-            pr_url=pr_url, preview_id=preview.preview_id, plan_hash=preview.plan_hash,
+            pr_url=pr_url, preview_id=preview.preview_id,
             expected_head_sha=preview.snapshot.head_sha,
-            expected_effective_base_sha=preview.snapshot.effective_base_sha,
-            mode=ReviewMode.review)
+            expected_effective_base_sha=preview.snapshot.effective_base_sha)
         return await service.create_confirmed_task(request)

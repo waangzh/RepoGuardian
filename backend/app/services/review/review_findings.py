@@ -1,57 +1,33 @@
-"""人工处理与机器证据分离；人工操作不更改 runtime 或发布资格。"""
-from pydantic import ValidationError
+"""Human dispositions do not override machine evidence or publication eligibility."""
 
 from app.models.review_plan import FindingLocation, FindingVerification, FindingView
-from app.services.publication.review_publication import publication_issue
+from app.services.publication.review_publication import validated_findings
 
 
-def finding_location(issue):
-    anchor = issue.get("primary_evidence") or {}
-    if anchor.get("resolution_status") != "exact":
-        return None
-    location = issue.get("resolved_location") or {}
-    if location and (location.get("file_path"), location.get("start_line"), location.get("end_line"), location.get("side")) != (
-            anchor.get("file_path"), anchor.get("resolved_start_line"), anchor.get("resolved_end_line"), anchor.get("resolved_side")):
-        return None
-    if not location:
-        location = {"file_path": anchor.get("file_path"), "start_line": anchor.get("resolved_start_line"),
-                    "end_line": anchor.get("resolved_end_line"), "side": anchor.get("resolved_side")}
-    try:
-        return FindingLocation(path=location.get("file_path"), start_line=location.get("start_line"),
-            end_line=location.get("end_line"), side={"head": "right", "base": "left"}.get(location.get("side")))
-    except ValidationError:
-        return None
-
-
-def finding_views(task, dispositions):
-    records = (task.task_runtime_report or {}).get("findings", [])
+def finding_views(task, dispositions, artifacts=None):
+    report = task.review_report
+    if report is None:
+        return []
+    verified = {finding.id: finding for finding in validated_findings(task, artifacts)[0]}
+    decisions = {item.candidate_id: item for item in report.decisions}
     items = []
-    for index, record in enumerate(records):
-        if not isinstance(record, dict):
-            continue
-        candidate = record.get("candidate") if isinstance(record.get("candidate"), dict) else {}
-        issue = record.get("issue") if isinstance(record.get("issue"), dict) else {}
-        identity = record.get("key") or candidate.get("candidate_id") or f"finding-{index}"
-        state = record.get("status") if isinstance(record.get("status"), str) else "unknown"
-        verified_issue, _ = publication_issue(task, record) if state == "confirmed" else (None, None)
-        evidence = ("verified" if verified_issue else
-                    "insufficient" if "insufficient" in (record.get("reason") or "") else
-                    "unresolved" if state in {"unresolved", "candidate"} else "unknown")
-        saved = dispositions.get(identity) or {}
-        items.append(FindingView(id=identity, status=state,
-            severity=verified_issue.severity.value if verified_issue else issue.get("severity") or candidate.get("severity"),
-            review_status={"published": "confirmed", "needs_human": "unresolved"}.get(state,
-                state if state in {"confirmed", "candidate", "unresolved", "dismissed"} else "unknown"),
-            title=issue.get("title") or candidate.get("claim"),
-            message=issue.get("failure_scenario") or candidate.get("failure_scenario") or candidate.get("claim"),
-            impact=issue.get("affected_behavior") or candidate.get("affected_behavior"),
-            recommendation=issue.get("recommendation") or candidate.get("recommendation"),
-            category=issue.get("category") or candidate.get("category"), location=finding_location(issue),
-            verification=FindingVerification(evidence_status=evidence),
-            evidence_status=evidence,
-            human_confirmation_reason=(issue.get("unresolved_reason") or "requires_human_confirmation")
-                if issue.get("requires_human_confirmation") else None,
-            anchor=issue.get("primary_evidence"), limitations=[record["reason"]] if record.get("reason") else [],
-            source_ids=record.get("source_candidate_ids") or [],
-            disposition=saved.get("current"), updated_at=saved.get("updated_at")))
+    for candidate in report.candidates:
+        decision = decisions.get(candidate.id)
+        accepted = verified.get(candidate.id)
+        state = ("confirmed" if accepted else "dismissed" if decision and decision.decision == "refuted"
+                 else "unresolved")
+        status = "verified" if accepted else "insufficient" if state == "unresolved" else "unknown"
+        location = None
+        if accepted:
+            change = next(item for item in task.changed_files if item.file_path == candidate.affected_path)
+            location = FindingLocation(path=candidate.affected_path, start_line=candidate.line,
+                end_line=candidate.line, side="left" if change.change_type == "deleted" else "right")
+        items.append(FindingView(id=candidate.id, status=state, review_status=state,
+            attribution=candidate.attribution,
+            title=candidate.title, message=candidate.trigger + "；" + candidate.actual_behavior,
+            impact=candidate.impact, recommendation=candidate.recommendation, category="correctness",
+            location=location, severity=candidate.severity, evidence_status=status,
+            verification=FindingVerification(evidence_status=status),
+            limitations=[decision.explanation] if decision else ["独立核验尚未完成"],
+            source_ids=candidate.assignment_ids, disposition=dispositions.get(candidate.id)))
     return items

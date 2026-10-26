@@ -1,76 +1,52 @@
-import type {
-  ReviewCreateResponse,
-  ReviewMode,
-  ReviewPreviewResponse,
-  ReviewTask,
-  TaskStepProgress,
-  ReviewUnitResult,
-  TaskRuntimeRetryResult,
-} from "../types/review";
-import type {
-  ModelCatalogResponse,
-  ReviewTaskListResponse,
-  SystemDiagnostics,
-  WorkspaceCleanupPreview,
-  WorkspaceCleanupResponse,
-} from "../types/operations";
-import type { PublicationPlan } from "../types/publication";
-import type { PublicationSelection, PublicationPreflightResult, PublicationAccepted, PublicationAttempt } from "../types/publication";
-import { publicationErrorText } from "../utils/publicationPresentation";
-
-const API_BASE = import.meta.env.VITE_API_BASE ?? "";
-
-export function getPrDiscussions(taskId: string, query: {
-  page?: number; page_size?: number; discussion_id?: string; comment_offset?: number; comment_limit?: number;
-} = {}, signal?: AbortSignal): Promise<import("../types/prDiscussion").DiscussionPage> {
-  const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(query)) if (value !== undefined) params.set(key, String(value));
-  return request(`/api/reviews/${encodeURIComponent(taskId)}/discussions?${params}`, { signal });
-}
-import type { PreviewJob, PreviewRequest } from '../types/previewJob';
-import type { QuickPreview } from '../types/quickPreview';
-
-export function getQuickPreview(prUrl: string, signal?: AbortSignal) {
-  return request<QuickPreview>('/api/reviews/preview/quick', {
-    method: 'POST', body: JSON.stringify({ pr_url: prUrl }), signal,
-  }, 'PR 快照已变化，请重新获取概览。');
-}
-
-export function createPreviewJob(id: string, input: PreviewRequest, signal?: AbortSignal) {
-  return request<PreviewJob>('/api/reviews/preview-jobs', {
-    method: 'POST', body: JSON.stringify({ id, request: input }), signal,
-  }, '预览标识对应不同请求，请重新准备审查方案。');
-}
-export function getPreviewJob(id: string, signal?: AbortSignal) {
-  return request<PreviewJob>(`/api/reviews/preview-jobs/${encodeURIComponent(id)}`, { signal });
-}
-export function cancelPreviewJob(id: string) {
-  return request<PreviewJob>(`/api/reviews/preview-jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
-}
-import type { FileContext } from "../utils/diffContext";
-export function getFileContext(taskId: string, fileId: number, signal?: AbortSignal) {
-  return request<FileContext>(`/api/reviews/${encodeURIComponent(taskId)}/files/${fileId}/context`, { signal }, null);
-}
+import type { ReviewCreateResponse, ReviewPreviewResponse, ReviewTask } from '../types/review';
 import type { ReviewCapabilities, ReviewPlanOptions, FindingView, FindingDisposition } from '../types/reviewPlan';
+import type { PreviewJob, PreviewRequest } from '../types/previewJob';
+import type { PublicationPlan, PublicationSelection, PublicationPreflightResult, PublicationAccepted, PublicationAttempt } from '../types/publication';
+import type { ModelCatalogResponse, ReviewTaskListResponse, SystemDiagnostics } from '../types/operations';
+import { publicationErrorText } from '../utils/publicationPresentation';
+const API_BASE = import.meta.env.VITE_API_BASE ?? '';
 
-export function getReviewCapabilities() { return request<ReviewCapabilities>('/api/system/review-capabilities'); }
-export function getPublicationCapability() {
-  return request<import('../types/operations').PublicationCapability>('/api/system/publication-capability');
+export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await fetch(API_BASE + path, { ...init, headers: { 'Content-Type': 'application/json', ...init.headers } });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    const detail = payload?.detail;
+    throw new Error(typeof detail === 'string' ? detail : detail?.message || detail?.code || `请求失败（${response.status}）`);
+  }
+  if (response.status === 204) return undefined as T;
+  return response.json() as Promise<T>;
 }
-export function updateSystemSettings(value: import("../types/operations").SystemSettingsUpdate) {
-  return request<SystemDiagnostics>("/api/system/settings", {
-    method: "PATCH",
-    body: JSON.stringify(value),
-  });
+export const getReviewCapabilities = () => request<ReviewCapabilities>('/api/system/review-capabilities');
+export const getAvailableModels = () => request<ModelCatalogResponse>('/api/system/models');
+export const getDiagnostics = () => request<SystemDiagnostics>('/api/system/diagnostics');
+export const updateSystemSettings = (value: {model_base_url: string; model_name: string; retention_days: number}) => request<SystemDiagnostics>('/api/system/settings', {method: 'PATCH', body: JSON.stringify(value)});
+export const getPublicationCapability = () => request<import('../types/operations').PublicationCapability>('/api/system/publication-capability');
+export const getReview = (id: string, signal?: AbortSignal) => request<ReviewTask>(`/api/reviews/${encodeURIComponent(id)}`, {signal});
+export function subscribeToReview(id: string, refresh: () => void) {
+  const stream = new EventSource(`${API_BASE}/api/reviews/${encodeURIComponent(id)}/stream`);
+  stream.addEventListener('step_progress', refresh);
+  stream.addEventListener('done', () => { refresh(); stream.close(); });
+  stream.onerror = () => stream.close();
+  return () => stream.close();
 }
-export function getFindings(id: string, signal?: AbortSignal) {
-  return request<{ items: FindingView[] }>(`${publicationPath(id)}/findings`, { signal });
+export const listReviews = (query: string, page: number, signal?: AbortSignal) => request<ReviewTaskListResponse>(`/api/reviews?q=${encodeURIComponent(query)}&page=${page}&page_size=20`, {signal});
+export const deleteReview = (id: string) => request<void>(`/api/reviews/${encodeURIComponent(id)}`, {method: 'DELETE'});
+export const cancelReview = (id: string) => request<{status: string}>(`/api/reviews/${encodeURIComponent(id)}/cancel`, {method: 'POST'});
+export const resumeReview = (id: string) => request<ReviewTask>(`/api/reviews/${encodeURIComponent(id)}/resume`, {method: 'POST'});
+export const createReview = (url: string, preview: ReviewPreviewResponse) => request<ReviewCreateResponse>('/api/reviews', {method: 'POST', body: JSON.stringify({pr_url:url, preview_id:preview.preview_id, expected_head_sha:preview.snapshot.head_sha, expected_effective_base_sha:preview.snapshot.effective_base_sha})});
+export const previewReview = (input: {pr_url: string; model?: string; plan: ReviewPlanOptions}) => request<ReviewPreviewResponse>('/api/reviews/preview', {method:'POST', body:JSON.stringify(input)});
+export const createPreviewJob = (id: string, input: PreviewRequest, signal?: AbortSignal) => request<PreviewJob>('/api/reviews/preview-jobs', {method:'POST', body:JSON.stringify({id,request:input}),signal});
+export const getPreviewJob = (id: string, signal?: AbortSignal) => request<PreviewJob>(`/api/reviews/preview-jobs/${encodeURIComponent(id)}`,{signal});
+export const cancelPreviewJob = (id: string) => request<PreviewJob>(`/api/reviews/preview-jobs/${encodeURIComponent(id)}/cancel`,{method:'POST'});
+export const getFindings = (id: string, signal?: AbortSignal) => request<{items: FindingView[]}>(`${publicationPath(id)}/findings`,{signal});
+export const setFindingDisposition = (id: string, finding: string, value: FindingDisposition) => request<{items: FindingView[]}>(`${publicationPath(id)}/findings/${encodeURIComponent(finding)}/disposition`,{method:'PATCH', body:JSON.stringify(value)});
+export const getPrDiscussions = (id: string, signal?: AbortSignal) => request<{items: Array<{id:string; source:string; path:string|null; resolved:boolean|null; outdated:boolean|null; comments:Array<{id:string;body:string;url:string|null}>}>;total:number;sources:Record<string,string>;limitations:string[]}>(`${publicationPath(id)}/discussions`,{signal});
+export const getFileContext = (id: string, file: number, signal?: AbortSignal) => request<{base_lines:string[];head_lines:string[]}>(`${publicationPath(id)}/files/${file}/context`,{signal});
+export async function getReport(id: string, signal?: AbortSignal): Promise<string> {
+ const response = await fetch(`${API_BASE}/api/reviews/${encodeURIComponent(id)}/report`,{signal});
+ if (!response.ok) throw new Error('报告尚未生成或读取失败');
+ return response.text();
 }
-export function setFindingDisposition(id: string, finding: string, value: FindingDisposition) {
-  return request<{ items: FindingView[] }>(`${publicationPath(id)}/findings/${encodeURIComponent(finding)}/disposition`,
-    { method: 'PATCH', body: JSON.stringify(value) });
-}
-
 async function publicationRequest<T>(path: string, token: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, { ...init, headers: {
     "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...init.headers,
@@ -116,183 +92,5 @@ export function checkReviewComment(taskId: string, signal?: AbortSignal, options
 }
 export function previewReviewComment(taskId: string, options: import('../types/publication').ReviewCommentOptions, signal?: AbortSignal) {
   return request<import('../types/publication').ReviewCommentCheck>(`/api/reviews/${encodeURIComponent(taskId)}/review-comment-preview`, { method: 'POST', signal, body: JSON.stringify(options) });
-}
-
-async function request<T>(path: string, init?: RequestInit, conflictMessage: string | null = '方案已失效或任务状态冲突，请重新预览后确认。'): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    },
-    ...init
-  });
-  if (!response.ok) {
-    const payload = await response.json().catch(() => null);
-    const detail = payload?.detail;
-    const planConflicts: Record<string, string> = {
-      review_plan_repreview_required: '方案已失效：旧预览缺少完整确认信息，请重新预览后确认。',
-      review_plan_configuration_changed: '方案已失效：服务端配置或审查策略已变化，请重新预览后确认。',
-      review_plan_stale: '方案已失效：PR 或规划输入已变化，请重新预览后确认。',
-      review_plan_expired: '方案已失效：审查方案已过期，请重新预览后确认。',
-      review_plan_model_mismatch: '方案已失效：执行模型与预览不一致，请重新预览后确认。',
-    };
-    const message = response.status === 409 && conflictMessage ? planConflicts[detail?.code] || conflictMessage :
-      typeof detail === 'string' ? detail : typeof detail?.message === 'string' ? detail.message :
-      Array.isArray(detail) ? detail.map(item => item.msg).join('；') : `请求失败：${response.status}`;
-    throw new Error(message);
-  }
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
-}
-
-export async function createReview(
-  prUrl: string,
-  model?: string,
-  mode: ReviewMode = "review",
-  preview?: ReviewPreviewResponse,
-): Promise<ReviewCreateResponse> {
-  // 引擎由服务端冻结为 task_review_v1；客户端不再选择引擎。
-  return request<ReviewCreateResponse>("/api/reviews", {
-    method: "POST",
-    body: JSON.stringify({
-      pr_url: prUrl,
-      model: model || null,
-      mode,
-      force_full_review: preview?.force_full_review ?? false,
-      ...(preview ? { preview_id: preview.preview_id, plan_hash: preview.plan_hash,
-        expected_head_sha: preview.snapshot?.head_sha,
-        expected_effective_base_sha: preview.snapshot?.effective_base_sha } : {}),
-    })
-  });
-}
-
-export async function previewReview(
-  prUrl: string,
-  mode: ReviewMode = "review",
-  signal?: AbortSignal,
-  model?: string,
-  plan?: ReviewPlanOptions,
-  reuseReviewId?: string,
-): Promise<ReviewPreviewResponse> {
-  return request<ReviewPreviewResponse>("/api/reviews/preview", {
-    method: "POST",
-    signal,
-    body: JSON.stringify({
-      pr_url: prUrl,
-      model: model || null,
-      ...(reuseReviewId ? { reuse_review_id: reuseReviewId } : {}),
-      ...(plan ? { plan } : {}),
-      mode,
-    }),
-  });
-}
-
-export async function getReview(taskId: string): Promise<ReviewTask> {
-  return request<ReviewTask>(`/api/reviews/${taskId}`);
-}
-
-export async function resumeReview(taskId: string, prUrl: string, preview: ReviewPreviewResponse): Promise<TaskRuntimeRetryResult> {
-  return request<TaskRuntimeRetryResult>(`/api/reviews/${encodeURIComponent(taskId)}/resume`, {
-    method: 'POST', body: JSON.stringify({ pr_url: prUrl, preview_id: preview.preview_id,
-      plan_hash: preview.plan_hash, expected_head_sha: preview.snapshot?.head_sha,
-      expected_effective_base_sha: preview.snapshot?.effective_base_sha,
-      mode: preview.mode }),
-  });
-}
-
-export async function listReviews(options: {
-  q?: string;
-  status?: string;
-  page?: number;
-  pageSize?: number;
-  signal?: AbortSignal;
-} = {}): Promise<ReviewTaskListResponse> {
-  const params = new URLSearchParams({
-    page: String(options.page ?? 1),
-    page_size: String(options.pageSize ?? 20),
-  });
-  if (options.status) params.set("status", options.status);
-  if (options.q) params.set('q', options.q);
-  return request<ReviewTaskListResponse>(`/api/reviews?${params.toString()}`, { signal: options.signal });
-}
-
-export function deleteReview(taskId: string, signal?: AbortSignal): Promise<void> {
-  return request<void>(`/api/reviews/${encodeURIComponent(taskId)}`, { method: "DELETE", signal }, null);
-}
-
-export async function getSystemDiagnostics(): Promise<SystemDiagnostics> {
-  return request<SystemDiagnostics>("/api/system/diagnostics");
-}
-
-export async function previewWorkspaceCleanup(): Promise<WorkspaceCleanupPreview> {
-  return request<WorkspaceCleanupPreview>("/api/system/workspaces/cleanup/preview");
-}
-
-export async function cleanupExpiredWorkspaces(): Promise<WorkspaceCleanupResponse> {
-  return request<WorkspaceCleanupResponse>("/api/system/workspaces/cleanup", {
-    method: "POST",
-    body: JSON.stringify({ mode: "expired_only", confirmed: true }),
-  });
-}
-
-export async function getAvailableModels(): Promise<ModelCatalogResponse> {
-  return request<ModelCatalogResponse>("/api/system/models");
-}
-
-export async function retryReviewUnit(
-  taskId: string,
-  unitId: string,
-): Promise<ReviewUnitResult | TaskRuntimeRetryResult> {
-  return request<ReviewUnitResult | TaskRuntimeRetryResult>(`/api/reviews/${taskId}/units/${unitId}/retry`, {
-    method: "POST",
-  });
-}
-
-export async function cancelReview(taskId: string): Promise<{ task_id: string; status: string }> {
-  return request(`/api/reviews/${taskId}/cancel`, { method: "POST" });
-}
-
-export async function getReport(taskId: string): Promise<string> {
-  const response = await fetch(`${API_BASE}/api/reviews/${taskId}/report`);
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
-  return response.text();
-}
-
-export function subscribeToEvents(
-  taskId: string,
-  callbacks: {
-    onStepProgress?: (data: {
-      node: string;
-      status: string;
-      message?: string;
-      progress?: TaskStepProgress | null;
-      started_at?: string | null;
-      updated_at?: string | null;
-    }) => void;
-    onDone?: (data: { status: string }) => void;
-    onError?: (data: { message: string }) => void;
-  }
-): EventSource {
-  const es = new EventSource(`${API_BASE}/api/reviews/${taskId}/stream`);
-  es.addEventListener("step_progress", (e: MessageEvent) => {
-    callbacks.onStepProgress?.(JSON.parse(e.data));
-  });
-  es.addEventListener("done", (e: MessageEvent) => {
-    callbacks.onDone?.(JSON.parse(e.data));
-    es.close();
-  });
-  es.addEventListener("error", (e: MessageEvent) => {
-    if (e.data) {
-      callbacks.onError?.(JSON.parse(e.data));
-    }
-    es.close();
-  });
-  es.onerror = () => {
-    callbacks.onError?.({ message: "Event stream disconnected" });
-    es.close();
-  };
-  return es;
 }
 

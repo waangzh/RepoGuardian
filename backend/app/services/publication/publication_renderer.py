@@ -4,17 +4,16 @@ import html
 import re
 from urllib.parse import quote
 
-from app.models.publication import HistoricalFindingView, PublicationFinding, PublicationPlan
+from app.models.publication import PublicationFinding, PublicationPlan
 from app.services.discussions.pr_discussion_matching import exact_duplicate_matches
 from app.services.publication.review_prose import author_goal_text
 from app.services.publication.review_text_format import (
-    MERGE_LABELS, MERGE_SYMBOLS, OUTCOME_DESCRIPTIONS, OUTCOME_LABELS, REASON_LABELS,
+    MERGE_SYMBOLS, OUTCOME_DESCRIPTIONS, OUTCOME_LABELS, REASON_LABELS,
     _comment_risks, _finding_location_text, _ordered_findings, _sentence, STATIC_BOUNDARY,
     markdown_text,
 )
 
 
-# 对外只保留三种合并建议；review_suggestions 仅为旧冻结计划兼容。
 
 
 def outcome_description(plan) -> str:
@@ -23,7 +22,7 @@ def outcome_description(plan) -> str:
     if outcome.kind != "failed" and outcome.kind != "cancelled" \
             and outcome.historical_discussion.affects_risk:
         current = (f"本轮变更范围内发现 {outcome.confirmed_count} 项代码证据已确认的问题" if outcome.confirmed_count
-                   else "本轮变更范围内未新增代码证据已确认的问题")
+                   else "本轮检查未发现代码证据已确认的问题")
         return (current + "；历史讨论复核确认的既有问题在当前代码中仍然存在，"
                 "属于已核验风险，不能据此认定本次变更没有问题。")
     if outcome.kind == "inconclusive" and set(outcome.reason_codes) == {"usage_integrity_unknown"} \
@@ -58,8 +57,8 @@ def render_finding(finding: PublicationFinding) -> str:
 
 
 def finding_markdown_title(finding: PublicationFinding) -> str:
-    """仅在输出边界转义；旧冻结计划的 title 已转义，不再重复处理。"""
-    return markdown_text(finding.raw_title, 200) if finding.raw_title is not None else finding.title
+    """纯文本标题只在 Markdown 输出边界转义。"""
+    return markdown_text(finding.title, 200)
 
 
 def finding_body(text: dict, severity: str, *, category: str | None = None,
@@ -93,7 +92,8 @@ def _goal_lines(goals, title, *, limit=20, include_reason=True):
         if goal.side:
             location += f"（{goal.side}）"
         reason = f"；{markdown_text(goal.reason)}" if include_reason and goal.reason else ""
-        status = {"examined": "已检查", "not_examined": "未检查", "unsupported": "暂不支持", "unknown": "未知"}.get(goal.status, goal.status)
+        status = {"examined": "已检查", "not_examined": "未检查", "blocked": "受阻",
+                  "unsupported": "暂不支持", "unknown": "未知"}.get(goal.status, goal.status)
         lines.append(f"- {location}：{markdown_text(status, 100)}{reason}")
     if limit is not None and len(goals) > limit:
         lines.append(f"另有 {len(goals) - limit} 项，完整目标见用户报告。")
@@ -125,10 +125,8 @@ def finding_location(plan, finding):
 
 
 def merge_heading(plan):
-    # 优先使用已保存的标签：失败/停止等情景的标签由 Planner 按事实生成，
-    # 静态映射只作为旧冻结计划的回退。
     decision = plan.digest.merge_decision
-    return decision.label or MERGE_LABELS.get(decision.status, "暂不能给出合并建议"), decision.advice
+    return decision.label, decision.advice
 
 
 def merge_verdict_line(plan) -> str:
@@ -157,7 +155,7 @@ def partial_review_note(plan) -> str:
 
 
 def _independent_count(decision, current: int, historical: int, kind: str) -> int:
-    """优先使用 Planner 保存的去重数量；旧冻结计划回退为来源相加。"""
+    """使用当前仲裁记录的独立问题数与来源统计。"""
     saved = (decision.blocking_independent_count if kind == "blocking"
              else decision.nonblocking_independent_count)
     return saved if saved is not None else current + historical
@@ -188,10 +186,6 @@ def merge_advice(plan):
 def _author_goal(plan):
     understanding = plan.digest.change_understanding
     text = (understanding.author_goal if understanding else plan.digest.author_goal) or ""
-    # 兼容旧计划生成的包装，不修改冻结数据，也不删改作者正文中的验证描述。
-    prefix = "作者声明（未经独立验证）："
-    if text.startswith(prefix):
-        text = text.removeprefix(prefix).removesuffix("（作者声明的输入范围有限制，见下方说明。）")
     return author_goal_text(text)
 
 
@@ -254,13 +248,12 @@ def _appendix_lines(plan, task):
     outcome = plan.outcome
     lines = ["", "## 附录：审查范围与限制", "",
         f"- 审查目标完成：{outcome.examined_goals} / {outcome.total_goals}",
-        f"- 本轮 Diff 新增代码证据已确认的问题：{outcome.confirmed_count}；未确认候选：{outcome.unresolved_count}",
+        f"- 本轮确认的问题（含归因单独标注的既有问题）：{outcome.confirmed_count}；未确认候选：{outcome.unresolved_count}",
         f"- 审查完整性：{ {'complete': '完整', 'partial': '不完整', 'unknown': '未知'}[outcome.review_completeness] }；"
         f"运行可靠性：{ {'reliable': '可靠', 'unreliable': '存在限制', 'unknown': '未知'}[outcome.runtime_reliability] }",
         f"- 审查 Commit：{markdown_text(plan.snapshot.head_sha or '未记录', 64)}",
         f"- 审查记录：{markdown_text(plan.review_id, 160)}"]
-    if task.run_manifest:
-        lines.append(f"- 模型：{markdown_text(task.run_manifest.provider)} / {markdown_text(task.run_manifest.model)}")
+    lines.append(f"- 模型：{markdown_text(task.configuration.provider)} / {markdown_text(task.configuration.model)}")
     if plan.digest.termination_reason:
         lines.append(f"- 终止记录：{markdown_text(plan.digest.termination_reason, 160)}")
     if plan.digest.actual_changes:
@@ -289,7 +282,7 @@ def render_user_report(task, plan: PublicationPlan) -> str:
     label, advice = merge_heading(plan)
     lines = ["# RepoGuardian 详细审查报告", "", "## 审查结论", "", f"**{label}**", "", advice, "",
              outcome_description(plan), "",
-             f"本轮 Diff 新增代码证据已确认的问题 {outcome.confirmed_count} 项（其中 {outcome.publishable_count} 项形成可发布意见）；"
+             f"本轮确认的问题（含归因单独标注的既有问题） {outcome.confirmed_count} 项（其中 {outcome.publishable_count} 项形成可发布意见）；"
              f"未确认候选 {outcome.unresolved_count} 项。"]
     history = historical_risk_line(plan)
     if history:
@@ -302,7 +295,7 @@ def render_user_report(task, plan: PublicationPlan) -> str:
     views = {item.id: item for item in plan.digest.findings}
     if not findings:
         # 有已核验历史风险时不能只写“没有问题”，否则结论与章节互相矛盾。
-        lines.append("本轮 Diff 没有通过发布准入、具备代码证据的新增问题；"
+        lines.append("本轮没有通过发布准入、具备代码证据的问题；"
                      + ("已核验的既有风险见下节。" if _history_entries(plan)[0]
                         else "未确认候选和证据缺口见下方“未决风险”。"))
     for finding in findings:
@@ -503,9 +496,6 @@ def _history_entries(plan):
     represented = {match.get("discussion_id") for finding in _ordered_findings(plan)
                    for match in exact_duplicate_matches(finding.discussion_matches)}
     assessed = {item.discussion_id: item for item in history.findings}
-    # 旧冻结计划可能没有 findings 字段；有证据编号的 verified_defects 仍是已核验风险。
-    legacy = {str(item.get("discussion_id")): item for item in history.verified_defects
-              if item.get("discussion_id") and item.get("evidence_ids")}
     risks, pending = [], []
     for item in plan.digest.discussion_rechecks:
         status = item.get("status")
@@ -513,12 +503,6 @@ def _history_entries(plan):
         if status in {"fixed", "not_present", "background"} or identity in represented:
             continue
         finding = assessed.get(identity)
-        if finding is None and identity in legacy:
-            finding = HistoricalFindingView(discussion_id=identity, path=legacy[identity].get("path"),
-                severity="unknown", priority="assess_impact",
-                reason=legacy[identity].get("reason") or "未记录原因",
-                evidence_ids=list(legacy[identity]["evidence_ids"]),
-                discussion_url=_history_url(plan, identity))
         if finding is not None:
             risks.append(finding)
         elif status == "still_present":
@@ -862,39 +846,21 @@ def render_technical_audit(plan, execution_record=None):
         f"- Effective Base：{markdown_text(plan.snapshot.effective_base_sha or '未知')}",
         f"- 机器结论：{OUTCOME_LABELS[plan.outcome.kind]}"]
     if plan.outcome.kind == "failed":
-        from app.services.review.task_review_projection import runtime_failure_summary
-        record = execution_record or {}
-        failure = record.get("failure_summary") or runtime_failure_summary(
-            record.get("diagnostics") or [], termination_reason=record.get("termination_reason"))
-        lines.append(f"- 失败原因：{markdown_text(failure)}")
+        lines.append("- 失败原因：审查未可靠完成；请查看任务错误类别并从检查点恢复或重新审查。")
     lines += ["", merge_advice(plan), "", "## 验证记录", "", *_validation_lines(plan)]
     record = execution_record or {}
-    from app.services.review.task_review_projection import group_relationship_leads, relationship_description
-    sections = [
-        ("未调度线索", record.get("unscheduled_leads") or []),
-        ("关系取证提示（尚未核验，不计作已完成调查）", record.get("relationship_hints") or []),
-    ]
-    sections += [(f"调查关系：{markdown_text(str(item.get('proposition') or '未命名调查'))}",
-                  item.get("relationship_leads") or [])
-                 for item in record.get("admitted_investigations") or []]
+    sections = [("未完成的核验", record.get("decisions") or [])]
     for title, leads in sections:
         if not leads:
             continue
         lines += ["", "## " + title, ""]
-        for group in group_relationship_leads(leads):
-            lines.append(f"- {markdown_text(str(group['label']))}："
-                         f"{markdown_text(str(group['status']))} / {markdown_text(str(group['reason']))}"
-                         f"（{len(group['members'])} 条）")
-            text = "\n".join(html.escape(relationship_description(member)).replace("\n", " ").replace("\r", " ")
-                             for member in group["members"])
-            fence = "`" * max(3, max((len(value) + 1 for value in re.findall(r"`+", text)), default=3))
-            lines += ["", fence + "text", text, fence, ""]
+        for lead in leads:
+            lines.append(f"- {markdown_text(str(lead.get('candidate_id') or '未知候选'))}："
+                f"{markdown_text(str(lead.get('decision') or '未知'))}；"
+                f"{markdown_text(str(lead.get('explanation') or '未记录原因'))}")
     for title, data in (("目标符合性与证据引用", [item.model_dump(mode="json") for item in plan.digest.intent_assessments]),
                         ("作者声明输入完整性", {"status": plan.digest.author_context_status,
                             "limitation": plan.digest.author_context_limitation}),
-                        ("PR 变更概述输入覆盖", plan.presentation.summary_input_coverage.model_dump(mode="json")
-                            if plan.presentation and plan.presentation.summary_input_coverage
-                            else {"status": "not_recorded"}),
                         ("问题与人工处理身份", [item.model_dump(mode="json") for item in plan.digest.findings]),
                         ("发布准入扣留记录", [item.model_dump(mode="json") for item in plan.withheld_findings]),
                         ("运行、计量与证据追踪", execution_record or {})):
@@ -922,7 +888,7 @@ def render_summary(plan, *, discussion_urls: dict[str, str] | None = None) -> st
     note = partial_review_note(plan)
     if note:
         lines += [note, ""]
-    lines += [f"本轮 Diff 新增代码证据已确认的问题：{outcome.confirmed_count}；"
+    lines += [f"本轮确认的问题（含归因单独标注的既有问题）：{outcome.confirmed_count}；"
               f"约定目标已检查 {outcome.examined_goals} / {outcome.total_goals} 项。"]
     findings = _ordered_findings(plan)
     if findings:

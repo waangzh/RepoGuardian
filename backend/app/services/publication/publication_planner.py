@@ -1,138 +1,107 @@
-"""保存快照的确定性发布投影，无远端读写或模型请求。"""
+"""Current saved findings to publication drafts; no model or remote operations."""
 
-from pydantic import ValidationError
-
-from app.models.publication import (DigestExcludedFile, DigestGoal, ReviewDigest, ReviewSummary, ReviewSummaryDigest,
-    PublicationAnchor, PublicationFinding, PublicationPlan, PublicationSnapshot, WithheldFinding)
-from app.models.review import ReviewTask
-from app.models.review_runtime import TaskRuntimeReport
-from app.services.publication.publication_renderer import finding_body, render_summary, render_user_report, render_review_comment
-from app.services.review.review_digest import enrich_review_digest
-from app.services.review.review_outcome import derive_review_outcome, snapshot_valid
-from app.services.publication.review_publication import select_publication_findings
+from app.models.publication import (
+    ChangeUnderstanding, DigestExcludedFile, DigestGoal, PublicationAnchor, PublicationFinding, PublicationPlan,
+    PublicationSnapshot, ReviewDigest, ReviewSummary, ReviewSummaryDigest, WithheldFinding,
+)
+from app.services.publication.publication_renderer import (
+    finding_body, render_summary, render_user_report, render_review_comment,
+)
 from app.services.publication.review_merge_decision import merge_decision
+from app.services.publication.review_presentation import build_presentation
+from app.services.publication.review_publication import validated_findings
+from app.services.review.review_findings import finding_views
+from app.services.review.review_outcome import derive_review_outcome, snapshot_valid
 
 
-def build_review_digest(task, report):
-    digest = ReviewDigest(excluded_files=[DigestExcludedFile(path=item.file_path, reason=item.reason)
-        for item in sorted(task.excluded_files, key=lambda item: (item.file_path, item.reason))])
-    if task.pr_discussion:
-        from app.services.discussions.pr_discussion_matching import safe_discussion_url
-
-        digest.discussion_stats = task.pr_discussion.get("stats")
-        digest.discussion_rechecks = task.pr_discussion.get("rechecks") or []
-        digest.discussion_links = {identity: safe for identity, url in (task.pr_discussion.get("links") or {}).items()
-            if (safe := safe_discussion_url(url, task.pr_url))}
-    if report is None:
-        return digest
-    digest.termination_reason = report.termination_reason
-    areas = set()
-    file_goals = {}
-    for item in report.initial_scope_coverage:
-        kind = item.get("target_kind")
-        goal = DigestGoal(goal_id=item.get("goal_id"), path=item.get("target_ref"),
-            start_line=item.get("start_line"), end_line=item.get("end_line"),
-            side="base" if kind == "base_source_range" else "head" if kind == "source_range" else None,
-            status=item.get("status") or "unknown", reason=item.get("reason"))
-        (digest.examined_goals if goal.status == "examined" else digest.incomplete_goals).append(goal)
-        if goal.path:
-            file_goals.setdefault(goal.path, []).append(goal.status)
-        if goal.status == "examined" and kind in {"source_range", "base_source_range", "file_change"}:
-            areas.add({"source_range": "head_source_ranges", "base_source_range": "base_source_ranges",
-                       "file_change": "file_changes"}[kind])
-    for goals in (digest.examined_goals, digest.incomplete_goals):
-        goals.sort(key=lambda item: (item.path or "", item.side or "", item.start_line or 0, item.goal_id or ""))
-    digest.reviewed_files = sorted(path for path, statuses in file_goals.items() if all(s == "examined" for s in statuses))
-    digest.checked_areas = sorted(areas)
-    return digest
-
-
-def summary_projection(plan: PublicationPlan) -> ReviewSummary:
-    """结果概览的轻量投影；技术审计与逐条正文仍只存在于完整计划。"""
-    digest = plan.digest
+def summary_projection(plan):
     return ReviewSummary(review_id=plan.review_id, snapshot=plan.snapshot, outcome=plan.outcome,
-        digest=ReviewSummaryDigest(author_goal=digest.author_goal,
-            discussion_review_enabled=digest.discussion_review_enabled,
-            discussion_stats=digest.discussion_stats,
-            author_context_status=digest.author_context_status,
-            author_context_limitation=digest.author_context_limitation,
-            change_understanding=digest.change_understanding, actual_changes=digest.actual_changes,
-            intent_alignment=digest.intent_alignment, merge_decision=digest.merge_decision,
-            excluded_files=digest.excluded_files, checked_areas=digest.checked_areas,
-            termination_reason=digest.termination_reason),
-        review_comment_markdown=plan.review_comment_markdown, withheld_findings=plan.withheld_findings,
-        content_eligible=plan.content_eligible, blocking_reasons=plan.blocking_reasons,
-        presentation=plan.presentation.model_copy(update={"findings": []}) if plan.presentation else None)
+        digest=ReviewSummaryDigest.model_validate({key: value for key, value in plan.digest.model_dump().items()
+            if key in ReviewSummaryDigest.model_fields}), review_comment_markdown=plan.review_comment_markdown,
+        withheld_findings=plan.withheld_findings, content_eligible=plan.content_eligible,
+        blocking_reasons=plan.blocking_reasons, presentation=plan.presentation)
 
 
 class PublicationPlanner:
-    def build(self, task: ReviewTask, *, dispositions: dict | None = None,
-              include_markdown: bool = True) -> PublicationPlan:
-        records = []
-        report = None
-        if task.engine == "task_review_v1" and task.task_runtime_report is not None:
-            try:
-                report = TaskRuntimeReport.model_validate(task.task_runtime_report)
-                records = report.findings
-            except ValidationError:
-                pass  # Outcome 显式报告 runtime_report_invalid。
-        selected, withheld = select_publication_findings(task, records)
-        outcome = derive_review_outcome(task, publishable_count=len(selected))
-        blockers = [reason.value for reason in outcome.reason_codes if reason in {
-            "task_failed", "task_cancelled", "snapshot_missing", "runtime_report_missing", "runtime_report_invalid",
-            "unsupported_legacy_projection"}]
+    def __init__(self, artifacts=None):
+        self.artifacts = artifacts
+
+    def build(self, task, *, dispositions=None, include_markdown=True):
+        selected, withheld = validated_findings(task, self.artifacts)
+        blockers = []
+        if task.status in {"failed", "cancelled"}:
+            blockers.append("task_" + task.status)
+        if not snapshot_valid(task):
+            blockers.append("snapshot_missing")
         if blockers:
-            withheld.extend((record["candidate"]["candidate_id"], "review_content_blocked") for _, record, _ in selected)
+            withheld.extend((finding.id, "review_content_blocked") for finding in selected)
             selected = []
-            outcome.publishable_count = 0
-        manifest = task.run_manifest
-        plan = PublicationPlan(review_id=task.id, outcome=outcome,
-            digest=enrich_review_digest(build_review_digest(task, report), task, report, dispositions),
-            snapshot=PublicationSnapshot(head_sha=manifest.head_sha if manifest else None,
-                effective_base_sha=manifest.effective_base_sha if manifest else None),
-            blocking_reasons=blockers, content_eligible=not blockers and snapshot_valid(task),
-            withheld_findings=[WithheldFinding(candidate_id=identity, reason_code=reason)
-                               for identity, reason in sorted(set(withheld))])
-        for key, record, issue in selected:
-            location = issue.resolved_location
-            evidence = issue.primary_evidence
-            anchor = PublicationAnchor(**location.model_dump()) if location else PublicationAnchor(
-                file_path=evidence.file_path, start_line=evidence.resolved_start_line,
-                end_line=evidence.resolved_end_line, side=evidence.resolved_side)
-            text = record["publication"]["published_text"]
-            evidence_summary = record["publication"]["basis"]
-            category = record["candidate"].get("category", "correctness")
-            finding = PublicationFinding(finding_key=key, candidate_id=record["candidate"]["candidate_id"],
-                severity=issue.severity.value, placement=issue.placement.value, anchor=anchor,
-                title=text["claim"], raw_title=text["claim"],
-                category=category, evidence_summary=evidence_summary,
-                evidence_ids=record["publication"]["evidence_ids"],
+        digest = ReviewDigest(pr_url=task.pr_url, author_goal=task.pr.body or task.pr.title,
+            author_context_status="truncated" if len(task.pr.body or "") > 4000 else "complete",
+            author_context_limitation="模型仅收到前 4000 字符作者声明。" if len(task.pr.body or "") > 4000 else None,
+            discussion_review_enabled=bool(task.configuration.options.include_pr_discussions),
+            actual_changes=[f"{item.file_path}: +{item.additions} / -{item.deletions}" for item in task.changed_files],
+            findings=finding_views(task, dispositions or {}, self.artifacts),
+            execution_status=task.status)
+        digest.change_understanding = ChangeUnderstanding(author_goal=task.pr.body or task.pr.title,
+            author_goal_source="description" if task.pr.body else "title",
+            diff_summary=f"本次变更涉及 {len(task.changed_files)} 个文件，新增 "
+                f"{sum(item.additions for item in task.changed_files)} 行、删除 "
+                f"{sum(item.deletions for item in task.changed_files)} 行。")
+        report = task.review_report
+        if report:
+            digest.termination_reason = report.termination
+            file_states = {}
+            for goal in report.goals:
+                item = DigestGoal(goal_id=goal.id, path=goal.path, side=goal.side,
+                    start_line=goal.start_line, end_line=goal.end_line, status=goal.status, reason=goal.reason)
+                (digest.examined_goals if goal.status == "examined" else digest.incomplete_goals).append(item)
+                file_states.setdefault(goal.path, []).append(goal.status)
+            digest.reviewed_files = sorted(path for path, states in file_states.items()
+                                           if all(state == "examined" for state in states))
+            digest.checked_areas = sorted({goal.side + "_source_ranges" for goal in report.goals
+                                           if goal.status == "examined"})
+            reviewed_paths = {path for assignment in report.assignments for path in assignment.focus_paths}
+            digest.excluded_files = [DigestExcludedFile(path=item.file_path, reason="未纳入主审范围")
+                                    for item in task.changed_files if item.file_path not in reviewed_paths]
+        if task.pr_discussion:
+            digest.discussion_stats = {"collected": task.pr_discussion["thread_count"], "checked": 0,
+                "unchecked": task.pr_discussion["thread_count"],
+                "status": "complete" if all(value == "complete" for value in task.pr_discussion["sources"].values())
+                    else "partial", "limitations": task.pr_discussion["limitations"]}
+        outcome = derive_review_outcome(task, publishable_count=len(selected))
+        plan = PublicationPlan(review_id=task.id, snapshot=PublicationSnapshot(
+            head_sha=task.snapshot.head_sha, effective_base_sha=task.snapshot.effective_base_sha),
+            outcome=outcome, digest=digest, content_eligible=not blockers,
+            blocking_reasons=blockers, withheld_findings=[WithheldFinding(candidate_id=identity, reason_code=reason)
+                                                       for identity, reason in sorted(set(withheld))])
+        for finding in selected:
+            candidate = finding.candidate
+            text = {"claim": candidate.title, "affected_behavior": candidate.impact,
+                    "failure_scenario": candidate.trigger + "；" + candidate.actual_behavior,
+                    "recommendation": candidate.recommendation}
+            change = next(item for item in task.changed_files if item.file_path == candidate.affected_path)
+            draft = PublicationFinding(finding_key=finding.id, candidate_id=finding.id,
+                attribution=candidate.attribution,
+                severity=candidate.severity, placement="inline" if finding.inline_line else "summary",
+                anchor=PublicationAnchor(file_path=candidate.affected_path, start_line=candidate.line,
+                    end_line=candidate.line, side="base" if change.change_type == "deleted" else "head"),
+                title=candidate.title, category="correctness",
+                evidence_summary=finding.verification.explanation, evidence_ids=finding.evidence_ids,
                 affected_behavior=text["affected_behavior"], failure_scenario=text["failure_scenario"],
-                recommendation=text["recommendation"],
-                body_markdown=finding_body(text, issue.severity.value,
-                    category=category, evidence_summary=evidence_summary))
-            if task.pr_discussion and (record.get("verification") or {}).get("discussion_manifest_hash") == task.pr_discussion.get("manifest_hash"):
-                from app.services.discussions.pr_discussion_matching import finding_discussions
-                matches, duplicate = finding_discussions(record)
-                finding.discussion_matches = matches
-                finding.discussion_urls = sorted({url for match in matches
-                    if (url := (task.pr_discussion.get("links") or {}).get(match["discussion_id"]))})
-                finding.default_selected = not duplicate
-                finding.default_selection_reason = "historical_duplicate" if duplicate else None
-            (plan.inline_drafts if finding.placement == "inline" else plan.summary_findings).append(finding)
+                recommendation=candidate.recommendation,
+                body_markdown=finding_body(text, candidate.severity, category="correctness",
+                                           evidence_summary=finding.verification.explanation))
+            draft.body_markdown += "\n\n**变更归因：** " + {
+                "introduced": "由本次 PR 引入", "exposed": "由本次 PR 暴露或扩大影响",
+                "pre_existing": "既有问题，不计作本次 PR 新增", "uncertain": "尚未确定",
+            }[candidate.attribution]
+            (plan.inline_drafts if finding.inline_line else plan.summary_findings).append(draft)
         rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-        def sort_key(finding):
-            return (rank[finding.severity], finding.anchor.file_path, finding.anchor.start_line or 0, finding.finding_key)
-        plan.inline_drafts.sort(key=sort_key)
-        plan.summary_findings.sort(key=sort_key)
+        for drafts in (plan.inline_drafts, plan.summary_findings):
+            drafts.sort(key=lambda item: (rank[item.severity], item.anchor.file_path, item.finding_key))
         plan.digest.merge_decision = merge_decision(plan)
-        if (task.task_runtime_configuration or {}).get("output_policy", {}).get("presentation_v1"):
-            from app.services.publication.review_presentation import build_presentation, compact_finding
-            for finding in [*plan.inline_drafts, *plan.summary_findings]:
-                finding.legacy_body_markdown = finding.body_markdown
-                finding.body_markdown = compact_finding(finding)
-            from app.services.review.synthesis.review_synthesis_binding import bound_synthesis
-            plan.presentation = build_presentation(plan, bound_synthesis(task, plan))
+        plan.presentation = build_presentation(plan)
         if include_markdown:
             plan.summary_markdown = render_summary(plan)
             plan.user_report_markdown = render_user_report(task, plan)

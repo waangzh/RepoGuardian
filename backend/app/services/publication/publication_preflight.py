@@ -1,5 +1,6 @@
 """显式授权、GitHub 身份、版本与精确 diff 的只读预检。"""
 from datetime import timezone
+import asyncio
 import re
 
 from app.core.fingerprints import stable_hash
@@ -10,8 +11,9 @@ from app.tools.github.github_diff_mapper import GitHubDiffMapper, MappingFailure
 
 
 class PublicationPreflight:
-    def __init__(self, publisher, config):
+    def __init__(self, publisher, config, artifacts=None):
         self.github, self.config = publisher, config
+        self.artifacts = artifacts
 
     async def check(self, task, finding_keys=None):
         config = self.config
@@ -19,7 +21,7 @@ class PublicationPreflight:
             raise GitHubPublishError("publication_disabled")
         if task.status not in {"completed", "completed_with_warnings"}:
             raise GitHubPublishError("review_not_publishable")
-        plan = PublicationPlanner().build(task)
+        plan = await asyncio.to_thread(PublicationPlanner(self.artifacts).build, task)
         if not plan.content_eligible:
             raise GitHubPublishError("publication_content_blocked")
         owner, repo, number = parse_pr_url(task.pr_url)
@@ -37,16 +39,17 @@ class PublicationPreflight:
                 or not any(permissions.get(role) is True for role in ("push", "maintain", "admin"))):
             raise GitHubPublishError("github_permission_denied")
         pr = await self.github.get(f"{path}/pulls/{number}")
-        manifest = task.run_manifest
-        if manifest.repository is not None and manifest.repository.casefold() != f"{owner}/{repo}".casefold():
+        snapshot = task.snapshot
+        if f"{task.pr.owner}/{task.pr.repo}".casefold() != f"{owner}/{repo}".casefold():
             raise GitHubPublishError("repository_identity_mismatch")
         if (pr.get("number") != number or (pr.get("base", {}).get("repo") or {}).get("id") != repository_id
-                or (manifest.pr_number is not None and manifest.pr_number != number)):
+                or task.pr.number != number):
             raise GitHubPublishError("repository_identity_mismatch")
         if pr.get("state") != "open" or pr.get("merged") is not False:
             raise GitHubPublishError("pr_not_open")
-        if (not re.fullmatch(r"[a-f0-9]{40,64}", manifest.base_sha or "")
-                or pr.get("head", {}).get("sha") != manifest.head_sha or pr.get("base", {}).get("sha") != manifest.base_sha):
+        if (not re.fullmatch(r"[a-f0-9]{40,64}", snapshot.declared_base_sha)
+                or pr.get("head", {}).get("sha") != snapshot.head_sha
+                or pr.get("base", {}).get("sha") != snapshot.declared_base_sha):
             raise GitHubPublishError("publication_stale")
         findings = [*plan.inline_drafts, *plan.summary_findings]
         available = {item.finding_key for item in findings}
@@ -66,8 +69,8 @@ class PublicationPreflight:
             else:
                 locations[finding.finding_key] = mapped
         context = {"owner": owner, "repo": repo, "pr_number": number, "repository_id": repository_id,
-                   "publisher_identity": f"user:{user['id']}", "publisher_id": user["id"], "base_sha": manifest.base_sha,
-                   "order": manifest.completed_at.astimezone(timezone.utc).isoformat() + ":" + task.id}
+                   "publisher_identity": f"user:{user['id']}", "publisher_id": user["id"], "base_sha": snapshot.declared_base_sha,
+                   "order": (task.completed_at or task.updated_at).astimezone(timezone.utc).isoformat() + ":" + task.id}
         partial = plan.outcome.kind == "inconclusive" or plan.outcome.coverage != "complete" or bool(fallback) or bool(plan.withheld_findings) or len(keys) != len(available)
         return {"ready": True, "review_id": task.id, "plan_hash": stable_hash(plan.model_dump(mode="json")),
             "head_sha": plan.snapshot.head_sha, "head_sha_matches": True, "pr_open": True, "permissions_ok": True,

@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import httpx
 
 import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -12,6 +13,9 @@ from app.llm.providers import OpenAICompatibleProvider
 from app.review.agents import build_agent
 from app.review.context import AgentContext
 from app.review.evidence import EvidenceService
+from app.review.evidence import source_lines
+from app.review.tools import read_base_file, read_diff, read_file, search_code
+from langchain.tools import ToolRuntime
 from app.review.models import DiscoveryOutput, ReviewLimits, ReviewSnapshot
 from app.services.review.artifact_store import LocalArtifactStore
 from app.tools.git_tool import GitTool
@@ -87,7 +91,7 @@ async def test_native_loop_parallel_reads_refusal_and_structured_response(source
     assert all(item["ok"] for item in responses[:2]), responses
     assert responses[2] == {"ok": False, "error": "read_rejected",
                             "error_type": "ReviewPathPolicyError",
-                            "error_stage": "_validate_repository_relative_path", "truncated": False}
+                            "truncated": False}
     for item in responses[:2]:
         ref = source_service.resolve(item["evidence"]["id"])
         assert ref.commit_sha == source_service.snapshot.head_sha
@@ -140,3 +144,61 @@ def test_agent_model_has_no_forced_json_mode():
     model = provider.agent_model()
     assert "response_format" not in model.model_kwargs
     assert model.max_retries == 0
+
+
+async def test_sensitive_rename_excludes_previous_path_from_every_native_tool(source_service):
+    context = AgentContext(evidence=source_service, denied_paths=frozenset({"safe.py"}),
+        changed_files=[{"file_path": ".env", "old_file_path": "safe.py", "hunks": []}])
+    runtime = ToolRuntime(state={}, context=context, config={}, stream_writer=lambda *_: None,
+                          tool_call_id="test", store=None)
+    for operation, args in (
+        (read_file, {"path": "safe.py", "start": 1, "end": 1}),
+        (read_base_file, {"path": "safe.py", "start": 1, "end": 1}),
+        (read_diff, {"path": ".env"}),
+        (search_code, {"query": "VALUE", "path": "safe.py"}),
+    ):
+        result = await operation.coroutine(**args, runtime=runtime)
+        assert not result["ok"], (operation.name, result)
+
+
+def test_source_line_identity_counts_only_lf():
+    assert source_lines("value='a\u2028b'\r\nnext\r") == ["value='a\u2028b'\r\n", "next\r"]
+    assert source_lines("") == []
+    assert source_lines("\n") == ["\n"]
+
+
+async def test_chatopenai_http_native_tools_and_structured_response(source_service):
+    requests = []
+
+    def transport(request):
+        payload = json.loads(request.content)
+        requests.append(payload)
+        assert "response_format" not in payload
+        assert payload["tools"]
+        assert "runtime" not in json.dumps(payload["tools"])
+        seen = [message for message in payload["messages"] if message["role"] == "tool"]
+        if not seen:
+            tool_calls = [{"id": "source", "type": "function", "function": {"name": "read_file",
+                "arguments": json.dumps({"path": "safe.py", "start": 1, "end": 1})}}]
+        else:
+            assert json.loads(seen[0]["content"])["ok"]
+            tool_calls = [{"id": "final", "type": "function", "function": {
+                "name": "DiscoveryOutput", "arguments": json.dumps({"findings": [], "examined": []})}}]
+        return httpx.Response(200, json={"id": "chat", "object": "chat.completion", "created": 1,
+            "model": "fixture", "choices": [{"index": 0, "finish_reason": "tool_calls",
+                "message": {"role": "assistant", "content": None, "tool_calls": tool_calls}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
+
+    provider = OpenAICompatibleProvider("fixture", "https://example.test/v1", "fixture")
+    model = provider.agent_model()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        from openai import AsyncOpenAI
+        sdk = AsyncOpenAI(api_key="fixture", base_url="https://example.test/v1", http_client=client,
+                          max_retries=0)
+        model.root_async_client = sdk
+        model.async_client = sdk.chat.completions
+        output = await build_agent(model, "behavior", ReviewLimits()).ainvoke(
+            {"messages": [("user", "Read the frozen source and submit.")]},
+            context=AgentContext(evidence=source_service))
+    assert len(requests) == 2
+    assert isinstance(output["structured_response"], DiscoveryOutput)

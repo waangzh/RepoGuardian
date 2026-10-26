@@ -10,7 +10,8 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
-from app.models.review import ReviewTask, _validate_repo_relative_path
+from app.review.contracts import ReviewTask
+from app.core.paths import validate_repo_relative_path as _validate_repo_relative_path
 from app.models.review_plan import FileContextResponse
 from app.review.tool_scope import is_sensitive_repository_change
 

@@ -1,16 +1,12 @@
-"""Versioned, untrusted PR conversation inputs and independent recheck results."""
+"""Frozen, untrusted PR conversation inputs."""
 
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-CONTRACT = "pr-discussion-context-v1"
-
-
 class DiscussionPolicy(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-    version: Literal["pr-discussion-context-v1"] = CONTRACT
     page_size: int = 50
     timeout_seconds: int = 30
     max_roots: int = 500
@@ -63,7 +59,6 @@ class DiscussionThread(BaseModel):
 
 class DiscussionSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    version: Literal["pr-discussion-context-v1"] = CONTRACT
     task_id: str
     pr_url: str
     head_sha: str

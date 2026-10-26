@@ -1,14 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { createServer } from "vite";
 import { createSSRApp, h } from "vue";
 import { renderToString } from "@vue/server-renderer";
 
-const fixtures = JSON.parse(await readFile(new URL("../fixtures/publication-plans.json", import.meta.url), "utf8"));
+const fixtures = {findings:{plan:{review_id:"review",snapshot:{head_sha:"a".repeat(40)},review_comment_markdown:"已核验评论",inline_drafts:[],summary_findings:[]}}};
 
 test("发布页在进入前区分复制评论与直接发布，未启用时不展示口令入口", async () => {
-  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, optimizeDeps: { noDiscovery: true, entries: [], include: [] }, appType: "custom" });
   try {
     const { default: Panel } = await server.ssrLoadModule("/src/components/review/publication/GitHubPublicationPanel.vue");
     const { plan } = fixtures.findings;
@@ -32,7 +31,7 @@ test("发布页在进入前区分复制评论与直接发布，未启用时不�
 });
 
 test("发布结果与预检使用用户语言，不直接展示协议值", async () => {
-  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, optimizeDeps: { noDiscovery: true, entries: [], include: [] }, appType: "custom" });
   try {
     const utils = await server.ssrLoadModule("/src/utils/publicationPresentation.ts");
     for (const state of ["queued", "preparing", "publishing", "succeeded", "partial", "failed", "uncertain", "stale"]) {

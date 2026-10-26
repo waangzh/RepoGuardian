@@ -1,0 +1,241 @@
+import shutil
+import asyncio
+import subprocess
+from types import SimpleNamespace
+
+import pytest
+from langgraph.checkpoint.memory import InMemorySaver
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.core.database import Base
+from app.models.review.diff import PullRequestInfo
+from app.review.contracts import ReviewCreateRequest, ReviewPreviewRequest
+from app.services.publication.publication_planner import PublicationPlanner
+from app.services.publication.publication_repository import PublicationRepository, PublicationConflict
+from app.models.publication import PublicationSelection
+from app.core.fingerprints import stable_hash
+from app.services.review.artifact_store import LocalArtifactStore
+from app.services.review.report_service import ReportService
+from app.services.review.review_repository import ReviewLeaseLost, ReviewRepository, ReviewStopped
+from app.services.review.review_service import ReviewService
+from app.tools.diff_parser import DiffParser
+from app.tools.git_tool import GitTool
+from tests.review.test_native_graph import ReviewModel
+
+pytest_plugins = ["tests.review.test_native_agents"]
+
+
+@pytest.fixture
+def pipeline(source_service, tmp_path, monkeypatch):
+    source = source_service
+    workdir = tmp_path / "workspaces"
+    workdir.mkdir()
+
+    class LocalGit(GitTool):
+        def clone_and_diff(self, pr, **kwargs):
+            destination = workdir / f"local-repo-1-{len(list(workdir.iterdir())):08d}"
+            shutil.copytree(source.repo_path, destination)
+            diff = subprocess.run(
+                ["git", "-C", str(destination), "diff", "--no-ext-diff",
+                 source.snapshot.base_sha, source.snapshot.head_sha],
+                check=True, capture_output=True,
+            ).stdout.decode()
+            return destination, diff
+
+    pr = PullRequestInfo(owner="local", repo="repo", number=1, title="Change value",
+        body="保留固定快照", html_url="https://github.com/local/repo/pull/1",
+        clone_url="https://github.com/local/repo.git",
+        base={"ref": "main", "sha": source.snapshot.base_sha,
+              "repo_clone_url": "https://github.com/local/repo.git"},
+        head={"ref": "change", "sha": source.snapshot.head_sha,
+              "repo_clone_url": "https://github.com/local/repo.git"})
+
+    class GitHub:
+        async def fetch_pr(self, url):
+            return pr.model_copy(deep=True)
+
+    model = ReviewModel()
+    provider = SimpleNamespace(
+        _provider_name="fixture", _base_url="https://example.test/v1", _default_model="fixture",
+        agent_model=lambda *args, **kwargs: model)
+    engine = create_engine(f"sqlite:///{(tmp_path / 'business.sqlite').as_posix()}",
+                           connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    repository = ReviewRepository(sessionmaker(engine, expire_on_commit=False),
+        LocalArtifactStore(tmp_path / "artifacts"), require_migration=False)
+    service = ReviewService(GitHub(), LocalGit(workdir), DiffParser(), provider, ReportService(),
+                             repository=repository)
+    monkeypatch.setattr(service, "start_worker", lambda: None)
+    saver = InMemorySaver()
+
+    async def checkpointer():
+        return saver
+
+    monkeypatch.setattr("app.services.review.review_service.get_checkpointer", checkpointer)
+    # Workspace cache behavior has independent filesystem tests; this fixture
+    # deliberately exercises fresh immutable inputs on each preparation.
+    monkeypatch.setattr("app.services.workspaces.prepared_workspaces.prepare_repository",
+                        lambda pr, git, *args, **kwargs: git.clone_and_diff(pr, **kwargs))
+    monkeypatch.setattr("app.services.workspaces.prepared_workspaces.PreparedWorkspaces.publish",
+                        lambda *args, **kwargs: False)
+    yield service, repository, model, pr, engine
+    engine.dispose()
+
+
+async def preview_and_create(service):
+    request = ReviewPreviewRequest(
+        pr_url="https://github.com/local/repo/pull/1",
+        plan={"scope": {"mode": "selected", "primary_files": ["safe.py"]},
+              "include_pr_discussions": False},
+    )
+    preview = await service.preview(request)
+    created = ReviewCreateRequest(pr_url=request.pr_url, preview_id=preview.preview_id,
+        expected_head_sha=preview.snapshot.head_sha,
+        expected_effective_base_sha=preview.snapshot.effective_base_sha)
+    return preview, created, await service.create_confirmed_task(created)
+
+
+async def test_persistent_pipeline_confirmation_native_graph_report_and_revalidated_drafts(pipeline):
+    service, repository, model, _, _ = pipeline
+    preview, request, task = await preview_and_create(service)
+    assert len(preview.assignments) == 2
+    replay = await service.create_confirmed_task(request)
+    assert replay.id == task.id
+    assert await service._worker.run_once()
+    saved = repository.get_task(task.id)
+    assert saved.status == "completed", saved.error
+    assert saved.review_report.complete
+    assert len(saved.review_report.findings) == 1
+    assert saved.report_markdown
+    assert len(model.observed) == 3
+    plan = PublicationPlanner(repository._artifacts).build(saved)
+    assert plan.content_eligible
+    assert plan.outcome.confirmed_count == plan.outcome.publishable_count == 1
+    assert len(plan.inline_drafts) == 1
+    assert plan.snapshot.head_sha == saved.snapshot.head_sha
+    assert not await service._worker.run_once()
+    assert len(model.observed) == 3
+
+
+async def test_confirmation_refuses_changed_pr_and_unapproved_plan(pipeline):
+    service, _, _, pr, _ = pipeline
+    preview = await service.preview(ReviewPreviewRequest(
+        pr_url=pr.html_url, plan={"include_pr_discussions": False}))
+    pr.head.sha = "0" * 40
+    with pytest.raises(ValueError, match="stale"):
+        await service.create_confirmed_task(ReviewCreateRequest(
+            pr_url=pr.html_url, preview_id=preview.preview_id,
+            expected_head_sha=preview.snapshot.head_sha,
+            expected_effective_base_sha=preview.snapshot.effective_base_sha))
+    with pytest.raises(ValueError):
+        ReviewCreateRequest.model_validate({"pr_url": pr.html_url})
+
+
+async def test_cancelled_task_and_lost_lease_refuse_late_writes(pipeline):
+    service, repository, model, _, _ = pipeline
+    _, _, task = await preview_and_create(service)
+    job = service._task_queue.claim(worker_id="owner")
+    assert job
+    lease = {"job_id": job.id, "owner": "other", "attempt": job.attempts}
+    with pytest.raises(ReviewLeaseLost):
+        repository.assert_active(task.id, lease)
+    assert service.cancel_task(task.id)
+    with pytest.raises(ReviewStopped):
+        repository.save_task(task)
+    await service._run_graph(task.id, job=job)
+    assert repository.get_task(task.id).status == "cancelled"
+    assert model.observed == []
+
+
+async def test_publication_refuses_tampered_verdict_or_missing_evidence_archive(pipeline):
+    service, repository, _, _, _ = pipeline
+    _, _, task = await preview_and_create(service)
+    assert await service._worker.run_once()
+    saved = repository.get_task(task.id)
+    assert saved.review_report is not None, saved.error
+    tampered = saved.model_copy(deep=True)
+    tampered.review_report.findings[0].candidate.title = "另一条未经核验的问题"
+    plan = PublicationPlanner(repository._artifacts).build(tampered)
+    assert not plan.inline_drafts and not plan.summary_findings
+    assert plan.withheld_findings
+    identity = saved.review_report.findings[0].evidence_ids[0]
+    evidence = repository._artifacts.root / saved.id / f"evidence-{identity}.txt"
+    evidence.unlink()
+    plan = PublicationPlanner(repository._artifacts).build(saved)
+    assert not plan.inline_drafts and plan.outcome.publishable_count == 0
+
+
+async def test_outbox_idempotency_and_cancelled_publication_boundary(pipeline):
+    service, review_repo, _, _, _ = pipeline
+    _, _, task = await preview_and_create(service)
+    assert await service._worker.run_once()
+    saved = review_repo.get_task(task.id)
+    plan = PublicationPlanner(review_repo._artifacts).build(saved)
+    keys = [draft.finding_key for draft in plan.inline_drafts]
+    selection = PublicationSelection(expected_plan_hash=stable_hash(plan.model_dump(mode="json")),
+        expected_head_sha=plan.snapshot.head_sha, finding_keys=keys)
+    context = {"repository_id": 123, "pr_number": 1, "publisher_identity": "user:7",
+        "owner": "local", "repo": "repo", "base_sha": saved.snapshot.declared_base_sha,
+        "order": saved.completed_at.isoformat() + ":" + saved.id, "publisher_id": 7}
+    repo = PublicationRepository(review_repo._session_factory)
+    one = repo.create(plan, selection, context, "request-key")
+    replay = repo.create(plan, selection, context, "request-key")
+    assert one.id == replay.id
+    lease = repo.acquire(one, "worker")
+    repo.release(lease)
+    with review_repo._session_factory.begin() as session:
+        from app.models.orm import ReviewTaskOrm
+        row = session.get(ReviewTaskOrm, task.id)
+        row.status = "cancelled"
+    with pytest.raises(PublicationConflict, match="review_not_publishable"):
+        repo.create(plan, selection, context, "new-request")
+    with pytest.raises(PublicationConflict, match="review_not_publishable"):
+        repo.acquire(one, "another-worker")
+
+
+async def test_cancel_api_thread_stops_running_model_and_blocks_late_completion(pipeline):
+    service, repository, model, _, _ = pipeline
+    entered = asyncio.Event()
+    original = model._agenerate
+
+    async def waiting(*args, **kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+        return await original(*args, **kwargs)
+
+    object.__setattr__(model, "_agenerate", waiting)
+    _, _, task = await preview_and_create(service)
+    runner = asyncio.create_task(service._worker.run_once())
+    await asyncio.wait_for(entered.wait(), 15)
+    assert await asyncio.to_thread(service.cancel_task, task.id)
+    await asyncio.wait_for(runner, 10)
+    saved = repository.get_task(task.id)
+    assert saved.status == "cancelled"
+    assert saved.review_report is None
+    assert PublicationPlanner(repository._artifacts).build(saved).inline_drafts == []
+
+
+async def test_completed_graph_result_survives_report_failure_without_new_model_calls(pipeline):
+    service, repository, model, _, _ = pipeline
+    original = service._report_service.generate
+    fail = True
+
+    def report(task):
+        nonlocal fail
+        if fail:
+            fail = False
+            raise OSError("injected report write boundary")
+        return original(task)
+
+    service._report_service.generate = report
+    _, _, task = await preview_and_create(service)
+    assert await service._worker.run_once()
+    saved = repository.get_task(task.id)
+    assert saved.status == "failed"
+    calls = len(model.observed)
+    resumed = await service.resume_review(task.id)
+    assert resumed.status == "queued"
+    assert await service._worker.run_once()
+    assert repository.get_task(task.id).status == "completed"
+    assert len(model.observed) == calls

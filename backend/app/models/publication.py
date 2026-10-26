@@ -7,7 +7,6 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from app.models.review_plan import FindingView
-from app.models.review_synthesis import SynthesisTruncationReason
 
 
 class ReviewOutcomeKind(StrEnum):
@@ -40,7 +39,6 @@ class OutcomeReason(StrEnum):
     SNAPSHOT_MISSING = "snapshot_missing"
     RUNTIME_REPORT_MISSING = "runtime_report_missing"
     RUNTIME_REPORT_INVALID = "runtime_report_invalid"
-    UNSUPPORTED_LEGACY_PROJECTION = "unsupported_legacy_projection"
     HISTORICAL_DISCUSSION_UNRESOLVED = "historical_discussion_unresolved"
 
 
@@ -101,7 +99,6 @@ class ReviewOutcome(BaseModel):
     @model_serializer(mode="wrap")
     def serialize_historical_discussion(self, handler):
         value = handler(self)
-        # 没有讨论记录的任务保持旧计划字节一致；有记录时才并列输出。
         if self.historical_discussion.status == "not_recorded":
             value.pop("historical_discussion", None)
         return value
@@ -138,8 +135,7 @@ class DigestIntent(BaseModel):
 
 
 class MergeDecision(BaseModel):
-    # 对外只生成三态；review_suggestions 仅为旧冻结计划的反序列化兼容。
-    status: Literal["unavailable", "fix_blockers", "resolve_unknowns", "review_suggestions", "conditional_merge"] = "unavailable"
+    status: Literal["unavailable", "fix_blockers", "resolve_unknowns", "conditional_merge"] = "unavailable"
     label: str = "暂不能给出合并建议"
     advice: str = "本轮缺少有效审查事实，请重新审查后再判断是否合并。"
     blocking_finding_keys: list[str] = Field(default_factory=list)
@@ -233,15 +229,13 @@ class PublicationAnchor(BaseModel):
 
 class PublicationFinding(BaseModel):
     finding_key: str
+    attribution: Literal["introduced", "exposed", "pre_existing", "uncertain"] = "uncertain"
     candidate_id: str
     severity: Literal["critical", "high", "medium", "low"]
     placement: Literal["inline", "summary"]
     anchor: PublicationAnchor
     title: str
     body_markdown: str
-    legacy_body_markdown: str | None = None
-    # 新计划保留纯文本；缺失表示旧计划的 title 已经过 Markdown 转义。
-    raw_title: str | None = None
     affected_behavior: str = ""
     failure_scenario: str = ""
     recommendation: str = ""
@@ -253,12 +247,6 @@ class PublicationFinding(BaseModel):
     discussion_urls: list[str] = Field(default_factory=list)
     discussion_matches: list[dict] = Field(default_factory=list)
 
-    @model_serializer(mode="wrap")
-    def serialize_legacy_body(self, handler):
-        value = handler(self)
-        if self.legacy_body_markdown is None:
-            value.pop("legacy_body_markdown", None)
-        return value
 
 
 class PresentationDelivery(BaseModel):
@@ -272,26 +260,14 @@ class PresentationDelivery(BaseModel):
     actual_published: int | None = Field(default=None, ge=0)
 
 
-class SummaryInputCoverage(BaseModel):
-    truncation_reasons: list[SynthesisTruncationReason] = Field(default_factory=list)
-    omitted_files: int = Field(default=0, ge=0)
-    omitted_hunks: int = Field(default=0, ge=0)
-
-    @property
-    def limits_diff_summary(self):
-        return bool({"diff_hunk_truncated", "diff_hunk_omitted"} & set(self.truncation_reasons))
-
-
 class ReviewPresentation(BaseModel):
     """只读投影；不替代 ReviewOutcome、核验记录或发布回执。"""
 
-    schema_version: Literal["review-presentation-v1", "review-presentation-v2"] = "review-presentation-v1"
     review_id: str
     snapshot: PublicationSnapshot
     language: Literal["zh-CN"] = "zh-CN"
     synthesis_status: Literal["ready", "fallback", "unavailable"] = "fallback"
-    # 概述来源：已冻结模型摘要、确定性变更元数据或不可用；旧计划缺失该字段。
-    summary_source: Literal["model", "metadata", "unavailable"] | None = None
+    summary_source: Literal["metadata", "unavailable"] = "metadata"
     purpose_text: str | None = None
     purpose_source: Literal["author_claim", "code_inferred", "unknown"] = "unknown"
     change_summary: str
@@ -301,17 +277,7 @@ class ReviewPresentation(BaseModel):
     findings: list[PublicationFinding] = Field(default_factory=list)
     delivery: PresentationDelivery
     limitations: list[str] = Field(default_factory=list)
-    summary_input_coverage: SummaryInputCoverage | None = None
 
-    @model_serializer(mode="wrap")
-    def serialize_optional_input_coverage(self, handler):
-        value = handler(self)
-        if self.summary_input_coverage is None:
-            value.pop("summary_input_coverage", None)
-        # 旧冻结计划没有来源标记；缺失不补写，保持正文与计划哈希不变。
-        if self.summary_source is None:
-            value.pop("summary_source", None)
-        return value
 
 
 class WithheldFinding(BaseModel):
@@ -344,7 +310,6 @@ class ReviewSummaryDigest(BaseModel):
 
 
 class ReviewSummary(BaseModel):
-    schema_version: Literal["review-summary-v1"] = "review-summary-v1"
     review_id: str
     snapshot: PublicationSnapshot
     outcome: ReviewOutcome
@@ -366,7 +331,6 @@ class ReviewSummary(BaseModel):
 class PublicationPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["review-publication-v1"] = "review-publication-v1"
     review_id: str
     snapshot: PublicationSnapshot
     outcome: ReviewOutcome
@@ -411,7 +375,7 @@ class ReviewCommentCheck(BaseModel):
     checked_at: datetime
     review_comment_markdown: str
     # 稳定的正文，不含随检查时点变化的过期/未知快照附注。
-    preview_markdown: str | None = None
+    preview_markdown: str
     included_finding_keys: list[str] = Field(default_factory=list)
     omitted_finding_keys: list[str] = Field(default_factory=list)
     retained_blocking_keys: list[str] = Field(default_factory=list)

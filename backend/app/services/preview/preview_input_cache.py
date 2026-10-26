@@ -14,7 +14,6 @@ from app.tools.git_tool import DIFF_CONTEXT_LINES, DIFF_POLICY_VERSION
 from app.languages.isolation import parser_fingerprint
 
 logger = logging.getLogger("RepoGuardian.PreviewCache")
-INDEX_CACHE_VERSION = "preview-input-v7"
 MAX_BYTES = 32 * 1024 * 1024
 MAX_RAW_BYTES = 512 * 1024 * 1024
 MAX_ENTRIES = 4
@@ -22,11 +21,8 @@ MAX_ENTRIES = 4
 
 def input_cache_key(pr, configuration):
     return stable_hash({"repository": pr.clone_url, "base": pr.base.sha, "head": pr.head.sha,
-        "index": INDEX_CACHE_VERSION, "parser": parser_fingerprint(),
-        "diff": DIFF_POLICY_VERSION, "context": DIFF_CONTEXT_LINES,
-        "call_resolution": configuration["call_resolution_version"],
-        "tool_schema": configuration.get("tool_schema_version"),
-        "config_version": configuration.get("config_version")})
+        "parser": parser_fingerprint(),
+        "diff": DIFF_POLICY_VERSION, "context": DIFF_CONTEXT_LINES})
 
 
 def encode(payload):
@@ -48,7 +44,7 @@ class PreviewInputCache:
                 return None
             envelope = row.payload
             try:
-                if (not isinstance(envelope, dict) or envelope.get("codec") != "zlib-base64-v1"
+                if (not isinstance(envelope, dict) or envelope.get("codec") != "zlib-base64"
                         or len(encode(envelope)) > MAX_BYTES):
                     return None
                 compressed = base64.b64decode(envelope["data"], validate=True)
@@ -72,7 +68,7 @@ class PreviewInputCache:
         if len(raw) > MAX_RAW_BYTES:
             logger.info("准备输入超过缓存展开上限：%d 字节，本次不缓存", len(raw))
             return
-        envelope = {"codec": "zlib-base64-v1", "raw_bytes": len(raw),
+        envelope = {"codec": "zlib-base64", "raw_bytes": len(raw),
                     "data": base64.b64encode(zlib.compress(raw, level=3)).decode("ascii")}
         stored_bytes = len(encode(envelope))
         if stored_bytes > MAX_BYTES:

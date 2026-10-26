@@ -22,12 +22,40 @@ def digest(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+def source_lines(content: str) -> list[str]:
+    """Git line numbers count LF, not Unicode separators in string literals."""
+    lines = content.split("\n")
+    return [line + "\n" for line in lines[:-1]] + ([lines[-1]] if lines[-1] else [])
+
+
+
 @dataclass
-class EvidenceService:
+class EvidenceArchive:
     snapshot: ReviewSnapshot
+    artifacts: LocalArtifactStore
+
+    def resolve(self, identity: str) -> EvidenceRef:
+        if not re.fullmatch(r"[0-9a-f]{64}", identity):
+            raise ValueError("invalid_evidence_id")
+        path = self.artifacts.root / self.snapshot.review_id / f"evidence-{identity}.txt"
+        encoded = self.artifacts.read_text(path.as_uri())
+        if digest(encoded) != identity:
+            raise ValueError("evidence_content_corrupted")
+        payload = json.loads(encoded)
+        ref = EvidenceRef(id=identity, **{k: v for k, v in payload.items() if k != "content"})
+        expected = self.snapshot.head_sha if ref.side == "head" else self.snapshot.base_sha
+        if (ref.review_id != self.snapshot.review_id or ref.commit_sha != expected
+                or digest(payload["content"]) != ref.content_hash
+                or len(source_lines(payload["content"])) != ref.end_line - ref.start_line + 1
+                or is_sensitive_repository_path(ref.path)):
+            raise ValueError("evidence_snapshot_mismatch")
+        return ref
+
+
+@dataclass
+class EvidenceService(EvidenceArchive):
     repo_path: Path
     allowed_paths: frozenset[str]
-    artifacts: LocalArtifactStore
     git: GitTool
     max_lines: int = 240
     max_file_bytes: int = 512_000
@@ -61,7 +89,7 @@ class EvidenceService:
         if end - start + 1 > self.max_lines:
             raise ValueError("source_range_too_large")
         sha, source = self._source(path, side)
-        lines = source.splitlines(keepends=True)
+        lines = source_lines(source)
         if end > len(lines):
             raise ValueError("source_range_out_of_bounds")
         content = "".join(lines[start - 1:end])
@@ -83,17 +111,9 @@ class EvidenceService:
             return await asyncio.to_thread(self._read, path, start, end, side)
 
     def resolve(self, identity: str) -> EvidenceRef:
-        if not re.fullmatch(r"[0-9a-f]{64}", identity):
-            raise ValueError("invalid_evidence_id")
-        path = self.artifacts.root / self.snapshot.review_id / f"evidence-{identity}.txt"
-        encoded = self.artifacts.read_text(path.as_uri())
-        if digest(encoded) != identity:
-            raise ValueError("evidence_content_corrupted")
-        payload = json.loads(encoded)
-        ref = EvidenceRef(id=identity, **{k: v for k, v in payload.items() if k != "content"})
+        ref = super().resolve(identity)
         sha, source = self._source(ref.path, ref.side)
-        original = "".join(source.splitlines(keepends=True)[ref.start_line - 1:ref.end_line])
-        if (ref.review_id != self.snapshot.review_id or ref.commit_sha != sha
-                or payload["content"] != original or digest(original) != ref.content_hash):
+        original = "".join(source_lines(source)[ref.start_line - 1:ref.end_line])
+        if ref.commit_sha != sha or digest(original) != ref.content_hash:
             raise ValueError("evidence_snapshot_mismatch")
         return ref

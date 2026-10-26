@@ -1,7 +1,6 @@
 """应用依赖组装：服务单例与生命周期入口，路由只消费这里构造的实例。"""
 
 import asyncio
-import logging
 from contextlib import asynccontextmanager
 from functools import lru_cache
 
@@ -51,19 +50,15 @@ def get_preview_jobs() -> PreviewJobs:
 def get_publication_service() -> PublicationService:
     token = settings.repoguardian_github_publish_token
     return PublicationService(PublicationRepository(), GitHubPublisher(token.get_secret_value() if token else None),
-                              settings, get_review_service().get_task)
+                              settings, get_review_service().get_task,
+                              artifacts=get_review_service()._artifacts)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    from app.graph.checkpointer import close_checkpointer
+    from app.review.checkpointer import close_checkpointer
     from app.languages.isolation import close_parser_workers
 
-    resolved = settings.resolve_model_profile()
-    log = logging.getLogger("RepoGuardian.LLM")
-    (log.warning if resolved.source == "generic_fallback" else log.info)(
-        "启动模型窗口配置：model=%s model_profile_source=%s profile=%s",
-        settings.repoguardian_model, resolved.source, resolved.profile.model_dump(mode="json"))
     service = get_review_service()
     repository = service.repository
     assert repository is not None  # 生产组装始终注入持久化仓库

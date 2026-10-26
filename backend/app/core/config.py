@@ -1,13 +1,11 @@
-﻿"""全局配置 —— 从 .env 文件 / 环境变量加载，提供类型安全的 Settings 单例。"""
+"""全局配置 —— 从 .env 文件 / 环境变量加载，提供类型安全的 Settings 单例。"""
 
 import os
 import re
 from pathlib import Path
-from typing import Literal
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from app.llm.model_request_budgeter import ModelRequestProfile
 
 
 class Settings(BaseSettings):
@@ -42,65 +40,16 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     repoguardian_model: str = "gpt-4.1-mini"
     repoguardian_provider: str = "openai"  # openai / deepseek / openai-compatible
-    repoguardian_model_request_attempts: int = Field(default=2, ge=1, le=5)
-    repoguardian_model_retry_backoff_seconds: float = Field(default=1.0, ge=0, le=30)
     repoguardian_model_request_timeout_seconds: float = Field(default=60, ge=1, le=600)
-    repoguardian_issue_dedup_timeout_seconds: float = Field(default=30, ge=0.1, le=300)
-    repoguardian_review_presentation_v1_enabled: bool = True
-    repoguardian_review_synthesis_enabled: bool = True
-    repoguardian_review_synthesis_max_input_chars: int = Field(default=24_000, ge=2000, le=60_000)
-    repoguardian_review_synthesis_max_tokens: int = Field(default=16_000, ge=0, le=100_000)
-    repoguardian_review_synthesis_output_tokens: int = Field(default=1800, ge=256, le=4096)
-    repoguardian_review_synthesis_timeout_seconds: float = Field(default=20, ge=0.1, le=120)
-    repoguardian_review_synthesis_max_cost_microusd: int | None = Field(default=None, ge=0)
 
-    def review_output_policy(self) -> dict:
-        """随新审查配置冻结；历史任务不因热配置启用新输出或模型调用。"""
-        return {
-            "presentation_v1": self.repoguardian_review_presentation_v1_enabled,
-            "synthesis_enabled": self.repoguardian_review_synthesis_enabled,
-            "language": "zh-CN",
-            "max_input_chars": self.repoguardian_review_synthesis_max_input_chars,
-            "max_tokens": self.repoguardian_review_synthesis_max_tokens,
-            "output_tokens": self.repoguardian_review_synthesis_output_tokens,
-            "timeout_seconds": self.repoguardian_review_synthesis_timeout_seconds,
-            "max_cost_microusd": self.repoguardian_review_synthesis_max_cost_microusd,
-        }
-    # JSON: {"provider:model":{"input":0.40,"output":1.60,"cached_input":0.10}}
-    # Rates are USD per one million tokens. Missing entries keep observed cost unknown.
-    repoguardian_model_pricing_json: str = "{}"
-    # 每个运行的独立上限，涵盖所有 Unit、Verifier 和协调传输尝试。
-    repoguardian_run_max_tokens: int = Field(default=1_000_000, ge=0)
-    repoguardian_run_max_calls: int = Field(default=200, ge=0)
     repoguardian_pr_discussions_enabled: bool = True
-    repoguardian_run_max_cost_microusd: int | None = Field(default=None, ge=0)
 
-    def run_budget_limits(self) -> dict[str, int | None]:
-        """运行创建时保存有效策略；恢复以持久账本为准。"""
-        return {"max_tokens": self.repoguardian_run_max_tokens,
-                "max_calls": self.repoguardian_run_max_calls,
-                "max_cost_microusd": self.repoguardian_run_max_cost_microusd}
-    # 显式通用配置优先于内置注册表；未配置时仅官方 endpoint 使用已知模型窗口。
-    repoguardian_model_request_profile: ModelRequestProfile = Field(
-        default_factory=ModelRequestProfile)
-    repoguardian_model_request_profiles: dict[str, ModelRequestProfile] = Field(
-        default_factory=dict)
 
-    def resolve_model_profile(self, model: str | None = None, provider: str | None = None):
-        from app.llm.model_request_budgeter import resolve_model_profile
-
-        return resolve_model_profile(model or self.repoguardian_model,
-            provider or self.repoguardian_provider, self.openai_base_url,
-            self.repoguardian_model_request_profile
-            if "repoguardian_model_request_profile" in self.model_fields_set else None,
-            self.repoguardian_model_request_profiles)
-
-    # ---- LangSmith 可观测性（默认不追踪，也不上传审查内容）----
+    # ---- LangSmith：显式启用会上传模型输入、源码工具结果与输出 ----
     repoguardian_langsmith_tracing: bool = False
     langsmith_api_key: str | None = None
     langsmith_project: str = "repoguardian"
     langsmith_endpoint: str | None = None
-    repoguardian_langsmith_include_content: bool = False
 
     # ---- 工作目录 ----
     repoguardian_workdir: Path = Path(__file__).resolve().parent.parent.parent / ".repoguardian" / "workspaces"
@@ -109,29 +58,20 @@ class Settings(BaseSettings):
 
     # ---- 产品模式 ----
     # 只读静态审查；不提供动态执行入口。
-    repoguardian_default_review_mode: Literal["review"] = "review"
-    # 创建任务时冻结；legacy_units 仅为历史任务快照的读取值。
-    repoguardian_review_engine: Literal["task_review_v1"] = "task_review_v1"
     repoguardian_github_webhook_secret: str | None = None
 
-    # ---- Review Unit Planner / 调度 ----
-    repoguardian_review_unit_concurrency: int = 4
-    # 增量审查：复用同一 PR 前序完整、无待复核问题且依赖未变化的目标覆盖；默认开启，
-    # 关闭后所有任务按完整 PR 重新审查。
-    repoguardian_incremental_review_enabled: bool = True
-    # pull_request synchronize webhook 自动创建增量审查；默认关闭，需显式配置
-    # webhook secret 与允许自动审查的仓库 allowlist。
+    # ---- 原生 Agent 派发与有界运行 ----
+    repoguardian_review_concurrency: int = Field(default=4, ge=1, le=16)
     repoguardian_incremental_review_webhook_enabled: bool = False
     repoguardian_incremental_review_webhook_repositories: str = ""
-    repoguardian_task_review_timeout_seconds: float = Field(default=1800, ge=1, le=86_400)
-    repoguardian_review_unit_small_max_changed_lines: int = 30
-    repoguardian_review_unit_large_min_changed_lines: int = 400
-    repoguardian_review_unit_max_lines_per_read: int = 240
-    repoguardian_review_unit_max_search_results: int = 12
+    repoguardian_review_timeout_seconds: float = Field(default=1800, ge=1, le=86_400)
+    repoguardian_agent_max_calls: int = Field(default=48, ge=1, le=100)
+    repoguardian_agent_max_tool_calls: int = Field(default=80, ge=1, le=500)
+    repoguardian_agent_output_tokens: int = Field(default=4096, ge=256, le=32768)
 
     # ---- 数据库 ----
-    repoguardian_db_path: Path = Path(".repoguardian/repoguardian.db")
-    repoguardian_checkpoint_db: Path = Path(".repoguardian/checkpoints.db")
+    repoguardian_db_path: Path = Path(".repoguardian/native-review.db")
+    repoguardian_checkpoint_db: Path = Path(".repoguardian/review-checkpoints.db")
     repoguardian_worker_poll_seconds: float = Field(default=0.25, ge=0.05, le=60)
     repoguardian_worker_lease_seconds: int = Field(default=300, ge=5, le=86_400)
     repoguardian_worker_max_attempts: int = Field(default=3, ge=1, le=20)
@@ -156,13 +96,6 @@ class Settings(BaseSettings):
         default=0.2, ge=0.0, le=1.0
     )
 
-    # ---- 可复用结论版本 ----
-    repoguardian_config_version: str = "6A-v2"
-    repoguardian_prompt_version: str = "review-v5"
-    repoguardian_rule_version: str = "rules-v2"
-    repoguardian_tool_schema_version: str = "tools-v3"
-    repoguardian_review_policy_version: str = "review-policy-v1"
-    repoguardian_allow_cross_model_reuse: bool = False
 
     # Windows 编辑器常会给 UTF-8 .env 写入 BOM；utf-8-sig 会安全移除 BOM，
     # 避免首个配置键被解析成 ``\ufeffGITHUB_TOKEN`` 之类的隐藏键名。

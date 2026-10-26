@@ -4,9 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.models.review import ReviewToolScope
 from app.review.tool_scope import ReviewPathPolicyError, validate_repository_file
-from app.tools.code_search import CodeSearchTool, ContextRetrievalPlanError
 from app.tools.repo_indexer import RepoIndexer
 
 
@@ -59,25 +57,12 @@ async def test_code_search_and_indexer_fail_closed_for_sensitive_files(tmp_path:
     index = await RepoIndexer().build_file_index(str(repo))
     assert {item["path"] for item in index} == {"safe.py"}
 
-    scope = ReviewToolScope(
-        review_unit_id="unit",
-        commentable_files={".env"},
-        readable_files={".env"},
-        repository_root=str(repo),
-        max_lines_per_read=20,
-        max_search_results=4,
-    )
-    with pytest.raises(ContextRetrievalPlanError, match="sensitive"):
-        await CodeSearchTool().retrieve_context(
-            changed_files=[{"file_path": ".env"}],
-            symbol_index=[],
-            file_index=[{"path": ".env"}],
-            repo_path=str(repo),
-            plan={
-                "reason": "尝试读取敏感文件",
-                "target_files": [".env"],
-                "search_terms": ["TOKEN"],
-                "relevance_types": ["text"],
-            },
-            scope=scope,
-        )
+    from app.review.context import AgentContext
+    from app.review.tools import search_code
+    from langchain.tools import ToolRuntime
+    from types import SimpleNamespace
+    evidence = SimpleNamespace(allowed_paths=frozenset({".env"}), _source=lambda *args: (_ for _ in ()).throw(ValueError("sensitive_path")))
+    runtime = ToolRuntime(state={}, context=AgentContext(evidence=evidence), config={},
+                          stream_writer=lambda *_: None, tool_call_id="test", store=None)
+    result = await search_code.coroutine(query="TOKEN", path=".env", runtime=runtime)
+    assert result["unreadable_files"] == 1 and result["matches"] == []

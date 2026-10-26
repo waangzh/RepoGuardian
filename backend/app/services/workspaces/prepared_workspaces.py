@@ -235,8 +235,7 @@ class PreparedWorkspaces:
 def prepare_repository(pr, git_tool, repository, configuration, **options):
     """Try a guarded local copy, then use the existing immutable-SHA remote path."""
     _check_cancelled(options.get("cancel_event"))
-    if (repository is not None and configuration.get("call_resolution_version")
-            and callable(getattr(git_tool, "clone_prepared", None))):
+    if repository is not None and callable(getattr(git_tool, "clone_prepared", None)):
         try:
             prepared = PreparedWorkspaces(repository, git_tool._workdir).copy(
                 pr, configuration, git_tool, **options)

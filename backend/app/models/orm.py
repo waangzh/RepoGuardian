@@ -21,7 +21,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 
@@ -183,21 +183,12 @@ class ReviewTaskOrm(Base):
     current_phase: Mapped[str] = mapped_column(String(64), nullable=False)
     model: Mapped[str | None] = mapped_column(String(128))
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
-    config_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    rule_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    tool_schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    planner_version: Mapped[str | None] = mapped_column(String(64))
-    review_policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
     warnings: Mapped[list[Any]] = mapped_column(JSON, default=list, nullable=False)
     error_summary: Mapped[str | None] = mapped_column(Text)
     task_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     task_snapshot_artifact_uri: Mapped[str | None] = mapped_column(String(1024))
     report_markdown: Mapped[str | None] = mapped_column(Text)
-    report_artifact_uri: Mapped[str | None] = mapped_column(String(1024))
     thread_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    checkpoint_ns: Mapped[str] = mapped_column(String(128), default="", nullable=False)
-    checkpoint_id: Mapped[str | None] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -205,84 +196,12 @@ class ReviewTaskOrm(Base):
     retention_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
-    units: Mapped[list[ReviewUnitOrm]] = relationship(cascade="all, delete-orphan")
-    issues: Mapped[list[ReviewIssueOrm]] = relationship(cascade="all, delete-orphan")
-    human_requests: Mapped[list[HumanRequestOrm]] = relationship(cascade="all, delete-orphan")
 
 
-class ReviewUnitOrm(Base):
-    __tablename__ = "review_units"
-    __table_args__ = (
-        UniqueConstraint("task_id", "unit_id", name="uq_review_units_task_unit"),
-        Index("ix_review_units_reuse", "fingerprint", "status", "model", "provider"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    task_id: Mapped[str] = mapped_column(ForeignKey("review_tasks.id", ondelete="CASCADE"), index=True)
-    unit_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    unit_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    budget: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
-    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    model: Mapped[str | None] = mapped_column(String(128))
-    provider: Mapped[str] = mapped_column(String(64), nullable=False)
-    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    rule_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    tool_schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    planner_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    review_policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    result_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON)
-    reused_from_id: Mapped[int | None] = mapped_column(ForeignKey("review_units.id"))
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    failure_reason: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class ReviewIssueOrm(Base):
-    __tablename__ = "review_issues"
-    __table_args__ = (UniqueConstraint("task_id", "issue_id", name="uq_review_issues_task_issue"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    task_id: Mapped[str] = mapped_column(ForeignKey("review_tasks.id", ondelete="CASCADE"), index=True)
-    unit_id: Mapped[int | None] = mapped_column(ForeignKey("review_units.id", ondelete="SET NULL"))
-    issue_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    candidate: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    evidence_resolution: Mapped[dict[str, Any] | None] = mapped_column(JSON)
-    verifier_decision: Mapped[dict[str, Any] | None] = mapped_column(JSON)
-    dedup_source: Mapped[dict[str, Any] | None] = mapped_column(JSON)
-    evidence_hash: Mapped[str | None] = mapped_column(String(64), index=True)
-    final_status: Mapped[str] = mapped_column(String(32), nullable=False)
-    publication_status: Mapped[str] = mapped_column(String(32), default="unpublished", nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class HumanRequestOrm(Base):
-    __tablename__ = "human_requests"
-    __table_args__ = (UniqueConstraint("task_id", "request_id", name="uq_human_task_request"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    request_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
-    task_id: Mapped[str] = mapped_column(ForeignKey("review_tasks.id", ondelete="CASCADE"), index=True)
-    unit_id: Mapped[int | None] = mapped_column(ForeignKey("review_units.id", ondelete="SET NULL"))
-    reason: Mapped[str] = mapped_column(Text, nullable=False)
-    question: Mapped[str] = mapped_column(Text, nullable=False)
-    options: Mapped[list[Any]] = mapped_column(JSON, default=list, nullable=False)
-    context: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    answer_option_id: Mapped[str | None] = mapped_column(String(128))
-    answer_text: Mapped[str | None] = mapped_column(Text)
-    answered_by: Mapped[str | None] = mapped_column(String(256))
-    deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    thread_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    checkpoint_ns: Mapped[str] = mapped_column(String(128), default="", nullable=False)
-    checkpoint_id: Mapped[str | None] = mapped_column(String(128))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class WorkerJobOrm(Base):
@@ -294,7 +213,6 @@ class WorkerJobOrm(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     task_id: Mapped[str] = mapped_column(ForeignKey("review_tasks.id", ondelete="CASCADE"), index=True)
-    unit_id: Mapped[int | None] = mapped_column(ForeignKey("review_units.id", ondelete="CASCADE"))
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False)
@@ -328,18 +246,6 @@ class IncrementalWebhookDeliveryOrm(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class SideEffectOrm(Base):
-    __tablename__ = "side_effects"
-
-    idempotency_key: Mapped[str] = mapped_column(String(256), primary_key=True)
-    task_id: Mapped[str] = mapped_column(ForeignKey("review_tasks.id", ondelete="CASCADE"), index=True)
-    effect_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    target: Mapped[str] = mapped_column(String(1024), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False)
-    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ArtifactOrm(Base):

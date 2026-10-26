@@ -328,14 +328,6 @@ def test_parser_version_changes_preview_cache_key(monkeypatch):
     assert cache.input_cache_key(pr, configuration) != original
 
 
-def test_parser_version_changes_confirmation_policy(monkeypatch):
-    from app.services.preview import preview_confirmation as confirmation
-
-    original = confirmation.policy_fingerprint()
-    monkeypatch.setattr(isolation, "parser_fingerprint", lambda: "other-parser")
-    assert confirmation.policy_fingerprint() != original
-
-
 def test_persistent_worker_reuses_process_and_keeps_file_identity(tmp_path, monkeypatch):
     processes = []
     original = subprocess.Popen

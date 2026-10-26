@@ -20,14 +20,6 @@ class ModelCatalogResponse(BaseModel):
     models: list[ProviderModelInfo]
 
 
-class VersionDiagnostics(BaseModel):
-    config: str
-    prompt: str
-    rule: str
-    tool_schema: str
-    review_policy: str
-
-
 class SystemDiagnostics(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -41,7 +33,6 @@ class SystemDiagnostics(BaseModel):
     langsmith_enabled: bool
     retention_days: int
     configured_secrets: dict[str, bool]
-    versions: VersionDiagnostics
 
 
 class SystemSettingsUpdate(BaseModel):

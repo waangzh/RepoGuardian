@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.review import ReviewPreviewRequest, ReviewPreviewResponse
+from app.review.contracts import ReviewPreviewRequest, ReviewPreviewResponse
 
 
 class PreviewJobCreate(BaseModel):

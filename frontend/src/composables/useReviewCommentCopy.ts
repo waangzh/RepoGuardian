@@ -64,7 +64,7 @@ export function useReviewCommentCopy(source: CommentSource, load = checkReviewCo
           || (options.finding_key && (result.included_finding_keys?.length !== 1 || result.included_finding_keys[0] !== options.finding_key))
           || (result.status === "current" && (!head || result.latest_head_sha !== head))) throw new Error("快照或所选问题不匹配");
       headCheck.value = result;
-      const latestPreview = result.preview_markdown ?? result.review_comment_markdown;
+      const latestPreview = result.preview_markdown;
       if (typeof latestPreview !== "string" || !latestPreview) throw new Error("评论正文无效");
       // 逐字比较比摘要比较更严格；快照附注不参与，避免检查时点使正文永远变化。
       if (latestPreview !== expectedMarkdown) {

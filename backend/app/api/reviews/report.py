@@ -14,9 +14,7 @@ from fastapi import APIRouter, HTTPException, Response, status
 
 from app.api import reviews as _reviews
 from app.core.config import settings
-from app.models.review import (
-    TaskStatus,
-)
+from app.review.contracts import TERMINAL_STATUSES
 from app.models.publication import PublicationPlan, ReviewCommentCheck, ReviewCommentOptions, ReviewSummary
 from app.services.publication.publication_planner import PublicationPlanner, summary_projection
 
@@ -28,10 +26,11 @@ async def _build_plan(task_id: str) -> PublicationPlan:
     task = await asyncio.to_thread(service.get_task, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    if task.status not in {TaskStatus.completed, TaskStatus.completed_with_warnings, TaskStatus.failed, TaskStatus.cancelled}:
+    if task.status not in TERMINAL_STATUSES:
         raise HTTPException(status_code=409, detail="Review is not finished")
     dispositions = await _report_dispositions(service, task_id)
-    return await asyncio.to_thread(PublicationPlanner().build, task.model_copy(deep=True), dispositions=dispositions)
+    return await asyncio.to_thread(PublicationPlanner(service._artifacts).build,
+                                   task.model_copy(deep=True), dispositions=dispositions)
 
 
 @router.get("/{task_id}/publication-summary", response_model=ReviewSummary, responses={

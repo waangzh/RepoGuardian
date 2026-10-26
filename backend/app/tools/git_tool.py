@@ -175,40 +175,27 @@ class GitTool:
                         "size": int(size) if size != "-" else None}
         return entries
 
-    def tracking_evidence(self, repo_path: str | Path, revision: str, queries: list[str]) -> dict:
-        """查询不可变 Head tree 的精确文件名；不访问正文、索引或工作树。"""
-        from app.models.review import CrossUnitFollowupRequest
-        from app.review.tool_scope import is_sensitive_repository_path
-
-        queries = CrossUnitFollowupRequest.validate_tracking_queries(queries)
-        if not queries or len(queries) > 12 or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", revision):
-            raise ValueError("tracking evidence requires bounded queries and an immutable revision")
-        root = self._validate_worktree(repo_path)
-        raw = self._run([self._git, "-C", str(root), "ls-tree", "-r", "--name-only", "-z", revision])
-        matches = sorted(path for path in raw.split("\0") if path and path.rsplit("/", 1)[-1] in queries)
-        visible, size = [], 0
-        for path in matches:
-            if not is_sensitive_repository_path(path) and size + len(path) <= 3000 and len(visible) < 40:
-                visible.append(path)
-                size += len(path)
-        return {"head_sha": revision, "queries": queries, "match_mode": "exact_basename_all_directories",
-            "matches": visible, "matched_count": len(matches), "complete": len(visible) == len(matches),
-            "scope": "committed_head_tree_only"}
-
     def get_file_content_at_revision(
         self, repo_path: str | Path, revision: str, file_path: str
     ) -> str | None:
         """读取服务端选定 revision 的文件，不切换工作树。"""
         repo_dir = self._validate_worktree(repo_path)
+        _normalized_commit_sha(revision, "source revision")
+        from app.core.paths import validate_repo_relative_path
+        validate_repo_relative_path(file_path)
         completed = subprocess.run(
             [self._git, "-C", str(repo_dir), "show", f"{revision}:{file_path}"],
             check=False,
             capture_output=True,
+            timeout=self._command_timeout_seconds,
             env=git_safety_environment(),
         )
         if completed.returncode != 0 or b"\x00" in completed.stdout:
             return None
-        return completed.stdout.decode("utf-8", errors="replace")
+        try:
+            return completed.stdout.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
 
     def clone_and_diff(
         self,

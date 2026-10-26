@@ -5,7 +5,7 @@ from app.tools.repository_graph import build_repository_graph
 
 
 def indexed_graph(tmp_path, source, *, caller="caller.py", target="src/pkg/stats.py", extra=None,
-                  target_source="def measure(values):\n    return values\n", version="import-evidence-v4"):
+                  target_source="def measure(values):\n    return values\n"):
     files, symbols = [], []
     adapter = TreeSitterLanguageAdapter("python", {".py"}, load_python_grammar)
     for path, content in {caller: source, target: target_source, **(extra or {})}.items():
@@ -18,7 +18,7 @@ def indexed_graph(tmp_path, source, *, caller="caller.py", target="src/pkg/stats
                       "python_namespace": analysis.python_namespace,
                       "import_refs": [ref.model_dump(mode="json") for ref in analysis.imports]})
         symbols.extend(symbol.to_index_entry() for symbol in analysis.symbols)
-    return build_repository_graph(files, symbols, call_resolution_version=version), symbols
+    return build_repository_graph(files, symbols), symbols
 
 
 @pytest.mark.parametrize("statement,expression", [
@@ -83,13 +83,6 @@ def test_unstable_target_definition_is_not_proven(tmp_path, target_source):
     assert not [edge for edge in graph["edges"] if edge.get("resolution_status") == "resolved"]
 
 
-def test_legacy_resolution_remains_frozen(tmp_path):
-    graph, _ = indexed_graph(tmp_path, "from pkg.stats import measure\ndef run():\n    return measure([])\n",
-                              version="import-evidence-v3")
-    edge = next(edge for edge in graph["edges"] if edge["type"] == "calls")
-    assert edge["resolution_status"] == "unresolved" and edge["resolution_basis"] == "unique_name"
-
-
 def test_unproven_name_hint_cannot_replace_a_proven_call_to_same_target(tmp_path):
     graph, _ = indexed_graph(tmp_path,
         "from pkg.stats import measure\ndef run(external):\n    external.measure([])\n    return measure([])\n")
@@ -109,8 +102,7 @@ def test_unproven_name_hint_cannot_replace_a_proven_call_to_same_target(tmp_path
 def test_submodule_import_never_binds_to_other_modules_same_demo(tmp_path, statement, expression, caller):
     graph, _ = indexed_graph(tmp_path, f"{statement}\ndef run():\n    return {expression}()\n",
         caller=caller, target="src/pkg/hardware.py", target_source="def demo():\n    return 1\n",
-        extra={"src/pkg/__init__.py": "", "src/pkg/stats.py": "def demo():\n    return 2\n"},
-        version="import-evidence-v5")
+        extra={"src/pkg/__init__.py": "", "src/pkg/stats.py": "def demo():\n    return 2\n"})
     edges = [edge for edge in graph["edges"] if edge["type"] == "calls"]
     assert len(edges) == 1 and edges[0]["target"] == "src/pkg/hardware.py::demo"
     assert edges[0]["resolution_status"] == "resolved"
@@ -124,6 +116,6 @@ def test_package_attributes_cannot_be_guessed_as_submodules(tmp_path, initialize
     graph, _ = indexed_graph(tmp_path, "from pkg import hardware\ndef run():\n    return hardware.demo()\n",
         target="src/pkg/hardware.py", target_source="def demo():\n    return 1\n",
         extra={"src/pkg/__init__.py": initializer, "src/pkg/stats.py": "def demo():\n    return 2\n"},
-        version="import-evidence-v5")
+        )
     assert not [edge for edge in graph["edges"] if edge.get("resolution_status") == "resolved"]
     assert all(edge.get("relationship_level") != "symbol" for edge in graph["edges"] if edge["type"] == "calls")
