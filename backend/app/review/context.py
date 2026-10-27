@@ -18,6 +18,10 @@ class AgentContext:
     discussions: list[dict] = field(default_factory=list)
     author_context: dict = field(default_factory=dict)
     check_active: Callable[[], Awaitable[None]] | None = None
+    discussions_enabled: bool = False
+    batch_verification: bool = False
+    budget: Any = None
+    budget_agent_id: str = ""
 
 
 @dataclass
@@ -30,6 +34,7 @@ class ReviewContext:
     selected_paths: frozenset[str] | None = None
     replaying_nodes: frozenset[str] = frozenset()
     retry_results: dict[tuple[str, str], dict] = field(default_factory=dict)
+    budget: Any = None
     check_active: Callable[[], Awaitable[None]] | None = None
     progress: Callable[[dict], Awaitable[None]] | None = None
     _agent_context: AgentContext | None = None
@@ -42,6 +47,9 @@ class ReviewContext:
     async def sources(self) -> AgentContext:
         await self.active()
         async with self._load_lock:
+            if self.budget is None:
+                from app.review.budget import ReviewBudget
+                self.budget = ReviewBudget(self.limits, active=self.active)
             if self._agent_context is None:
                 self._agent_context = await self.load()
                 self._agent_context.check_active = self.active

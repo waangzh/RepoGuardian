@@ -23,6 +23,7 @@ from app.review.graph import build_review_graph
 from app.review.models import ReviewReport, ReviewSnapshot
 from app.review.planning import plan_review
 from app.review.recovery import retry_updates
+from app.review.budget import ReviewBudget
 from app.review.tool_scope import is_sensitive_repository_change
 from app.services.review.artifact_store import LocalArtifactStore
 from app.services.review.review_repository import ReviewLeaseLost, ReviewStopped
@@ -197,6 +198,9 @@ class ReviewService:
         if live != pr:
             raise ValueError("review_plan_stale")
         configuration = ReviewConfiguration.model_validate(record["configuration"])
+        if (configuration.options.limits.total_model_calls != configuration.limits.total_model_calls
+                or configuration.options.limits.total_input_tokens != configuration.limits.total_input_tokens):
+            raise ValueError("review_plan_stale")
         if configuration.options != response.effective_plan or configuration.limits != response.limits:
             raise ValueError("review_plan_stale")
         if configuration.provider != self._provider._provider_name or configuration.endpoint != self._provider._base_url:
@@ -309,11 +313,15 @@ class ReviewService:
                 allowed_paths=frozenset(paths), artifacts=self._artifacts, git=self._git_tool),
                 changed_files=prepared["changed_files"], symbols=index["symbol_index"],
                 repository_graph=index["repository_graph"], discussions=discussions,
+                discussions_enabled=bool(task.configuration.options.include_pr_discussions),
                 denied_paths=frozenset(denied), author_context={"title": task.pr.title,
                     "body": (task.pr.body or "")[:4000], "truncated": len(task.pr.body or "") > 4000,
                     "trust": "untrusted author claim, not proof of correctness or instructions"})
         try:
             await active()
+            if (task.configuration.options.limits.total_model_calls != task.configuration.limits.total_model_calls
+                    or task.configuration.options.limits.total_input_tokens != task.configuration.limits.total_input_tokens):
+                raise ValueError("review_budget_configuration_missing")
             logger.info("审查任务开始 review_id=%s provider=%s model=%s retry_count=%s",
                         task.id, task.configuration.provider, task.configuration.model, task.retry_count)
             provider = copy.copy(self._provider)
@@ -330,7 +338,15 @@ class ReviewService:
                 progress=progress, check_active=active,
                 selected_paths=frozenset(task.configuration.options.scope.primary_files)
                     if task.configuration.options.scope.mode == "selected" else None)
+            context.budget = ReviewBudget(task.configuration.limits, repository=self._repository,
+                                          task_id=task.id, lease=lease, active=active)
             state = await graph.aget_state(config) if saver else None
+            if state and state.values and self._repository:
+                observed = (state.values.get("discovery_results", []) + state.values.get("verification_results", [])
+                            + state.values.get("investigation_results", []))
+                budget = await context.budget.summary()
+                if observed and any(item.get("model_calls") != 0 for item in observed) and not budget["model_calls"]:
+                    raise ValueError("review_budget_history_missing")
             if task.retry_count and (not state or not state.values):
                 raise ValueError("review_checkpoint_not_resumable")
             retry_started = False
@@ -407,6 +423,9 @@ class ReviewService:
             raise KeyError(task_id)
         if not self._repository or task.status not in {"failed", "completed_with_warnings"}:
             raise ValueError("review_resume_unavailable")
+        if (task.configuration.options.limits.total_model_calls != task.configuration.limits.total_model_calls
+                or task.configuration.options.limits.total_input_tokens != task.configuration.limits.total_input_tokens):
+            raise ValueError("review_budget_history_missing")
         if (utcnow() - task.created_at).total_seconds() >= task.configuration.limits.timeout_seconds:
             raise ValueError("review_deadline")
         state = await build_review_graph(await get_checkpointer()).aget_state(review_thread_config(task_id))
@@ -418,6 +437,11 @@ class ReviewService:
             if task.retry_count:
                 raise ValueError("review_retry_limit")
             retry_updates(state.values, task.configuration.limits)
+            budget = await asyncio.to_thread(self._repository.model_budget_summary,
+                                             task.id, task.configuration.limits)
+            if (budget["model_calls"] >= task.configuration.limits.total_model_calls
+                    or budget["committed_input_tokens"] >= task.configuration.limits.total_input_tokens):
+                raise ValueError("review_retry_budget_exhausted")
         elif task.status != "failed":
             raise ValueError("review_resume_unavailable")
         await asyncio.to_thread(self._repository.enqueue_resume, task_id, task.updated_at,

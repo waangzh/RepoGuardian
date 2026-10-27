@@ -33,3 +33,6 @@ class ReviewState(TypedDict, total=False):
     related_candidates: list[dict]
     retry_count: int
     retry_results: list[dict]
+    batch_id: str
+    batch_candidates: list[dict]
+    verification_batches: list[dict]

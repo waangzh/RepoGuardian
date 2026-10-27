@@ -37,7 +37,9 @@ def finding_views(task, dispositions, artifacts=None):
             location=location, severity=finding_severity(accepted) if accepted else candidate.severity,
             evidence_status=status,
             verification=FindingVerification(evidence_status=status),
-            limitations=[decision.explanation] if decision else ["独立核验尚未完成"],
+            limitations=(decision.limitations or (
+                [decision.explanation] if decision.decision == "insufficient_evidence" else []))
+                if decision else ["独立核验尚未完成"],
             source_ids=sorted({source for item in members
                 for source in item.assignment_ids}), disposition=dispositions.get(candidate.id)))
     return items

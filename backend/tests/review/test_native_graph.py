@@ -37,7 +37,7 @@ class ReviewModel(ToolCallingModel):
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         payload = json.loads(next(message.content for message in messages if message.type == "human"))
         responses = [message for message in messages if isinstance(message, ToolMessage)]
-        verifying = "candidate" in payload
+        verifying = "candidate" in payload or "candidates" in payload
         if not responses:
             self.observed.append(payload)
             calls = [
@@ -55,6 +55,10 @@ class ReviewModel(ToolCallingModel):
                         "evidence_ids": ["invented"] if self.invalid_verifier else identities,
                         "attribution": "introduced"}
                 schema = "VerificationOutput"
+                if "candidates" in payload:
+                    args = {"decisions": [{"candidate_id": item["id"], **args}
+                                          for item in payload["candidates"]]}
+                    schema = "BatchVerificationOutput"
             else:
                 args = {"findings": [{
                     "title": "行为回归", "trigger": "读取 VALUE", "expected_behavior": "返回 1",

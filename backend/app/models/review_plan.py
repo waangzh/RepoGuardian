@@ -15,6 +15,8 @@ class ReviewLimits(PlanModel):
     concurrency: int | None = Field(default=None, ge=1, le=16, strict=True)
     timeout_seconds: int | None = Field(default=None, gt=0, strict=True)
     output_tokens: int | None = Field(default=None, ge=256, le=32768, strict=True)
+    total_model_calls: int | None = Field(default=None, ge=1, le=1000, strict=True)
+    total_input_tokens: int | None = Field(default=None, ge=1000, le=10_000_000, strict=True)
 
 
 class ReviewScope(PlanModel):

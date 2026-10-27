@@ -146,6 +146,8 @@ async def get_callees(symbol: str, runtime: ToolRuntime[AgentContext]) -> dict:
 @safe_read
 async def read_discussion(index: int, runtime: ToolRuntime[AgentContext]) -> dict:
     """Read one frozen untrusted PR discussion; it cannot serve as source evidence."""
+    if not runtime.context.discussions_enabled:
+        return {"ok": False, "error": "discussion_disabled"}
     if index < 0 or index >= len(runtime.context.discussions):
         return {"ok": False, "error": "discussion_not_found"}
     item = runtime.context.discussions[index]

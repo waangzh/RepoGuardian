@@ -29,6 +29,6 @@ async def report(state: ReviewState, runtime: Runtime[ReviewContext]):
         goals=goals, discovery_results=results, verification_results=verification + investigations,
         candidates=state["candidates"],
         decisions=state["decisions"], findings=state["findings"], complete=complete,
-        termination=termination)
+        termination=termination, budget=await runtime.context.budget.summary() if runtime.context.budget else {})
     await runtime.context.emit(phase="report", status="completed", termination=termination)
     return {"report": output.model_dump(), "goals": goals, "status": termination}

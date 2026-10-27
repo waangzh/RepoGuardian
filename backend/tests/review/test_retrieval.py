@@ -35,12 +35,20 @@ def commit_sources(service, texts):
     service.allowed_paths = frozenset(set(service.allowed_paths) | set(texts))
 
 
-async def test_late_file_and_in_file_hits_are_reachable_at_fixed_snapshot(source_service):
+async def test_late_file_and_in_file_hits_are_reachable_at_fixed_snapshot(source_service, monkeypatch):
     texts = {f"pkg/f{index:03d}.py": "unrelated\n" for index in range(130)}
     texts["pkg/f129.py"] = "NEEDLE\n" * 27
     commit_sources(source_service, texts)
     (source_service.repo_path / "pkg/f129.py").write_text("dirty tree\n", encoding="utf-8")
     context = AgentContext(evidence=source_service)
+    searches = []
+    original = source_service.git.find_matching_paths
+
+    def located(*args):
+        searches.append(args[2])
+        return original(*args)
+
+    monkeypatch.setattr(source_service.git, "find_matching_paths", located)
     pages, cursor = [], ""
     while True:
         page = await search(context, "NEEDLE", cursor=cursor)
@@ -51,9 +59,10 @@ async def test_late_file_and_in_file_hits_are_reachable_at_fixed_snapshot(source
             break
         assert len(pages) < 10
         cursor = page["next_cursor"]
-    assert pages[0]["matches"] == [] and pages[0]["has_more"]
+    assert pages[0]["matches"][0]["path"] == "pkg/f129.py" and pages[0]["has_more"]
     assert [item["line"] for page in pages for item in page["matches"]] == list(range(1, 28))
     assert all(item["path"] == "pkg/f129.py" for page in pages for item in page["matches"])
+    assert searches == ["NEEDLE"]  # Subsequent hit pages reuse the signed bounded search window.
     filtered = await search(context, "NEEDLE", path="pkg", glob="*129.py", limit=40)
     assert len(filtered["matches"]) == 27 and not filtered["has_more"]
     base = await search(context, "OLD", path="removed.py", side="base")
@@ -85,15 +94,15 @@ async def test_path_pagination_query_and_snapshot_binding(source_service):
 async def test_unreadable_earlier_page_and_cursor_restart_preserve_scope(source_service):
     texts = {f"pkg/f{index:03d}.py": "no match\n" for index in range(125)}
     texts["pkg/f000.py"] = "large" * 20
-    texts["pkg/f124.py"] = "NEEDLE\n"
+    texts["pkg/f124.py"] = "NEEDLE\nNEEDLE\n"
     commit_sources(source_service, texts)
     source_service.max_file_bytes = 50
     context = AgentContext(evidence=source_service)
-    first = await search(context, "NEEDLE", path="pkg")
+    first = await search(context, "NEEDLE", path="pkg", limit=1)
     assert first["has_more"] and first["unreadable_files"] == 1
     # A recreated invocation shares only the immutable archive, not in-memory cursor state.
     restarted = AgentContext(evidence=source_service)
-    last = await search(restarted, "NEEDLE", path="pkg", cursor=first["next_cursor"])
+    last = await search(restarted, "NEEDLE", path="pkg", cursor=first["next_cursor"], limit=1)
     assert not last["has_more"] and last["matches"][0]["path"] == "pkg/f124.py"
     assert last["unreadable_files"] == 0 and not last["scope_complete"]
 

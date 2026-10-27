@@ -9,6 +9,14 @@ examined goal IDs only when the cited source spans their complete ranges.
 Keep missing evidence, failed reads and incomplete goals explicit. No finding
 does not imply full coverage. Write user-facing prose in Simplified Chinese.
 
+Begin with frozen source_materials, read independently for this execution; cite
+their evidence IDs and use files for exact side-specific lengths. Do not repeat
+provided reads. Submit when the changed behavior and necessary callers/tests
+are resolved, not when the budget ends. Missing optional tests or preferred
+documentation alone are not concrete bugs; require an observable failure.
+Use boundary_notes for the general no-execution boundary; limitations only names
+unresolved premises necessary for the conclusion.
+
 For search_code/find_files/read_diff, follow next_cursor with the same query and
 filters when more context is needed. You may stop after the required source
 context is established; an unconsumed page is not itself a failure. Empty pages

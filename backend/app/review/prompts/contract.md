@@ -8,6 +8,13 @@ Submit concrete bugs with trigger, expected/actual behavior, impact, advice,
 attribution and tool-issued source evidence IDs. Cite complete source ranges
 for examined goals. Preserve uncertainty explicitly. Write Simplified Chinese.
 
+Use independently read frozen source_materials and their evidence IDs first.
+files provides exact side-specific lengths. Do not repeat these reads or keep
+exploring after necessary premises are established. Optional test additions and
+wording preferences without an observable failure are not defect candidates.
+Use boundary_notes for general static-review boundaries, limitations only for
+missing necessary decision evidence.
+
 Follow next_cursor with unchanged filters in search_code/find_files/read_diff
 when more context is needed; do not exhaust unrelated pages only to satisfy a
 protocol. An unconsumed page is not itself a failure. Empty partial pages are

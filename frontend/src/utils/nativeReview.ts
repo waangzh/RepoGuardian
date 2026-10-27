@@ -5,6 +5,8 @@ export const reviewerLabel = (role: string) => ({ behavior: '行为审查', cont
 export const decisionLabel = (decision: string) => ({ confirmed: '已确认', refuted: '已排除', insufficient_evidence: '证据不足' }[decision] || '尚未核验');
 export const phaseLabel = (phase: string) => ({ queued:'等待执行', prepare:'准备固定快照', planning:'规划完成', reviewing:'独立审查中', verifying_issues:'核验候选问题', behavior:'行为审查', contract:'契约审查', specialist:'风险专家审查', collect:'聚合候选', verifier:'独立核验', investigator:'定向调查', arbitrate:'证据仲裁', report:'生成报告', completed:'审查结束', failed:'执行失败', cancelled:'已停止' }[phase] || phase);
 export const executionErrorLabel = (code: string | null) => ({
+  ReviewBudgetExceeded: '达到整轮模型调用或累计输入预算，未完成范围保留为未知',
+  BatchVerificationIncomplete: '批量核验裁决缺失、重复或超出范围',
   GraphRecursionError: '达到执行步数上限，未提交最终审查结果',
   ModelCallLimitExceededError: '模型调用预算已耗尽',
   ToolCallLimitExceededError: '工具调用预算已耗尽',
@@ -25,6 +27,9 @@ export function resumeLabel(task: ReviewTask): string | null {
   if (!failed.every(item => item.model_calls != null && item.tool_calls != null
     && item.model_calls < limits.model_calls && item.tool_calls < limits.tool_calls)) return null;
   if (Date.now() - Date.parse(task.created_at) >= limits.timeout_seconds * 1000) return null;
+  const budget = report.budget;
+  if (budget && ((budget.model_calls ?? 0) >= limits.total_model_calls
+    || (budget.committed_input_tokens ?? 0) >= limits.total_input_tokens)) return null;
   return '补查失败分支';
 }
 export function orderedProgress(task: ReviewTask) {
@@ -41,7 +46,17 @@ export function progressSummary(task: ReviewTask) {
 }
 export function observedUsage(report: ReviewReport | null) {
   if (!report) return { calls: null, tokens: null };
-  const results: AgentResult[] = [...report.discovery_results, ...report.verification_results];
+  if (report.budget && report.budget.model_calls != null) {
+    const budget = report.budget;
+    return { calls: budget.model_calls, tokens: budget.input_tokens == null || budget.output_tokens == null
+      ? null : budget.input_tokens + budget.output_tokens };
+  }
+  const seen = new Set<string>();
+  const results: AgentResult[] = [...report.discovery_results, ...report.verification_results].filter(item => {
+    if (!item.execution_id) return true;
+    if (seen.has(item.execution_id)) return false;
+    seen.add(item.execution_id); return true;
+  });
   return {
     calls: results.some(item => item.model_calls === null) ? null : results.reduce((sum, item) => sum + (item.model_calls ?? 0), 0),
     tokens: results.some(item => item.input_tokens === null || item.output_tokens === null) ? null
@@ -66,5 +81,6 @@ export function defaultPlan(depth: 'quick' | 'standard' | 'deep' = 'standard', d
   return { depth, include_pr_discussions: discussions,
     focus: ['correctness', 'security', 'performance', 'compatibility'] as const,
     scope: { mode: 'all' as const, primary_files: [] as string[] },
-    limits: { model_calls: null, tool_calls: null, concurrency: null, timeout_seconds: null, output_tokens: null } };
+    limits: { model_calls: null, tool_calls: null, concurrency: null, timeout_seconds: null,
+      output_tokens: null, total_model_calls: null, total_input_tokens: null } };
 }

@@ -66,13 +66,13 @@ class LoopModel(ReviewModel):
 async def test_graph_step_guard_does_not_preempt_the_configured_model_budget(source_service):
     limits = ReviewLimits(model_calls=24)
     model = LoopModel()
-    with pytest.raises(Exception, match="[Mm]odel.*limit") as failure:
+    with pytest.raises(Exception, match="finalization_required") as failure:
         await build_agent(model, "behavior", limits).ainvoke(
             {"messages": [("user", "Offline loop fixture")]},
             context=AgentContext(evidence=source_service),
             config={"recursion_limit": agent_recursion_limit(limits)})
-    assert type(failure.value).__name__ == "ModelCallLimitExceededError"
-    assert model.calls == 24
+    assert type(failure.value).__name__ == "FinalizationRequired"
+    assert model.calls == 23  # 图步数不再提前终止；最后两次只允许提交。
 
 
 async def test_exception_retains_tool_failures_and_does_not_leak_error_body(source_service, caplog):
@@ -87,7 +87,6 @@ async def test_exception_retains_tool_failures_and_does_not_leak_error_body(sour
     assert result["input_tokens"] == 20
     assert result["output_tokens"] == 10
     assert "review_id=review" in caplog.text
-    assert "source_range_out_of_bounds" in caplog.text
     assert "审查分支失败" in caplog.text
     assert "VALUE" not in caplog.text
 

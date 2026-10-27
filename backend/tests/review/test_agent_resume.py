@@ -133,8 +133,13 @@ def test_sync_checkpoints_resume_tool_messages_without_repeating_completed_calls
     assert [event["stage"] for event in calls] == ["crash", "resume", "resume"]
     assert [event["tools"] for event in calls] == [[], ["safe.py", "other.py"], ["safe.py", "other.py", "base"]]
     reads = [event for event in events if event["kind"] == "read"]
-    assert sum(event["stage"] == "crash" for event in reads) == 2
-    assert len(reads) == 6  # Three reads per assignment; the interrupted reads are not repeated.
+    # Material packets are independently read on each invocation; completed tool
+    # calls still resume from their persisted ToolMessages without replay.
+    tool_reads = [event for event in reads if event["path"] == "other.py"]
+    assert sum(event["stage"] == "crash" for event in tool_reads) == 1
+    assert len(tool_reads) == 2
+    assert sum(event["stage"] == "crash" for event in reads) == 4
+    assert len(reads) == 12  # Six explicit tool reads plus bounded material preparation.
     assert len([event for event in events if event["kind"] == "model"]) == 6
     assert events[-1] == {"stage": "resume", "kind": "done", "complete": True, "termination": "completed"}
 

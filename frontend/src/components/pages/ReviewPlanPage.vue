@@ -27,6 +27,8 @@ const deletions = computed(() => props.preview.changed_files.reduce((sum, file) 
     <div class="aside-stat"><span class="muted">{{ dirty ? '待更新的执行模型' : '执行模型' }}</span><strong>{{ model || '服务端默认模型' }}</strong></div>
     <div class="aside-stat"><span class="muted">总期限 / 并发</span><strong>{{ preview.limits.timeout_seconds }} 秒 / {{ preview.limits.concurrency }}</strong></div>
     <div class="aside-stat"><span class="muted">每个 Agent 调用上限</span><strong>{{ preview.limits.model_calls }} 次模型 / {{ preview.limits.tool_calls }} 次工具</strong></div>
+    <div class="aside-stat"><span class="muted">整轮预算</span><strong>{{ preview.limits.total_model_calls }} 次模型 / {{ preview.limits.total_input_tokens }} 输入 Token</strong></div>
+    <p class="field-hint">输入包含缓存命中；请求前保守预估预留，返回后按服务商用量结算。未知调用保留预留，不按零计。</p>
     <p class="field-hint">方案有效至 {{ new Date(preview.expires_at).toLocaleTimeString() }}。配置、PR 版本或策略变化需要重新生成方案。</p>
     <p v-for="warning in preview.warnings" :key="warning" class="notice small space-top">{{ warning }}</p>
     <p v-if="dirty" class="input-error space-top" role="status">配置已修改，请先更新方案。当前派发任务、文件范围和额度仍属于上一次冻结方案。</p>

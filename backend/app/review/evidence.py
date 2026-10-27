@@ -112,7 +112,8 @@ class EvidenceService(EvidenceArchive):
         artifact = self.artifacts.put_text(
             task_id=self.snapshot.review_id, kind="evidence", content=encoded)
         ref = EvidenceRef(id=artifact.sha256, **{k: v for k, v in payload.items() if k != "content"})
-        return {"ok": True, "evidence": ref.model_dump(), "content": content, "truncated": False}
+        return {"ok": True, "evidence": ref.model_dump(), "content": content, "truncated": False,
+                "total_lines": len(lines), "max_read_lines": self.max_lines}
 
     async def read(self, path: str, start: int, end: int, side: str = "head") -> dict:
         async with self._semaphore:

@@ -68,6 +68,8 @@ class Settings(BaseSettings):
     repoguardian_agent_max_calls: int = Field(default=48, ge=1, le=100)
     repoguardian_agent_max_tool_calls: int = Field(default=80, ge=1, le=500)
     repoguardian_agent_output_tokens: int = Field(default=4096, ge=256, le=32768)
+    repoguardian_review_max_model_calls: int = Field(default=64, ge=1, le=1000)
+    repoguardian_review_max_input_tokens: int = Field(default=500_000, ge=1000, le=10_000_000)
 
     # ---- 数据库 ----
     repoguardian_db_path: Path = Path(".repoguardian/native-review.db")

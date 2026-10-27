@@ -12,6 +12,7 @@ from app.review.nodes.verification import (
 )
 from app.review.nodes.reporting import report
 from app.review.state import ReviewState
+from app.review.verification_batches import verification_batches
 
 
 def route_discovery(state):
@@ -26,9 +27,14 @@ def route_discovery(state):
 def route_verification(state):
     completed = {item["id"] for item in state.get("verification_results", [])
                  if item["status"] == "completed"}
-    return [Send("verify", {"review_id": state["review_id"], "candidate": item,
-                           "related_candidates": comparison_candidates(item, state["eligible_candidates"])})
-            for item in state["eligible_candidates"] if item["id"] not in completed] or "arbitrate"
+    pending = []
+    for batch in state.get("verification_batches", verification_batches(state["eligible_candidates"])):
+        candidates = [item for item in batch["candidates"] if item["id"] not in completed]
+        if candidates:
+            pending.append(Send("verify", {"review_id": state["review_id"],
+                "candidate": candidates[0], "batch_id": batch["id"], "batch_candidates": candidates,
+                "related_candidates": comparison_candidates(candidates[0], state["eligible_candidates"])}))
+    return pending or "arbitrate"
 
 
 

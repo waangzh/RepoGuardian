@@ -12,7 +12,7 @@ from app.review.tool_scope import (
 )
 
 PAGE_CHARS = 16_000
-SCAN_FILES = 120
+SCAN_FILES = 4096
 
 
 def _size(value):
@@ -54,13 +54,13 @@ def _position(context, cursor, scope, size):
         raise ValueError("invalid_cursor") from exc
 
 
-def _page(context, scope, cursor, position, has_more, *, unreadable_total=0, **body):
+def _page(context, scope, cursor, position, has_more, *, unreadable_total=0, search_window=None, **body):
     next_cursor = None
     if has_more:
         artifact = context.evidence.artifacts.put_text(
             task_id=context.evidence.snapshot.review_id, kind="cursor",
             content=json.dumps({"scope": scope, "position": position[0], "column": position[1],
-                                "unreadable_files": unreadable_total},
+                                "unreadable_files": unreadable_total, "search_window": search_window},
                                sort_keys=True))
         next_cursor = artifact.sha256
     return {"ok": True, **body, "pagination_id": scope, "cursor": cursor,
@@ -84,7 +84,7 @@ def _paths(context, path="", glob=""):
 def _matching_paths(service, paths, side, query):
     sha = service.snapshot.head_sha if side == "head" else service.snapshot.base_sha
     entries = service.git.get_tree_entries(service.repo_path, sha, paths)
-    readable, unreadable, remaining_bytes = [], set(), 8 * 1024 * 1024
+    readable, unreadable, excluded, remaining_bytes = [], set(), set(), 8 * 1024 * 1024
     processed = 0
     for path in paths:
         entry = entries.get(path)
@@ -93,7 +93,9 @@ def _matching_paths(service, paths, side, query):
             continue  # A BASE deletion or old rename path need not exist in HEAD.
         try:
             if entry.get("mode") not in {"100644", "100755"}:
-                raise ValueError("source_not_regular_blob")
+                excluded.add(path)
+                processed += 1
+                continue
             if entry.get("size") is None or entry["size"] > service.max_file_bytes:
                 raise ValueError("source_too_large")
             if entry["size"] > remaining_bytes:
@@ -106,7 +108,7 @@ def _matching_paths(service, paths, side, query):
         except (ValueError, OSError):
             unreadable.add(path)
         processed += 1
-    return service.git.find_matching_paths(service.repo_path, sha, query, readable), unreadable, processed
+    return service.git.find_matching_paths(service.repo_path, sha, query, readable), unreadable, excluded, processed
 
 
 async def search(context, query, path="", glob="", side="head", cursor="", limit=12):
@@ -117,25 +119,41 @@ async def search(context, query, path="", glob="", side="head", cursor="", limit
     scope = _scope(context, "search", [query, path, glob, side])
     first, line_start, prior_unreadable = await asyncio.to_thread(
         _position, context, cursor, scope, len(paths))
+    window = None
+    if cursor:
+        service = context.evidence
+        artifact = service.artifacts.root / service.snapshot.review_id / f"cursor-{cursor}.txt"
+        encoded = await asyncio.to_thread(service.artifacts.read_text, artifact.as_uri())
+        if digest(encoded) != cursor:
+            raise ValueError("invalid_cursor")
+        saved = json.loads(encoded)
+        window = saved.get("search_window")
     stop = min(len(paths), first + SCAN_FILES)
     matches, searched, unreadable = [], 0, 0
     # git grep only locates matching files; source reads still enforce blob and path policy.
     try:
-        hits, rejected, processed = await asyncio.to_thread(
-            _matching_paths, context.evidence, paths[first:stop], side, query)
+        if window:
+            stop = window["stop"]
+            hits, rejected, excluded = set(window["hits"]), set(), set()
+            if not first < stop <= len(paths) or not hits <= set(paths[:stop]):
+                raise ValueError("invalid_cursor")
+        else:
+            hits, rejected, excluded, processed = await asyncio.to_thread(
+                _matching_paths, context.evidence, paths[first:stop], side, query)
+            stop = first + processed
+            window = {"stop": stop, "hits": sorted(hits)}
     except subprocess.TimeoutExpired as exc:
         raise ValueError("snapshot_search_timeout") from exc
-    stop = first + processed
-    for index in range(first, stop):
+    # Locate matches across this bounded scan before paging source hits, not unrelated paths.
+    unreadable = len(rejected)
+    positions = {selected: index for index, selected in enumerate(paths)}
+    for selected in sorted(hits, key=positions.__getitem__):
+        index = positions[selected]
+        if index < first:
+            continue
         if context.check_active:
             await context.check_active()
-        selected = paths[index]
         searched += 1
-        if selected in rejected:
-            unreadable += 1
-            continue
-        if selected not in hits:
-            continue
         try:
             _, content = await asyncio.to_thread(context.evidence._source, selected, side)
         except (ValueError, OSError):
@@ -153,12 +171,15 @@ async def search(context, query, path="", glob="", side="head", cursor="", limit
                 return await asyncio.to_thread(
                     _page, context, scope, cursor, (index, line), True, source="search_hint",
                     matches=matches, searched_files=searched, unreadable_files=unreadable,
+                    policy_exclusions=len(excluded),
+                    search_window=window,
                     unreadable_total=prior_unreadable + unreadable,
                     scope_files=len(paths), scope_complete=False)
             matches.append(match)
     return await asyncio.to_thread(
         _page, context, scope, cursor, (stop, 0), stop < len(paths), source="search_hint",
         matches=matches, searched_files=searched, unreadable_files=unreadable,
+        policy_exclusions=len(excluded),
         unreadable_total=prior_unreadable + unreadable,
         scope_files=len(paths), scope_complete=stop == len(paths) and not (prior_unreadable + unreadable))
 

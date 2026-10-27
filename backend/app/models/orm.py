@@ -195,6 +195,19 @@ class ReviewTaskOrm(Base):
 
 
 
+class ReviewModelCallOrm(Base):
+    __tablename__ = "review_model_calls"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey("review_tasks.id", ondelete="CASCADE"), index=True)
+    agent_id: Mapped[str] = mapped_column(String(160))
+    reserved_input_tokens: Mapped[int] = mapped_column(Integer)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    cached_input_tokens: Mapped[int | None] = mapped_column(Integer)
+    settled: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class WorkerJobOrm(Base):
     __tablename__ = "worker_jobs"
     __table_args__ = (

@@ -4,7 +4,7 @@ import type { ReviewCapabilities, ReviewPlanOptions } from '../../types/reviewPl
 const props = defineProps<{ modelValue: ReviewPlanOptions; capabilities: ReviewCapabilities | null; disabled?: boolean }>();
 const emit = defineEmits<{ 'update:modelValue': [value: ReviewPlanOptions] }>();
 const focuses = { correctness: '正确性', security: '安全', performance: '性能', compatibility: '跨模块契约' } as const;
-const limits = { model_calls: '每个 Agent 模型调用', tool_calls: '每个 Agent 工具调用', concurrency: 'Agent 并发', timeout_seconds: '总期限（秒）', output_tokens: '单次输出 Token' } as const;
+const limits = { model_calls: '每个 Agent 模型调用', tool_calls: '每个 Agent 工具调用', concurrency: 'Agent 并发', timeout_seconds: '总期限（秒）', output_tokens: '单次输出 Token', total_model_calls: '整轮模型调用', total_input_tokens: '整轮累计输入 Token（含缓存）' } as const;
 function change(update: (plan: ReviewPlanOptions) => void) {
   const next = structuredClone(toRaw(props.modelValue));
   update(next); emit('update:modelValue', next);

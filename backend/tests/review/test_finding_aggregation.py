@@ -90,6 +90,15 @@ class EquivalentReviewModel(ReviewModel):
                 if peers and (self.reciprocal or payload["candidate"]["title"].endswith("behavior")):
                     call["args"]["equivalent_candidate_ids"] = [item["id"] for item in peers]
                     call["args"]["equivalence_reason"] = "same VALUE contract regression and repair"
+            elif call["name"] == "BatchVerificationOutput":
+                by_id = {item["id"]: item for item in payload["candidates"]}
+                for decision in call["args"]["decisions"]:
+                    decision["severity"] = "high"
+                    candidate = by_id[decision["candidate_id"]]
+                    if self.reciprocal or candidate["title"].endswith("behavior"):
+                        decision["equivalent_candidate_ids"] = [identity for identity in by_id
+                                                                 if identity != candidate["id"]]
+                        decision["equivalence_reason"] = "same VALUE contract regression and repair"
         return result
 
 
@@ -106,7 +115,7 @@ async def test_graph_keeps_candidate_hashes_and_all_verdicts(
     report = state["report"]
     assert len(report["candidates"]) == len(report["decisions"]) == len(report["verification_results"]) == 2
     assert len(report["findings"]) == count
-    assert len(model.observed) == 4
+    assert len(model.observed) == 3
     assert report["termination"] == "completed"
     assert {item["attribution"] for item in report["candidates"]} == (
         {"introduced", "exposed"} if different_attributions else {"introduced"}

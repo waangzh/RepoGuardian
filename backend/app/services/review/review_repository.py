@@ -3,6 +3,7 @@
 import json
 from datetime import timedelta, timezone
 from typing import Iterable
+from uuid import uuid4
 
 from sqlalchemy import or_, select, update
 
@@ -10,7 +11,7 @@ from app.core.config import settings
 from app.core.database import schema_is_current, sync_session
 from app.models.orm import (
     ArtifactOrm, FindingDispositionOrm, GitHubSummarySlotOrm, PublicationAttemptOrm,
-    ReviewPreviewOrm, ReviewTaskOrm, WorkerJobOrm, IncrementalWebhookDeliveryOrm, utcnow,
+    ReviewPreviewOrm, ReviewTaskOrm, WorkerJobOrm, IncrementalWebhookDeliveryOrm, ReviewModelCallOrm, utcnow,
 )
 from app.review.contracts import ReviewTask, ReviewTaskListResponse, TERMINAL_STATUSES
 from app.services.review.artifact_store import LocalArtifactStore
@@ -57,6 +58,54 @@ class ReviewRepository:
     def assert_active(self, task_id, lease=None):
         with self._session_factory.begin() as session:
             self._guard(session, task_id, lease)
+
+    def _model_budget_rows(self, session, task_id):
+        return [{key: getattr(row, key) for key in ("reserved_input_tokens", "input_tokens",
+            "output_tokens", "cached_input_tokens")} for row in session.scalars(
+                select(ReviewModelCallOrm).where(ReviewModelCallOrm.task_id == task_id))]
+
+    def model_budget_summary(self, task_id, limits):
+        from app.review.budget import budget_summary
+        with self._session_factory() as session:
+            return budget_summary(self._model_budget_rows(session, task_id), limits)
+
+    def reserve_model_call(self, task_id, agent_id, estimate, limits, *, lease=None):
+        from app.review.budget import ReviewBudgetExceeded, budget_summary
+        with self._session_factory.begin() as session:
+            row = self._guard(session, task_id, lease)
+            task = ReviewTask.model_validate(self._load(row))
+            if limits != task.configuration.limits:
+                raise ValueError("review_budget_configuration_changed")
+            if (utcnow() - as_utc(row.created_at)).total_seconds() >= limits.timeout_seconds:
+                raise TimeoutError("review_deadline")
+            if type(estimate) is not int or estimate < 1:
+                raise ValueError("invalid_budget_reservation")
+            summary = budget_summary(self._model_budget_rows(session, task_id), limits)
+            if (summary["model_calls"] >= limits.total_model_calls
+                    or summary["committed_input_tokens"] + estimate > limits.total_input_tokens):
+                raise ReviewBudgetExceeded("review_budget_exhausted")
+            identity = uuid4().hex
+            session.add(ReviewModelCallOrm(id=identity, task_id=task_id, agent_id=agent_id,
+                reserved_input_tokens=estimate, settled=False))
+            return identity
+
+    def settle_model_call(self, task_id, identity, usage, *, lease=None):
+        with self._session_factory.begin() as session:
+            self._guard(session, task_id, lease)
+            row = session.get(ReviewModelCallOrm, identity)
+            if row is None or row.task_id != task_id:
+                raise ValueError("model_call_identity_mismatch")
+            if row.settled:
+                return
+            if usage:
+                for key in ("input_tokens", "output_tokens"):
+                    value = usage.get(key)
+                    if type(value) is not int or value < 0:
+                        raise ValueError("invalid_model_usage")
+                    setattr(row, key, value)
+                cached = usage.get("input_token_details", {}).get("cache_read")
+                row.cached_input_tokens = cached if type(cached) is int and 0 <= cached <= row.input_tokens else None
+            row.settled = True
 
     def create_task(self, task: ReviewTask, *, preview_id=None, enqueue=False):
         payload, uri = self._serialize(task)

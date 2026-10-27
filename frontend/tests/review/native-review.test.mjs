@@ -74,18 +74,32 @@ test('活动页直接显示分支失败原因、实际用量和无候选核验�
  try{
   const {default:Component}=await server.ssrLoadModule('/src/components/pages/ReviewActivityPage.vue');
   const failure={id:'agent',status:'failed',error:'GraphRecursionError',model_calls:17,tool_calls:21,
-   input_tokens:144450,output_tokens:1315,tool_failures:12,previous_attempts:[]};
+   input_tokens:144450,output_tokens:1315,tool_failures:12,previous_attempts:[],
+   policy_exclusions:2,incomplete_searches:1,structured_output_retries:1};
   const task={phase:'failed',configuration:{limits:{model_calls:24,tool_calls:80}},
    steps:[{name:'agent',message:'behavior',status:'failed',started_at:'2026-10-27T11:56:00Z',
     updated_at:'2026-10-27T11:56:23Z',data:{...failure}},
    {name:'arbitrate',message:'arbitrate',status:'completed',started_at:null,
     updated_at:'2026-10-27T11:56:38Z',data:{candidates:0}}],
-   review_report:{assignments:[{id:'agent',reviewer:'behavior',objective:'<script>untrusted</script>',focus_paths:['safe.py']}],
+   review_report:{budget:{},assignments:[{id:'agent',reviewer:'behavior',objective:'<script>untrusted</script>',focus_paths:['safe.py']}],
     discovery_results:[failure],verification_results:[]}};
   const html=await renderToString(createSSRApp(Component,{task}));
   assert.match(html,/达到执行步数上限，未提交最终审查结果/);
   assert.match(html,/17 \/ 24/);assert.match(html,/工具失败 12 次/);
   assert.match(html,/无候选进入独立核验/);assert.match(html,/开始：/);assert.match(html,/结束：/);
+  assert.match(html,/策略排除记录 2/);assert.match(html,/结构化输出纠错 1/);
   assert.match(html,/&lt;script&gt;untrusted/);assert.doesNotMatch(html,/<script>|NaN|undefined/);
+ }finally{await server.close();}
+});
+
+test('整轮预算优先使用账本，共享批量结果不重复计量',async()=>{
+ const server=await createServer({server:{middlewareMode:true,hmr:false},optimizeDeps:{noDiscovery:true,entries:[],include:[]},appType:'custom'});
+ try{
+  const {observedUsage}=await server.ssrLoadModule('/src/utils/nativeReview.ts');
+  const result={execution_id:'shared',model_calls:2,input_tokens:10,output_tokens:5};
+  const report={discovery_results:[],verification_results:[{...result,id:'a'},{...result,id:'b'}],budget:{}};
+  assert.deepEqual(observedUsage(report),{calls:2,tokens:15});
+  assert.deepEqual(observedUsage({...report,budget:{model_calls:3,input_tokens:100,output_tokens:20}}),{calls:3,tokens:120});
+  assert.deepEqual(observedUsage({...report,budget:{model_calls:3,input_tokens:null,output_tokens:20}}),{calls:3,tokens:null});
  }finally{await server.close();}
 });

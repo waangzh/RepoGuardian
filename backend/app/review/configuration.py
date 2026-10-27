@@ -15,6 +15,8 @@ def maxima():
         "concurrency": settings.repoguardian_review_concurrency,
         "timeout_seconds": int(settings.repoguardian_review_timeout_seconds),
         "output_tokens": settings.repoguardian_agent_output_tokens,
+        "total_model_calls": settings.repoguardian_review_max_model_calls,
+        "total_input_tokens": settings.repoguardian_review_max_input_tokens,
     }
 
 

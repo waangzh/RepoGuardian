@@ -4,6 +4,8 @@ export interface ReviewLimits {
   concurrency: number | null;
   timeout_seconds: number | null;
   output_tokens: number | null;
+  total_model_calls: number | null;
+  total_input_tokens: number | null;
 }
 export interface ReviewPlanOptions {
   depth: 'quick' | 'standard' | 'deep';

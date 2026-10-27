@@ -100,7 +100,10 @@ class ExaminedGoal(ReviewModel):
 class DiscoveryOutput(ReviewModel):
     findings: list[CandidateProposal] = Field(default_factory=list, max_length=30)
     examined: list[ExaminedGoal] = Field(default_factory=list)
-    limitations: list[str] = Field(default_factory=list, max_length=20)
+    limitations: list[str] = Field(default_factory=list, max_length=20,
+        description="Only missing evidence necessary for the conclusion; not general static-review boundaries.")
+    boundary_notes: list[str] = Field(default_factory=list, max_length=10,
+        description="General static-review boundaries that do not prevent the stated conclusions.")
 
 
 class VerificationOutput(ReviewModel):
@@ -112,7 +115,10 @@ class VerificationOutput(ReviewModel):
     severity: Severity | None = None
     equivalent_candidate_ids: list[str] = Field(default_factory=list, max_length=8)
     equivalence_reason: str | None = Field(default=None, max_length=2000)
-    limitations: list[str] = Field(default_factory=list, max_length=20)
+    limitations: list[str] = Field(default_factory=list, max_length=20,
+        description="Necessary evidence gaps. MUST be empty for confirmed/refuted; otherwise choose insufficient_evidence.")
+    boundary_notes: list[str] = Field(default_factory=list, max_length=10,
+        description="General boundaries such as not executing tests; these do not imply missing decision evidence.")
 
     @model_validator(mode="after")
     def limitations_require_uncertainty(self):
@@ -134,6 +140,11 @@ class VerificationResult(VerificationOutput):
     candidate_id: str
 
 
+class BatchVerificationOutput(ReviewModel):
+    decisions: list[VerificationResult] = Field(min_length=1, max_length=3,
+        description="Exactly one decision for each supplied candidate_id; never omit, repeat, or invent an ID.")
+
+
 class AgentAttempt(ReviewModel):
     status: Literal["completed", "failed"]
     evidence_ids: list[str] = Field(default_factory=list)
@@ -145,12 +156,17 @@ class AgentAttempt(ReviewModel):
     tool_failures: int = Field(default=0, ge=0)
     unconsumed_pages: int = Field(default=0, ge=0)
     investigation_limitations: list[str] = Field(default_factory=list, max_length=20)
+    policy_exclusions: int = Field(default=0, ge=0)
+    incomplete_searches: int = Field(default=0, ge=0)
+    structured_output_retries: int = Field(default=0, ge=0)
+    cached_input_tokens: int | None = None
 
 
 class AgentResult(AgentAttempt):
     id: str
     output: dict = Field(default_factory=dict)
     previous_attempts: list[AgentAttempt] = Field(default_factory=list, max_length=1)
+    execution_id: str | None = None
 
 
 class VerifiedFinding(ReviewModel):
@@ -168,6 +184,8 @@ class ReviewLimits(ReviewModel):
     tool_calls: int = Field(default=80, ge=1, le=500)
     timeout_seconds: int = Field(default=1800, ge=1, le=86400)
     output_tokens: int = Field(default=4096, ge=256, le=32768)
+    total_model_calls: int = Field(default=64, ge=1, le=1000)
+    total_input_tokens: int = Field(default=500_000, ge=1000, le=10_000_000)
 
 
 class ReviewReport(ReviewModel):
@@ -181,3 +199,4 @@ class ReviewReport(ReviewModel):
     findings: list[VerifiedFinding]
     complete: bool
     termination: Literal["completed", "partial", "cancelled", "deadline", "failed"]
+    budget: dict = Field(default_factory=dict)

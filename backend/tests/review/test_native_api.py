@@ -93,10 +93,11 @@ def test_current_schema_has_no_internal_agent_sessions_or_historical_versions(pi
     assert "engine" not in json.dumps(schema)
 
 
-def test_alembic_current_schema_matches_models_on_fresh_database(tmp_path):
+def test_alembic_current_schema_matches_models_on_fresh_database(tmp_path, monkeypatch):
     from alembic import command
     from alembic.config import Config
     from sqlalchemy import create_engine
+    monkeypatch.setattr("logging.config.fileConfig", lambda *args, **kwargs: None)
     engine = create_engine(f"sqlite:///{(tmp_path / 'migrated.sqlite').as_posix()}")
     config = Config("alembic.ini")
     with engine.begin() as connection:
