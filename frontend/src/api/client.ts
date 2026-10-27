@@ -1,4 +1,4 @@
-import type { ReviewCreateResponse, ReviewPreviewResponse, ReviewTask } from '../types/review';
+import type { FileContext, ReviewCreateResponse, ReviewPreviewResponse, ReviewTask } from '../types/review';
 import type { ReviewCapabilities, ReviewPlanOptions, FindingView, FindingDisposition } from '../types/reviewPlan';
 import type { PreviewJob, PreviewRequest } from '../types/previewJob';
 import type { PublicationPlan, PublicationSelection, PublicationPreflightResult, PublicationAccepted, PublicationAttempt } from '../types/publication';
@@ -41,7 +41,7 @@ export const cancelPreviewJob = (id: string) => request<PreviewJob>(`/api/review
 export const getFindings = (id: string, signal?: AbortSignal) => request<{items: FindingView[]}>(`${publicationPath(id)}/findings`,{signal});
 export const setFindingDisposition = (id: string, finding: string, value: FindingDisposition) => request<{items: FindingView[]}>(`${publicationPath(id)}/findings/${encodeURIComponent(finding)}/disposition`,{method:'PATCH', body:JSON.stringify(value)});
 export const getPrDiscussions = (id: string, signal?: AbortSignal) => request<{items: Array<{id:string; source:string; path:string|null; resolved:boolean|null; outdated:boolean|null; comments:Array<{id:string;body:string;url:string|null}>}>;total:number;sources:Record<string,string>;limitations:string[]}>(`${publicationPath(id)}/discussions`,{signal});
-export const getFileContext = (id: string, file: number, signal?: AbortSignal) => request<{base_lines:string[];head_lines:string[]}>(`${publicationPath(id)}/files/${file}/context`,{signal});
+export const getFileContext = (id: string, file: number, signal?: AbortSignal) => request<FileContext>(`${publicationPath(id)}/files/${file}/context`,{signal});
 export async function getReport(id: string, signal?: AbortSignal): Promise<string> {
  const response = await fetch(`${API_BASE}/api/reviews/${encodeURIComponent(id)}/report`,{signal});
  if (!response.ok) throw new Error('报告尚未生成或读取失败');

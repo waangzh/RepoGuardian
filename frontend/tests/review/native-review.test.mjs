@@ -23,7 +23,7 @@ test('当前图投影分离候选、覆盖、确认和未知用量',async()=>{
 test('原生审查页面如实显示运行中、失败、取消，不从零问题推导成功',async()=>{
  const server=await createServer({server:{middlewareMode:true,hmr:false},optimizeDeps: { noDiscovery: true, entries: [], include: [] }, appType:'custom'});
  try{
-  const {default:Component}=await server.ssrLoadModule('/src/components/review/NativeReview.vue');
+  const {default:Component}=await server.ssrLoadModule('/src/components/review/ReviewWorkspace.vue');
   for(const status of ['reviewing','failed','cancelled']){
    const task={id:'a'.repeat(32),status,phase:status,error:status==='failed'?'timeout':null,
      pr:{owner:'o',repo:'r',number:1,title:'<script>alert(1)</script>'},snapshot:{head_sha:'b'.repeat(40),effective_base_sha:'c'.repeat(40)},

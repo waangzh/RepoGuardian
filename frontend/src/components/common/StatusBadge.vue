@@ -35,6 +35,11 @@ const labels: Record<string, string> = {
   published: "已发布",
   suggested: "建议稿",
   unverified: "未验证",
+  unknown: "未知",
+  insufficient: "证据不足",
+  refuted: "已排除",
+  expired: "已过期",
+  consumed: "已启动审查",
   validation_pending: "待验证",
   verified: "已验证",
   validation_inconclusive: "结果不确定",
@@ -45,10 +50,10 @@ const labels: Record<string, string> = {
   inconclusive: "不确定",
   unsupported: "不支持",
   infrastructure_error: "环境错误",
-  critical: "Critical",
-  high: "High",
-  medium: "Medium",
-  low: "Low",
+  critical: "严重",
+  high: "高风险",
+  medium: "中风险",
+  low: "低风险",
 };
 
 /**
@@ -75,7 +80,7 @@ const EVIDENCE_TONES: Record<string, string> = {
   // 尚未定论或仍需人工确认，保持中性提示色，不冒充通过。
   unresolved: "purple", needs_human: "purple", candidate: "purple",
   inconclusive: "purple", validation_inconclusive: "purple", unverified: "neutral",
-  dismissed: "neutral", unsupported: "neutral",
+  dismissed: "neutral", unsupported: "neutral", insufficient: "purple", refuted: "neutral",
 };
 
 const SEVERITY_TONES: Record<string, string> = {

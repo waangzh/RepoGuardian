@@ -1,0 +1,100 @@
+/* Current API views share the original workbench's tokens and chrome. */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.rg-app :is(.page,.card,.section-stack,.plan-aside,.rg-overview,.rd-main) { min-width: 0; }
+.rg-app :is(code,pre,.break-anywhere) { overflow-wrap: anywhere; }
+.rg-app .plan-number { margin-top: 8px; font-size: 28px; font-weight: 700; color: var(--ink); }
+.rg-app .plan-file { display: grid; gap: 8px; padding: 14px 0; border-bottom: 1px solid var(--line); min-width: 0; }
+.rg-app .plan-file:last-child { border-bottom: 0; }
+.rg-app .plan-file > .badge { justify-self: start; }
+.rg-plan-controls { min-width: 0; padding: 0; border: 0; margin: 16px 0 0; }
+.rg-plan-controls .setting-section { margin: 0 0 20px; }
+.rg-plan-controls h3 { margin-bottom: 12px; }
+.rg-plan-controls .option-card { display: grid; grid-template-columns: auto minmax(0,1fr); align-content: start; gap: 6px 8px; }
+.rg-plan-controls .option-card.selected { border-color: var(--primary); background: var(--blueWash); }
+.rg-plan-controls .opt-desc { grid-column: 1 / -1; }
+.rg-plan-controls :is(input[type="radio"],input[type="checkbox"]), .rg-checkboxes input { width: 16px; min-height: 16px; height: 16px; padding: 0; flex: 0 0 auto; accent-color: var(--primary); }
+.rg-checkboxes { display: flex; flex-wrap: wrap; gap: 12px 22px; }
+.rg-app .field-label { display: grid; gap: 8px; }
+.rg-app .field-label textarea { width: 100%; resize: vertical; min-height: 96px; }
+.rg-app .rg-auto-width { width: auto; max-width: 100%; }
+.rg-inline-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.rg-running-agent { display: flex; align-items: center; gap: 12px; margin: 8px 0 !important; }
+.rg-live-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--primary); animation: rg-live 1.8s ease-in-out infinite; }
+@keyframes rg-live { 50% { opacity: .35; } }
+.rg-preserve-lines { white-space: pre-wrap; overflow-wrap: anywhere; }
+.rg-app .rg-change-list { margin: 8px 0; padding-left: 18px; }
+.rg-app .rg-json { max-width: 100%; padding: 16px; overflow: auto; white-space: pre; background: var(--surface2); border: 1px solid var(--line); border-radius: var(--radius-control); font: 12px/1.8 var(--font-mono); }
+.rg-stage-list { list-style: none; margin: 18px 0 0; padding: 0; display: grid; gap: 18px; }
+.rg-stage-list > li { display: flex; align-items: flex-start; gap: 12px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+.rg-stage-list > li > .app-icon { margin-top: 3px; color: var(--primary); }
+.rg-search-box { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 160px; }
+.rg-app .rg-search-box input { min-width: 0; }
+.rg-history-entry { display: flex; align-items: center; gap: 18px; padding: 20px; border-bottom: 1px solid var(--line); }
+.rg-history-entry:last-child { border-bottom: 0; }
+.rg-history-icon { display: grid; place-items: center; flex: 0 0 40px; height: 40px; background: var(--blueWash); color: var(--primary); border-radius: 10px; }
+.rg-history-copy { flex: 1; min-width: 0; }
+.rg-app .rg-history-title { padding: 0; border: 0; background: transparent; text-align: left; color: var(--ink); font-weight: 650; overflow-wrap: anywhere; }
+.rg-history-copy > p { margin: 5px 0; }
+.rg-pagination { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 14px; margin-top: 18px; }
+.rg-app .rg-finding-filters { display: grid; grid-template-columns: minmax(140px,1fr) 170px 150px; }
+.rg-restored-findings { display: grid; grid-template-columns: minmax(230px,.7fr) minmax(0,1.8fr); gap: var(--panel-gap); align-items: start; }
+.rg-findings-list { max-height: min(76vh,960px); overflow: auto; }
+.rg-app .rg-finding-facts { margin: 18px 0 0; }
+.rg-finding-facts > div { display: grid; grid-template-columns: 100px minmax(0,1fr); gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.rg-finding-facts dt { font-size: 13px; font-weight: 600; color: var(--muted); }
+.rg-finding-facts dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.rg-evidence-id { display: block; margin-top: 6px; color: var(--muted); }
+.rg-app .rg-file-workbench { display: grid; grid-template-columns: 260px minmax(0,1fr); gap: var(--panel-gap); align-items: start; }
+.rg-file-nav { padding: 12px; min-width: 0; max-height: 80vh; overflow: auto; }
+.rg-file-nav > button { display: flex; align-items: flex-start; gap: 10px; width: 100%; border: 0; border-radius: 8px; padding: 12px 8px; background: transparent; text-align: left; color: var(--ink); }
+.rg-file-nav > button:hover { background: var(--surface2); }
+.rg-file-nav > button.active { background: var(--blueWash); color: var(--primary); }
+.rg-file-nav > button > span { min-width: 0; flex: 1; }
+.rg-file-nav :is(strong,small) { display: block; overflow-wrap: anywhere; }
+.rg-file-nav .app-icon { flex-shrink: 0; margin-top: 3px; }
+.rg-app .rg-diff-header { display: flex; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); align-items: center; }
+.rg-diff-path { min-width: 0; flex: 1; }
+.rg-diff-stats { display: inline-flex; flex-shrink: 0; gap: 12px; }
+.rg-app .rg-diff-footnote { display: grid; justify-items: start; gap: 12px; padding: 14px 16px; }
+.rg-source-pair { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); border-top: 1px solid var(--line); }
+.rg-source-pair > details { min-width: 0; overflow: hidden; }
+.rg-source-pair > details + details { border-left: 1px solid var(--line); }
+.rg-source-pair summary { padding: 12px 16px; cursor: pointer; background: var(--surface2); }
+.rg-source-line { display: grid; grid-template-columns: 52px minmax(max-content,1fr); font: 12px/1.8 var(--font-mono); }
+.rg-source-line .ln { padding: 0 10px; text-align: right; color: var(--muted); background: var(--surface2); user-select: none; }
+.rg-source-line code { white-space: pre; padding: 0 12px; font: inherit; }
+.rg-table-scroll { max-width: 100%; overflow: auto; }
+.rg-app .rg-table { width: 100%; border-collapse: collapse; text-align: left; }
+.rg-table :is(th,td) { padding: 14px 12px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+.rg-table th { background: var(--surface2); font-size: 13px; color: var(--muted); }
+.rg-table td small { display: block; margin-top: 4px; }
+.rg-discussion-workbench { display: grid; grid-template-columns: minmax(230px,.8fr) minmax(0,1.7fr); gap: var(--panel-gap); align-items: start; }
+.rg-thread-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; color: var(--muted); font-size: 12px; }
+.rg-thread-comment { border-top: 1px solid var(--line); padding: 18px 0; }
+.rg-thread-comment a { display: inline-flex; margin-top: 12px; font-size: 13px; }
+.rg-app .rd-layout { grid-template-columns: minmax(0,1fr) 250px; }
+.rg-app .rd-main { padding: 20px; }
+.rg-app .rd-markdown { padding: 0; }
+.rg-app .rd-aside-card code { display: block; font-size: 12px; }
+@media (min-width: 1100px) { .rg-app .rg-findings-list { position: sticky; top: 64px; } }
+@media (max-width: 1100px) {
+  .rg-app .rg-restored-findings { grid-template-columns: minmax(200px,.8fr) minmax(0,1.6fr); }
+  .rg-app .rd-layout { grid-template-columns: minmax(0,1fr); }
+  .rg-app .rd-aside { border-left: 0; border-top: 1px solid var(--line); display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; }
+}
+@media (max-width: 760px) {
+  .rg-app :is(.rg-restored-findings,.rg-file-workbench,.rg-discussion-workbench,.rg-source-pair) { grid-template-columns: minmax(0,1fr); }
+  .rg-findings-list, .rg-file-nav { max-height: 320px; }
+  .rg-source-pair > details + details { border-left: 0; border-top: 1px solid var(--line); }
+  .rg-app .rg-finding-filters { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .rg-finding-filters > input { grid-column: 1 / -1; }
+  .rg-history-entry { flex-wrap: wrap; gap: 12px; padding: 16px; }
+  .rg-history-copy { flex-basis: calc(100% - 64px); }
+  .rg-history-entry > .head-actions { margin-left: auto; }
+  .rg-finding-facts > div { grid-template-columns: minmax(0,1fr); gap: 5px; }
+  .rg-app .rd-aside { grid-template-columns: minmax(0,1fr); }
+  .rg-app .rd-heading { flex-wrap: wrap; }
+  .rg-app .rd-shell-caption { display: none; }
+  .rg-app .rg-running-agent { flex-wrap: wrap; }
+}
+@media (prefers-reduced-motion: reduce) { .rg-live-dot { animation: none; } }

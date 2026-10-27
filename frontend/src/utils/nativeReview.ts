@@ -1,9 +1,9 @@
-import type { ReviewTask, ReviewReport, AgentResult } from '../types/review';
+import type { ReviewTask, ReviewReport, AgentResult, FileContext } from '../types/review';
 
 export const terminal = (status: string) => ['completed', 'completed_with_warnings', 'failed', 'cancelled'].includes(status);
 export const reviewerLabel = (role: string) => ({ behavior: '行为审查', contract: '契约审查', specialist: '风险专家', verifier: '独立核验', investigator: '定向调查' }[role] || role);
 export const decisionLabel = (decision: string) => ({ confirmed: '已确认', refuted: '已排除', insufficient_evidence: '证据不足' }[decision] || '尚未核验');
-export const phaseLabel = (phase: string) => ({ prepare:'准备固定快照', planning:'规划完成', behavior:'行为审查', contract:'契约审查', specialist:'风险专家审查', collect:'聚合候选', verifier:'独立核验', investigator:'定向调查', arbitrate:'证据仲裁', report:'生成报告', completed:'审查结束', failed:'执行失败', cancelled:'已停止' }[phase] || phase);
+export const phaseLabel = (phase: string) => ({ queued:'等待执行', prepare:'准备固定快照', planning:'规划完成', reviewing:'独立审查中', verifying_issues:'核验候选问题', behavior:'行为审查', contract:'契约审查', specialist:'风险专家审查', collect:'聚合候选', verifier:'独立核验', investigator:'定向调查', arbitrate:'证据仲裁', report:'生成报告', completed:'审查结束', failed:'执行失败', cancelled:'已停止' }[phase] || phase);
 export function progressSummary(task: ReviewTask) {
   const running = task.steps.filter(step => step.status === 'running');
   const report = task.review_report;
@@ -24,6 +24,16 @@ export function observedUsage(report: ReviewReport | null) {
 export function safeGitHubLink(value: string | null | undefined): string | undefined {
   try { const url = new URL(value || ''); return url.protocol === 'https:' && url.hostname === 'github.com' && !url.username && !url.password ? url.href : undefined; }
   catch { return undefined; }
+}
+export function isFileContextFor(value: unknown, fileId: number, path: string, snapshot: ReviewTask['snapshot']): value is FileContext {
+  if (!value || typeof value !== 'object') return false;
+  const context = value as Partial<FileContext>;
+  return context.file_id === fileId && context.file_path === path
+    && context.snapshot?.head_sha === snapshot.head_sha
+    && context.snapshot?.effective_base_sha === snapshot.effective_base_sha
+    && context.snapshot?.declared_base_sha === snapshot.declared_base_sha
+    && Array.isArray(context.base_lines) && context.base_lines.every(line => typeof line === 'string')
+    && Array.isArray(context.head_lines) && context.head_lines.every(line => typeof line === 'string');
 }
 export function defaultPlan(depth: 'quick' | 'standard' | 'deep' = 'standard', discussions = true) {
   return { depth, include_pr_discussions: discussions,
