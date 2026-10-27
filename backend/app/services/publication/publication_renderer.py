@@ -5,7 +5,6 @@ import re
 from urllib.parse import quote
 
 from app.models.publication import PublicationFinding, PublicationPlan
-from app.services.discussions.pr_discussion_matching import exact_duplicate_matches
 from app.services.publication.review_prose import author_goal_text
 from app.services.publication.review_text_format import (
     MERGE_SYMBOLS, OUTCOME_DESCRIPTIONS, OUTCOME_LABELS, REASON_LABELS,
@@ -17,34 +16,12 @@ from app.services.publication.review_text_format import (
 
 
 def outcome_description(plan) -> str:
-    """区分本轮 Diff 与历史复核：已核验的既有风险不能被写成“没有可确认的问题”。"""
+    """展示当前审查结论，计量未知不改变已完成的代码核验。"""
     outcome = plan.outcome
-    if outcome.kind != "failed" and outcome.kind != "cancelled" \
-            and outcome.historical_discussion.affects_risk:
-        current = (f"本轮变更范围内发现 {outcome.confirmed_count} 项代码证据已确认的问题" if outcome.confirmed_count
-                   else "本轮检查未发现代码证据已确认的问题")
-        return (current + "；历史讨论复核确认的既有问题在当前代码中仍然存在，"
-                "属于已核验风险，不能据此认定本次变更没有问题。")
     if outcome.kind == "inconclusive" and set(outcome.reason_codes) == {"usage_integrity_unknown"} \
             and outcome.review_completeness == "complete":
         return "已检查范围内未发现已确认问题；运行计量记录不完整，未知用量不能当作完整统计。"
     return OUTCOME_DESCRIPTIONS[outcome.kind]
-
-
-def historical_risk_line(plan) -> str:
-    """历史复核的已核验风险与未完成调查分别计数，避免把未知写成已确认。"""
-    outcome = plan.outcome
-    history = outcome.historical_discussion
-    if not history.affects_risk:
-        return ""
-    verified = len(history.findings) or len(history.verified_defects)
-    pending = _history_entries(plan)[1]
-    if not verified:
-        return ""
-    line = f"历史讨论复核确认 {verified} 项既有问题在当前代码中仍存在；不计入本轮 Diff 新增问题，但会影响合并判断。"
-    if pending:
-        line += f" 另有 {len(pending)} 项历史事项尚未完成核验，不能据此判断已修复。"
-    return line
 
 
 
@@ -154,28 +131,14 @@ def partial_review_note(plan) -> str:
     return ""
 
 
-def _independent_count(decision, current: int, historical: int, kind: str) -> int:
-    """使用当前仲裁记录的独立问题数与来源统计。"""
-    saved = (decision.blocking_independent_count if kind == "blocking"
-             else decision.nonblocking_independent_count)
-    return saved if saved is not None else current + historical
-
-
 def merge_advice(plan):
     label, advice = merge_heading(plan)
     decision = plan.digest.merge_decision
     lines = [f"**{label}**", "", advice]
     if decision.status != "unavailable" or decision.blocking_finding_keys or decision.nonblocking_finding_keys:
-        blocking_current = len(decision.blocking_finding_keys)
-        blocking_history = len(decision.blocking_historical_keys)
-        suggestions_current = len(decision.nonblocking_finding_keys)
-        suggestions_history = len(decision.nonblocking_historical_keys)
-        # 审计视图同时给出独立缺陷数与两份证据来源，避免相加后的数字被误读。
         lines.append(
-            f"独立缺陷：高优先级问题 {_independent_count(decision, blocking_current, blocking_history, 'blocking')} 项，"
-            f"非高优先级建议 {_independent_count(decision, suggestions_current, suggestions_history, 'nonblocking')} 项。"
-            f"证据来源：本轮记录高优先级 {blocking_current} 项、建议 {suggestions_current} 项；"
-            f"历史复核高优先级 {blocking_history} 项、建议 {suggestions_history} 项。"
+            f"当前已确认：高优先级问题 {len(decision.blocking_finding_keys)} 项，"
+            f"非高优先级建议 {len(decision.nonblocking_finding_keys)} 项。"
             "严重度映射不替代对部署条件和业务影响的判断，仍需满足项目要求的 CI 与必要审批。"
             "上述数量与建议由 RepoGuardian 审查策略生成，不代表 GitHub Mergeability 或分支保护结论。")
     if decision.limits:
@@ -284,9 +247,6 @@ def render_user_report(task, plan: PublicationPlan) -> str:
              outcome_description(plan), "",
              f"本轮确认的问题（含归因单独标注的既有问题） {outcome.confirmed_count} 项（其中 {outcome.publishable_count} 项形成可发布意见）；"
              f"未确认候选 {outcome.unresolved_count} 项。"]
-    history = historical_risk_line(plan)
-    if history:
-        lines += ["", history]
     if plan.digest.merge_decision.limits:
         lines += ["", "需要补充或确认：", *[f"- {value}" for value in plan.digest.merge_decision.limits]]
     lines += _change_understanding(plan, full=True)
@@ -294,10 +254,7 @@ def render_user_report(task, plan: PublicationPlan) -> str:
     findings = _ordered_findings(plan)
     views = {item.id: item for item in plan.digest.findings}
     if not findings:
-        # 有已核验历史风险时不能只写“没有问题”，否则结论与章节互相矛盾。
-        lines.append("本轮没有通过发布准入、具备代码证据的问题；"
-                     + ("已核验的既有风险见下节。" if _history_entries(plan)[0]
-                        else "未确认候选和证据缺口见下方“未决风险”。"))
+        lines.append("本轮没有通过发布准入、具备代码证据的问题；未确认候选和证据缺口见下方“未决风险”。")
     for finding in findings:
         lines += _report_finding_lines(plan, finding, views.get(finding.finding_key))
     published_keys = {item.finding_key for item in findings}
@@ -318,11 +275,6 @@ def render_user_report(task, plan: PublicationPlan) -> str:
             lines += _human_lines(view)
             if view.review_status != "confirmed":
                 lines.append("以上为候选或排除记录，不能作为已核验的发布评论。")
-    history_risks = _history_entries(plan)[0]
-    if history_risks:
-        lines += ["", "## 已核验的既有风险", "",
-                  "以下问题经历史讨论复核并以当前固定代码核验仍存在；不计入本轮 Diff 新增问题，但会影响合并判断。", "",
-                  *_comment_history_risk_lines(plan, history_risks)]
     lines += _risk_section(plan)
     lines += _next_steps(plan)
     lines += discussion_report_lines(plan, task)
@@ -332,60 +284,15 @@ def render_user_report(task, plan: PublicationPlan) -> str:
 
 def discussion_report_lines(plan, task=None):
     if plan.digest.discussion_review_enabled is False:
-        return ["", "## 历史讨论复核", "", "本次未纳入历史讨论；未采集、未提供给模型，也未执行历史问题复核。"]
+        return ["", "## PR 讨论上下文", "", "本次未纳入 PR 讨论上下文。"]
     stats = plan.digest.discussion_stats
     if stats is None:
-        return ["", "## 历史讨论复核", "", "未记录历史讨论采集统计，不能推断该 PR 没有讨论。",
-                *_discussion_recheck_lines(plan)]
-    history = plan.outcome.historical_discussion
-    status_labels = {"completed": "复核完成", "partial": "复核未完整完成", "timed_out": "复核超时中断",
-                     "unavailable": "复核记录不可用", "not_recorded": "未记录"}
-    lines = ["", "## 历史讨论复核", "",
-        f"复核状态：{status_labels.get(history.status, '未知')}；"
-        f"已读取并保存 {stats['comments']} 条 PR 评论，整理为 {stats['collected']} 项讨论；"
-        f"其中 {stats['checked']} 项已有复核结论，{stats['unchecked']} 项尚未核实充分。",
-        f"引用口径：已参考 {stats['referenced']} 项相关讨论，包含 {stats['referenced_comments']} 条评论。"
-        "复核结论含代码核对结果和背景说明，不代表每项都经过代码验证。",
-        "本节独立于当前 Diff 的审查结论与覆盖率；平台已解决和作者修复声明不是代码证据。"
-        "历史复核的超时或计量缺失不改变已完成的主审查结论。"]
-    usage = history.usage or {}
-    if usage.get("sent_calls"):
-        lines.append(f"复核调用：{usage.get('sent_calls')} 次；已结算 {usage.get('settled_tokens', 0)} tokens；"
-                     f"未知用量 {usage.get('unknown_attempts', 0)} 次（单独记录，不计入主审查计量）。")
-    if history.findings:
-        priorities = {"fix_before_merge": "建议合并前修复", "assess_improvement": "评估改进", "assess_impact": "需补核影响"}
-        lines.append("经独立代码核验确认仍存在的问题（按当前影响分级）：")
-        for item in history.findings:
-            lines.append(f"- [{item.severity}] {markdown_text(item.discussion_id)}：{priorities[item.priority]}；"
-                         + markdown_text(item.affected_behavior or item.reason))
-            if item.recommendation:
-                lines.append("  建议：" + markdown_text(item.recommendation))
-            lines.append("  代码证据：" + "、".join(markdown_text(e) for e in item.evidence_ids))
-            if item.discussion_url:
-                lines.append(f"  [查看已有讨论]({item.discussion_url})")
-    elif history.verified_defects:
-        lines.append("经独立代码核验确认仍存在的问题：")
-        for item in history.verified_defects:
-            location = markdown_text(item.get("path") or "未记录文件", 500)
-            lines.append(f"- {markdown_text(str(item.get('discussion_id')), 200)}（{location}）："
-                         + markdown_text(item.get("reason") or "未记录原因"))
-    lines += _discussion_recheck_lines(plan)
+        return ["", "## PR 讨论上下文", "", "未记录讨论采集统计，不能推断该 PR 没有讨论。"]
+    status = "完整" if stats["status"] == "complete" else "不完整"
+    lines = ["", "## PR 讨论上下文", "",
+        f"采集状态：{status}；已保存 {stats['collected']} 项讨论供 Agent 按需读取。",
+        "讨论仅作为背景，不代表相关主张已核实；源码核验结果统一记录为当前候选和问题。"]
     lines += [f"- 限制：{markdown_text(value)}" for value in stats["limitations"]]
-    return lines
-
-
-def _discussion_recheck_lines(plan):
-    lines = []
-    labels = {"still_present": "问题仍存在", "not_present": "当前快照中该主张不成立", "fixed": "已核验修复",
-              "insufficient_evidence": "证据不足", "not_checked": "未核验", "background": "背景说明"}
-    for item in plan.digest.discussion_rechecks:
-        lines += ["", f"- {markdown_text(item['discussion_id'])}：{labels.get(item['status'], '未知')}。",
-                  "  " + markdown_text(item["reason"])]
-        if item.get("evidence_ids"):
-            lines.append("  代码证据：" + "、".join(markdown_text(e) for e in item["evidence_ids"]))
-        url = plan.digest.discussion_links.get(item["discussion_id"])
-        if url:
-            lines.append(f"  [查看已有讨论]({url})")
     return lines
 
 
@@ -444,9 +351,9 @@ def _next_steps(plan):
     outcome = plan.outcome
     lines = ["", "## 下一步建议", ""]
     steps = []
-    if plan.digest.merge_decision.blocking_finding_keys or plan.digest.merge_decision.blocking_historical_keys:
+    if plan.digest.merge_decision.blocking_finding_keys:
         steps.append("- 修复上方高优先级问题并在新快照重新核验；人工标记已处理不能代替机器复核。")
-    if plan.digest.merge_decision.nonblocking_finding_keys or plan.digest.merge_decision.nonblocking_historical_keys:
+    if plan.digest.merge_decision.nonblocking_finding_keys:
         steps.append("- 逐项评估非高优先级建议的影响与处理方式。")
     if plan.digest.incomplete_goals:
         steps.append("- 补查未完成目标，再判断整轮审查是否完整。")
@@ -485,105 +392,6 @@ def _comment_finding_lines(plan, finding, view, *, full):
     return lines
 
 
-def _history_entries(plan):
-    """把历史复核分成“已核验的既有风险”和“尚未完成的调查”。
-
-    只有取得独立代码证据且判定仍存在的记录才是已核验风险；平台 resolved、
-    人工注记和缺少证据的模型判断都留在待确认一侧。已被当前问题按严格重复
-    关联覆盖的历史记录不重复展示，但仍保留在合并决策的来源计数中。
-    """
-    history = plan.outcome.historical_discussion
-    represented = {match.get("discussion_id") for finding in _ordered_findings(plan)
-                   for match in exact_duplicate_matches(finding.discussion_matches)}
-    assessed = {item.discussion_id: item for item in history.findings}
-    risks, pending = [], []
-    for item in plan.digest.discussion_rechecks:
-        status = item.get("status")
-        identity = item.get("discussion_id") or "未记录"
-        if status in {"fixed", "not_present", "background"} or identity in represented:
-            continue
-        finding = assessed.get(identity)
-        if finding is not None:
-            risks.append(finding)
-        elif status == "still_present":
-            pending.append((identity, "复核仍存在，但缺少可引用的代码证据，尚不能作为已核验风险", item))
-        else:
-            pending.append((identity, "待核实，不能判断已修复", item))
-    return risks, pending
-
-
-def _history_url(plan, identity):
-    return plan.digest.discussion_links.get(identity)
-
-
-def _history_priority(finding) -> str:
-    return {"fix_before_merge": "建议合并前修复", "assess_improvement": "评估改进",
-            "assess_impact": "严重度及影响尚待核对"}[finding.priority]
-
-
-def _comment_history_risk_lines(plan, risks):
-    """已核验的既有风险按正式问题格式呈现，并明确不计入本轮 Diff 新增问题。"""
-    lines = []
-    for finding in risks:
-        title = _sentence(finding.affected_behavior or finding.reason, 180)
-        lines += [f"**[{finding.severity.title()} · 历史复核] {markdown_text(title, 200)}**", "",
-                  f"**代码位置：** {markdown_text(finding.path, 500) if finding.path else '未记录文件'}", ""]
-        lines += [f"**复核结论：** {_history_priority(finding)}；{markdown_text(_sentence(finding.reason, 180))}", ""]
-        if finding.recommendation:
-            lines += [f"**建议：** {markdown_text(_sentence(finding.recommendation, 180))}", ""]
-        if finding.evidence_ids:
-            lines += [f"**代码证据：** {'、'.join(markdown_text(item) for item in finding.evidence_ids)}", ""]
-        url = finding.discussion_url or _history_url(plan, finding.discussion_id)
-        if url:
-            lines += [f"[历史讨论]({url})", ""]
-    return lines
-
-
-def _comment_history_risk_section(plan, risks):
-    """已核验的既有风险使用正式风险章节，而不是与未完成调查混在待确认事项中。"""
-    if not risks:
-        return []
-    return ["", "## 已核验的既有风险", "",
-            "以下问题经历史讨论复核并以当前固定代码核验仍存在；不计入本轮 Diff 新增问题，但会影响合并判断。", "",
-            *_comment_history_risk_lines(plan, risks)]
-
-
-def _comment_history_pending_lines(plan, pending, *, include_discussed=False):
-    """默认只保留具有当前风险线索的提醒，普通历史调查按用户选择简短展示。"""
-    lines = []
-    for identity, label, item in pending:
-        material = item.get("status") == "still_present" or (
-            item.get("severity") in {"critical", "high"} and item.get("affected_behavior")
-            and item.get("recommendation"))
-        if not include_discussed and not material:
-            continue
-        url = _history_url(plan, identity)
-        claim = item.get("affected_behavior") or item.get("reason") or "历史讨论所指的问题"
-        action = item.get("recommendation") or "核对原讨论对应的当前实现及相关测试断言，补齐证据后判断是否需要修复"
-        lines += [f"- **历史主张：** {markdown_text(_sentence(claim, 160))}",
-                  f"  **当前判断：** {label}。",
-                  f"  **建议动作：** {markdown_text(_sentence(action, 160))}"]
-        if url:
-            lines.append(f"  [查看原始讨论]({url})")
-    return lines
-
-
-def _comment_history_lines(plan):
-    """交付摘要使用的一行式历史状态；已核验风险与待确认调查分别表述。"""
-    risks, pending = _history_entries(plan)
-    lines = []
-    for finding in risks:
-        lines.append(f"- 历史复核仍存在：[{finding.severity}] {markdown_text(finding.affected_behavior or finding.reason, 240)}；"
-                     f"{_history_priority(finding)}；{markdown_text(finding.path or '未记录文件', 500)}。"
-                     "不计入本轮 Diff 新增问题。")
-        if finding.recommendation:
-            lines.append("  建议：" + markdown_text(finding.recommendation))
-        if finding.evidence_ids:
-            lines.append("  代码证据：" + "、".join(markdown_text(item) for item in finding.evidence_ids))
-    lines += _comment_history_pending_lines(plan, pending)
-    return lines
-
-
 def _comment_location(plan, finding) -> str:
     """评论正文中的位置行；有严格解析的 PR 身份时使用不可变快照链接。"""
     label = _finding_location_text(finding)
@@ -615,7 +423,7 @@ def _comment_change_overview(plan, *, title="变更理解"):
 
 
 def _comment_other_results(plan, *, omitted, retained, withheld, full, title=None, extra_lines=(),
-                          include_discussed=False, include_investigations=True):
+                          include_investigations=True):
     """只展开实际缺口；通用验证边界统一放在文末。
 
     章节标题按内容决定：确实存在未确认事项时使用“仍需确认的事项”；
@@ -623,10 +431,7 @@ def _comment_other_results(plan, *, omitted, retained, withheld, full, title=Non
     不让完整明细本身制造一个并不存在的风险章节。简洁版与完整版共享同一
     判断结果，完整版只追加明细，不改变章节是否存在。
     """
-    # 已核验风险有独立章节，避免通用限制行与它重复表达同一事实。
-    risks = _comment_risks(plan, include_history=not _history_entries(plan)[0],
-                           include_investigations=include_investigations)
-    pending = _history_entries(plan)[1]
+    risks = _comment_risks(plan, include_investigations=include_investigations)
     entries = list(risks)
     if plan.digest.incomplete_goals:
         entries.append(f"- 约定目标仍有 {len(plan.digest.incomplete_goals)} 项未完成检查。")
@@ -642,7 +447,6 @@ def _comment_other_results(plan, *, omitted, retained, withheld, full, title=Non
     if withheld:
         entries.append(f"- 另有 {withheld} 项代码证据已确认的记录未通过发布准入，详见完整报告；"
                        "当前评论未将其描述为已核验问题。")
-    entries += _comment_history_pending_lines(plan, pending, include_discussed=include_discussed)
     has_pending = bool(entries)
     if full:
         source = _author_source_lines(plan)
@@ -662,7 +466,7 @@ def _comment_other_results(plan, *, omitted, retained, withheld, full, title=Non
 
 
 
-def comment_selection(plan, *, exclude_resolved=False, include_discussed=False):
+def comment_selection(plan, *, exclude_resolved=False):
     findings = _ordered_findings(plan)
     resolved = {item.id for item in plan.digest.findings if item.disposition and item.disposition.status == "resolved"}
     blockers = set(plan.digest.merge_decision.blocking_finding_keys)
@@ -699,7 +503,7 @@ def _comment_next_steps(plan, *, has_findings: bool):
     return [" ".join(steps)]
 
 
-def render_review_comment(plan, *, detail="compact", exclude_resolved=False, include_discussed=False):
+def render_review_comment(plan, *, detail="compact", exclude_resolved=False):
     """固定章节语义，只按风险调整顺序；没有内容的章节不输出。
 
     章节含义在所有状态下一致：结论、本次变更理解、需要处理的问题、其他建议、
@@ -707,10 +511,8 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False, inc
     """
     if plan.presentation is not None:
         from app.services.publication.review_presentation import render_presentation
-        return render_presentation(plan, copy=True, detail=detail, exclude_resolved=exclude_resolved,
-                                   include_discussed=include_discussed)
-    included, omitted, retained = comment_selection(plan, exclude_resolved=exclude_resolved,
-                                                     include_discussed=include_discussed)
+        return render_presentation(plan, copy=True, detail=detail, exclude_resolved=exclude_resolved)
+    included, omitted, retained = comment_selection(plan, exclude_resolved=exclude_resolved)
     full = detail == "full"
     withheld = max(0, plan.outcome.confirmed_count - plan.outcome.publishable_count)
     lines = ["RepoGuardian · PR Code Review", "", merge_verdict_line(plan), ""]
@@ -718,13 +520,7 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False, inc
         lines += ["本次未纳入历史讨论；以下结论不包含历史讨论复核。", ""]
     if plan.digest.discussion_stats:
         stats = plan.digest.discussion_stats
-        lines += [f"当前结论针对本轮变更范围；已参考 {stats['referenced']} 项历史讨论，"
-                  f"另有 {stats['unchecked']} 项历史事项未核验。", ""]
-    history = historical_risk_line(plan)
-    if history:
-        lines += [history, ""]
-    if any(item.default_selection_reason == "historical_duplicate" for item in included):
-        lines += ["已有历史讨论的当前问题仍保留风险摘要；已有讨论不代表已修复。", ""]
+        lines += [f"已保存 {stats['collected']} 项 PR 讨论供 Agent 按需读取；采集数量不代表已核验数量。", ""]
     note = partial_review_note(plan)
     if note:
         lines += [note, ""]
@@ -745,19 +541,9 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False, inc
             return []
         result = ["", f"## {title}", ""]
         for finding in findings:
-            discussed = finding.default_selection_reason == "historical_duplicate"
-            needs_evidence = (full or (discussed and include_discussed) or finding.severity in {"high", "critical"}
+            needs_evidence = (full or finding.severity in {"high", "critical"}
                 or finding.finding_key in blockers)
-            if discussed and not include_discussed and not full:
-                needs_evidence = False
             result += _comment_finding_lines(plan, finding, views.get(finding.finding_key), full=needs_evidence)
-            if discussed:
-                from app.services.discussions.pr_discussion_matching import safe_discussion_url
-
-                urls = [safe for url in finding.discussion_urls
-                        if (safe := safe_discussion_url(url, plan.digest.pr_url))]
-                links = "、".join(f"[历史讨论 {i}]({url})" for i, url in enumerate(urls, 1))
-                result += ["当前快照仍确认此问题。" + (f"已有讨论：{links}。" if links else "未保存可用的历史讨论链接。"), ""]
         return result
 
     scope_lines = []
@@ -771,7 +557,7 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False, inc
 
     def limitations():
         return _comment_other_results(plan, omitted=omitted, retained=retained, withheld=withheld,
-            full=full, extra_lines=scope_lines, include_discussed=include_discussed)
+            full=full, extra_lines=scope_lines)
 
     def next_steps_section():
         return ["", "## 下一步", "", *_comment_next_steps(plan, has_findings=bool(included))]
@@ -779,31 +565,25 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False, inc
     def understanding_section():
         return ["", *_comment_change_overview(plan)]
 
-    # 已核验的历史风险进入正式风险章节；未完成的历史调查留在待确认章节。
-    history_section = _comment_history_risk_section(plan, _history_entries(plan)[0])
     if interrupted:
         lines += understanding_section()
         scope = (f"约定目标已检查 {plan.outcome.examined_goals} / {plan.outcome.total_goals} 项"
                  if plan.outcome.total_goals else "约定目标的检查范围未知")
         lines += ["", scope + "；以上仅为已保存的检查观察，不代表完整结论。"]
-        lines += history_section
         lines += limitations()
         lines += next_steps_section()
     elif blocking_findings:
         lines += finding_section(blocking_findings, "需要处理的问题")
-        lines += history_section
         lines += understanding_section()
         lines += finding_section(suggestions, "其他建议")
         lines += limitations()
         lines += next_steps_section()
     elif suggestions or omitted:
-        lines += history_section
         lines += understanding_section()
         lines += finding_section(suggestions, "其他建议")
         lines += limitations()
         lines += next_steps_section()
     elif incomplete:
-        lines += history_section
         lines += understanding_section()
         lines += ["", "> 以上变更理解仅基于已保存的局部观察或变更元数据，"
                   "不代表所有目标已完成核验。"]
@@ -811,7 +591,6 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False, inc
             "", "## 仍需确认的事项", "", "缺口或运行记录尚不明确，请先核对详细报告。"]
         lines += next_steps_section()
     else:
-        lines += history_section
         lines += understanding_section()
         lines += limitations()
         lines += next_steps_section()
@@ -880,11 +659,7 @@ def render_summary(plan, *, discussion_urls: dict[str, str] | None = None) -> st
     lines = ["## RepoGuardian · PR Review", "", merge_verdict_line(plan), ""]
     if digest.discussion_stats:
         stats = digest.discussion_stats
-        lines += [f"已参考 {stats['referenced']} 项相关讨论；历史复核独立于当前变更结论，"
-                  f"{stats['unchecked']} 项尚未核验。", ""]
-    history = historical_risk_line(plan)
-    if history:
-        lines += [history, ""]
+        lines += [f"已保存 {stats['collected']} 项 PR 讨论供 Agent 按需读取；采集数量不代表已核验数量。", ""]
     note = partial_review_note(plan)
     if note:
         lines += [note, ""]
@@ -912,7 +687,6 @@ def render_summary(plan, *, discussion_urls: dict[str, str] | None = None) -> st
     withheld_count = max(0, outcome.confirmed_count - outcome.publishable_count)
     if withheld_count > 0:
         risks.append(f"- {withheld_count} 项代码证据已确认的记录未进入发布草稿；请在 RepoGuardian 中核对证据与原因。")
-    risks += _comment_history_lines(plan)
     if risks:
         lines += ["", "### 仍需关注", "", *dict.fromkeys(risks)]
     if digest.author_context_limitation and not any(digest.author_context_limitation in line for line in risks):

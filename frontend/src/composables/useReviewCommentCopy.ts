@@ -27,7 +27,7 @@ export function useReviewCommentCopy(source: CommentSource, load = checkReviewCo
     checking.value = false; pendingCopy.value = null; pendingAction = null; headCheck.value = null; copied.value = false; feedback.value = "";
   }
   watch([source.reviewId, source.reviewedHeadSha, source.markdown, () => source.options().detail,
-    () => source.options().exclude_resolved, () => source.options().include_discussed,
+    () => source.options().exclude_resolved,
     () => source.options().finding_key], () => { updatedPreview.value = null; resetCopy(); }, { flush: "sync" });
   onScopeDispose(resetCopy);
 

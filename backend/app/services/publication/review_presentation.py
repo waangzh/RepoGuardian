@@ -118,8 +118,7 @@ def _review_conclusion(plan):
     from app.services.publication.publication_renderer import merge_verdict_line
 
     outcome = plan.outcome
-    if (outcome.kind in {"failed", "cancelled"} or outcome.confirmed_count
-            or outcome.historical_discussion.affects_risk):
+    if outcome.kind in {"failed", "cancelled"} or outcome.confirmed_count:
         return merge_verdict_line(plan)
     if outcome.kind == "clean" and outcome.finding_conclusion == "no_confirmed_findings":
         return "✅ 结论：已检查范围内未发现已确认问题"
@@ -211,10 +210,10 @@ def selected_presentation(plan, selected, fallback=(), *, already_published=0, a
 
 
 def render_presentation(plan, *, copy=False, detail="compact", exclude_resolved=False,
-                        include_discussed=False, discussion_urls=None):
+                        discussion_urls=None):
     from app.services.publication.publication_renderer import (
-        _comment_history_risk_section, _comment_next_steps, _comment_other_results, _goal_lines,
-        _history_entries, _human_lines, comment_selection, finding_location,
+        _comment_next_steps, _comment_other_results, _goal_lines,
+        _human_lines, comment_selection, finding_location,
         finding_markdown_title, partial_review_note,
     )
 
@@ -254,15 +253,6 @@ def render_presentation(plan, *, copy=False, detail="compact", exclude_resolved=
             lines += [f"- **[{finding.severity.title()}] {finding_markdown_title(finding)}** — "
                       + _finding_location_text(finding)
                       + (f" · [查看代码讨论]({url})" if url else "（代码行意见以实际发布回执为准）")]
-        if finding.default_selection_reason == "historical_duplicate" or include_discussed:
-            from app.services.discussions.pr_discussion_matching import safe_discussion_url
-            urls = [safe for url in finding.discussion_urls
-                    if (safe := safe_discussion_url(url, plan.digest.pr_url))]
-            links = "、".join(f"[历史讨论 {index}]({url})" for index, url in enumerate(urls, 1))
-            if links:
-                lines += ["", "当前快照仍确认此问题；已有讨论不代表已修复。" + links, ""]
-    history_risks = _history_entries(plan)[0]
-    lines += _comment_history_risk_section(plan, history_risks)
     scope_lines = []
     if detail == "full":
         scope_lines = ["", "### 审查范围", ""]
@@ -272,7 +262,7 @@ def render_presentation(plan, *, copy=False, detail="compact", exclude_resolved=
                         for item in plan.digest.excluded_files]
     lines += _comment_other_results(plan, omitted=omitted, retained=retained,
         withheld=max(0, plan.outcome.confirmed_count - plan.outcome.publishable_count),
-        full=detail == "full", include_discussed=include_discussed, extra_lines=scope_lines,
+        full=detail == "full", extra_lines=scope_lines,
         include_investigations=not any(item.answer == "unresolved" for item in plan.digest.investigations))
     pending = [item for item in plan.digest.investigations if item.answer == "unresolved"]
     if pending:
@@ -303,7 +293,7 @@ def render_presentation(plan, *, copy=False, detail="compact", exclude_resolved=
             advice = "建议先补齐上述待核实事项所需证据，再结合 CI 和人工评审决定是否合并。"
         else:
             advice = " ".join(_comment_next_steps(
-                plan, has_findings=bool(_ordered_findings(plan) or history_risks)))
+                plan, has_findings=bool(_ordered_findings(plan))))
         lines += ["", "### 验证与合并建议", "",
             f"{scope}；静态审查边界：{dynamic} {markdown_text(advice)}", "", "---", "",
             f"审查快照：`{markdown_text(plan.snapshot.head_sha or '未记录', 64)}`"

@@ -327,7 +327,7 @@ class ReviewService:
             context.replaying_nodes = frozenset(state.next) if state and state.values else frozenset()
             async with asyncio.timeout(max(0, remaining)):
                 result = await graph.ainvoke(None if state and state.values else {"review_id": task_id},
-                                            config, context=context)
+                                            config, context=context, durability="sync")
             await active()
             task.review_report = ReviewReport.model_validate(result["report"])
             task.status = "completed" if task.review_report.termination == "completed" else "completed_with_warnings"

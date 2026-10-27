@@ -48,7 +48,7 @@ function clearTimer() { if (timer) clearTimeout(timer); timer = null; }
 function invalidate() { preview.value = null; acknowledge.value = false; confirmationKey.value = ""; dialog.value?.close(); }
 watch(() => props.plan, () => {
   generation += 1; controller?.abort(); clearTimer(); current.value = null; history.value = []; busy.value = false;
-  selected.value = findings.value.filter(item => item.default_selected !== false).map(item => item.finding_key); token.value = ""; error.value = ""; invalidate();
+  selected.value = findings.value.map(item => item.finding_key); token.value = ""; error.value = ""; invalidate();
 }, { immediate: true });
 watch(selected, invalidate, { deep: true });
 watch(token, () => { generation += 1; controller?.abort(); clearTimer(); busy.value = false; invalidate(); });
@@ -150,7 +150,7 @@ const placementLabel = (placement: string) => placement === "inline" ? "代码�
 
       <template v-if="publishEnabled">
         <label class="github-publication__credential">本地发布操作口令<input v-model="token" type="password" autocomplete="off" placeholder="独立操作口令，不是 GitHub Token" :disabled="busy" /></label>
-        <fieldset :disabled="busy"><legend>选择要发布的已核验问题（PR 总结评论始终发布）</legend><p v-if="!findings.length">没有合格问题草稿；预检将校验能否发布当前审查结论。</p><label v-for="finding in findings" :key="finding.finding_key"><input v-model="selected" type="checkbox" :value="finding.finding_key" />{{ publicationFindingTitle(finding) }} · {{ placementLabel(finding.placement) }}<small v-if="finding.default_selected === false">已有讨论且未发现新增信息，默认不选；可手动纳入。</small><a v-for="url in finding.discussion_urls || []" :key="url" :href="safeLink(url)" target="_blank" rel="noreferrer">查看已有讨论</a></label></fieldset>
+        <fieldset :disabled="busy"><legend>选择要发布的已核验问题（PR 总结评论始终发布）</legend><p v-if="!findings.length">没有合格问题草稿；预检将校验能否发布当前审查结论。</p><label v-for="finding in findings" :key="finding.finding_key"><input v-model="selected" type="checkbox" :value="finding.finding_key" />{{ publicationFindingTitle(finding) }} · {{ placementLabel(finding.placement) }}</label></fieldset>
         <div class="github-publication__actions"><button type="button" class="button button--secondary button--compact" :disabled="busy || !token" @click="preflight">检查发布条件并预览</button><button type="button" class="button button--ghost button--compact" :disabled="busy || !token" @click="loadHistory">加载发布历史</button></div>
         <p v-if="busy" role="status">正在处理发布请求…</p><p v-if="error" role="alert">{{ error }}</p>
         <section v-if="preview" aria-label="发布预检结果">

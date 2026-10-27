@@ -14,34 +14,6 @@ export interface ReviewOutcome {
   finding_conclusion: "confirmed" | "unresolved" | "no_confirmed_findings" | "unknown";
   review_completeness: CoverageKind;
   runtime_reliability: "reliable" | "unreliable" | "unknown";
-  /** 历史讨论复核的独立结果；其超时或计量缺失不影响上方主审查字段。 */
-  historical_discussion?: HistoricalDiscussionOutcome;
-}
-
-export interface HistoricalDiscussionOutcome {
-  status: "not_recorded" | "completed" | "partial" | "timed_out" | "unavailable";
-  collected: number;
-  checked: number;
-  unchecked: number;
-  verified_defects: { discussion_id: string | null; path: string | null; reason: string | null; evidence_ids: string[] }[];
-  termination_reason: string | null;
-  limitations: string[];
-  usage: Record<string, unknown>;
-  affects_risk: boolean;
-  findings?: HistoricalFindingView[];
-}
-
-export interface HistoricalFindingView {
-  discussion_id: string;
-  path: string | null;
-  status: "still_present";
-  severity: "critical" | "high" | "medium" | "low" | "unknown";
-  priority: "fix_before_merge" | "assess_improvement" | "assess_impact";
-  affected_behavior: string | null;
-  recommendation: string | null;
-  reason: string;
-  evidence_ids: string[];
-  discussion_url: string | null;
 }
 
 export interface DigestGoal {
@@ -76,9 +48,7 @@ export interface ChangeUnderstanding {
 }
 export interface ReviewDigest {
   discussion_review_enabled?: boolean | null;
-  discussion_stats?: {status:string;collected:number;checked:number;unchecked:number;limitations:string[]} | null;
-  discussion_rechecks?: {discussion_id:string;status:string;reason:string}[];
-  discussion_links?: Record<string, string>;
+  discussion_stats?: {status:string;collected:number;limitations:string[]} | null;
   pr_url?: string | null;
   author_goal?: string | null;
   author_context_status?: "complete" | "truncated" | "unknown" | "not_recorded";
@@ -117,17 +87,10 @@ export interface MergeDecision {
   nonblocking_finding_keys: string[];
   unresolved_reasons: string[];
   limits: string[];
-  blocking_historical_keys?: string[];
-  nonblocking_historical_keys?: string[];
-  blocking_independent_count?: number | null;
-  nonblocking_independent_count?: number | null;
-  /** 与本轮问题指向同一缺陷、已在计数中合并的历史讨论。 */
-  deduplicated_historical_keys?: string[];
 }
 export interface ReviewCommentOptions {
   detail: "compact" | "full";
   exclude_resolved: boolean;
-  include_discussed?: boolean;
   finding_key?: string | null;
 }
 
@@ -147,10 +110,6 @@ export interface PublicationAnchor {
 export interface PublicationFinding {
   attribution: 'introduced' | 'exposed' | 'pre_existing' | 'uncertain';
   finding_key: string;
-  default_selected?: boolean;
-  default_selection_reason?: string | null;
-  discussion_urls?: string[];
-  discussion_matches?: { discussion_id: string; reason: string }[];
   candidate_id: string;
   severity: "critical" | "high" | "medium" | "low";
   placement: "inline" | "summary";
@@ -188,7 +147,7 @@ export interface PublicationPlan {
 
 export interface ReviewSummaryDigest {
   discussion_review_enabled?: boolean | null;
-  discussion_stats?: {status:string;collected:number;checked:number;unchecked:number;limitations:string[]} | null;
+  discussion_stats?: {status:string;collected:number;limitations:string[]} | null;
   author_goal?: string | null;
   author_context_status?: "complete" | "truncated" | "unknown" | "not_recorded";
   author_context_limitation?: string | null;

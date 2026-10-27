@@ -39,48 +39,11 @@ class OutcomeReason(StrEnum):
     SNAPSHOT_MISSING = "snapshot_missing"
     RUNTIME_REPORT_MISSING = "runtime_report_missing"
     RUNTIME_REPORT_INVALID = "runtime_report_invalid"
-    HISTORICAL_DISCUSSION_UNRESOLVED = "historical_discussion_unresolved"
-
-
-class HistoricalFindingView(BaseModel):
-    discussion_id: str
-    path: str | None = None
-    status: Literal["still_present"] = "still_present"
-    severity: Literal["critical", "high", "medium", "low", "unknown"] = "unknown"
-    priority: Literal["fix_before_merge", "assess_improvement", "assess_impact"] = "assess_impact"
-    affected_behavior: str | None = None
-    recommendation: str | None = None
-    reason: str
-    evidence_ids: list[str] = Field(default_factory=list)
-    discussion_url: str | None = None
-
-
-class HistoricalDiscussionOutcome(BaseModel):
-    """历史 PR 讨论复核的独立结论；与当前 Diff 主审查分别判定。"""
-
-    status: Literal["not_recorded", "completed", "partial", "timed_out", "unavailable"] = "not_recorded"
-    collected: int = Field(default=0, ge=0)
-    checked: int = Field(default=0, ge=0)
-    unchecked: int = Field(default=0, ge=0)
-    verified_defects: list[dict] = Field(default_factory=list)
-    termination_reason: str | None = None
-    limitations: list[str] = Field(default_factory=list)
-    usage: dict = Field(default_factory=dict)
-    affects_risk: bool = False
-    findings: list[HistoricalFindingView] = Field(default_factory=list)
-
-    @model_serializer(mode="wrap")
-    def serialize_findings(self, handler):
-        value = handler(self)
-        if "findings" not in self.model_fields_set:
-            value.pop("findings", None)
-        return value
 
 
 class ReviewOutcome(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    # 外层字段描述当前 Diff 主审查；历史讨论复核作为独立结果并列返回。
     kind: ReviewOutcomeKind
     coverage: CoverageKind
     confirmed_count: int = Field(default=0, ge=0)
@@ -93,15 +56,6 @@ class ReviewOutcome(BaseModel):
     finding_conclusion: Literal["confirmed", "unresolved", "no_confirmed_findings", "unknown"] = "unknown"
     review_completeness: CoverageKind = CoverageKind.UNKNOWN
     runtime_reliability: Literal["reliable", "unreliable", "unknown"] = "unknown"
-    # 历史讨论复核结果明确与主审查并列；其超时或计量缺失不写入上方主审查字段。
-    historical_discussion: HistoricalDiscussionOutcome = Field(default_factory=HistoricalDiscussionOutcome)
-
-    @model_serializer(mode="wrap")
-    def serialize_historical_discussion(self, handler):
-        value = handler(self)
-        if self.historical_discussion.status == "not_recorded":
-            value.pop("historical_discussion", None)
-        return value
 
 
 class DigestGoal(BaseModel):
@@ -142,21 +96,6 @@ class MergeDecision(BaseModel):
     nonblocking_finding_keys: list[str] = Field(default_factory=list)
     unresolved_reasons: list[str] = Field(default_factory=list)
     limits: list[str] = Field(default_factory=list)
-    blocking_historical_keys: list[str] = Field(default_factory=list)
-    nonblocking_historical_keys: list[str] = Field(default_factory=list)
-    # 独立缺陷数按“当前问题—历史讨论”的严格重复关联去重；来源数量仍由上方键列表分别保留。
-    blocking_independent_count: int | None = Field(default=None, ge=0)
-    nonblocking_independent_count: int | None = Field(default=None, ge=0)
-    deduplicated_historical_keys: list[str] = Field(default_factory=list)
-
-    @model_serializer(mode="wrap")
-    def serialize_history_keys(self, handler):
-        value = handler(self)
-        for key in ("blocking_historical_keys", "nonblocking_historical_keys", "blocking_independent_count",
-                    "nonblocking_independent_count", "deduplicated_historical_keys"):
-            if key not in self.model_fields_set:
-                value.pop(key, None)
-        return value
 
 
 class ChangeUnderstanding(BaseModel):
@@ -183,8 +122,6 @@ class ChangeUnderstanding(BaseModel):
 class ReviewDigest(BaseModel):
     discussion_review_enabled: bool | None = None
     discussion_stats: dict | None = None
-    discussion_rechecks: list[dict] = Field(default_factory=list)
-    discussion_links: dict[str, str] = Field(default_factory=dict)
     pr_url: str | None = None
     author_goal: str | None = None
     author_context_status: Literal["complete", "truncated", "unknown", "not_recorded"] = "not_recorded"
@@ -242,10 +179,6 @@ class PublicationFinding(BaseModel):
     category: str | None = None
     evidence_summary: str | None = None
     evidence_ids: list[str] = Field(default_factory=list)
-    default_selected: bool = True
-    default_selection_reason: str | None = None
-    discussion_urls: list[str] = Field(default_factory=list)
-    discussion_matches: list[dict] = Field(default_factory=list)
 
 
 
@@ -357,7 +290,6 @@ class ReviewCommentOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
     detail: Literal["compact", "full"] = "compact"
     exclude_resolved: bool = False
-    include_discussed: bool = False
     finding_key: str | None = Field(default=None, min_length=1, max_length=256)
 
     @model_validator(mode="after")

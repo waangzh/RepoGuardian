@@ -65,8 +65,7 @@ class PublicationPlanner:
             digest.excluded_files = [DigestExcludedFile(path=item.file_path, reason="未纳入主审范围")
                                     for item in task.changed_files if item.file_path not in reviewed_paths]
         if task.pr_discussion:
-            digest.discussion_stats = {"collected": task.pr_discussion["thread_count"], "checked": 0,
-                "unchecked": task.pr_discussion["thread_count"],
+            digest.discussion_stats = {"collected": task.pr_discussion["thread_count"],
                 "status": "complete" if all(value == "complete" for value in task.pr_discussion["sources"].values())
                     else "partial", "limitations": task.pr_discussion["limitations"]}
         outcome = derive_review_outcome(task, publishable_count=len(selected))
@@ -100,7 +99,10 @@ class PublicationPlanner:
         rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
         for drafts in (plan.inline_drafts, plan.summary_findings):
             drafts.sort(key=lambda item: (rank[item.severity], item.anchor.file_path, item.finding_key))
-        plan.digest.merge_decision = merge_decision(plan)
+        plan.digest.merge_decision = merge_decision(
+            outcome, selected, content_eligible=plan.content_eligible,
+            execution_complete=bool(report and report.termination == "completed"),
+        )
         plan.presentation = build_presentation(plan)
         if include_markdown:
             plan.summary_markdown = render_summary(plan)

@@ -96,7 +96,24 @@ async def preview_and_create(service):
     return preview, created, await service.create_confirmed_task(created)
 
 
-async def test_persistent_pipeline_confirmation_native_graph_report_and_revalidated_drafts(pipeline):
+async def test_persistent_pipeline_confirmation_native_graph_report_and_revalidated_drafts(pipeline, monkeypatch):
+    from app.services.review import review_service
+
+    build_graph = review_service.build_review_graph
+    durability = []
+
+    def synchronous_graph(saver):
+        graph = build_graph(saver)
+        invoke = graph.ainvoke
+
+        async def checked_invoke(*args, **kwargs):
+            durability.append(kwargs.get("durability"))
+            return await invoke(*args, **kwargs)
+
+        monkeypatch.setattr(graph, "ainvoke", checked_invoke)
+        return graph
+
+    monkeypatch.setattr(review_service, "build_review_graph", synchronous_graph)
     service, repository, model, _, _ = pipeline
     preview, request, task = await preview_and_create(service)
     assert len(preview.assignments) == 2
@@ -109,6 +126,7 @@ async def test_persistent_pipeline_confirmation_native_graph_report_and_revalida
     assert len(saved.review_report.findings) == 1
     assert saved.report_markdown
     assert len(model.observed) == 3
+    assert durability == ["sync"]
     plan = PublicationPlanner(repository._artifacts).build(saved)
     assert plan.content_eligible
     assert plan.outcome.confirmed_count == plan.outcome.publishable_count == 1

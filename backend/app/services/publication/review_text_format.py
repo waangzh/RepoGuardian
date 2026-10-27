@@ -29,7 +29,6 @@ REASON_LABELS = {
     "unscheduled_investigation": "仍有未处理的调查线索", "usage_integrity_unknown": "模型请求计量不完整或不一致",
     "snapshot_missing": "审查快照缺失或身份无效", "runtime_report_missing": "缺少任务运行报告",
     "runtime_report_invalid": "任务运行报告格式无效",
-    "historical_discussion_unresolved": "历史讨论复核确认原问题在当前代码中仍存在，需核对",
 }
 
 
@@ -48,61 +47,6 @@ MERGE_SYMBOLS = {
     "conditional_merge": "✅",
     "unavailable": "❓",
 }
-
-
-INCOMPLETE_LABELS = {
-    "scope_incomplete": "还有约定检查未完成",
-    "evidence_gaps": MERGE_LABELS["resolve_unknowns"],
-    "runtime_limits": "审查已结束，但结果可靠性仍需核对",
-}
-
-
-_EVIDENCE_REASONS = {
-    "verification_unresolved", "finding_status_unknown", "investigation_incomplete",
-    "unscheduled_investigation", "confirmed_findings_withheld", "finding_severity_unknown",
-    "author_context_truncated", "author_context_unknown", "historical_discussion_unresolved",
-}
-
-
-_RUNTIME_REASONS = {
-    "budget_exhausted", "deadline_exceeded", "usage_integrity_unknown", "termination_incomplete",
-    "snapshot_missing", "runtime_report_missing", "runtime_report_invalid",
-    "head_validation_failed", "head_validation_unknown",
-}
-
-
-def review_limitation_kind(outcome, reasons=()):
-    """仅按保存事实区分范围、代码证据与运行记录限制，不改变 Outcome。"""
-    reasons = set(outcome.reason_codes) | set(reasons)
-    if reasons & {"scope_incomplete", "scope_empty"} or (
-            outcome.total_goals > 0 and outcome.examined_goals < outcome.total_goals):
-        return "scope_incomplete"
-    if outcome.unresolved_count or outcome.incomplete_investigations or reasons & _EVIDENCE_REASONS:
-        return "evidence_gaps"
-    if reasons & _RUNTIME_REASONS or outcome.runtime_reliability != "reliable":
-        return "runtime_limits"
-    return None
-
-
-def review_limitation_label(outcome, reasons=()):
-    reasons = set(outcome.reason_codes) | set(reasons)
-    kind = review_limitation_kind(outcome, reasons)
-    if kind == "scope_incomplete":
-        if not outcome.total_goals:
-            return "检查范围尚不明确"
-        remaining = outcome.total_goals - outcome.examined_goals
-        return f"还有 {remaining} 项约定检查未完成" if remaining > 0 else "尚无法确认检查范围是否完整"
-    if kind == "evidence_gaps":
-        if outcome.unresolved_count:
-            return f"有 {outcome.unresolved_count} 项疑点需要进一步确认"
-        if outcome.incomplete_investigations:
-            return f"有 {outcome.incomplete_investigations} 项关联调查尚未完成"
-        if reasons & {"author_context_truncated", "author_context_unknown"}:
-            return "作者声明范围尚待核对"
-        if "confirmed_findings_withheld" in reasons:
-            return "部分代码证据已确认的记录未通过交付准入，需核对证据"
-        return "存在未确认事项，需进一步核实"
-    return INCOMPLETE_LABELS.get(kind, "审查结论暂不完整")
 
 
 def markdown_text(value: str, limit: int = 2000) -> str:
@@ -135,16 +79,11 @@ def _finding_location_text(finding) -> str:
 
 
 
-def _comment_risks(plan, *, include_history=True, include_investigations=True):
-    """只列影响合并判断的限制；未逐项核验的作者声明留在详细报告。
-
-    已核验的历史风险在评论中有独立章节，通用限制行不再重复同一条结论；
-    尚未完成的历史调查仍由待确认章节逐项呈现。
-    """
+def _comment_risks(plan, *, include_investigations=True):
+    """只列当前审查限制；计量未知单独说明，不作为代码缺陷。"""
     reasons = {item.value for item in plan.outcome.reason_codes}
     risks = [value for value in plan.digest.merge_decision.limits
-             if (include_history or value != REASON_LABELS["historical_discussion_unresolved"])
-             and (include_investigations or not (
+             if (include_investigations or not (
                  "investigation_incomplete" in reasons
                  and value == REASON_LABELS["investigation_incomplete"]))]
     if "usage_integrity_unknown" in plan.outcome.reason_codes:

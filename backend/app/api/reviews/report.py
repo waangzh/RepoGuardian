@@ -63,10 +63,9 @@ def _comment_content(plan, options):
         if selected is None:
             raise HTTPException(status_code=409, detail="Selected finding is no longer eligible for a comment")
         return [selected], [item for item in findings if item.finding_key != selected.finding_key], [], render_finding_comment(plan, selected)
-    included, omitted, retained = comment_selection(plan, exclude_resolved=options.exclude_resolved,
-                                                     include_discussed=options.include_discussed)
+    included, omitted, retained = comment_selection(plan, exclude_resolved=options.exclude_resolved)
     return included, omitted, retained, render_review_comment(plan, detail=options.detail,
-        exclude_resolved=options.exclude_resolved, include_discussed=options.include_discussed)
+        exclude_resolved=options.exclude_resolved)
 
 
 @router.post("/{task_id}/review-comment-check", response_model=ReviewCommentCheck)
