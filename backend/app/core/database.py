@@ -1,24 +1,19 @@
 """SQLAlchemy 数据库基础设施。
 
 表结构只通过 Alembic migration 管理；应用启动不会调用 ``create_all``。
-同步会话负责短事务写入；异步会话供 API 和 Worker 使用。
+同步会话负责短事务写入，异步调用方在线程中执行数据库操作。
 """
 
 from pathlib import Path
 
 from sqlalchemy import create_engine, event, inspect, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import settings
 
 Path(settings.repoguardian_db_path).parent.mkdir(parents=True, exist_ok=True)
 _sqlite_path = Path(settings.repoguardian_db_path).resolve().as_posix()
-ASYNC_DATABASE_URL = f"sqlite+aiosqlite:///{_sqlite_path}"
 SYNC_DATABASE_URL = f"sqlite:///{_sqlite_path}"
-
-engine = create_async_engine(ASYNC_DATABASE_URL, echo=False)
-async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 sync_engine = create_engine(
     SYNC_DATABASE_URL,
@@ -47,10 +42,4 @@ def schema_is_current() -> bool:
         return False
     with sync_engine.connect() as connection:
         version = connection.scalar(text("SELECT version_num FROM alembic_version"))
-    return version == "20261027_0001"
-
-
-async def init_db() -> None:
-    """仅验证迁移，不自动建表。"""
-    if not schema_is_current():
-        raise RuntimeError("database is not migrated; run `uv run alembic upgrade head`")
+    return version == "20261027_0002"

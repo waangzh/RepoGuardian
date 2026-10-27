@@ -303,6 +303,48 @@ async def test_tool_failures_are_diagnostic_when_goal_coverage_is_complete(sourc
     assert result["report"]["termination"] == "completed"
 
 
+class InvestigatedReviewModel(ReviewModel):
+    """Verifier 报告证据不足，定向调查随后排除该疑点。"""
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        result = super()._generate(messages, stop, run_manager, **kwargs)
+        investigator = any("bounded independent investigation" in str(message.content)
+                           for message in messages if message.type == "system")
+        for call in result.generations[0].message.tool_calls:
+            if call["name"] == "DiscoveryOutput":
+                call["args"]["findings"][0]["severity"] = "high"
+            elif call["name"] == "VerificationOutput" and investigator:
+                call["args"] = {"decision": "refuted", "explanation": "调用方已校验输入，疑点不成立",
+                                "evidence_ids": call["args"]["evidence_ids"],
+                                "attribution": "introduced"}
+            elif call["name"] == "VerificationOutput":
+                call["args"] = {"decision": "insufficient_evidence", "explanation": "缺少调用方证据",
+                                "attribution": "uncertain", "limitations": ["未读取调用方"]}
+        return result
+
+
+async def test_resolved_investigation_is_not_reported_as_incomplete(source_service):
+    model = InvestigatedReviewModel()
+    state = await build_review_graph().ainvoke({"review_id": "review"},
+        context=review_context(source_service, model))
+    assert len(model.observed) == 4  # 两个发现、一次初始核验、一次定向调查
+    saved_report = ReviewReport.model_validate(state["report"])
+    assert len(saved_report.verification_results) == 2  # 历史执行记录完整保留
+    assert any(item.investigation_limitations for item in saved_report.verification_results)
+    assert saved_report.decisions[0].decision == "refuted" and not saved_report.findings
+    task = SimpleNamespace(
+        id="review", status="completed", error=None, review_report=saved_report,
+        snapshot=SimpleNamespace(head_sha=saved_report.snapshot.head_sha,
+                                 effective_base_sha=saved_report.snapshot.base_sha),
+        pr=SimpleNamespace(owner="local", repo="repo", number=1),
+    )
+    outcome = derive_review_outcome(task)
+    assert outcome.unresolved_count == 0
+    assert outcome.incomplete_investigations == 0
+    assert "investigation_incomplete" not in {item.value for item in outcome.reason_codes}
+    assert outcome.kind == "clean"
+
+
 async def test_explicit_investigation_limitations_do_not_masquerade_as_execution_failure(source_service):
     from langgraph.runtime import Runtime
     from app.review.nodes.reporting import report

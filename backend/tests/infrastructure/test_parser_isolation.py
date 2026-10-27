@@ -316,16 +316,15 @@ def test_rust_large_line_numbers_and_chained_calls(tmp_path):
     assert result.symbols[-1].calls[-1].line == 320
 
 
-def test_parser_version_changes_preview_cache_key(monkeypatch):
+def test_parser_version_changes_prepared_workspace_key(monkeypatch):
     from types import SimpleNamespace
-    from app.services.preview import preview_input_cache as cache
+    from app.services.workspaces import prepared_workspaces as workspaces
 
     pr = SimpleNamespace(clone_url="https://example.test/repo",
                          base=SimpleNamespace(sha="a" * 40), head=SimpleNamespace(sha="b" * 40))
-    configuration = {"call_resolution_version": "test"}
-    original = cache.input_cache_key(pr, configuration)
-    monkeypatch.setattr(cache, "parser_fingerprint", lambda: "other-parser")
-    assert cache.input_cache_key(pr, configuration) != original
+    original = workspaces.prepared_workspace_key(pr)
+    monkeypatch.setattr(workspaces, "parser_fingerprint", lambda: "other-parser")
+    assert workspaces.prepared_workspace_key(pr) != original
 
 
 def test_persistent_worker_reuses_process_and_keeps_file_identity(tmp_path, monkeypatch):

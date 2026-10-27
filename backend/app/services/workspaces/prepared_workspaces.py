@@ -14,15 +14,24 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
+from app.core.fingerprints import stable_hash
+from app.languages.isolation import parser_fingerprint
 from app.models.orm import PreparedWorkspaceOrm, utcnow
-from app.services.preview.preview_input_cache import input_cache_key
 from app.services.preview.preview_jobs import as_utc
-from app.tools.git_tool import GitToolCancelled, GitToolError
+from app.tools.git_tool import (
+    DIFF_CONTEXT_LINES, DIFF_POLICY_VERSION, GitToolCancelled, GitToolError,
+)
 from app.tools.workspace_cleanup import (
     PREPARED_WORKSPACE_PREFIX, _directory_size, cleanup_workspace,
 )
 
 logger = logging.getLogger("RepoGuardian.PreparedWorkspaces")
+
+
+def prepared_workspace_key(pr):
+    return stable_hash({"repository": pr.clone_url, "base": pr.base.sha, "head": pr.head.sha,
+        "parser": parser_fingerprint(),
+        "diff": DIFF_POLICY_VERSION, "context": DIFF_CONTEXT_LINES})
 
 
 def _check_cancelled(cancel_event):
@@ -196,8 +205,8 @@ class PreparedWorkspaces:
                 raise
             return True
 
-    def copy(self, pr, configuration, git_tool, *, progress_callback=None, cancel_event=None):
-        key = input_cache_key(pr, configuration)
+    def copy(self, pr, git_tool, *, progress_callback=None, cancel_event=None):
+        key = prepared_workspace_key(pr)
         with self.guard(cancel_event=cancel_event):
             if (settings.repoguardian_prepared_workspace_max_entries == 0
                     or settings.repoguardian_prepared_workspace_max_bytes == 0):
@@ -232,13 +241,13 @@ class PreparedWorkspaces:
         return None
 
 
-def prepare_repository(pr, git_tool, repository, configuration, **options):
+def prepare_repository(pr, git_tool, repository, **options):
     """Try a guarded local copy, then use the existing immutable-SHA remote path."""
     _check_cancelled(options.get("cancel_event"))
     if repository is not None and callable(getattr(git_tool, "clone_prepared", None)):
         try:
             prepared = PreparedWorkspaces(repository, git_tool._workdir).copy(
-                pr, configuration, git_tool, **options)
+                pr, git_tool, **options)
             if prepared is not None:
                 return prepared
         except GitToolCancelled:

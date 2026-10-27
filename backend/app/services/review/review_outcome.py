@@ -42,7 +42,11 @@ def derive_review_outcome(task, *, publishable_count=None):
         reasons.append(Reason.TERMINATION_INCOMPLETE)
     elif report.termination != "completed":
         reasons.append(Reason.TERMINATION_INCOMPLETE)
-    incomplete_investigations = sum(bool(result.investigation_limitations) for result in results)
+    # decisions 是仲裁后的当前裁决；已完成调查覆盖的初始核验限制不再计入。
+    # 历史执行记录仍完整保留在报告中用于审计。
+    incomplete_investigations = sum(
+        bool(result.investigation_limitations) for result in report.discovery_results
+    ) + sum(bool(decision.limitations) for decision in report.decisions)
     if incomplete_investigations:
         reasons.append(Reason.INVESTIGATION_INCOMPLETE)
     if task.error == "review_deadline":

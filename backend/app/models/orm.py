@@ -132,15 +132,6 @@ class PreviewJobOrm(Base):
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class PreviewInputCacheOrm(Base):
-    __tablename__ = "preview_input_cache"
-    key: Mapped[str] = mapped_column(String(64), primary_key=True)
-    payload: Mapped[dict] = mapped_column(JSON)
-    digest: Mapped[str] = mapped_column(String(64))
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
 class PreparedWorkspaceOrm(Base):
     __tablename__ = "prepared_workspaces"
     id: Mapped[str] = mapped_column(String(32), primary_key=True)

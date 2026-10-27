@@ -1,13 +1,12 @@
 """仅渲染后端已准入文本；不访问 GitHub、模型或仓库。"""
 
-import html
 import re
 from urllib.parse import quote
 
 from app.models.publication import PublicationFinding, PublicationPlan
 from app.services.publication.review_prose import author_goal_text
 from app.services.publication.review_text_format import (
-    MERGE_SYMBOLS, OUTCOME_DESCRIPTIONS, OUTCOME_LABELS, REASON_LABELS,
+    MERGE_SYMBOLS, OUTCOME_DESCRIPTIONS, REASON_LABELS,
     _comment_risks, _finding_location_text, _ordered_findings, _sentence, STATIC_BOUNDARY,
     markdown_text,
 )
@@ -563,38 +562,6 @@ def render_finding_comment(plan, finding):
     lines += ["", f"本评论仅针对当前选中的一个问题；另有 {other_count} 项已准入问题未包含在本条评论中。"
         "完整审查结论、被扣留记录与未决风险请查看完整 PR 评论和详细报告。", "",
         f"审查 Commit：`{markdown_text(plan.snapshot.head_sha or '未记录', 64)}`；只读静态审查，未执行目标代码、测试或构建。"]
-    return "\n".join(lines)
-
-
-def render_technical_audit(plan, execution_record=None):
-    import json
-
-    lines = ["# RepoGuardian 技术审计记录", "", "格式化的执行与证据索引，不代表全部原始事件或模型完整输入输出。", "",
-        "## 快照与结论身份", "", f"- 审查记录：{markdown_text(plan.review_id)}",
-        f"- Head：{markdown_text(plan.snapshot.head_sha or '未知')}",
-        f"- Effective Base：{markdown_text(plan.snapshot.effective_base_sha or '未知')}",
-        f"- 机器结论：{OUTCOME_LABELS[plan.outcome.kind]}"]
-    if plan.outcome.kind == "failed":
-        lines.append("- 失败原因：审查未可靠完成；请查看任务错误类别并从检查点恢复或重新审查。")
-    lines += ["", merge_advice(plan), "", "## 验证记录", "", *_validation_lines(plan)]
-    record = execution_record or {}
-    sections = [("未完成的核验", record.get("decisions") or [])]
-    for title, leads in sections:
-        if not leads:
-            continue
-        lines += ["", "## " + title, ""]
-        for lead in leads:
-            lines.append(f"- {markdown_text(str(lead.get('candidate_id') or '未知候选'))}："
-                f"{markdown_text(str(lead.get('decision') or '未知'))}；"
-                f"{markdown_text(str(lead.get('explanation') or '未记录原因'))}")
-    for title, data in (("作者声明输入完整性", {"status": plan.digest.author_context_status,
-                            "limitation": plan.digest.author_context_limitation}),
-                        ("问题与人工处理身份", [item.model_dump(mode="json") for item in plan.digest.findings]),
-                        ("发布准入扣留记录", [item.model_dump(mode="json") for item in plan.withheld_findings]),
-                        ("运行、计量与证据追踪", execution_record or {})):
-        text = html.escape(json.dumps(data, ensure_ascii=False, indent=2), quote=False)
-        fence = "`" * max(3, max((len(value) + 1 for value in re.findall(r"`+", text)), default=3))
-        lines += ["", "## " + title, "", fence + "json", text, fence]
     return "\n".join(lines)
 
 

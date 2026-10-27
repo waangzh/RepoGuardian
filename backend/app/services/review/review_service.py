@@ -94,13 +94,13 @@ class ReviewService:
         if self._worker_task:
             await self._worker_task
 
-    async def _prepare(self, pr, configuration, *, identity, progress=None, cancel_event=None):
+    async def _prepare(self, pr, *, identity, progress=None, cancel_event=None):
         from app.services.workspaces.prepared_workspaces import prepare_repository
         def notify(event):
             if progress:
                 progress(event.phase, event.message, percent=event.percent, operation=event.operation)
         repo, diff = await asyncio.to_thread(prepare_repository, pr, self._git_tool, self._repository,
-            configuration.model_dump(mode="json"), progress_callback=notify, cancel_event=cancel_event)
+            progress_callback=notify, cancel_event=cancel_event)
         self._repo_paths[identity] = Path(repo)
         try:
             index = await RepoIndexer().execute(repo_path=str(repo), progress=progress, cancel_event=cancel_event)
@@ -124,7 +124,7 @@ class ReviewService:
             await asyncio.to_thread(progress, "github", "正在获取 PR 信息")
         pr = await self._github_tool.fetch_pr(str(request.pr_url))
         identity = uuid4().hex
-        repo, prepared = await self._prepare(pr, configuration, identity=identity,
+        repo, prepared = await self._prepare(pr, identity=identity,
                                              progress=progress, cancel_event=cancel_event)
         retained = False
         try:
@@ -156,9 +156,11 @@ class ReviewService:
                           "configuration": configuration.model_dump(mode="json")}
                 if self._repository:
                     await asyncio.to_thread(self._repository.save_preview, identity, record, response.expires_at)
-                    from app.services.workspaces.prepared_workspaces import PreparedWorkspaces
+                    from app.services.workspaces.prepared_workspaces import (
+                        PreparedWorkspaces, prepared_workspace_key,
+                    )
                     retained = await asyncio.to_thread(PreparedWorkspaces(self._repository, self._git_tool._workdir).publish,
-                        self._workspace_key(pr, configuration), repo, pr,
+                        prepared_workspace_key(pr), repo, pr,
                         {"effective_base_sha": prepared["snapshot"]["effective_base_sha"]}, cancel_event=cancel_event)
                 else:
                     self._previews[identity] = record
@@ -167,11 +169,6 @@ class ReviewService:
             self._repo_paths.pop(identity, None)
             if not retained:
                 await asyncio.to_thread(cleanup_workspace, repo, workdir=self._git_tool._workdir)
-
-    @staticmethod
-    def _workspace_key(pr, configuration):
-        from app.services.preview.preview_input_cache import input_cache_key
-        return input_cache_key(pr, configuration.model_dump(mode="json"))
 
     async def create_confirmed_task(self, request):
         record = (await asyncio.to_thread(self._repository.get_preview, request.preview_id)
@@ -267,7 +264,7 @@ class ReviewService:
                     await asyncio.to_thread(self._repository.save_task, task.model_copy(deep=True), lease=lease)
         async def load():
             nonlocal repo
-            repo, prepared = await self._prepare(task.pr, task.configuration, identity=task_id, cancel_event=cancel)
+            repo, prepared = await self._prepare(task.pr, identity=task_id, cancel_event=cancel)
             if (PlanSnapshot.model_validate(prepared["snapshot"]) != task.snapshot
                     or prepared["changed_files"] != [item.model_dump(mode="json") for item in task.changed_files]):
                 raise ValueError("fixed_snapshot_inputs_changed")

@@ -5,11 +5,6 @@ import re
 import unicodedata
 
 
-OUTCOME_LABELS = {"clean": "本次检查未发现需在合并前处理的问题", "findings": "发现代码证据已确认的问题",
-                  "inconclusive": "未得出完整结论", "failed": "审查中断，尚无完整结论",
-                  "cancelled": "审查已停止，已保留部分结果"}
-
-
 OUTCOME_DESCRIPTIONS = {
     "clean": "已完成本次约定范围的静态审查，在已检查范围内未发现具有充分代码证据、需要 PR 作者处理的问题。未发现问题不等于证明代码正确。",
     "findings": "请逐项核对下列代码证据已确认的问题及建议；仍需关注的限制见下方说明。",

@@ -107,18 +107,6 @@ def _review_conclusion(plan):
     return merge_verdict_line(plan)
 
 
-def compact_finding(finding):
-    from app.services.publication.publication_renderer import finding_markdown_title
-
-    label = finding.severity.title()
-    if finding.category:
-        label += " · " + markdown_text(finding.category.title(), 100)
-    return (f"**[{label}] {finding_markdown_title(finding)}**\n\n"
-            f"**问题：** {markdown_text(finding.affected_behavior)}\n\n"
-            f"**影响／触发：** {markdown_text(finding.failure_scenario)}\n\n"
-            f"**建议：** {markdown_text(finding.recommendation)}")
-
-
 def _review_summary(plan):
     """问题概述由已核验问题确定性生成，模型不再改写问题结论。"""
     findings = _ordered_findings(plan)

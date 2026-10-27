@@ -6,7 +6,7 @@ import re
 import subprocess
 import threading
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Callable
 from uuid import uuid4
@@ -22,7 +22,7 @@ from app.tools.workspace_cleanup import cleanup_workspace
 
 logger = logging.getLogger("RepoGuardian.GitTool")
 
-# 生产、Preview、CLI 与评测共用的 Diff 策略：内容基准取唯一 merge base，
+# 生产审查与 Preview 共用的 Diff 策略：内容基准取唯一 merge base，
 # PR 声明 base 只保留身份用途。修改命令或上下文行数时必须同步该版本号。
 DIFF_POLICY = "merge_base"
 DIFF_POLICY_VERSION = "merge-base-v2"
@@ -62,10 +62,6 @@ class GitProgressEvent:
     current: int | None = None
     total: int | None = None
     detail: str | None = None
-
-    def as_dict(self) -> dict[str, str | int | None]:
-        return asdict(self)
-
 
 GitProgressCallback = Callable[[GitProgressEvent], None]
 
@@ -425,45 +421,6 @@ class GitTool:
         bases = self.merge_bases(repo_path, base_sha, head_sha)
         return bases[0] if len(bases) == 1 else None
 
-    def is_ancestor(self, repo_path: str | Path, ancestor_sha: str, descendant_sha: str) -> bool:
-        """只读判断提交祖先关系；force push 或改写历史时返回 False。"""
-        _normalized_commit_sha(ancestor_sha, "ancestor")
-        _normalized_commit_sha(descendant_sha, "descendant")
-        repo_dir = self._validate_worktree(repo_path)
-        completed = subprocess.run(
-            [self._git, "-C", str(repo_dir), "merge-base", "--is-ancestor",
-             ancestor_sha, descendant_sha],
-            check=False,
-            capture_output=True,
-            timeout=self._command_timeout_seconds if self._command_timeout_seconds > 0 else None,
-            env=git_safety_environment(),
-        )
-        # 0 表示祖先；1 表示不是祖先；其他退出码是命令失败，不能降级成“不可复用”。
-        if completed.returncode == 0:
-            return True
-        if completed.returncode == 1:
-            return False
-        raise GitToolError(
-            f"Git merge-base --is-ancestor 执行失败（exit {completed.returncode}）"
-        )
-
-    def changed_paths(
-        self, repo_path: str | Path, base_sha: str, head_sha: str
-    ) -> list[str]:
-        """两个固定提交之间发生变化的路径；不含正文，不访问工作树。
-
-        使用 ``--no-renames``：重命名按“删除旧路径 + 新增新路径”计，避免
-        旧路径上的结论被误认为仍适用于新路径。
-        """
-        _normalized_commit_sha(base_sha, "base")
-        _normalized_commit_sha(head_sha, "head")
-        repo_dir = self._validate_worktree(repo_path)
-        raw = self._run(
-            [self._git, "-C", str(repo_dir), "diff", "--no-ext-diff", "--no-renames",
-             "--name-only", "-z", base_sha, head_sha]
-        )
-        return sorted({path for path in raw.split("\0") if path})
-
     def review_diff_context(
         self, repo_path: str | Path, base_sha: str | None = None, head_sha: str | None = None
     ) -> dict[str, str]:
@@ -486,26 +443,6 @@ class GitTool:
             "diff_policy": DIFF_POLICY,
             "diff_policy_version": DIFF_POLICY_VERSION,
         }
-
-    def checkout_sha(self, repo_path: str | Path, sha: str) -> None:
-        """在任务临时 clone 中切换到已 fetch 的确定 SHA。"""
-        repo_dir = Path(repo_path).resolve()
-        self._run([self._git, "-C", str(repo_dir), "checkout", "--detach", sha])
-
-    def reset_to_sha(self, repo_path: str | Path, sha: str) -> None:
-        """强制将任务临时 clone 复位到一个服务端已获取的确定 SHA。"""
-        repo_dir = self._validate_worktree(repo_path)
-        self._run([self._git, "-C", str(repo_dir), "reset", "--hard", sha])
-
-    def clean_worktree(self, repo_path: str | Path) -> None:
-        """删除临时 clone 中所有未跟踪和忽略文件，不保留候选补丁副作用。"""
-        repo_dir = self._validate_worktree(repo_path)
-        self._run([self._git, "-C", str(repo_dir), "clean", "-fdx"])
-
-    def prepare_patch_workspace(self, repo_path: str | Path, head_sha: str) -> None:
-        """为单个候选补丁建立 ``Head + 当前补丁`` 的唯一允许验证起点。"""
-        self.reset_to_sha(repo_path, head_sha)
-        self.clean_worktree(repo_path)
 
     @staticmethod
     def _validate_worktree(repo_path: str | Path) -> Path:

@@ -130,20 +130,3 @@ class PlannedChangedFile(BaseModel):
     classifications: list[str] = Field(default_factory=list)
     included: bool
     excluded_reason: str | None = None
-
-
-class ExcludedReviewFile(BaseModel):
-    file_path: str
-    reason: str
-    classifications: list[str] = Field(default_factory=list)
-
-
-class ContextProvenance(BaseModel):
-    """Planner 为文件进入 Unit 可读范围给出的可审计依据。"""
-
-    file: str
-    source: str
-    distance: int = Field(ge=0, le=2)
-    confidence: float = Field(ge=0, le=1)
-    why_retrieved: str
-    unit_id: str | None = None

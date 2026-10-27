@@ -204,20 +204,6 @@ class DatabaseTaskQueue:
             row.updated_at = now
             return row.status
 
-    def cancel_for_task(self, task_id: str) -> int:
-        with self._session_factory.begin() as session:
-            result = session.execute(
-                update(WorkerJobOrm)
-                .where(
-                    WorkerJobOrm.task_id == task_id,
-                    WorkerJobOrm.kind.in_(["review"]),
-                    WorkerJobOrm.status.in_(["queued", "retry", "leased"]),
-                )
-                .values(status="cancelled", lease_owner=None, lease_until=None, updated_at=utcnow())
-            )
-            return result.rowcount
-
-
 class ReviewWorker:
     def __init__(
         self,
@@ -251,7 +237,7 @@ class ReviewWorker:
                     self.queue.fail, job.id, self.worker_id, "task cancelled", retry=True
                 )
             except ValueError:
-                # cancel_for_task 已原子地把租约改为 cancelled。
+                # 任务取消或租约失效后，不再更新该作业。
                 pass
             if asyncio.current_task() and asyncio.current_task().cancelling():
                 raise

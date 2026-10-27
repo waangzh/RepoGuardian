@@ -15,4 +15,5 @@ def upgrade():
 
 
 def downgrade():
+    op.drop_table("preview_input_cache", if_exists=True)
     Base.metadata.drop_all(bind=op.get_bind(), checkfirst=True)
