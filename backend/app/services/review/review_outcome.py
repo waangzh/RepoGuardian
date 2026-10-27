@@ -40,11 +40,11 @@ def derive_review_outcome(task, *, publishable_count=None):
         reasons.append(Reason.USAGE_INTEGRITY_UNKNOWN)
     if any(result.status != "completed" for result in results):
         reasons.append(Reason.TERMINATION_INCOMPLETE)
-    elif report.termination not in {"completed", "partial"}:
+    elif report.termination != "completed":
         reasons.append(Reason.TERMINATION_INCOMPLETE)
-    if any(result.read_errors or result.output.get("limitations") for result in results):
-        if Reason.TERMINATION_INCOMPLETE not in reasons:
-            reasons.append(Reason.TERMINATION_INCOMPLETE)
+    incomplete_investigations = sum(bool(result.investigation_limitations) for result in results)
+    if incomplete_investigations:
+        reasons.append(Reason.INVESTIGATION_INCOMPLETE)
     if task.error == "review_deadline":
         reasons.append(Reason.DEADLINE_EXCEEDED)
     confirmed = len(report.findings)
@@ -53,8 +53,9 @@ def derive_review_outcome(task, *, publishable_count=None):
     coverage = CoverageKind.COMPLETE if report.complete else CoverageKind.PARTIAL if total else CoverageKind.UNKNOWN
     return ReviewOutcome(kind=kind, coverage=coverage, confirmed_count=confirmed,
         publishable_count=publishable_count or 0, unresolved_count=unresolved,
+        incomplete_investigations=incomplete_investigations,
         total_goals=total, examined_goals=examined, reason_codes=reasons,
         finding_conclusion="confirmed" if confirmed else "unresolved" if unresolved else "no_confirmed_findings",
         review_completeness=coverage,
-        runtime_reliability="unreliable" if any(result.status != "completed" for result in results)
+        runtime_reliability="unreliable" if Reason.TERMINATION_INCOMPLETE in reasons
             else "unknown" if Reason.USAGE_INTEGRITY_UNKNOWN in reasons else "reliable")

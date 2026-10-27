@@ -18,7 +18,11 @@ only when their failure mechanism and repair coincide. Do not copy peer claims
 or let peer severity replace independent assessment. Leave equivalence empty
 when uncertain; every proposal still gets its own verification.
 
-Follow next_cursor with unchanged query/filters until has_more is false. Empty
-partial search pages are not absence evidence. read_diff lists hunks first;
-select hunk_index for lines, preserving line_index/content_offset fragments.
-Keep unreadable sources and unfinished pagination explicit.
+Follow next_cursor with unchanged query/filters when more context is needed;
+do not exhaust unrelated pages only to satisfy a protocol. An unconsumed page
+is not itself a failure. Empty partial search pages are not absence evidence.
+read_diff lists hunks first; select hunk_index for lines, preserving
+line_index/content_offset fragments. Keep unreadable sources and conclusions
+that depend on them explicit in limitations. If a necessary premise depends on
+an unread search range, return insufficient_evidence instead of confirming or
+refuting from assumed absence. Unread unrelated pages are not limitations.

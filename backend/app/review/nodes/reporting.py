@@ -14,18 +14,18 @@ async def report(state: ReviewState, runtime: Runtime[ReviewContext]):
                                     sources.evidence, state["assignments"])
     results = state.get("discovery_results", [])
     complete = bool(goals) and all(goal["status"] == "examined" for goal in goals)
-    complete = complete and len(results) == len(state["assignments"])
-    complete = complete and all(item["status"] == "completed" for item in results)
-    unresolved = any(item["decision"] == "insufficient_evidence" for item in state["decisions"])
-    unresolved = unresolved or len(state["decisions"]) != len(state["candidates"])
-    verifier_failed = any(item["status"] != "completed"
-        for item in state.get("verification_results", []) + state.get("investigation_results", []))
-    limitations = any(item.get("read_errors") or item.get("output", {}).get("limitations")
-        for item in results + state.get("verification_results", []) + state.get("investigation_results", []))
-    termination = "completed" if complete and not unresolved and not verifier_failed and not limitations else "partial"
+    verification = state.get("verification_results", [])
+    investigations = state.get("investigation_results", [])
+    discovery_complete = ({item["id"] for item in results}
+                          == {item["id"] for item in state["assignments"]})
+    verification_complete = ({item["id"] for item in verification}
+                             == {item["id"] for item in state["eligible_candidates"]})
+    execution_complete = discovery_complete and verification_complete and all(
+        item["status"] == "completed" for item in results + verification + investigations)
+    termination = "completed" if execution_complete else "partial"
     output = ReviewReport(snapshot=state["snapshot"], assignments=state["assignments"],
-        goals=goals, discovery_results=results, verification_results=state.get("verification_results", [])
-        + state.get("investigation_results", []), candidates=state["candidates"],
+        goals=goals, discovery_results=results, verification_results=verification + investigations,
+        candidates=state["candidates"],
         decisions=state["decisions"], findings=state["findings"], complete=complete,
         termination=termination)
     await runtime.context.emit(phase="report", status="completed", termination=termination)

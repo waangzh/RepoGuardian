@@ -53,7 +53,7 @@ async def read_base_file(path: str, start: int, end: int, runtime: ToolRuntime[A
 @safe_read
 async def read_diff(path: str, runtime: ToolRuntime[AgentContext], hunk_index: int | None = None,
                     start: int = 0, cursor: str = "", limit: int = 60) -> dict:
-    """List fixed diff hunks, or read hunk_index from zero-based start. Follow next_cursor.
+    """List fixed diff hunks, or read hunk_index from zero-based start. Continue as needed.
 
     Large lines carry line_index/content_offset/continued fragments. Diff is not source evidence.
     """
@@ -80,9 +80,10 @@ async def search_code(query: str, runtime: ToolRuntime[AgentContext], path: str 
                       glob: str = "", side: str = "head", cursor: str = "", limit: int = 12) -> dict:
     """Search UTF-8 text at frozen head/base; binary blobs are excluded.
 
-    path selects a file/directory, glob filters paths.
-    Follow next_cursor with the same query/filters until has_more is false; an empty page
-    with has_more is not a negative search. Results are hints; read source for evidence.
+    path selects a file/directory, glob filters paths. Continue next_cursor with
+    unchanged filters when more context is needed.
+    has_more means the scope is not exhausted, not a failure. An empty partial page
+    cannot prove absence. Results are hints; read source for evidence.
     """
     return await search(runtime.context, query, path, glob, side, cursor, limit)
 
@@ -91,7 +92,7 @@ async def search_code(query: str, runtime: ToolRuntime[AgentContext], path: str 
 @safe_read
 async def find_files(runtime: ToolRuntime[AgentContext], query: str = "", path: str = "",
                      glob: str = "", cursor: str = "", limit: int = 80) -> dict:
-    """List authorized paths filtered by substring, directory and glob. Follow next_cursor."""
+    """List authorized paths by substring, directory and glob. Continue next_cursor as needed."""
     return await asyncio.to_thread(find_paths, runtime.context, query, path, glob, cursor, limit)
 
 

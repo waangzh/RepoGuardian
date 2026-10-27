@@ -62,7 +62,7 @@ async def run_agent(context, identity, reviewer, payload):
                 context=sources, config={"recursion_limit": context.limits.model_calls * 4 + 8,
                                          "callbacks": [usage_observer]})
         await context.active()
-        evidence, read_errors, pending_pages, consumed_pages = set(), 0, set(), set()
+        evidence, tool_failures, pending_pages, consumed_pages = set(), 0, set(), set()
         for message in result["messages"]:
             if isinstance(message, ToolMessage) and message.name in {
                 "read_file", "read_base_file", "read_diff", "read_symbol", "search_code",
@@ -70,8 +70,10 @@ async def run_agent(context, identity, reviewer, payload):
             }:
                 try:
                     body = json.loads(message.content)
+                    if not isinstance(body, dict):
+                        raise ValueError("invalid_tool_response")
                     if body.get("ok") is not True or body.get("truncated") or body.get("unreadable_files"):
-                        read_errors += 1
+                        tool_failures += 1
                     if body.get("ok") and body.get("pagination_id"):
                         pagination = body["pagination_id"]
                         if body.get("cursor"):
@@ -82,11 +84,13 @@ async def run_agent(context, identity, reviewer, payload):
                             and body.get("ok") and body.get("evidence")):
                         evidence.add(body["evidence"]["id"])
                 except (ValueError, TypeError, KeyError):
-                    read_errors += 1
-        read_errors += len(pending_pages - consumed_pages)
+                    tool_failures += 1
         output = result["structured_response"].model_dump()
+        investigation_limitations = output.get("limitations", [])
         envelope = AgentResult(id=identity, status="completed", output=output,
-            evidence_ids=sorted(evidence), read_errors=read_errors, **usage_observer.values())
+            evidence_ids=sorted(evidence), tool_failures=tool_failures,
+            unconsumed_pages=len(pending_pages - consumed_pages),
+            investigation_limitations=investigation_limitations, **usage_observer.values())
     except (asyncio.CancelledError, KeyboardInterrupt):
         raise
     except Exception as exc:

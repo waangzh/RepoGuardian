@@ -1,5 +1,6 @@
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 import aiosqlite
@@ -14,6 +15,7 @@ from app.review.context import AgentContext, ReviewContext
 from app.review.findings import candidate_gate, collect_candidates, verify_finding
 from app.review.graph import build_review_graph
 from app.review.models import CandidateFinding, ReviewLimits, ReviewReport
+from app.services.review.review_outcome import derive_review_outcome
 from tests.review.test_native_agents import ToolCallingModel
 
 pytest_plugins = ["tests.review.test_native_agents"]
@@ -108,7 +110,7 @@ async def test_invalid_verification_does_not_become_confirmed_or_clean(source_se
     report = ReviewReport.model_validate(result["report"])
     assert report.findings == []
     assert report.complete  # Code coverage is independent of verification.
-    assert report.termination == "partial"
+    assert report.termination == "completed"
     assert report.decisions[0].decision == "insufficient_evidence"
 
 
@@ -236,7 +238,7 @@ async def test_empty_scope_terminates_without_agents_or_false_clean(source_servi
     result = await build_review_graph().ainvoke({"review_id": "review"},
         context=ReviewContext(load=load, model=model))
     assert not result["report"]["complete"]
-    assert result["report"]["termination"] == "partial"
+    assert result["report"]["termination"] == "completed"
     assert model.observed == []
 
 
@@ -252,6 +254,15 @@ async def test_verifier_preserves_insufficient_without_fabricating_source(source
     output["output"]["decision"] = "refuted"
     with pytest.raises(ValueError, match="refutation_source_missing"):
         verify_finding(candidate, output, source_service, [CHANGE])
+
+
+def test_verification_limitations_cannot_be_returned_as_confirmed_or_refuted():
+    from app.review.models import VerificationOutput
+
+    for decision in ("confirmed", "refuted"):
+        with pytest.raises(ValueError, match="limitations_require_insufficient_evidence"):
+            VerificationOutput(decision=decision, explanation="仍有关键来源未读取",
+                attribution="uncertain", limitations=["关键调用方范围无法读取"])
 
 
 def test_investigation_routes_only_once_for_high_impact_uncertainty():
@@ -281,12 +292,34 @@ async def test_replayed_agent_work_does_not_reset_unknown_prior_usage_to_zero(so
                for item in result["report"]["discovery_results"])
 
 
-async def test_tool_read_limitations_do_not_turn_complete_coverage_into_complete_conclusion(source_service):
+async def test_tool_failures_are_diagnostic_when_goal_coverage_is_complete(source_service):
     from langgraph.runtime import Runtime
     from app.review.nodes.reporting import report
     context = review_context(source_service, ReviewModel())
     state = await build_review_graph().ainvoke({"review_id": "review"}, context=context)
-    state["discovery_results"][0]["read_errors"] = 1
+    state["discovery_results"][0]["tool_failures"] = 1
     result = await report(state, Runtime(context=context))
     assert result["report"]["complete"]
-    assert result["report"]["termination"] == "partial"
+    assert result["report"]["termination"] == "completed"
+
+
+async def test_explicit_investigation_limitations_do_not_masquerade_as_execution_failure(source_service):
+    from langgraph.runtime import Runtime
+    from app.review.nodes.reporting import report
+    context = review_context(source_service, ReviewModel())
+    state = await build_review_graph().ainvoke({"review_id": "review"}, context=context)
+    state["discovery_results"][0]["investigation_limitations"] = ["调用方搜索仍有未读取范围"]
+    result = await report(state, Runtime(context=context))
+    assert result["report"]["complete"]
+    assert result["report"]["termination"] == "completed"
+    saved_report = ReviewReport.model_validate(result["report"])
+    task = SimpleNamespace(
+        id="review", status="completed", error=None, review_report=saved_report,
+        snapshot=SimpleNamespace(head_sha=saved_report.snapshot.head_sha,
+                                 effective_base_sha=saved_report.snapshot.base_sha),
+        pr=SimpleNamespace(owner="local", repo="repo", number=1),
+    )
+    outcome = derive_review_outcome(task)
+    assert outcome.kind == "findings"
+    assert outcome.incomplete_investigations == 1
+    assert "investigation_incomplete" in {item.value for item in outcome.reason_codes}

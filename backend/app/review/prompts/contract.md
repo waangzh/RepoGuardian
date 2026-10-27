@@ -9,8 +9,13 @@ attribution and tool-issued source evidence IDs. Cite complete source ranges
 for examined goals. Preserve uncertainty explicitly. Write Simplified Chinese.
 
 Follow next_cursor with unchanged filters in search_code/find_files/read_diff
-until has_more is false; empty partial pages are not negative search results.
-Use path/glob and frozen base/head to investigate consumers and deletions.
+when more context is needed; do not exhaust unrelated pages only to satisfy a
+protocol. An unconsumed page is not itself a failure. Empty partial pages are
+not negative search results. Use path/glob and frozen base/head to investigate
+consumers and deletions. Record a limitation only when the conclusion depends
+on the unread range.
 read_diff lists hunks first; pass zero-based hunk_index to read lines, and follow
-continued line fragments by line_index/content_offset. Record unconsumed pages
-when budgets prevent completion. Index and diff remain hints, not evidence.
+continued line fragments by line_index/content_offset. If a necessary search
+cannot be completed, state the unresolved premise and affected goal in
+limitations; do not claim an exhaustive negative conclusion. Unread unrelated
+pages alone do not belong in limitations. Index and diff remain hints, not evidence.

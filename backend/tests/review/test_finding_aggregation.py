@@ -127,13 +127,15 @@ class PaginatedModel(ReviewModel):
             usage_metadata={"input_tokens": 10, "output_tokens": 10, "total_tokens": 20}))])
 
 
-@pytest.mark.parametrize("consume,termination", [(True, "completed"), (False, "partial")])
-async def test_consumed_pages_are_not_permanent_read_errors(source_service, consume, termination):
+@pytest.mark.parametrize("consume", [True, False])
+async def test_unconsumed_search_pages_do_not_lower_termination(source_service, consume):
     state = await build_review_graph().ainvoke({"review_id": "review"},
         context=review_context(source_service, PaginatedModel(consume_pages=consume)))
     assert state["report"]["complete"]
-    assert state["report"]["termination"] == termination
-    assert all(bool(item["read_errors"]) is not consume for item in state["report"]["discovery_results"])
+    assert state["report"]["termination"] == "completed"
+    assert all(item["unconsumed_pages"] == (0 if consume else 1)
+               for item in state["report"]["discovery_results"])
+    assert all(item["tool_failures"] == 0 for item in state["report"]["discovery_results"])
 
 
 class ToolFailureModel(ReviewModel):
@@ -155,4 +157,5 @@ async def test_path_validation_failure_is_an_agent_tool_result(source_service):
     state = await build_review_graph().ainvoke({"review_id": "review"},
         context=review_context(source_service, ToolFailureModel()))
     result = state["report"]["discovery_results"][0]
-    assert result["status"] == "completed" and result["read_errors"] == 1
+    assert result["status"] == "completed" and result["tool_failures"] == 1
+    assert result["unconsumed_pages"] == 0

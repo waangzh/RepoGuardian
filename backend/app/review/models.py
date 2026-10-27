@@ -112,6 +112,13 @@ class VerificationOutput(ReviewModel):
     severity: Severity | None = None
     equivalent_candidate_ids: list[str] = Field(default_factory=list, max_length=8)
     equivalence_reason: str | None = Field(default=None, max_length=2000)
+    limitations: list[str] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def limitations_require_uncertainty(self):
+        if self.limitations and self.decision != "insufficient_evidence":
+            raise ValueError("limitations_require_insufficient_evidence")
+        return self
 
     @model_validator(mode="after")
     def valid_equivalence(self):
@@ -136,7 +143,9 @@ class AgentResult(ReviewModel):
     model_calls: int | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
-    read_errors: int = Field(default=0, ge=0)
+    tool_failures: int = Field(default=0, ge=0)
+    unconsumed_pages: int = Field(default=0, ge=0)
+    investigation_limitations: list[str] = Field(default_factory=list, max_length=20)
 
 
 class VerifiedFinding(ReviewModel):
