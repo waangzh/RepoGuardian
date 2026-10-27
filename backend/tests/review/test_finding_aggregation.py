@@ -34,6 +34,9 @@ def test_aggregation_requires_reciprocal_clique_severity_and_location():
     assert len(aggregate_findings([finding("a", ["b"]), finding("b", [])])) == 2
     assert len(aggregate_findings([finding("a", ["b"]), finding("b", ["a"], severity="medium")])) == 2
     assert len(aggregate_findings([finding("a", ["b"]), finding("b", ["a"], line=40)])) == 2
+    different_attribution = finding("b", ["a"])
+    different_attribution.verification.attribution = "exposed"
+    assert len(aggregate_findings([finding("a", ["b"]), different_attribution])) == 2
     chain = aggregate_findings([finding("a", ["b"]), finding("b", ["a", "c"]), finding("c", ["b"])])
     assert len(chain) == 2 and chain[0].related_candidate_ids == ["b"]
 
@@ -67,6 +70,7 @@ async def test_equivalence_cannot_name_unread_or_unsupplied_candidate(source_ser
 
 class EquivalentReviewModel(ReviewModel):
     reciprocal: bool = True
+    different_attributions: bool = False
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         result = super()._generate(messages, stop, run_manager, **kwargs)
@@ -78,6 +82,8 @@ class EquivalentReviewModel(ReviewModel):
                 proposal["title"] = "view " + payload["assignment"]["reviewer"]
                 proposal["trigger"] = "event " + payload["assignment"]["reviewer"]
                 proposal["severity"] = "high" if payload["assignment"]["reviewer"] == "behavior" else "low"
+                if self.different_attributions and payload["assignment"]["reviewer"] == "contract":
+                    proposal["attribution"] = "exposed"
             elif call["name"] == "VerificationOutput":
                 call["args"]["severity"] = "high"
                 peers = payload.get("related_candidates", [])
@@ -88,8 +94,13 @@ class EquivalentReviewModel(ReviewModel):
 
 
 @pytest.mark.parametrize("reciprocal,count", [(True, 1), (False, 2)])
-async def test_graph_keeps_candidate_hashes_and_all_verdicts(source_service, reciprocal, count):
-    model = EquivalentReviewModel(reciprocal=reciprocal)
+@pytest.mark.parametrize("different_attributions", [False, True])
+async def test_graph_keeps_candidate_hashes_and_all_verdicts(
+    source_service, reciprocal, count, different_attributions,
+):
+    model = EquivalentReviewModel(
+        reciprocal=reciprocal, different_attributions=different_attributions,
+    )
     state = await build_review_graph().ainvoke({"review_id": "review"},
         context=review_context(source_service, model))
     report = state["report"]
@@ -97,6 +108,10 @@ async def test_graph_keeps_candidate_hashes_and_all_verdicts(source_service, rec
     assert len(report["findings"]) == count
     assert len(model.observed) == 4
     assert report["termination"] == "completed"
+    assert {item["attribution"] for item in report["candidates"]} == (
+        {"introduced", "exposed"} if different_attributions else {"introduced"}
+    )
+    assert all(item["attribution"] == "introduced" for item in report["decisions"])
     assert all(item["id"] == candidate_identity(CandidateFinding.model_validate(item))
                for item in report["candidates"])
 

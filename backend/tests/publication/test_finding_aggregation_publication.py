@@ -1,3 +1,5 @@
+import pytest
+
 from app.review.findings import finding_severity
 from app.services.publication.publication_planner import PublicationPlanner
 from app.services.publication.review_publication import validated_findings
@@ -8,9 +10,14 @@ from tests.review.test_native_lifecycle import preview_and_create
 pytest_plugins = ["tests.review.test_native_lifecycle"]
 
 
-async def test_aggregated_issue_revalidates_all_members_and_preserves_triggers(pipeline):
+@pytest.mark.parametrize("different_attributions", [False, True])
+async def test_aggregated_issue_revalidates_all_members_and_preserves_triggers(
+    pipeline, different_attributions,
+):
     service, repository, _, _, _ = pipeline
-    service._provider.agent_model = lambda *args, **kwargs: EquivalentReviewModel()
+    service._provider.agent_model = lambda *args, **kwargs: EquivalentReviewModel(
+        different_attributions=different_attributions,
+    )
     _, _, task = await preview_and_create(service)
     assert await service._worker.run_once()
     task = repository.get_task(task.id)
@@ -21,11 +28,13 @@ async def test_aggregated_issue_revalidates_all_members_and_preserves_triggers(p
     assert finding_severity(accepted[0]) == "high"
     views = finding_views(task, {}, repository._artifacts)
     assert len(views) == 1 and views[0].review_status == "confirmed" and views[0].severity == "high"
+    assert views[0].attribution == "introduced"
     assert len(views[0].source_ids) == 2
     assert "event behavior" in views[0].message and "event contract" in views[0].message
     plan = PublicationPlanner(repository._artifacts).build(task)
     drafts = [*plan.inline_drafts, *plan.summary_findings]
     assert len(drafts) == 1 and drafts[0].severity == "high"
+    assert drafts[0].attribution == "introduced"
     assert "event behavior" in drafts[0].failure_scenario and "event contract" in drafts[0].failure_scenario
     assert plan.outcome.confirmed_count == plan.outcome.publishable_count == 1
     assert len(plan.digest.merge_decision.blocking_finding_keys) == 1

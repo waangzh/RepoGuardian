@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from alembic import command
@@ -8,10 +9,14 @@ from app.core import database
 from app.models.orm import PreviewJobOrm
 
 
-def test_cache_cleanup_migrates_new_and_existing_schema_without_losing_jobs(tmp_path, monkeypatch):
+def test_cache_cleanup_migrates_new_and_existing_schema_without_losing_jobs(
+    tmp_path, monkeypatch, caplog,
+):
+    logger = logging.getLogger(__name__)
     engine = create_engine(f"sqlite:///{(tmp_path / 'business.db').as_posix()}")
     monkeypatch.setattr(database, "sync_engine", engine)
-    config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+    config = Config()
+    config.set_main_option("script_location", str(Path(__file__).resolve().parents[2] / "alembic"))
     try:
         with engine.connect() as connection:
             config.attributes["connection"] = connection
@@ -40,3 +45,5 @@ def test_cache_cleanup_migrates_new_and_existing_schema_without_losing_jobs(tmp_
             assert inspect(connection).get_table_names() == ["alembic_version"]
     finally:
         engine.dispose()
+    logger.warning("migration_logging_preserved")
+    assert "migration_logging_preserved" in caplog.text

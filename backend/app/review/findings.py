@@ -59,7 +59,6 @@ def comparison_candidates(candidate, candidates):
     """A bounded comparison set is a hint, never a deduplication decision."""
     return sorted((item for item in candidates if item["id"] != candidate["id"]
         and item["affected_path"] == candidate["affected_path"]
-        and item["attribution"] == candidate["attribution"]
         and abs(item["line"] - candidate["line"]) <= 20),
         key=lambda item: (abs(item["line"] - candidate["line"]), item["id"]))[:8]
 
@@ -135,7 +134,6 @@ def verify_finding(candidate, result, service, changed_files, related_candidates
         for identity in output.equivalent_candidate_ids:
             peer = peers.get(identity)
             if (peer is None or peer["affected_path"] != candidate.affected_path
-                    or peer["attribution"] != candidate.attribution
                     or abs(peer["line"] - candidate.line) > 20 or not any(
                     ref.path == peer["affected_path"] and ref.side == "head"
                     and ref.start_line <= peer["line"] <= ref.end_line for ref in refs)):
