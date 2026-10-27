@@ -11,7 +11,8 @@ from app.core.config import settings
 from app.core.database import schema_is_current, sync_session
 from app.models.orm import (
     ArtifactOrm, FindingDispositionOrm, GitHubSummarySlotOrm, PublicationAttemptOrm,
-    ReviewPreviewOrm, ReviewTaskOrm, WorkerJobOrm, IncrementalWebhookDeliveryOrm, ReviewModelCallOrm, utcnow,
+    ReviewPreviewOrm, ReviewTaskOrm, WorkerJobOrm, IncrementalWebhookDeliveryOrm, ReviewModelCallOrm,
+    ReviewBranchBudgetOrm, utcnow,
 )
 from app.review.contracts import ReviewTask, ReviewTaskListResponse, TERMINAL_STATUSES
 from app.services.review.artifact_store import LocalArtifactStore
@@ -60,17 +61,39 @@ class ReviewRepository:
             self._guard(session, task_id, lease)
 
     def _model_budget_rows(self, session, task_id):
-        return [{key: getattr(row, key) for key in ("reserved_input_tokens", "input_tokens",
-            "output_tokens", "cached_input_tokens")} for row in session.scalars(
-                select(ReviewModelCallOrm).where(ReviewModelCallOrm.task_id == task_id))]
+        return [{"reserved_input_bytes": row.reserved_input_bytes,
+                 "input_tokens": row.input_tokens, "output_tokens": row.output_tokens,
+                 "cached_input_tokens": row.cached_input_tokens, "settled": row.settled}
+                for row in session.scalars(
+                    select(ReviewModelCallOrm).where(ReviewModelCallOrm.task_id == task_id))]
 
     def model_budget_summary(self, task_id, limits):
         from app.review.budget import budget_summary
         with self._session_factory() as session:
-            return budget_summary(self._model_budget_rows(session, task_id), limits)
+            return budget_summary(self._model_budget_rows(session, task_id), limits,
+                                  self._branch_budget_rows(session, task_id).values())
 
-    def reserve_model_call(self, task_id, agent_id, estimate, limits, *, lease=None):
-        from app.review.budget import ReviewBudgetExceeded, budget_summary
+    def _branch_budget_rows(self, session, task_id):
+        return {row.agent_id: {key: getattr(row, key) for key in (
+            "held_input_tokens", "held_model_calls", "finalizing", "final_requests")}
+            for row in session.scalars(select(ReviewBranchBudgetOrm).where(
+                ReviewBranchBudgetOrm.task_id == task_id))}
+
+    def model_branch_budget(self, task_id, agent_id):
+        from app.review.budget import branch_budget
+        with self._session_factory() as session:
+            return self._branch_budget_rows(session, task_id).get(agent_id, branch_budget())
+
+    def release_branch_budget(self, task_id, agent_id, *, lease=None):
+        with self._session_factory.begin() as session:
+            self._guard(session, task_id, lease)
+            branch = session.get(ReviewBranchBudgetOrm, (task_id, agent_id))
+            if branch:
+                branch.held_input_tokens = branch.held_model_calls = 0
+
+    def reserve_model_call(self, task_id, agent_id, estimate, limits, *, lease=None,
+                           stage="explore", hold=0):
+        from app.review.budget import plan_reservation
         with self._session_factory.begin() as session:
             row = self._guard(session, task_id, lease)
             task = ReviewTask.model_validate(self._load(row))
@@ -78,15 +101,18 @@ class ReviewRepository:
                 raise ValueError("review_budget_configuration_changed")
             if (utcnow() - as_utc(row.created_at)).total_seconds() >= limits.timeout_seconds:
                 raise TimeoutError("review_deadline")
-            if type(estimate) is not int or estimate < 1:
-                raise ValueError("invalid_budget_reservation")
-            summary = budget_summary(self._model_budget_rows(session, task_id), limits)
-            if (summary["model_calls"] >= limits.total_model_calls
-                    or summary["committed_input_tokens"] + estimate > limits.total_input_tokens):
-                raise ReviewBudgetExceeded("review_budget_exhausted")
+            values = plan_reservation(self._model_budget_rows(session, task_id),
+                self._branch_budget_rows(session, task_id), agent_id, estimate, limits,
+                stage=stage, hold=hold, review_id=task_id)
+            branch = session.get(ReviewBranchBudgetOrm, (task_id, agent_id))
+            if branch is None:
+                branch = ReviewBranchBudgetOrm(task_id=task_id, agent_id=agent_id)
+                session.add(branch)
+            for key, value in values.items():
+                setattr(branch, key, value)
             identity = uuid4().hex
             session.add(ReviewModelCallOrm(id=identity, task_id=task_id, agent_id=agent_id,
-                reserved_input_tokens=estimate, settled=False))
+                reserved_input_bytes=estimate, settled=False))
             return identity
 
     def settle_model_call(self, task_id, identity, usage, *, lease=None):

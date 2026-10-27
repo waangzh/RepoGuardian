@@ -209,6 +209,8 @@ async def run_agent(context, identity, reviewer, payload):
         logger.error("审查分支失败 review_id=%s agent_id=%s reviewer=%s code=%s model_calls=%s tool_calls=%s",
             sources.evidence.snapshot.review_id, identity, reviewer, error,
             len(usage_observer.started), len(usage_observer.tools_started))
+    if context.budget is not None:
+        await context.budget.finish(identity)
     envelope = AgentResult(id=identity, status="failed" if error else "completed", error=error,
         output=output, investigation_limitations=output.get("limitations", []), **usage_observer.values())
     envelope.evidence_ids = sorted(set(envelope.evidence_ids) | material_ids)

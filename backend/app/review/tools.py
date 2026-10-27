@@ -83,6 +83,7 @@ async def search_code(query: str, runtime: ToolRuntime[AgentContext], path: str 
                       glob: str = "", side: str = "head", cursor: str = "", limit: int = 12) -> dict:
     """Search UTF-8 text at frozen head/base; binary blobs are excluded.
 
+    query is a literal substring, not a regular expression. Escapes match literally.
     path selects a file/directory, glob filters paths. Continue next_cursor with
     unchanged filters when more context is needed.
     has_more means the scope is not exhausted, not a failure. An empty partial page

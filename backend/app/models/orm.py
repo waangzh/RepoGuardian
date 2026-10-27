@@ -200,12 +200,22 @@ class ReviewModelCallOrm(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     task_id: Mapped[str] = mapped_column(ForeignKey("review_tasks.id", ondelete="CASCADE"), index=True)
     agent_id: Mapped[str] = mapped_column(String(160))
-    reserved_input_tokens: Mapped[int] = mapped_column(Integer)
+    reserved_input_bytes: Mapped[int] = mapped_column(Integer)
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
     cached_input_tokens: Mapped[int | None] = mapped_column(Integer)
     settled: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ReviewBranchBudgetOrm(Base):
+    __tablename__ = "review_branch_budgets"
+    task_id: Mapped[str] = mapped_column(ForeignKey("review_tasks.id", ondelete="CASCADE"), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    held_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    held_model_calls: Mapped[int] = mapped_column(Integer, default=0)
+    finalizing: Mapped[bool] = mapped_column(Boolean, default=False)
+    final_requests: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class WorkerJobOrm(Base):

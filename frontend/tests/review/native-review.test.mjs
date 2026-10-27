@@ -81,13 +81,18 @@ test('活动页直接显示分支失败原因、实际用量和无候选核验�
     updated_at:'2026-10-27T11:56:23Z',data:{...failure}},
    {name:'arbitrate',message:'arbitrate',status:'completed',started_at:null,
     updated_at:'2026-10-27T11:56:38Z',data:{candidates:0}}],
-   review_report:{budget:{},assignments:[{id:'agent',reviewer:'behavior',objective:'<script>untrusted</script>',focus_paths:['safe.py']}],
+   review_report:{budget:{model_calls:17,model_call_limit:64,input_tokens:null,output_tokens:1315,
+    committed_input_tokens:200000,outstanding_input_tokens:55550,held_input_tokens:40000,
+    held_model_calls:2,input_token_factor:0.25,input_token_limit:500000,unknown_calls:1},
+    assignments:[{id:'agent',reviewer:'behavior',objective:'<script>untrusted</script>',focus_paths:['safe.py']}],
     discovery_results:[failure],verification_results:[]}};
   const html=await renderToString(createSSRApp(Component,{task}));
   assert.match(html,/达到执行步数上限，未提交最终审查结果/);
   assert.match(html,/17 \/ 24/);assert.match(html,/工具失败 12 次/);
   assert.match(html,/无候选进入独立核验/);assert.match(html,/开始：/);assert.match(html,/结束：/);
   assert.match(html,/策略排除记录 2/);assert.match(html,/结构化输出纠错 1/);
+  assert.match(html,/实际输入 未知/);assert.match(html,/提交保护 40000 Token \/ 2 次调用/);
+  assert.match(html,/Token\/字节比 0.25/);assert.match(html,/未知调用 1 次/);
   assert.match(html,/&lt;script&gt;untrusted/);assert.doesNotMatch(html,/<script>|NaN|undefined/);
  }finally{await server.close();}
 });

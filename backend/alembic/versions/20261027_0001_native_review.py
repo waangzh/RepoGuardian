@@ -12,7 +12,8 @@ depends_on = None
 
 def upgrade():
     Base.metadata.create_all(bind=op.get_bind(), checkfirst=False,
-        tables=[table for table in Base.metadata.sorted_tables if table.name != "review_model_calls"])
+        tables=[table for table in Base.metadata.sorted_tables
+                if table.name not in {"review_model_calls", "review_branch_budgets"}])
 
 
 def downgrade():

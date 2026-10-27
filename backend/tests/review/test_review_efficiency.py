@@ -169,9 +169,106 @@ async def test_in_memory_budget_preserves_unknown_and_idempotent_settlement():
     two = await budget.reserve("agent", 600)
     await budget.settle(two, None)
     summary = await budget.summary()
-    assert summary["committed_input_tokens"] == 700 and summary["input_tokens"] is None
+    assert summary["input_token_factor"] == 0.167
+    assert summary["committed_input_tokens"] == 200 and summary["input_tokens"] is None
+    assert summary["outstanding_input_tokens"] == 100 and summary["unknown_calls"] == 1
     with pytest.raises(ReviewBudgetExceeded):
         await budget.reserve("agent", 1)
+
+
+async def test_calibrated_factor_replaces_raw_byte_reservation():
+    budget = ReviewBudget(ReviewLimits(total_input_tokens=1000))
+    known = await budget.reserve("agent", 100)
+    await budget.settle(known, {"input_tokens": 25, "output_tokens": 5})
+    # 3000 bytes would exceed the limit if bytes were treated as tokens.
+    ticket = await budget.reserve("agent", 3000)
+    summary = await budget.summary()
+    assert summary["input_token_factor"] == 0.25
+    assert summary["committed_input_tokens"] == 775
+    await budget.settle(ticket, None)
+    summary = await budget.summary()
+    assert summary["unknown_calls"] == 1 and summary["outstanding_input_tokens"] == 750
+    assert summary["committed_input_tokens"] == 775
+
+
+async def test_input_rejection_reports_dimension_and_amounts_while_calls_remain(caplog):
+    budget = ReviewBudget(ReviewLimits(total_model_calls=64, total_input_tokens=1000))
+    await budget.reserve("agent", 1000)
+    with caplog.at_level(logging.WARNING, logger="RepoGuardian.Review"):
+        with pytest.raises(ReviewBudgetExceeded) as excinfo:
+            await budget.reserve("agent", 1)
+    assert str(excinfo.value) == "input_tokens"
+    for field in ("dimension=input_tokens", "stage=explore", "model_calls=1/64",
+                  "committed_input=1000", "outstanding_input=1000", "estimate=1",
+                  "held=0", "factor=1.0", "input_limit=1000"):
+        assert field in caplog.text
+
+
+async def test_exploration_reserves_its_final_submission_and_correction(source_service):
+    class RecordingBudget(ReviewBudget):
+        def __init__(self, limits):
+            super().__init__(limits)
+            self.reserves = []
+
+        async def reserve(self, agent_id, encoded_bytes, *, stage="explore", hold=0):
+            self.reserves.append((stage, hold, encoded_bytes))
+            return await super().reserve(agent_id, encoded_bytes, stage=stage, hold=hold)
+
+    budget = RecordingBudget(ReviewLimits(model_calls=3))
+    context = AgentContext(evidence=source_service, budget=budget, budget_agent_id="agent")
+    result = await build_agent(FinalizingModel(), "verifier", ReviewLimits(model_calls=3)).ainvoke(
+        {"messages": [("user", "Review fixture")]}, context=context)
+    assert result["structured_response"].decision == "refuted"
+    assert [stage for stage, _, _ in budget.reserves] == ["explore", "finalize"]
+    assert [hold for _, hold, _ in budget.reserves] == [2, 1]
+    # The submission carries no exploration tools, so its reservation is smaller.
+    assert budget.reserves[1][2] < budget.reserves[0][2]
+
+
+async def test_input_rejection_finalizes_instead_of_failing_the_branch(source_service):
+    class RejectingBudget(ReviewBudget):
+        def __init__(self, limits):
+            super().__init__(limits)
+            self.stages = []
+
+        async def reserve(self, agent_id, encoded_bytes, *, stage="explore", hold=0):
+            self.stages.append(stage)
+            if stage == "explore":
+                raise ReviewBudgetExceeded("input_tokens")
+            return await super().reserve(agent_id, encoded_bytes, stage=stage, hold=hold)
+
+    class ConvergingModel(ToolCallingModel):
+        tools_seen: list[list[str]] = []
+        calls: int = 0
+
+        def bind_tools(self, tools, **kwargs):
+            self.tools_seen.append([tool.name if hasattr(tool, "name") else tool["function"]["name"]
+                                    for tool in tools])
+            return self
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            self.calls += 1
+            if self.tools_seen[-1] == ["VerificationOutput"]:
+                calls = [{"name": "VerificationOutput", "id": f"final-{self.calls}", "args": {
+                    "decision": "refuted", "explanation": "输入预算压力下直接提交",
+                    "attribution": "uncertain", "evidence_ids": [],
+                    "boundary_notes": ["未执行测试"], "limitations": []}}]
+            else:
+                calls = [{"name": "read_file", "args": {"path": "safe.py", "start": 1, "end": 1},
+                          "id": f"read-{self.calls}"}]
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(content="",
+                tool_calls=calls, usage_metadata={"input_tokens": 20, "output_tokens": 5,
+                    "total_tokens": 25, "input_token_details": {"cache_read": 10}}))])
+
+    model = ConvergingModel()
+    budget = RejectingBudget(ReviewLimits())
+    context = AgentContext(evidence=source_service, budget=budget, budget_agent_id="agent")
+    result = await build_agent(model, "verifier", ReviewLimits(model_calls=8)).ainvoke(
+        {"messages": [("user", "Review fixture")]}, context=context)
+    assert result["structured_response"].decision == "refuted"
+    # The rejected exploration never reaches the model; the branch submits immediately.
+    assert model.calls == 1 and budget.stages == ["explore", "finalize"]
+    assert model.tools_seen == [["VerificationOutput"]]
 
 
 async def test_model_middleware_settles_actual_usage_and_reuses_round_budget(source_service):
@@ -183,6 +280,7 @@ async def test_model_middleware_settles_actual_usage_and_reuses_round_budget(sou
     summary = await context.budget.summary()
     assert summary["model_calls"] == 2 and summary["input_tokens"] == 40
     assert summary["cached_input_tokens"] == 20 and summary["unknown_calls"] == 0
+    assert summary["held_input_tokens"] == summary["held_model_calls"] == 0
 
 
 async def test_schema_retry_is_counted_even_when_the_agent_fails(source_service):
@@ -276,7 +374,7 @@ def test_budget_migration_upgrades_existing_database_without_losing_tasks(tmp_pa
             retention_until=utcnow()))
         command.upgrade(config, "head")
         assert "review_model_calls" in inspect(connection).get_table_names()
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20261027_0003"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20261028_0005"
         assert connection.scalar(text("SELECT task_snapshot FROM review_tasks WHERE id='preserved'")) == '{"sentinel": "keep"}'
         command.downgrade(config, "20261027_0002")
         assert "review_model_calls" not in inspect(connection).get_table_names()
