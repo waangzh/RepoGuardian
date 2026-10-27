@@ -79,30 +79,12 @@ def _finding_location_text(finding) -> str:
 
 
 
-def _comment_risks(plan, *, include_investigations=True):
+def _comment_risks(plan):
     """只列当前审查限制；计量未知单独说明，不作为代码缺陷。"""
-    reasons = {item.value for item in plan.outcome.reason_codes}
-    risks = [value for value in plan.digest.merge_decision.limits
-             if (include_investigations or not (
-                 "investigation_incomplete" in reasons
-                 and value == REASON_LABELS["investigation_incomplete"]))]
+    risks = list(plan.digest.merge_decision.limits)
     if "usage_integrity_unknown" in plan.outcome.reason_codes:
         risks.append("运行计量记录不完整：模型请求计量不完整或不一致；未知用量不能当作完整统计。"
                      "运行或计量异常本身不代表发现代码缺陷。")
-    for item in plan.digest.intent_assessments:
-        if item.status == "contradicted":
-            locations = []
-            for observation in item.observations:
-                if observation.get("alignment") != "contradicted":
-                    continue
-                path = observation.get("path") or "未知文件"
-                line = observation.get("start_line")
-                locations.append(f"{path}:{line}" if line else path)
-            suffix = "，位置：" + "、".join(dict.fromkeys(locations)) if locations else ""
-            risks.append(f"作者声明“{_sentence(item.author_target, 120)}”与代码存在静态证据矛盾{suffix}。")
-    pending = [item for item in plan.digest.investigations if item.answer == "unresolved"]
-    if pending and include_investigations:
-        risks.append(f"{len(pending)} 项调查未得到充分答案，相关调用链结论仍需补充证据。")
     return [f"- {value}" for value in dict.fromkeys(risks)]
 
 

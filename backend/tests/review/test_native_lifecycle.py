@@ -215,6 +215,27 @@ async def test_publication_refuses_tampered_verdict_or_missing_evidence_archive(
     assert not plan.inline_drafts and plan.outcome.publishable_count == 0
 
 
+async def test_native_investigation_limits_survive_report_projection_without_legacy_digest(pipeline):
+    service, repository, _, _, _ = pipeline
+    _, _, task = await preview_and_create(service)
+    assert await service._worker.run_once()
+    saved = repository.get_task(task.id)
+    assert saved.review_report.termination == "completed"
+    saved.review_report.discovery_results[0].investigation_limitations = ["调用方搜索还有未核实范围"]
+    plan = PublicationPlanner(repository._artifacts).build(saved)
+    assert plan.outcome.incomplete_investigations == 1
+    assert "investigation_incomplete" in plan.outcome.reason_codes
+    assert plan.outcome.runtime_reliability == "reliable"
+    assert plan.presentation.verdict.status in {"fix_blockers", "resolve_unknowns"}
+    label = "仍有未完成或证据不足的调查"
+    assert any(label in item for item in plan.presentation.limitations)
+    for text in (plan.summary_markdown, plan.review_comment_markdown, plan.user_report_markdown):
+        assert label in text
+        assert "调查状态未知" not in text
+    assert plan.digest.findings
+    assert plan.outcome.confirmed_count == len(saved.review_report.findings)
+
+
 async def test_outbox_idempotency_and_cancelled_publication_boundary(pipeline):
     service, review_repo, _, _, _ = pipeline
     _, _, task = await preview_and_create(service)

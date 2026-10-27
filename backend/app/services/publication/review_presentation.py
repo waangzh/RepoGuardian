@@ -85,35 +85,6 @@ def _change_overview(presentation):
     return _editorial_markdown(presentation, " ".join(parts), 1200)
 
 
-def _investigation_view(item):
-    proposition = item.proposition
-    call_match = re.match(
-        r"待源码核对的 calls 命题：调用方\s+([^\s（]+)（定义范围 \d+-\d+）"
-        r"对\s+([^\s（]+)（定义范围 \d+-\d+）", proposition)
-    is_call_chain = bool(call_match or re.search(r"\bcalls\b|调用链|嵌套调用|调用方", proposition, re.I))
-    title = (f"{call_match.group(1).rsplit('::', 1)[-1]} → "
-             f"{call_match.group(2).rsplit('::', 1)[-1]} 调用兼容性核验"
-             if call_match else proposition if len(proposition) <= 140 else "关联行为核验")
-    doubt = ("尚不能确认调用双方的参数传递、返回值消费与异常处理路径是否兼容。"
-             if is_call_chain else "尚不能确认该调查命题已获得充分证据，不能据此判断代码存在缺陷。")
-    missing = next((_observation_text(value) for value in [*item.limitations, item.reason or ""]
-                    if len(value) <= 280 and re.search(r"缺少|未读取|未覆盖|不足|缺失|missing", value, re.I)), "")
-    if not missing:
-        missing = ("尚缺少足以核验相关调用链的绑定源码观察。" if is_call_chain
-                   else "尚缺少足以支持或反驳该调查结论的绑定源码证据。")
-    action = (
-        "补查调用双方实现，核对参数传递、返回值消费与异常处理，并确认相关回归测试覆盖预期场景。"
-        if is_call_chain else
-        "补查调查命题涉及的实现与可引用证据；证据充分前继续保持未决，不将其作为已确认缺陷。"
-    )
-    return {
-        "title": markdown_text(title, 180),
-        "doubt": markdown_text(doubt, 300),
-        "missing": markdown_text(missing, 300),
-        "action": markdown_text(action, 360),
-    }
-
-
 def _review_conclusion(plan):
     from app.services.publication.publication_renderer import merge_verdict_line
 
@@ -176,7 +147,7 @@ def build_presentation(plan):
     purpose = (author_goal_text(understanding.author_goal) if understanding else "") or None
     summary, summary_source = _fallback_summary(plan)
     findings = _ordered_findings(plan)
-    limitations = list(dict.fromkeys(_comment_risks(plan, include_investigations=False)))
+    limitations = list(dict.fromkeys(_comment_risks(plan)))
     return ReviewPresentation(
         review_id=plan.review_id, snapshot=plan.snapshot,
         synthesis_status="fallback",
@@ -262,19 +233,7 @@ def render_presentation(plan, *, copy=False, detail="compact", exclude_resolved=
                         for item in plan.digest.excluded_files]
     lines += _comment_other_results(plan, omitted=omitted, retained=retained,
         withheld=max(0, plan.outcome.confirmed_count - plan.outcome.publishable_count),
-        full=detail == "full", extra_lines=scope_lines,
-        include_investigations=not any(item.answer == "unresolved" for item in plan.digest.investigations))
-    pending = [item for item in plan.digest.investigations if item.answer == "unresolved"]
-    if pending:
-        lines += ["", f"## 待核实事项（{len(pending)} 项）", ""]
-        for item in pending[:5]:
-            view = _investigation_view(item)
-            lines += [f"### {view['title']}", "",
-                f"**疑点：** {view['doubt']}", "",
-                f"**缺少的证据：** {view['missing']}", "",
-                f"**建议：** {view['action']}", ""]
-        if len(pending) > 5:
-            lines += [f"- 另有 {len(pending) - 5} 项待核实事项；完整命题、证据与请求范围见内部技术审计记录。", ""]
+        full=detail == "full", extra_lines=scope_lines)
     if detail == "full":
         advice = presentation.verdict.advice
         scope = (f"约定目标已检查 {plan.outcome.examined_goals} / {plan.outcome.total_goals}。"
@@ -288,12 +247,7 @@ def render_presentation(plan, *, copy=False, detail="compact", exclude_resolved=
         scope = (f"静态目标已检查 {plan.outcome.examined_goals}/{plan.outcome.total_goals}"
                  if plan.outcome.total_goals else "静态检查范围未知")
         dynamic = STATIC_BOUNDARY
-        if pending and presentation.verdict.status == "resolve_unknowns" \
-                and plan.outcome.kind not in {"failed", "cancelled"}:
-            advice = "建议先补齐上述待核实事项所需证据，再结合 CI 和人工评审决定是否合并。"
-        else:
-            advice = " ".join(_comment_next_steps(
-                plan, has_findings=bool(_ordered_findings(plan))))
+        advice = " ".join(_comment_next_steps(plan, has_findings=bool(_ordered_findings(plan))))
         lines += ["", "### 验证与合并建议", "",
             f"{scope}；静态审查边界：{dynamic} {markdown_text(advice)}", "", "---", "",
             f"审查快照：`{markdown_text(plan.snapshot.head_sha or '未记录', 64)}`"

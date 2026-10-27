@@ -1,11 +1,14 @@
+from types import SimpleNamespace
+
 import pytest
 
 from app.models.publication import (
-    PublicationPlan, PublicationSnapshot, ReviewDigest, ReviewOutcome,
+    DigestGoal, PublicationPlan, PublicationSnapshot, ReviewDigest, ReviewOutcome,
 )
 from app.review.models import CandidateFinding, VerificationResult, VerifiedFinding
+from app.services.publication.publication_planner import summary_projection
 from app.services.publication.publication_renderer import (
-    discussion_report_lines, render_review_comment, render_summary,
+    discussion_report_lines, render_review_comment, render_summary, render_user_report,
 )
 from app.services.publication.review_merge_decision import merge_decision
 from app.services.publication.review_presentation import build_presentation
@@ -152,3 +155,31 @@ def test_discussion_context_renders_current_collection_stats_without_claiming_re
     plan.presentation = build_presentation(plan)
     assert render_summary(plan)
     assert render_review_comment(plan)
+
+
+def test_current_report_does_not_invent_unknown_investigations_or_legacy_intent_details():
+    plan = PublicationPlan(
+        review_id="review", snapshot=PublicationSnapshot(), outcome=outcome(),
+        content_eligible=True, digest=ReviewDigest(examined_goals=[
+            DigestGoal(goal_id=side, path="safe.py", side=side, start_line=1, end_line=1, status="examined")
+            for side in ("head", "base")
+        ]),
+    )
+    plan.digest.merge_decision = merge_decision(
+        plan.outcome, [], content_eligible=True, execution_complete=True,
+    )
+    task = SimpleNamespace(configuration=SimpleNamespace(provider="fixture", model="fixture"))
+    texts = [render_user_report(task, plan), render_review_comment(plan, detail="full")]
+    plan.presentation = build_presentation(plan)
+    texts += [render_summary(plan), render_review_comment(plan, detail="full")]
+    for text in texts:
+        assert "调查状态未知" not in text
+        assert "作者意图对照" not in text
+        assert "待源码核对的 calls 命题" not in text
+    assert plan.presentation.limitations == []
+    assert plan.presentation.verdict.status == "conditional_merge"
+    removed = {"intent_alignment", "intent_assessments", "investigations_known",
+               "investigations", "unresolved_leads"}
+    assert not removed & plan.model_dump(mode="json")["digest"].keys()
+    assert not removed & summary_projection(plan).model_dump(mode="json")["digest"].keys()
+    assert not {"DigestInvestigation", "DigestIntent"} & PublicationPlan.model_json_schema()["$defs"].keys()

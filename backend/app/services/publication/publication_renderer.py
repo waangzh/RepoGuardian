@@ -165,7 +165,8 @@ def _change_understanding(plan, *, full=False):
     understanding = plan.digest.change_understanding
     author_goal = _author_goal(plan) or "未记录明确的作者目标。"
     actual = understanding.actual_changes if understanding else "未保存可归纳的实际变更。"
-    alignment = understanding.alignment if understanding else plan.digest.intent_alignment
+    alignment = (understanding.alignment if understanding
+                 else "未保存逐目标的符合性核验记录，不能由覆盖率推断作者目标已经实现。")
     lines = ["", "## PR 变更理解", "",
         "**PR 目标：** " + markdown_text(author_goal, 1200 if full else 400), "",
         "**代码实际改变了什么：** " + markdown_text(actual, 2000 if full else 600), "",
@@ -173,22 +174,6 @@ def _change_understanding(plan, *, full=False):
     if full and plan.digest.actual_changes:
         lines += ["", "**变更文件（固定 Diff 事实）：**", "",
                   *[f"- {markdown_text(item, 1000)}" for item in plan.digest.actual_changes]]
-    if full:
-        lines += _intent_detail(plan)
-    return lines
-
-
-def _intent_detail(plan):
-    lines = ["", "作者意图对照为辅助分析，不要求逐项核验；未核验项不代表目标未实现。"]
-    labels = {"observed": "局部静态证据支持", "contradicted": "存在静态证据矛盾", "insufficient": "证据不足",
-              "not_applicable": "当前检查不适用", "not_checked": "尚未核验"}
-    for item in plan.digest.intent_assessments:
-        lines += ["", f"- 作者目标：{markdown_text(item.author_target, 4000)}；判断：{labels[item.status]}。"]
-        for observation in item.observations:
-            lines.append(f"  - 实际行为：{markdown_text(observation['actual_behavior'])}；"
-                f"位置：{markdown_text(str(observation.get('path') or '未知文件'))}:{observation.get('start_line') or '未知'}"
-                f"（{observation['side']}）；证据：{markdown_text('、'.join(observation['evidence_ids']) or '未获得有效证据')}。")
-            lines += ["  - 限制：" + markdown_text(value) for value in observation["limitations"]]
     return lines
 
 
@@ -306,44 +291,10 @@ def _risk_section(plan):
         items.append(f"- 未完成目标：{markdown_text(goal.path or '文件未记录', 500)}"
                      + (f":{goal.start_line}" if goal.start_line else "")
                      + (f"；{markdown_text(goal.reason)}" if goal.reason else ""))
-    pending = [item for item in plan.digest.investigations if item.answer == "unresolved"]
-    if not plan.digest.investigations_known:
-        lines += ["调查状态未知；不能将缺失记录视为调查已完成。", ""]
-    elif plan.digest.investigations:
-        answered_count = len(plan.digest.investigations) - len(pending)
-        lines += [f"已记录调查 {len(plan.digest.investigations)} 项；有明确答案 {answered_count} 项；"
-                  f"未得到充分答案 {len(pending)} 项。", ""]
-    if plan.digest.execution_status and plan.digest.investigations:
-        lines += ["实际运行记录：" + markdown_text(
-            plan.digest.execution_status + " / " + (plan.digest.termination_reason or "未记录终止原因")), ""]
-    for item in pending[:5]:
-        items.append(f"- 未决调查：{markdown_text(item.proposition)}"
-                     + (f"；{markdown_text(item.reason)}" if item.reason else "；尚未记录明确原因"))
-        items += ["  - 限制：" + markdown_text(value) for value in item.limitations]
-        if item.requested_ranges:
-            items += ["  - 请求取证范围（请求范围不代表已读取或已核验）："]
-            items += [f"    - {markdown_text(request.path or '文件未记录')}："
-                      f"{request.start_line or '未知'}–{request.end_line or '未知'}"
-                      for request in item.requested_ranges]
-            items += ["  - 建议补读上述缺失实现或补齐对应证据，再判断原调查命题；证据不足不代表代码存在缺陷。"]
-    if plan.digest.unresolved_leads:
-        items += [f"- 未调度线索：{markdown_text(value)}" for value in plan.digest.unresolved_leads[:5]]
     if not items:
         lines.append("没有需要单独关注的未决风险；仍以审查范围与验证边界为准。")
     else:
         lines += items
-    if plan.digest.investigations_known and len(pending) > 5:
-        lines.append(f"- 另有 {len(pending) - 5} 项未决调查，完整记录见技术审计记录。")
-    answered = [item for item in plan.digest.investigations if item.answer != "unresolved"]
-    if answered:
-        lines += ["", "### 关键调查摘要", ""]
-        for item in answered[:5]:
-            label = "静态证据支持此命题" if item.answer == "supported" else "静态证据反驳此命题"
-            lines.append(f"- {markdown_text(item.proposition)}：{label}"
-                         + (f"；{markdown_text(item.reason)}" if item.reason else "")
-                         + "".join(f"；限制：{markdown_text(value)}" for value in item.limitations))
-        if len(answered) > 5:
-            lines.append(f"- 另有 {len(answered) - 5} 项已回答调查，完整记录见技术审计记录。")
     return lines
 
 
@@ -422,8 +373,7 @@ def _comment_change_overview(plan, *, title="变更理解"):
     return lines
 
 
-def _comment_other_results(plan, *, omitted, retained, withheld, full, title=None, extra_lines=(),
-                          include_investigations=True):
+def _comment_other_results(plan, *, omitted, retained, withheld, full, title=None, extra_lines=()):
     """只展开实际缺口；通用验证边界统一放在文末。
 
     章节标题按内容决定：确实存在未确认事项时使用“仍需确认的事项”；
@@ -431,7 +381,7 @@ def _comment_other_results(plan, *, omitted, retained, withheld, full, title=Non
     不让完整明细本身制造一个并不存在的风险章节。简洁版与完整版共享同一
     判断结果，完整版只追加明细，不改变章节是否存在。
     """
-    risks = _comment_risks(plan, include_investigations=include_investigations)
+    risks = _comment_risks(plan)
     entries = list(risks)
     if plan.digest.incomplete_goals:
         entries.append(f"- 约定目标仍有 {len(plan.digest.incomplete_goals)} 项未完成检查。")
@@ -637,8 +587,7 @@ def render_technical_audit(plan, execution_record=None):
             lines.append(f"- {markdown_text(str(lead.get('candidate_id') or '未知候选'))}："
                 f"{markdown_text(str(lead.get('decision') or '未知'))}；"
                 f"{markdown_text(str(lead.get('explanation') or '未记录原因'))}")
-    for title, data in (("目标符合性与证据引用", [item.model_dump(mode="json") for item in plan.digest.intent_assessments]),
-                        ("作者声明输入完整性", {"status": plan.digest.author_context_status,
+    for title, data in (("作者声明输入完整性", {"status": plan.digest.author_context_status,
                             "limitation": plan.digest.author_context_limitation}),
                         ("问题与人工处理身份", [item.model_dump(mode="json") for item in plan.digest.findings]),
                         ("发布准入扣留记录", [item.model_dump(mode="json") for item in plan.withheld_findings]),

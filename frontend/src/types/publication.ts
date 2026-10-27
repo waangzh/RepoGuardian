@@ -29,14 +29,6 @@ export interface DigestExcludedFile {
   path: string;
   reason: string;
 }
-export interface DigestInvestigation {
-  work_item_id: string | null;
-  proposition: string;
-  answer: "supported" | "refuted" | "unresolved";
-  reason: string | null;
-  limitations: string[];
-  requested_ranges: DigestGoal[];
-}
 export interface ChangeUnderstanding {
   author_goal: string;
   actual_changes: string;
@@ -55,12 +47,7 @@ export interface ReviewDigest {
   author_context_limitation?: string | null;
   actual_changes?: string[];
   change_understanding?: ChangeUnderstanding | null;
-  intent_alignment?: string;
-  intent_assessments?: DigestIntent[];
   findings?: import('./reviewPlan').FindingView[];
-  investigations_known?: boolean;
-  investigations?: DigestInvestigation[];
-  unresolved_leads?: string[];
   execution_status?: string | null;
   examined_goals: DigestGoal[];
   incomplete_goals: DigestGoal[];
@@ -71,14 +58,6 @@ export interface ReviewDigest {
   termination_reason: string | null;
 }
 
-export interface DigestIntent {
-  author_target: string;
-  status: "observed" | "contradicted" | "insufficient" | "not_applicable" | "not_checked";
-  observations: { goal_id: string; path: string; start_line: number | null; side: "head" | "base";
-    author_goal_summary?: string;
-    actual_behavior: string; alignment: "supported" | "contradicted" | "insufficient" | "not_applicable";
-    evidence_ids: string[]; limitations: string[] }[];
-}
 export interface MergeDecision {
   status: "unavailable" | "fix_blockers" | "resolve_unknowns" | "conditional_merge";
   label: string;
@@ -153,7 +132,6 @@ export interface ReviewSummaryDigest {
   author_context_limitation?: string | null;
   change_understanding?: ChangeUnderstanding | null;
   actual_changes?: string[];
-  intent_alignment?: string;
   merge_decision?: MergeDecision;
   excluded_files: DigestExcludedFile[];
   checked_areas: ("head_source_ranges" | "base_source_ranges" | "file_changes")[];

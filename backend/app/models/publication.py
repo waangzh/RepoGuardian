@@ -73,21 +73,6 @@ class DigestExcludedFile(BaseModel):
     reason: str
 
 
-class DigestInvestigation(BaseModel):
-    work_item_id: str | None = None
-    proposition: str
-    answer: Literal["supported", "refuted", "unresolved"] = "unresolved"
-    reason: str | None = None
-    limitations: list[str] = Field(default_factory=list)
-    requested_ranges: list[DigestGoal] = Field(default_factory=list)
-
-
-class DigestIntent(BaseModel):
-    author_target: str
-    status: Literal["observed", "contradicted", "insufficient", "not_applicable", "not_checked"] = "not_checked"
-    observations: list[dict] = Field(default_factory=list)
-
-
 class MergeDecision(BaseModel):
     status: Literal["unavailable", "fix_blockers", "resolve_unknowns", "conditional_merge"] = "unavailable"
     label: str = "暂不能给出合并建议"
@@ -128,12 +113,7 @@ class ReviewDigest(BaseModel):
     author_context_limitation: str | None = None
     actual_changes: list[str] = Field(default_factory=list)
     change_understanding: ChangeUnderstanding | None = None
-    intent_alignment: str = "未保存独立的目标符合性核验记录，不能由覆盖率推断作者目标已经实现。"
-    intent_assessments: list[DigestIntent] = Field(default_factory=list)
     findings: list[FindingView] = Field(default_factory=list)
-    investigations_known: bool = False
-    investigations: list[DigestInvestigation] = Field(default_factory=list)
-    unresolved_leads: list[str] = Field(default_factory=list)
     execution_status: str | None = None
     examined_goals: list[DigestGoal] = Field(default_factory=list)
     incomplete_goals: list[DigestGoal] = Field(default_factory=list)
@@ -228,7 +208,6 @@ class ReviewSummaryDigest(BaseModel):
     author_context_limitation: str | None = None
     change_understanding: ChangeUnderstanding | None = None
     actual_changes: list[str] = Field(default_factory=list)
-    intent_alignment: str = ""
     merge_decision: MergeDecision = Field(default_factory=MergeDecision)
     excluded_files: list[DigestExcludedFile] = Field(default_factory=list)
     checked_areas: list[Literal["head_source_ranges", "base_source_ranges", "file_changes"]] = Field(default_factory=list)
