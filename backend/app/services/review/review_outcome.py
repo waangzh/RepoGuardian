@@ -52,8 +52,10 @@ def derive_review_outcome(task, *, publishable_count=None):
     if task.error == "review_deadline":
         reasons.append(Reason.DEADLINE_EXCEEDED)
     confirmed = len(report.findings)
+    # 计量完整性是运行遥测：保留在 reason_codes 中供展示，但不改变代码审查结论。
+    code_reasons = [reason for reason in reasons if reason != Reason.USAGE_INTEGRITY_UNKNOWN]
     kind = (task.status if task.status in {"failed", "cancelled"} else "findings" if confirmed
-            else "inconclusive" if reasons else "clean")
+            else "inconclusive" if code_reasons else "clean")
     coverage = CoverageKind.COMPLETE if report.complete else CoverageKind.PARTIAL if total else CoverageKind.UNKNOWN
     return ReviewOutcome(kind=kind, coverage=coverage, confirmed_count=confirmed,
         publishable_count=publishable_count or 0, unresolved_count=unresolved,

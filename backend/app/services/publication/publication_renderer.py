@@ -15,12 +15,8 @@ from app.services.publication.review_text_format import (
 
 
 def outcome_description(plan) -> str:
-    """展示当前审查结论，计量未知不改变已完成的代码核验。"""
-    outcome = plan.outcome
-    if outcome.kind == "inconclusive" and set(outcome.reason_codes) == {"usage_integrity_unknown"} \
-            and outcome.review_completeness == "complete":
-        return "已检查范围内未发现已确认问题；运行计量记录不完整，未知用量不能当作完整统计。"
-    return OUTCOME_DESCRIPTIONS[outcome.kind]
+    """展示当前审查结论；计量未知只作为运行遥测，不改变代码核验结论。"""
+    return OUTCOME_DESCRIPTIONS[plan.outcome.kind]
 
 
 
@@ -480,7 +476,7 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False):
     suggestions = [item for item in included if item.finding_key not in blocking_keys]
     incomplete = (plan.outcome.kind == "inconclusive"
         or plan.outcome.review_completeness != "complete"
-        or plan.outcome.runtime_reliability != "reliable"
+        or plan.outcome.runtime_reliability == "unreliable"
         or plan.digest.merge_decision.status == "resolve_unknowns")
     views = {item.id: item for item in plan.digest.findings}
 

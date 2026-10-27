@@ -109,7 +109,7 @@ def test_failure_cancellation_or_content_rejection_overrides_confirmed_blockers(
 
 
 def test_usage_unknown_is_preserved_without_blocking_complete_code_review():
-    facts = outcome(kind="inconclusive", reason_codes=["usage_integrity_unknown"],
+    facts = outcome(kind="clean", reason_codes=["usage_integrity_unknown"],
                     runtime_reliability="unknown")
     plan = PublicationPlan(
         review_id="review", snapshot=PublicationSnapshot(), outcome=facts, content_eligible=True,

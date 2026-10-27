@@ -365,6 +365,26 @@ async def test_resolved_investigation_is_not_reported_as_incomplete(source_servi
     assert outcome.kind == "clean"
 
 
+async def test_usage_unknown_stays_telemetry_and_does_not_change_review_kind(source_service):
+    state = await build_review_graph().ainvoke({"review_id": "review"},
+        context=review_context(source_service, ReviewModel()))
+    saved_report = ReviewReport.model_validate(state["report"])
+    for result in saved_report.discovery_results + saved_report.verification_results:
+        result.input_tokens = result.output_tokens = None
+    task = SimpleNamespace(
+        id="review", status="completed", error=None, review_report=saved_report,
+        snapshot=SimpleNamespace(head_sha=saved_report.snapshot.head_sha,
+                                 effective_base_sha=saved_report.snapshot.base_sha),
+        pr=SimpleNamespace(owner="local", repo="repo", number=1),
+    )
+    outcome = derive_review_outcome(task)
+    assert outcome.runtime_reliability == "unknown"
+    assert "usage_integrity_unknown" in {item.value for item in outcome.reason_codes}
+    # 计量未知只作遥测，不改变代码审查结论。
+    assert outcome.kind == "findings"
+    assert {item.value for item in outcome.reason_codes} == {"usage_integrity_unknown"}
+
+
 async def test_explicit_investigation_limitations_do_not_masquerade_as_execution_failure(source_service):
     from langgraph.runtime import Runtime
     from app.review.nodes.reporting import report
