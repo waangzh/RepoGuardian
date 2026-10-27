@@ -1,0 +1,77 @@
+import asyncio
+
+from langgraph.runtime import Runtime
+
+from app.review.context import ReviewContext
+from app.review.state import ReviewState
+from app.review.findings import aggregate_findings, candidate_gate, comparison_candidates, verify_finding
+from app.review.models import CandidateFinding, VerificationResult
+from app.review.nodes.agent_execution import run_agent
+
+
+async def evidence_gate(state: ReviewState, runtime: Runtime[ReviewContext]):
+    sources = await runtime.context.sources()
+    changes = [item for item in sources.changed_files if runtime.context.selected_paths is None
+               or item["file_path"] in runtime.context.selected_paths]
+    eligible, rejections = [], []
+    for raw in state["candidates"]:
+        candidate = CandidateFinding.model_validate(raw)
+        try:
+            await asyncio.to_thread(candidate_gate, candidate, sources.evidence,
+                                    state.get("discovery_results", []), changes)
+            eligible.append(raw)
+        except (ValueError, OSError):
+            rejections.append(VerificationResult(candidate_id=candidate.id,
+                decision="insufficient_evidence", explanation="候选证据未通过源码与快照校验",
+                attribution="uncertain").model_dump())
+    return {"eligible_candidates": eligible, "gate_rejections": rejections, "status": "verifying"}
+
+
+
+async def verify(state: ReviewState, runtime: Runtime[ReviewContext]):
+    candidate = state["candidate"]
+    result = await run_agent(runtime.context, candidate["id"], "verifier",
+        {"candidate": candidate, "related_candidates": state.get("related_candidates", [])})
+    return {"verification_results": [result]}
+
+
+
+async def arbitrate(state: ReviewState, runtime: Runtime[ReviewContext]):
+    sources = await runtime.context.sources()
+    by_id = {item["id"]: item for item in state.get("verification_results", [])}
+    by_id.update({item["id"]: item for item in state.get("investigation_results", [])
+                  if item["status"] == "completed"})
+    findings, decisions = [], list(state["gate_rejections"])
+    for raw in state["eligible_candidates"]:
+        candidate = CandidateFinding.model_validate(raw)
+        result = by_id.get(candidate.id)
+        try:
+            if result is None or result["status"] != "completed":
+                raise ValueError("verifier_failed")
+            decision, finding = await asyncio.to_thread(
+                verify_finding, candidate, result, sources.evidence, sources.changed_files,
+                comparison_candidates(raw, state["eligible_candidates"]))
+            decisions.append(decision.model_dump())
+            if finding:
+                findings.append(finding)
+        except (ValueError, OSError):
+            decisions.append(VerificationResult(candidate_id=candidate.id,
+                decision="insufficient_evidence", explanation="独立核验未完成或源码证据不足",
+                attribution="uncertain").model_dump())
+    await runtime.context.emit(phase="arbitrate", confirmed=len(findings),
+                               unresolved=sum(item["decision"] == "insufficient_evidence" for item in decisions))
+    return {"findings": [item.model_dump() for item in aggregate_findings(findings)], "decisions": decisions}
+
+
+
+async def investigate(state: ReviewState, runtime: Runtime[ReviewContext]):
+    candidate = state["candidate"]
+    result = await run_agent(runtime.context, candidate["id"], "investigator",
+        {"candidate": candidate, "related_candidates": state.get("related_candidates", [])})
+    return {"investigation_results": [result]}
+
+
+
+async def finish_investigation(state: ReviewState, runtime: Runtime[ReviewContext]):
+    await runtime.context.active()
+    return {"investigation_round": 1}

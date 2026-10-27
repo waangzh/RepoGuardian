@@ -283,7 +283,7 @@ async def test_replayed_agent_work_does_not_reset_unknown_prior_usage_to_zero(so
 
 async def test_tool_read_limitations_do_not_turn_complete_coverage_into_complete_conclusion(source_service):
     from langgraph.runtime import Runtime
-    from app.review.graph import report
+    from app.review.nodes.reporting import report
     context = review_context(source_service, ReviewModel())
     state = await build_review_graph().ainvoke({"review_id": "review"}, context=context)
     state["discovery_results"][0]["read_errors"] = 1
