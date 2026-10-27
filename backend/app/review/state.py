@@ -30,3 +30,4 @@ class ReviewState(TypedDict, total=False):
     status: str
     assignment: dict
     candidate: dict
+    related_candidates: list[dict]

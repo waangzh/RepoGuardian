@@ -136,6 +136,37 @@ async def test_persistent_pipeline_confirmation_native_graph_report_and_revalida
     assert len(model.observed) == 3
 
 
+async def test_preview_and_execution_use_the_same_related_file_plan(pipeline, monkeypatch):
+    service, repository, _, pr, _ = pipeline
+    prepare = service._prepare
+
+    async def related_prepare(*args, **kwargs):
+        repo, prepared = await prepare(*args, **kwargs)
+        prepared["index"]["symbol_index"].append(
+            {"file": "safe.py", "symbol_id": "safe::value", "start_line": 1, "end_line": 1})
+        prepared["index"]["repository_graph"]["edges"].append({
+            "type": "calls", "source_kind": "symbol", "target_kind": "symbol",
+            "source": "safe::value", "target": "removed::old",
+            "source_file": "safe.py", "target_file": "removed.py",
+            "resolution_status": "resolved", "confidence": 0.99})
+        return repo, prepared
+
+    monkeypatch.setattr(service, "_prepare", related_prepare)
+    preview = await service.preview(ReviewPreviewRequest(
+        pr_url=pr.html_url, plan={"include_pr_discussions": False,
+            "scope": {"mode": "selected", "primary_files": ["safe.py", "removed.py"]}}))
+    assert len(preview.assignments) == 2
+    assert all(item.focus_paths == ["removed.py", "safe.py"] for item in preview.assignments)
+    task = await service.create_confirmed_task(ReviewCreateRequest(pr_url=pr.html_url,
+        preview_id=preview.preview_id, expected_head_sha=preview.snapshot.head_sha,
+        expected_effective_base_sha=preview.snapshot.effective_base_sha))
+    assert await service._worker.run_once()
+    report = repository.get_task(task.id).review_report
+    assert report is not None
+    assert report.assignments == preview.assignments
+    assert {item.id for item in report.goals} == {item.id for item in preview.goals}
+
+
 async def test_confirmation_refuses_changed_pr_and_unapproved_plan(pipeline):
     service, _, _, pr, _ = pipeline
     preview = await service.preview(ReviewPreviewRequest(

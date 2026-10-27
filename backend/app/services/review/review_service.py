@@ -136,7 +136,8 @@ class ReviewService:
             if selected is not None and not selected <= eligible:
                 raise ValueError("selected_files_not_eligible")
             goals, assignments, excluded = plan_review(prepared["changed_files"],
-                depth=configuration.options.depth, selected_paths=selected, focus=configuration.options.focus)
+                depth=configuration.options.depth, selected_paths=selected, focus=configuration.options.focus,
+                repository_graph=prepared["index"]["repository_graph"], symbols=prepared["index"]["symbol_index"])
             response = ReviewPreviewResponse(preview_id=identity, snapshot=prepared["snapshot"],
                 effective_plan=configuration.options, expires_at=utcnow() + timedelta(minutes=15),
                 changed_files=[PlannedChangedFile(file_path=item["file_path"],

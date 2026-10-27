@@ -197,6 +197,37 @@ class GitTool:
         except UnicodeDecodeError:
             return None
 
+    def find_matching_paths(
+        self, repo_path: str | Path, revision: str, query: str, paths: list[str],
+    ) -> set[str]:
+        """Search literal text in selected immutable blobs, without textconv or external grep."""
+        repo_dir = self._validate_worktree(repo_path)
+        _normalized_commit_sha(revision, "search revision")
+        from app.core.paths import validate_repo_relative_path
+        from app.review.tool_scope import is_sensitive_repository_path
+
+        selected = sorted({validate_repo_relative_path(path) for path in paths})
+        if not query or "\x00" in query or any(is_sensitive_repository_path(path) for path in selected):
+            raise ValueError("invalid_search_scope")
+        if not selected:
+            return set()
+        matches = set()
+        for offset in range(0, len(selected), 32):
+            completed = subprocess.run(
+                [self._git, "--literal-pathspecs", "-C", str(repo_dir), "grep",
+                 "--no-ext-grep", "--no-textconv", "-I", "-F", "-l", "-z",
+                 "-e", query, revision, "--", *selected[offset:offset + 32]],
+                capture_output=True, timeout=self._command_timeout_seconds,
+                env=git_safety_environment(),
+            )
+            if completed.returncode not in {0, 1}:
+                raise ValueError("snapshot_search_failed")
+            prefix = revision + ":"
+            for item in completed.stdout.decode("utf-8").split("\0"):
+                if item.startswith(prefix) and item[len(prefix):] in selected:
+                    matches.add(item[len(prefix):])
+        return matches
+
     def clone_and_diff(
         self,
         pr: PullRequestInfo,

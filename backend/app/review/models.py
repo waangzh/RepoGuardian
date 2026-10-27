@@ -109,6 +109,18 @@ class VerificationOutput(ReviewModel):
     evidence_ids: list[str] = Field(default_factory=list, max_length=32)
     counterevidence_ids: list[str] = Field(default_factory=list, max_length=32)
     attribution: Literal["introduced", "exposed", "pre_existing", "uncertain"]
+    severity: Severity | None = None
+    equivalent_candidate_ids: list[str] = Field(default_factory=list, max_length=8)
+    equivalence_reason: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def valid_equivalence(self):
+        if self.equivalent_candidate_ids and (
+                self.decision != "confirmed" or not self.equivalence_reason or self.severity is None):
+            raise ValueError("equivalence_requires_confirmed_reason_and_severity")
+        if len(set(self.equivalent_candidate_ids)) != len(self.equivalent_candidate_ids):
+            raise ValueError("duplicate_equivalence_member")
+        return self
 
 
 class VerificationResult(VerificationOutput):
@@ -133,6 +145,7 @@ class VerifiedFinding(ReviewModel):
     verification: VerificationResult
     evidence_ids: list[str]
     inline_line: int | None
+    related_candidate_ids: list[str] = Field(default_factory=list, max_length=8)
 
 
 class ReviewLimits(ReviewModel):

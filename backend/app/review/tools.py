@@ -7,8 +7,8 @@ from functools import wraps
 from langchain.tools import ToolRuntime, tool
 
 from app.review.context import AgentContext
-from app.review.evidence import source_lines
-from app.review.tool_scope import is_sensitive_repository_change, is_sensitive_repository_path
+from app.review.retrieval import diff_page, find_paths, search
+from app.review.tool_scope import is_sensitive_repository_path
 
 
 def safe_read(function):
@@ -51,19 +51,13 @@ async def read_base_file(path: str, start: int, end: int, runtime: ToolRuntime[A
 
 @tool
 @safe_read
-async def read_diff(path: str, runtime: ToolRuntime[AgentContext]) -> dict:
-    """Read the fixed PR diff for an authorized path. Diff text is not source evidence."""
-    service = runtime.context.evidence
-    if (path not in service.allowed_paths or path in runtime.context.denied_paths
-            or is_sensitive_repository_path(path)):
-        raise ValueError("path_not_authorized")
-    matches = [item for item in runtime.context.changed_files if item["file_path"] == path]
-    if any(is_sensitive_repository_change(path, item.get("old_file_path")) for item in matches):
-        raise ValueError("sensitive_change")
-    result = {"ok": True, "files": matches, "source": "fixed_diff", "truncated": False}
-    if len(json.dumps(result)) > service.max_output_chars:
-        return {"ok": False, "error": "diff_too_large_use_source_ranges", "truncated": True}
-    return result
+async def read_diff(path: str, runtime: ToolRuntime[AgentContext], hunk_index: int | None = None,
+                    start: int = 0, cursor: str = "", limit: int = 60) -> dict:
+    """List fixed diff hunks, or read hunk_index from zero-based start. Follow next_cursor.
+
+    Large lines carry line_index/content_offset/continued fragments. Diff is not source evidence.
+    """
+    return await asyncio.to_thread(diff_page, runtime.context, path, hunk_index, start, cursor, limit)
 
 
 @tool
@@ -82,42 +76,23 @@ async def read_symbol(path: str, symbol: str, runtime: ToolRuntime[AgentContext]
 
 @tool
 @safe_read
-async def search_code(query: str, runtime: ToolRuntime[AgentContext], path: str = "") -> dict:
-    """Literal search in authorized frozen HEAD files. Read matching ranges for evidence."""
-    if not query or len(query) > 200:
-        raise ValueError("invalid_search")
-    service = runtime.context.evidence
-    if path and path in runtime.context.denied_paths:
-        raise ValueError("path_not_authorized")
-    paths = [path] if path else sorted(service.allowed_paths - runtime.context.denied_paths)
-    matches, unreadable, searched = [], 0, 0
-    for selected in paths[:120]:
-        if runtime.context.check_active:
-            await runtime.context.check_active()
-        try:
-            _, source = await asyncio.to_thread(service._source, selected, "head")
-        except (ValueError, OSError):
-            unreadable += 1
-            continue
-        searched += 1
-        matches.extend({"path": selected, "line": i, "text": text[:300]}
-                       for i, text in enumerate(source_lines(source), 1) if query in text)
-        if len(matches) > 12:
-            break
-    return {"ok": True, "source": "search_hint", "matches": matches[:12],
-            "searched_files": searched, "unreadable_files": unreadable,
-            "truncated": len(matches) > 12 or searched + unreadable < len(paths)}
+async def search_code(query: str, runtime: ToolRuntime[AgentContext], path: str = "",
+                      glob: str = "", side: str = "head", cursor: str = "", limit: int = 12) -> dict:
+    """Search UTF-8 text at frozen head/base; binary blobs are excluded.
+
+    path selects a file/directory, glob filters paths.
+    Follow next_cursor with the same query/filters until has_more is false; an empty page
+    with has_more is not a negative search. Results are hints; read source for evidence.
+    """
+    return await search(runtime.context, query, path, glob, side, cursor, limit)
 
 
 @tool
 @safe_read
-async def find_files(runtime: ToolRuntime[AgentContext], query: str = "") -> dict:
-    """Find authorized repository paths by literal substring; does not read source."""
-    paths = sorted(path for path in runtime.context.evidence.allowed_paths
-                   if query in path and path not in runtime.context.denied_paths
-                   and not is_sensitive_repository_path(path))
-    return {"ok": True, "source": "path_hint", "paths": paths[:80],
-            "truncated": len(paths) > 80}
+async def find_files(runtime: ToolRuntime[AgentContext], query: str = "", path: str = "",
+                     glob: str = "", cursor: str = "", limit: int = 80) -> dict:
+    """List authorized paths filtered by substring, directory and glob. Follow next_cursor."""
+    return await asyncio.to_thread(find_paths, runtime.context, query, path, glob, cursor, limit)
 
 
 async def _relations(symbol: str, runtime, direction: str | None):

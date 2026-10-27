@@ -65,4 +65,4 @@ async def test_code_search_and_indexer_fail_closed_for_sensitive_files(tmp_path:
     runtime = ToolRuntime(state={}, context=AgentContext(evidence=evidence), config={},
                           stream_writer=lambda *_: None, tool_call_id="test", store=None)
     result = await search_code.coroutine(query="TOKEN", path=".env", runtime=runtime)
-    assert result["unreadable_files"] == 1 and result["matches"] == []
+    assert not result["ok"] and result["error"] == "read_rejected"

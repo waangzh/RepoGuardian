@@ -55,7 +55,47 @@ def candidate_gate(candidate, service, results, changed_files):
     return refs
 
 
-def verify_finding(candidate, result, service, changed_files):
+def comparison_candidates(candidate, candidates):
+    """A bounded comparison set is a hint, never a deduplication decision."""
+    return sorted((item for item in candidates if item["id"] != candidate["id"]
+        and item["affected_path"] == candidate["affected_path"]
+        and item["attribution"] == candidate["attribution"]
+        and abs(item["line"] - candidate["line"]) <= 20),
+        key=lambda item: (abs(item["line"] - candidate["line"]), item["id"]))[:8]
+
+
+def finding_severity(finding):
+    return finding.verification.severity or finding.candidate.severity
+
+
+def aggregate_findings(findings):
+    """Only form cliques of independently confirmed, reciprocal equivalence claims."""
+    remaining = {item.id: item for item in findings}
+    aggregated = []
+
+    def equivalent(left, right):
+        return (right.id in left.verification.equivalent_candidate_ids
+            and left.id in right.verification.equivalent_candidate_ids
+            and left.verification.severity is not None
+            and right.verification.severity is not None
+            and finding_severity(left) == finding_severity(right)
+            and left.candidate.attribution == right.candidate.attribution
+            and left.candidate.affected_path == right.candidate.affected_path
+            and abs(left.candidate.line - right.candidate.line) <= 20)
+
+    while remaining:
+        representative = remaining.pop(min(remaining))
+        members = [representative]
+        for identity in sorted(remaining):
+            item = remaining[identity]
+            if all(equivalent(member, item) for member in members):
+                members.append(remaining.pop(identity))
+        aggregated.append(representative.model_copy(update={
+            "related_candidate_ids": [member.id for member in members[1:]]}))
+    return aggregated
+
+
+def verify_finding(candidate, result, service, changed_files, related_candidates=()):
     if result.get("status") != "completed":
         raise ValueError("verification_not_completed")
     output = VerificationOutput.model_validate(result["output"])
@@ -83,6 +123,21 @@ def verify_finding(candidate, result, service, changed_files):
         if change.get("change_type") != "added" and not any(
                 ref.side == "base" and ref.path == base_path for ref in refs):
             raise ValueError("base_comparison_missing")
+        peers = {item["id"]: item for item in related_candidates}
+        if len(peers) != len(related_candidates) or candidate.id in peers:
+            raise ValueError("invalid_equivalence_scope")
+        for identity in output.equivalent_candidate_ids:
+            peer = peers.get(identity)
+            if (peer is None or peer["affected_path"] != candidate.affected_path
+                    or peer["attribution"] != candidate.attribution
+                    or abs(peer["line"] - candidate.line) > 20 or not any(
+                    ref.path == peer["affected_path"] and ref.side == "head"
+                    and ref.start_line <= peer["line"] <= ref.end_line for ref in refs)):
+                raise ValueError("equivalence_subject_not_read")
+        if output.equivalent_candidate_ids and not any(
+                ref.side == "head" and ref.path == candidate.affected_path
+                and ref.start_line <= candidate.line <= ref.end_line for ref in refs):
+            raise ValueError("equivalence_anchor_not_read")
     verification = VerificationResult(candidate_id=candidate.id, **output.model_dump())
     inline = None
     if decision == "confirmed":
@@ -94,7 +149,8 @@ def verify_finding(candidate, result, service, changed_files):
                 inline = candidate.line
         return verification, VerifiedFinding(
             id=candidate.id, candidate=candidate, verification=verification,
-            evidence_ids=sorted(set(output.evidence_ids)), inline_line=inline)
+            evidence_ids=sorted(set(output.evidence_ids)), inline_line=inline,
+            related_candidate_ids=[])
     return verification, None
 
 

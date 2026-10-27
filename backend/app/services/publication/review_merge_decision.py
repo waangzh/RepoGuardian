@@ -2,6 +2,7 @@
 
 from app.models.publication import MergeDecision, OutcomeReason, ReviewOutcome
 from app.review.models import VerifiedFinding
+from app.review.findings import finding_severity
 from app.services.publication.review_text_format import MERGE_LABELS, REASON_LABELS
 # 合并建议是审查策略输出，不是 GitHub Mergeability 或分支保护结论。
 POLICY_BOUNDARY = "这是 RepoGuardian 按审查策略给出的建议，不代表 GitHub 的 Mergeability 状态或分支保护会阻止合并。"
@@ -14,8 +15,8 @@ def merge_decision(
     content_eligible: bool,
     execution_complete: bool,
 ) -> MergeDecision:
-    blocking = sorted({item.id for item in findings if item.candidate.severity in {"critical", "high"}})
-    suggestions = sorted({item.id for item in findings if item.candidate.severity in {"medium", "low"}})
+    blocking = sorted({item.id for item in findings if finding_severity(item) in {"critical", "high"}})
+    suggestions = sorted({item.id for item in findings if finding_severity(item) in {"medium", "low"}})
     reasons = {reason.value for reason in outcome.reason_codes
                if reason != OutcomeReason.USAGE_INTEGRITY_UNKNOWN}
     scope_complete = (outcome.coverage == "complete" and outcome.review_completeness == "complete"

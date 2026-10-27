@@ -13,7 +13,8 @@ from langsmith import Client, tracing_context
 from app.review.agents import build_agent
 from app.review.context import ReviewContext
 from app.review.findings import (
-    candidate_gate, collect_candidates, covered_goals, verify_finding,
+    aggregate_findings, candidate_gate, collect_candidates, comparison_candidates,
+    covered_goals, verify_finding,
 )
 from app.review.models import AgentResult, CandidateFinding, ReviewReport, VerificationResult
 from app.review.planning import plan_review
@@ -64,7 +65,8 @@ async def plan(state: ReviewState, runtime: Runtime[ReviewContext]):
     context = runtime.context
     sources = await context.sources()
     goals, assignments, _ = plan_review(
-        sources.changed_files, depth=context.depth, selected_paths=context.selected_paths, focus=context.focus)
+        sources.changed_files, depth=context.depth, selected_paths=context.selected_paths, focus=context.focus,
+        repository_graph=sources.repository_graph, symbols=sources.symbols)
     await context.emit(phase="planning", assignments=[item.model_dump() for item in assignments])
     return {"goals": [item.model_dump() for item in goals],
             "assignments": [item.model_dump() for item in assignments], "status": "discovering"}
@@ -96,7 +98,7 @@ async def run_agent(context, identity, reviewer, payload):
                 context=sources, config={"recursion_limit": context.limits.model_calls * 4 + 8,
                                          "callbacks": [usage_observer]})
         await context.active()
-        evidence, read_errors = set(), 0
+        evidence, read_errors, pending_pages, consumed_pages = set(), 0, set(), set()
         for message in result["messages"]:
             if isinstance(message, ToolMessage) and message.name in {
                 "read_file", "read_base_file", "read_diff", "read_symbol", "search_code",
@@ -106,11 +108,18 @@ async def run_agent(context, identity, reviewer, payload):
                     body = json.loads(message.content)
                     if body.get("ok") is not True or body.get("truncated") or body.get("unreadable_files"):
                         read_errors += 1
+                    if body.get("ok") and body.get("pagination_id"):
+                        pagination = body["pagination_id"]
+                        if body.get("cursor"):
+                            consumed_pages.add((pagination, body["cursor"]))
+                        if body.get("next_cursor"):
+                            pending_pages.add((pagination, body["next_cursor"]))
                     if (message.name in {"read_file", "read_base_file", "read_symbol"}
                             and body.get("ok") and body.get("evidence")):
                         evidence.add(body["evidence"]["id"])
                 except (ValueError, TypeError, KeyError):
                     read_errors += 1
+        read_errors += len(pending_pages - consumed_pages)
         output = result["structured_response"].model_dump()
         envelope = AgentResult(id=identity, status="completed", output=output,
             evidence_ids=sorted(evidence), read_errors=read_errors, **usage_observer.values())
@@ -163,13 +172,15 @@ async def evidence_gate(state: ReviewState, runtime: Runtime[ReviewContext]):
 
 
 def route_verification(state):
-    return [Send("verify", {"review_id": state["review_id"], "candidate": item})
+    return [Send("verify", {"review_id": state["review_id"], "candidate": item,
+                           "related_candidates": comparison_candidates(item, state["eligible_candidates"])})
             for item in state["eligible_candidates"]] or "arbitrate"
 
 
 async def verify(state: ReviewState, runtime: Runtime[ReviewContext]):
     candidate = state["candidate"]
-    result = await run_agent(runtime.context, candidate["id"], "verifier", {"candidate": candidate})
+    result = await run_agent(runtime.context, candidate["id"], "verifier",
+        {"candidate": candidate, "related_candidates": state.get("related_candidates", [])})
     return {"verification_results": [result]}
 
 
@@ -186,17 +197,18 @@ async def arbitrate(state: ReviewState, runtime: Runtime[ReviewContext]):
             if result is None or result["status"] != "completed":
                 raise ValueError("verifier_failed")
             decision, finding = await asyncio.to_thread(
-                verify_finding, candidate, result, sources.evidence, sources.changed_files)
+                verify_finding, candidate, result, sources.evidence, sources.changed_files,
+                comparison_candidates(raw, state["eligible_candidates"]))
             decisions.append(decision.model_dump())
             if finding:
-                findings.append(finding.model_dump())
+                findings.append(finding)
         except (ValueError, OSError):
             decisions.append(VerificationResult(candidate_id=candidate.id,
                 decision="insufficient_evidence", explanation="独立核验未完成或源码证据不足",
                 attribution="uncertain").model_dump())
     await runtime.context.emit(phase="arbitrate", confirmed=len(findings),
                                unresolved=sum(item["decision"] == "insufficient_evidence" for item in decisions))
-    return {"findings": findings, "decisions": decisions}
+    return {"findings": [item.model_dump() for item in aggregate_findings(findings)], "decisions": decisions}
 
 
 def route_investigation(state):
@@ -207,13 +219,15 @@ def route_investigation(state):
     eligible = {item["id"] for item in state["eligible_candidates"]}
     candidates = [item for item in state["candidates"]
                   if item["id"] in pending & eligible and item["severity"] in {"critical", "high"}]
-    return [Send("investigate", {"review_id": state["review_id"], "candidate": item})
+    return [Send("investigate", {"review_id": state["review_id"], "candidate": item,
+                                "related_candidates": comparison_candidates(item, state["eligible_candidates"])})
             for item in candidates] or "report"
 
 
 async def investigate(state: ReviewState, runtime: Runtime[ReviewContext]):
     candidate = state["candidate"]
-    result = await run_agent(runtime.context, candidate["id"], "investigator", {"candidate": candidate})
+    result = await run_agent(runtime.context, candidate["id"], "investigator",
+        {"candidate": candidate, "related_candidates": state.get("related_candidates", [])})
     return {"investigation_results": [result]}
 
 

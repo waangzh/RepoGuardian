@@ -1,7 +1,7 @@
 """Revalidate saved graph findings and immutable evidence before publication."""
 
 from app.review.evidence import EvidenceArchive
-from app.review.findings import candidate_gate, verify_finding
+from app.review.findings import aggregate_findings, candidate_gate, comparison_candidates, verify_finding
 from app.services.review.artifact_store import LocalArtifactStore
 
 
@@ -26,20 +26,51 @@ def validated_findings(task, artifacts=None):
         selected_paths = set(task.configuration.options.scope.primary_files)
         changed = [item for item in changed if item["file_path"] in selected_paths]
     selected, withheld, seen = [], [], set()
-    for finding in report.findings:
-        if finding.id in seen:
-            withheld.append((finding.id, "duplicate_finding_conflict"))
-            selected = [item for item in selected if item.id != finding.id]
-            continue
-        seen.add(finding.id)
+    confirmed = {item.candidate_id for item in report.decisions if item.decision == "confirmed"}
+    if len(candidates) != len(report.candidates):
+        return [], [(identity, "duplicate_candidate_conflict") for identity in sorted(confirmed or candidates)]
+    if len(decisions) != len(report.decisions):
+        return [], [(identity, "duplicate_decision_conflict") for identity in sorted(confirmed or candidates)]
+    if not confirmed <= set(candidates):
+        return [], [(identity, "confirmed_candidate_missing") for identity in sorted(confirmed - set(candidates))]
+    raw_candidates = []
+    for candidate in report.candidates:
         try:
-            candidate = candidates[finding.id]
-            if (candidate != finding.candidate or decisions[finding.id] != finding.verification
-                    or finding.verification.decision != "confirmed"):
-                raise ValueError("finding_subject_mismatch")
             candidate_gate(candidate, archive, discovery, changed)
-            decision, rebuilt = verify_finding(candidate, results[finding.id], archive, changed)
-            if rebuilt != finding or decision != finding.verification:
+            raw_candidates.append(candidate.model_dump())
+        except (ValueError, OSError):
+            if candidate.id in confirmed:
+                return [], [(candidate.id, "publication_evidence_invalid")]
+    member_ids = [identity for finding in report.findings
+                  for identity in (finding.id, *finding.related_candidate_ids)]
+    if len(member_ids) != len(set(member_ids)) or set(member_ids) != confirmed:
+        missing = confirmed - set(member_ids)
+        extra = set(member_ids) - confirmed
+        for identity in sorted(missing):
+            withheld.append((identity, "confirmed_finding_missing"))
+        for identity in sorted(extra):
+            withheld.append((identity, "nonconfirmed_finding_member"))
+        if missing or extra:
+            return [], sorted(set(withheld))
+    for finding in report.findings:
+        members = [finding.id, *finding.related_candidate_ids]
+        if len(set(members)) != len(members) or set(members) & seen:
+            withheld.append((finding.id, "duplicate_finding_conflict"))
+            selected = [item for item in selected
+                        if not {item.id, *item.related_candidate_ids} & set(members)]
+            continue
+        seen.update(members)
+        try:
+            rebuilt_members = []
+            for identity in members:
+                candidate = candidates[identity]
+                decision, rebuilt = verify_finding(candidate, results[identity], archive, changed,
+                    comparison_candidates(candidate.model_dump(), raw_candidates))
+                if rebuilt is None or decision != decisions[identity]:
+                    raise ValueError("finding_subject_mismatch")
+                rebuilt_members.append(rebuilt)
+            reconstructed = aggregate_findings(rebuilt_members)
+            if reconstructed != [finding]:
                 raise ValueError("finding_subject_mismatch")
             selected.append(finding)
         except (KeyError, ValueError, OSError):

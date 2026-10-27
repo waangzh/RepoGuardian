@@ -10,6 +10,7 @@ from app.services.publication.publication_renderer import (
 from app.services.publication.review_merge_decision import merge_decision
 from app.services.publication.review_presentation import build_presentation
 from app.services.publication.review_publication import validated_findings
+from app.review.findings import finding_severity
 from app.services.review.review_findings import finding_views
 from app.services.review.review_outcome import derive_review_outcome, snapshot_valid
 
@@ -76,20 +77,23 @@ class PublicationPlanner:
                                                        for identity, reason in sorted(set(withheld))])
         for finding in selected:
             candidate = finding.candidate
+            members = [item for item in report.candidates
+                       if item.id in {finding.id, *finding.related_candidate_ids}]
             text = {"claim": candidate.title, "affected_behavior": candidate.impact,
-                    "failure_scenario": candidate.trigger + "；" + candidate.actual_behavior,
+                    "failure_scenario": "\n".join(dict.fromkeys(
+                        item.trigger + "；" + item.actual_behavior for item in members)),
                     "recommendation": candidate.recommendation}
             change = next(item for item in task.changed_files if item.file_path == candidate.affected_path)
             draft = PublicationFinding(finding_key=finding.id, candidate_id=finding.id,
                 attribution=candidate.attribution,
-                severity=candidate.severity, placement="inline" if finding.inline_line else "summary",
+                severity=finding_severity(finding), placement="inline" if finding.inline_line else "summary",
                 anchor=PublicationAnchor(file_path=candidate.affected_path, start_line=candidate.line,
                     end_line=candidate.line, side="base" if change.change_type == "deleted" else "head"),
                 title=candidate.title, category="correctness",
                 evidence_summary=finding.verification.explanation, evidence_ids=finding.evidence_ids,
                 affected_behavior=text["affected_behavior"], failure_scenario=text["failure_scenario"],
                 recommendation=candidate.recommendation,
-                body_markdown=finding_body(text, candidate.severity, category="correctness",
+                body_markdown=finding_body(text, finding_severity(finding), category="correctness",
                                            evidence_summary=finding.verification.explanation))
             draft.body_markdown += "\n\n**变更归因：** " + {
                 "introduced": "由本次 PR 引入", "exposed": "由本次 PR 暴露或扩大影响",
