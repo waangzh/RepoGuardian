@@ -59,7 +59,8 @@ async def arbitrate(state: ReviewState, runtime: Runtime[ReviewContext]):
                 decision="insufficient_evidence", explanation="独立核验未完成或源码证据不足",
                 attribution="uncertain").model_dump())
     await runtime.context.emit(phase="arbitrate", confirmed=len(findings),
-                               unresolved=sum(item["decision"] == "insufficient_evidence" for item in decisions))
+        unresolved=sum(item["decision"] == "insufficient_evidence" for item in decisions),
+        candidates=len(state["eligible_candidates"]))
     return {"findings": [item.model_dump() for item in aggregate_findings(findings)], "decisions": decisions}
 
 

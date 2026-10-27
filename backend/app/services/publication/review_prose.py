@@ -9,8 +9,13 @@ _NO_AUTHOR_GOAL = "未记录明确的作者目标。"
 
 def author_goal_text(value: str | None) -> str:
     """返回可展示的作者目标；哨兵与审计来源文本返回空串。"""
-    text = " ".join((value or "").split())
-    return "" if not text or text == _NO_AUTHOR_GOAL or _AUDIT_PURPOSE.search(text) else text
+    paragraphs = re.split(r"\n\s*\n", value or "")
+    kept = []
+    for paragraph in paragraphs:
+        sentences = re.split(r"(?<=[.!?。！？])\s+", paragraph.strip())
+        kept.extend(sentence for sentence in sentences if not _AUDIT_PURPOSE.search(sentence))
+    text = " ".join(" ".join(kept).split())
+    return "" if not text or text == _NO_AUTHOR_GOAL else text
 
 
 def concise_text(value: str | None, limit: int = 240) -> str:

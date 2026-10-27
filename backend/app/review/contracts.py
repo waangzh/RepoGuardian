@@ -54,6 +54,7 @@ class ReviewProgress(ReviewModel):
     status: Literal["running", "completed", "failed"]
     message: str
     data: dict = Field(default_factory=dict)
+    started_at: datetime | None = None
     updated_at: datetime = Field(default_factory=utcnow)
 
 
@@ -73,6 +74,7 @@ class ReviewTask(ReviewModel):
     report_markdown: str | None = None
     warnings: list[str] = Field(default_factory=list)
     error: str | None = None
+    retry_count: int = Field(default=0, ge=0, le=1)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
     completed_at: datetime | None = None

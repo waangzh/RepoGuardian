@@ -168,7 +168,7 @@ def test_current_report_does_not_invent_unknown_investigations_or_legacy_intent_
     plan.digest.merge_decision = merge_decision(
         plan.outcome, [], content_eligible=True, execution_complete=True,
     )
-    task = SimpleNamespace(configuration=SimpleNamespace(provider="fixture", model="fixture"))
+    task = SimpleNamespace(configuration=SimpleNamespace(provider="fixture", model="fixture"), review_report=None)
     texts = [render_user_report(task, plan), render_review_comment(plan, detail="full")]
     plan.presentation = build_presentation(plan)
     texts += [render_summary(plan), render_review_comment(plan, detail="full")]

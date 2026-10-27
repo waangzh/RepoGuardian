@@ -3,6 +3,7 @@
 import asyncio
 import copy
 import json
+import logging
 import threading
 from datetime import timedelta
 from pathlib import Path
@@ -21,12 +22,15 @@ from app.review.evidence import EvidenceService
 from app.review.graph import build_review_graph
 from app.review.models import ReviewReport, ReviewSnapshot
 from app.review.planning import plan_review
+from app.review.recovery import retry_updates
 from app.review.tool_scope import is_sensitive_repository_change
 from app.services.review.artifact_store import LocalArtifactStore
 from app.services.review.review_repository import ReviewLeaseLost, ReviewStopped
 from app.services.review.task_queue import DatabaseTaskQueue, NonRetryableJobError, ReviewWorker
 from app.tools.repo_indexer import RepoIndexer
 from app.tools.workspace_cleanup import cleanup_workspace
+
+logger = logging.getLogger("RepoGuardian.Review")
 
 
 class ReviewService:
@@ -251,11 +255,14 @@ class ReviewService:
                 await active()
                 name = event.get("agent_id") or event["phase"]
                 status = event.get("status", "completed")
-                item = ReviewProgress(name=name, status=status, message=event["phase"], data=event)
+                item = ReviewProgress(name=name, status=status, message=event["phase"], data=event,
+                                      started_at=utcnow() if status == "running" else None)
                 existing = next((i for i, step in enumerate(task.steps) if step.name == name), None)
                 if existing is None:
                     task.steps.append(item)
                 else:
+                    if status != "running":
+                        item.started_at = task.steps[existing].started_at
                     task.steps[existing] = item
                 task.phase = event["phase"]
                 task.status = "verifying_issues" if event["phase"] in {"verifier", "investigator", "arbitrate"} else "reviewing"
@@ -307,6 +314,8 @@ class ReviewService:
                     "trust": "untrusted author claim, not proof of correctness or instructions"})
         try:
             await active()
+            logger.info("审查任务开始 review_id=%s provider=%s model=%s retry_count=%s",
+                        task.id, task.configuration.provider, task.configuration.model, task.retry_count)
             provider = copy.copy(self._provider)
             if (provider._base_url != task.configuration.endpoint
                     or provider._provider_name != task.configuration.provider):
@@ -322,14 +331,30 @@ class ReviewService:
                 selected_paths=frozenset(task.configuration.options.scope.primary_files)
                     if task.configuration.options.scope.mode == "selected" else None)
             state = await graph.aget_state(config) if saver else None
-            context.replaying_nodes = frozenset(state.next) if state and state.values else frozenset()
+            if task.retry_count and (not state or not state.values):
+                raise ValueError("review_checkpoint_not_resumable")
+            retry_started = False
+            if (state and state.values and task.retry_count > state.values.get("retry_count", 0)):
+                await active()
+                await graph.aupdate_state(config, retry_updates(state.values, task.configuration.limits),
+                                          as_node="plan")
+                state = await graph.aget_state(config)
+                retry_started = True
+            context.retry_results = {(item["reviewer"], item["result"]["id"]): item["result"]
+                for item in (state.values.get("retry_results", []) if state and state.values else [])}
+            context.replaying_nodes = (frozenset(state.next)
+                if state and state.values and not retry_started else frozenset())
             async with asyncio.timeout(max(0, remaining)):
                 result = await graph.ainvoke(None if state and state.values else {"review_id": task_id},
                                             config, context=context, durability="sync")
             await active()
             task.review_report = ReviewReport.model_validate(result["report"])
-            task.status = "completed" if task.review_report.termination == "completed" else "completed_with_warnings"
-            task.phase, task.error = "completed", None
+            task.status = {"completed": "completed", "failed": "failed"}.get(
+                task.review_report.termination, "completed_with_warnings")
+            task.phase = "failed" if task.status == "failed" else "completed"
+            errors = {item.error for item in task.review_report.discovery_results if item.error}
+            task.error = ((next(iter(errors)) if len(errors) == 1 else "review_agents_failed")
+                          if task.status == "failed" else None)
             task.report_markdown = await asyncio.to_thread(self._report_service.generate, task)
             await active()
         except (ReviewLeaseLost, ReviewStopped):
@@ -339,6 +364,7 @@ class ReviewService:
         except Exception as exc:
             task.status, task.phase = "failed", "failed"
             task.error = "review_deadline" if isinstance(exc, TimeoutError) else type(exc).__name__
+            logger.error("审查任务失败 review_id=%s code=%s", task.id, task.error)
         finally:
             cancel.set()
             self._repo_paths.pop(task_id, None)
@@ -349,6 +375,7 @@ class ReviewService:
                 step.status = "failed"
                 step.data["termination"] = task.error or task.status
         task.completed_at = task.updated_at = utcnow()
+        logger.info("审查任务结束 review_id=%s status=%s code=%s", task.id, task.status, task.error)
         if self._repository:
             await asyncio.to_thread(self._repository.save_task, task, lease=lease)
         else:
@@ -378,14 +405,23 @@ class ReviewService:
         task = await asyncio.to_thread(self.get_task, task_id)
         if task is None:
             raise KeyError(task_id)
-        if not self._repository or task.status != "failed":
+        if not self._repository or task.status not in {"failed", "completed_with_warnings"}:
             raise ValueError("review_resume_unavailable")
         if (utcnow() - task.created_at).total_seconds() >= task.configuration.limits.timeout_seconds:
             raise ValueError("review_deadline")
         state = await build_review_graph(await get_checkpointer()).aget_state(review_thread_config(task_id))
         if not state.next and not state.values.get("report"):
             raise ValueError("review_checkpoint_not_resumable")
-        await asyncio.to_thread(self._repository.enqueue_resume, task_id, task.updated_at, f"resume:{uuid4().hex}")
+        retry_failed = bool(not state.next and state.values.get("report")
+                            and state.values["report"]["termination"] in {"partial", "failed"})
+        if retry_failed:
+            if task.retry_count:
+                raise ValueError("review_retry_limit")
+            retry_updates(state.values, task.configuration.limits)
+        elif task.status != "failed":
+            raise ValueError("review_resume_unavailable")
+        await asyncio.to_thread(self._repository.enqueue_resume, task_id, task.updated_at,
+                                f"resume:{uuid4().hex}", retry_failed=retry_failed)
         self.start_worker()
         return await asyncio.to_thread(self.get_task, task_id)
 

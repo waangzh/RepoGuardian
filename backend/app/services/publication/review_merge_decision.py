@@ -38,6 +38,8 @@ def merge_decision(
         decision.label = {"failed": "审查中断，尚无完整结论",
                           "cancelled": "审查已停止，已保留部分结果"}.get(
                               outcome.kind, MERGE_LABELS["unavailable"])
+        if outcome.kind == "failed":
+            decision.label = "审查执行失败，尚无完整结论"
     elif blocking:
         decision.status = "fix_blockers"
         decision.label = f"发现 {len(blocking)} 项高优先级问题，建议修复后复审"

@@ -28,6 +28,12 @@ def source_lines(content: str) -> list[str]:
     return [line + "\n" for line in lines[:-1]] + ([lines[-1]] if lines[-1] else [])
 
 
+class SourceReadError(ValueError):
+    def __init__(self, code, **details):
+        super().__init__(code)
+        self.code, self.details = code, details
+
+
 
 @dataclass
 class EvidenceArchive:
@@ -67,34 +73,36 @@ class EvidenceService(EvidenceArchive):
         if path not in self.allowed_paths or is_sensitive_repository_path(path):
             raise ReviewPathPolicyError("path_not_authorized")
         if side not in {"head", "base"}:
-            raise ValueError("invalid_source_side")
+            raise SourceReadError("invalid_source_side")
         sha = self.snapshot.head_sha if side == "head" else self.snapshot.base_sha
         entry = self.git.get_tree_entries(self.repo_path, sha, [path]).get(path)
         if not entry or entry.get("mode") not in {"100644", "100755"}:
             raise ReviewPathPolicyError("source_not_regular_blob")
         if entry.get("size") is None or entry["size"] > self.max_file_bytes:
-            raise ValueError("source_too_large")
+            raise SourceReadError("source_too_large")
         # Existing Head paths must also obey realpath containment. Base deletions
         # are read from blobs and need no working tree file.
         if (self.repo_path / path).exists() or (self.repo_path / path).is_symlink():
             validate_repository_file(self.repo_path, path, require_tracked_if_git=False)
         source = self.git.get_file_content_at_revision(self.repo_path, sha, path)
         if source is None:
-            raise ValueError("source_unavailable")
+            raise SourceReadError("source_unavailable")
         return sha, source
 
     def _read(self, path: str, start: int, end: int, side: str) -> dict:
         if type(start) is not int or type(end) is not int or start < 1 or end < start:
-            raise ValueError("invalid_source_range")
+            raise SourceReadError("invalid_source_range")
         if end - start + 1 > self.max_lines:
-            raise ValueError("source_range_too_large")
+            raise SourceReadError("source_range_too_large", max_lines=self.max_lines)
         sha, source = self._source(path, side)
         lines = source_lines(source)
         if end > len(lines):
-            raise ValueError("source_range_out_of_bounds")
+            raise SourceReadError("source_range_out_of_bounds", side=side,
+                requested_range=[start, end], available_range=[1, len(lines)] if lines else None,
+                retryable_with_corrected_arguments=bool(lines))
         content = "".join(lines[start - 1:end])
         if len(content) > self.max_output_chars:
-            raise ValueError("source_output_too_large")
+            raise SourceReadError("source_output_too_large")
         payload = {
             "review_id": self.snapshot.review_id, "commit_sha": sha, "side": side,
             "path": path, "start_line": start, "end_line": end,

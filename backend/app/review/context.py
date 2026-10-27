@@ -29,6 +29,7 @@ class ReviewContext:
     focus: tuple[str, ...] = ("correctness", "security", "performance", "compatibility")
     selected_paths: frozenset[str] | None = None
     replaying_nodes: frozenset[str] = frozenset()
+    retry_results: dict[tuple[str, str], dict] = field(default_factory=dict)
     check_active: Callable[[], Awaitable[None]] | None = None
     progress: Callable[[dict], Awaitable[None]] | None = None
     _agent_context: AgentContext | None = None

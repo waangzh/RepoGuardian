@@ -15,16 +15,20 @@ from app.review.state import ReviewState
 
 
 def route_discovery(state):
+    completed = {item["id"] for item in state.get("discovery_results", [])
+                 if item["status"] == "completed"}
     return [Send("discover", {"review_id": state["review_id"], "assignment": item,
                              "goals": [goal for goal in state["goals"] if goal["id"] in item["goal_ids"]]})
-            for item in state["assignments"]] or "collect"
+            for item in state["assignments"] if item["id"] not in completed] or "collect"
 
 
 
 def route_verification(state):
+    completed = {item["id"] for item in state.get("verification_results", [])
+                 if item["status"] == "completed"}
     return [Send("verify", {"review_id": state["review_id"], "candidate": item,
                            "related_candidates": comparison_candidates(item, state["eligible_candidates"])})
-            for item in state["eligible_candidates"]] or "arbitrate"
+            for item in state["eligible_candidates"] if item["id"] not in completed] or "arbitrate"
 
 
 
@@ -34,8 +38,10 @@ def route_investigation(state):
     pending = {item["candidate_id"] for item in state["decisions"]
                if item["decision"] == "insufficient_evidence"}
     eligible = {item["id"] for item in state["eligible_candidates"]}
+    completed = {item["id"] for item in state.get("investigation_results", [])
+                 if item["status"] == "completed"}
     candidates = [item for item in state["candidates"]
-                  if item["id"] in pending & eligible and item["severity"] in {"critical", "high"}]
+                  if item["id"] in (pending & eligible) - completed and item["severity"] in {"critical", "high"}]
     return [Send("investigate", {"review_id": state["review_id"], "candidate": item,
                                 "related_candidates": comparison_candidates(item, state["eligible_candidates"])})
             for item in candidates] or "report"

@@ -7,6 +7,7 @@ from functools import wraps
 from langchain.tools import ToolRuntime, tool
 
 from app.review.context import AgentContext
+from app.review.evidence import SourceReadError
 from app.review.retrieval import diff_page, find_paths, search
 from app.review.tool_scope import is_sensitive_repository_path
 
@@ -22,6 +23,8 @@ def safe_read(function):
             result = await function(*args, **kwargs)
             if len(json.dumps(result)) > 24000:
                 return {"ok": False, "error": "tool_output_too_large", "truncated": True}
+        except SourceReadError as exc:
+            return {"ok": False, "error": exc.code, **exc.details, "truncated": False}
         except (ValueError, OSError) as exc:
             return {"ok": False, "error": "read_rejected",
                     "error_type": type(exc).__name__, "truncated": False}

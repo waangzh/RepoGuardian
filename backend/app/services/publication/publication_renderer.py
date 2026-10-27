@@ -4,6 +4,7 @@ import re
 from urllib.parse import quote
 
 from app.models.publication import PublicationFinding, PublicationPlan
+from app.review.errors import execution_error_text
 from app.services.publication.review_prose import author_goal_text
 from app.services.publication.review_text_format import (
     MERGE_SYMBOLS, OUTCOME_DESCRIPTIONS, REASON_LABELS,
@@ -159,9 +160,11 @@ def _author_source_lines(plan):
 def _change_understanding(plan, *, full=False):
     understanding = plan.digest.change_understanding
     author_goal = _author_goal(plan) or "未记录明确的作者目标。"
-    actual = understanding.actual_changes if understanding else "未保存可归纳的实际变更。"
-    alignment = (understanding.alignment if understanding
-                 else "未保存逐目标的符合性核验记录，不能由覆盖率推断作者目标已经实现。")
+    actual = ((understanding.implementation_changes or understanding.diff_summary
+               or understanding.actual_changes) if understanding else "未保存固定 Diff 事实。")
+    alignment = ("尚未形成完整的行为核验结论，不能判断作者目标是否实现。"
+                 if plan.outcome.review_completeness != "complete"
+                 else "源码范围检查已完成；覆盖记录不等于对作者全部目标的实现证明。")
     lines = ["", "## PR 变更理解", "",
         "**PR 目标：** " + markdown_text(author_goal, 1200 if full else 400), "",
         "**代码实际改变了什么：** " + markdown_text(actual, 2000 if full else 600), "",
@@ -229,6 +232,19 @@ def render_user_report(task, plan: PublicationPlan) -> str:
              f"未确认候选 {outcome.unresolved_count} 项。"]
     if plan.digest.merge_decision.limits:
         lines += ["", "需要补充或确认：", *[f"- {value}" for value in plan.digest.merge_decision.limits]]
+    if task.review_report:
+        roles = {item.id: {"behavior": "行为审查", "contract": "契约审查",
+                          "specialist": "风险专家审查"}[item.reviewer]
+                 for item in task.review_report.assignments}
+        failures = [item for item in task.review_report.discovery_results + task.review_report.verification_results
+                    if item.status == "failed"]
+        if failures:
+            lines += ["", "**执行失败原因：**", ""]
+            for item in failures:
+                lines.append(f"- {roles.get(item.id, '独立核验或定向调查')}："
+                    f"{execution_error_text(item.error)}（{markdown_text(item.error or 'unknown')}）；"
+                    f"模型调用 {item.model_calls if item.model_calls is not None else '未知'} / "
+                    f"{task.configuration.limits.model_calls}，读取或工具失败 {item.tool_failures} 次。")
     lines += _change_understanding(plan, full=True)
     lines += ["", "## 代码证据已确认的问题", ""]
     findings = _ordered_findings(plan)
@@ -284,7 +300,8 @@ def _risk_section(plan):
         items.append(f"- {REASON_LABELS[reason]}")
     for goal in plan.digest.incomplete_goals[:5]:
         items.append(f"- 未完成目标：{markdown_text(goal.path or '文件未记录', 500)}"
-                     + (f":{goal.start_line}" if goal.start_line else "")
+                     + (f":{goal.start_line}–{goal.end_line}" if goal.start_line else "")
+                     + (f"（{goal.side.upper()}）" if goal.side else "")
                      + (f"；{markdown_text(goal.reason)}" if goal.reason else ""))
     if not items:
         lines.append("没有需要单独关注的未决风险；仍以审查范围与验证边界为准。")

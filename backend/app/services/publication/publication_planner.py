@@ -13,6 +13,7 @@ from app.services.publication.review_publication import validated_findings
 from app.review.findings import finding_attribution, finding_severity
 from app.services.review.review_findings import finding_views
 from app.services.review.review_outcome import derive_review_outcome, snapshot_valid
+from app.services.publication.review_prose import author_goal_text
 
 
 def summary_projection(plan):
@@ -37,15 +38,16 @@ class PublicationPlanner:
         if blockers:
             withheld.extend((finding.id, "review_content_blocked") for finding in selected)
             selected = []
-        digest = ReviewDigest(pr_url=task.pr_url, author_goal=task.pr.body or task.pr.title,
+        author_goal = author_goal_text(task.pr.body) or task.pr.title
+        digest = ReviewDigest(pr_url=task.pr_url, author_goal=author_goal,
             author_context_status="truncated" if len(task.pr.body or "") > 4000 else "complete",
             author_context_limitation="模型仅收到前 4000 字符作者声明。" if len(task.pr.body or "") > 4000 else None,
             discussion_review_enabled=bool(task.configuration.options.include_pr_discussions),
             actual_changes=[f"{item.file_path}: +{item.additions} / -{item.deletions}" for item in task.changed_files],
             findings=finding_views(task, dispositions or {}, self.artifacts),
             execution_status=task.status)
-        digest.change_understanding = ChangeUnderstanding(author_goal=task.pr.body or task.pr.title,
-            author_goal_source="description" if task.pr.body else "title",
+        digest.change_understanding = ChangeUnderstanding(author_goal=author_goal,
+            author_goal_source="description" if author_goal_text(task.pr.body) else "title",
             diff_summary=f"本次变更涉及 {len(task.changed_files)} 个文件，新增 "
                 f"{sum(item.additions for item in task.changed_files)} 行、删除 "
                 f"{sum(item.deletions for item in task.changed_files)} 行。")

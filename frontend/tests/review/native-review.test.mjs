@@ -45,3 +45,47 @@ test('方案克隆从 Vue 原始值创建，保留选择且不修改冻结方案
  clone.scope.primary_files.push('other.py');
  assert.deepEqual(plan.value.scope.primary_files,['safe.py']);
 });
+
+test('失败分支补查入口受一次次数、剩余额度和原总期限限制',async()=>{
+ const server=await createServer({server:{middlewareMode:true,hmr:false},optimizeDeps:{noDiscovery:true,entries:[],include:[]},appType:'custom'});
+ try{
+  const {resumeLabel,orderedProgress}=await server.ssrLoadModule('/src/utils/nativeReview.ts');
+  const task={status:'completed_with_warnings',retry_count:0,created_at:new Date().toISOString(),
+   configuration:{limits:{model_calls:24,tool_calls:80,timeout_seconds:1800}},
+   review_report:{termination:'partial',discovery_results:[{status:'failed',model_calls:17,tool_calls:21}],verification_results:[]},
+   steps:[{name:'later',started_at:'2026-10-27T11:56:02Z',updated_at:'2026-10-27T11:56:20Z'},
+    {name:'earlier',started_at:'2026-10-27T11:56:00Z',updated_at:'2026-10-27T11:56:38Z'}]};
+  assert.equal(resumeLabel(task),'补查失败分支');
+  assert.equal(resumeLabel({...task,retry_count:1}),null);
+  assert.equal(resumeLabel({...task,status:'cancelled'}),null);
+  assert.equal(resumeLabel({...task,created_at:'2020-01-01T00:00:00Z'}),null);
+  for(const result of [{status:'failed',model_calls:null,tool_calls:21},{status:'failed',model_calls:17,tool_calls:null},
+   {status:'failed',model_calls:24,tool_calls:21},{status:'failed',model_calls:17,tool_calls:80}]){
+   assert.equal(resumeLabel({...task,review_report:{...task.review_report,discovery_results:[result]}}),null);
+  }
+  assert.equal(resumeLabel({...task,status:'failed',review_report:null}),'从检查点继续');
+  assert.deepEqual(orderedProgress(task).map(step=>step.name),['earlier','later']);
+  assert.deepEqual(task.steps.map(step=>step.name),['later','earlier']);
+ }finally{await server.close();}
+});
+
+test('活动页直接显示分支失败原因、实际用量和无候选核验边界',async()=>{
+ const server=await createServer({server:{middlewareMode:true,hmr:false},optimizeDeps:{noDiscovery:true,entries:[],include:[]},appType:'custom'});
+ try{
+  const {default:Component}=await server.ssrLoadModule('/src/components/pages/ReviewActivityPage.vue');
+  const failure={id:'agent',status:'failed',error:'GraphRecursionError',model_calls:17,tool_calls:21,
+   input_tokens:144450,output_tokens:1315,tool_failures:12,previous_attempts:[]};
+  const task={phase:'failed',configuration:{limits:{model_calls:24,tool_calls:80}},
+   steps:[{name:'agent',message:'behavior',status:'failed',started_at:'2026-10-27T11:56:00Z',
+    updated_at:'2026-10-27T11:56:23Z',data:{...failure}},
+   {name:'arbitrate',message:'arbitrate',status:'completed',started_at:null,
+    updated_at:'2026-10-27T11:56:38Z',data:{candidates:0}}],
+   review_report:{assignments:[{id:'agent',reviewer:'behavior',objective:'<script>untrusted</script>',focus_paths:['safe.py']}],
+    discovery_results:[failure],verification_results:[]}};
+  const html=await renderToString(createSSRApp(Component,{task}));
+  assert.match(html,/达到执行步数上限，未提交最终审查结果/);
+  assert.match(html,/17 \/ 24/);assert.match(html,/工具失败 12 次/);
+  assert.match(html,/无候选进入独立核验/);assert.match(html,/开始：/);assert.match(html,/结束：/);
+  assert.match(html,/&lt;script&gt;untrusted/);assert.doesNotMatch(html,/<script>|NaN|undefined/);
+ }finally{await server.close();}
+});

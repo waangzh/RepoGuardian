@@ -161,14 +161,26 @@ class ReviewRepository:
                 .values(status="cancelled", lease_owner=None, lease_until=None))
             return True
 
-    def enqueue_resume(self, task_id, expected_updated_at, enqueue_key):
+    def enqueue_resume(self, task_id, expected_updated_at, enqueue_key, *, retry_failed=False):
         with self._session_factory.begin() as session:
             row = self._guard(session, task_id)
-            if row.status != "failed" or as_utc(row.updated_at) != as_utc(expected_updated_at):
+            allowed = {"failed", "completed_with_warnings"} if retry_failed else {"failed"}
+            if row.status not in allowed or as_utc(row.updated_at) != as_utc(expected_updated_at):
                 raise ValueError("review_resume_stale")
             if session.scalar(select(WorkerJobOrm.id).where(WorkerJobOrm.task_id == task_id,
                     WorkerJobOrm.status == "leased", WorkerJobOrm.lease_until > utcnow()).limit(1)):
                 raise ValueError("review_job_active")
+            if session.scalar(select(PublicationAttemptOrm.id).where(
+                    PublicationAttemptOrm.review_id == task_id,
+                    or_(PublicationAttemptOrm.state.in_(["queued", "preparing", "publishing", "uncertain"]),
+                        PublicationAttemptOrm.id.in_(select(GitHubSummarySlotOrm.pending_publication_id))))):
+                raise ValueError("review_publication_pending")
+            if retry_failed:
+                task = ReviewTask.model_validate(self._load(row))
+                if task.retry_count:
+                    raise ValueError("review_retry_limit")
+                task.retry_count = 1
+                row.task_snapshot, row.task_snapshot_artifact_uri = self._serialize(task)
             row.status, row.current_phase, row.error_summary, row.completed_at = "queued", "prepare", None, None
             row.updated_at = utcnow()
             from app.services.review.task_queue import DatabaseTaskQueue
@@ -221,9 +233,13 @@ class ReviewRepository:
         if not candidates:
             return []
         with self._session_factory() as session:
-            return list(session.scalars(select(ReviewTaskOrm.thread_id).where(
+            rows = session.scalars(select(ReviewTaskOrm).where(
                 ReviewTaskOrm.thread_id.in_(candidates), ReviewTaskOrm.status.in_(
-                    ["completed", "completed_with_warnings", "cancelled", "deleted"]))))
+                    ["completed", "completed_with_warnings", "cancelled", "deleted"]))).all()
+            now = utcnow()
+            return [row.thread_id for row in rows if row.status != "completed_with_warnings"
+                or (now - as_utc(row.created_at)).total_seconds()
+                    >= ReviewTask.model_validate(self._load(row)).configuration.limits.timeout_seconds]
 
     def _serialize(self, task):
         payload = task.model_dump(mode="json")

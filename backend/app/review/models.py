@@ -134,18 +134,23 @@ class VerificationResult(VerificationOutput):
     candidate_id: str
 
 
-class AgentResult(ReviewModel):
-    id: str
+class AgentAttempt(ReviewModel):
     status: Literal["completed", "failed"]
-    output: dict = Field(default_factory=dict)
     evidence_ids: list[str] = Field(default_factory=list)
     error: str | None = None
     model_calls: int | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
+    tool_calls: int | None = None
     tool_failures: int = Field(default=0, ge=0)
     unconsumed_pages: int = Field(default=0, ge=0)
     investigation_limitations: list[str] = Field(default_factory=list, max_length=20)
+
+
+class AgentResult(AgentAttempt):
+    id: str
+    output: dict = Field(default_factory=dict)
+    previous_attempts: list[AgentAttempt] = Field(default_factory=list, max_length=1)
 
 
 class VerifiedFinding(ReviewModel):

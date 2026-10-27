@@ -31,3 +31,5 @@ class ReviewState(TypedDict, total=False):
     assignment: dict
     candidate: dict
     related_candidates: list[dict]
+    retry_count: int
+    retry_results: list[dict]
