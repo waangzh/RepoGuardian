@@ -68,6 +68,11 @@ def finding_severity(finding):
     return finding.verification.severity or finding.candidate.severity
 
 
+def finding_attribution(finding):
+    """已核验的归因是最终判断；候选归因只是发现阶段的初始假设。"""
+    return finding.verification.attribution
+
+
 def aggregate_findings(findings):
     """Only form cliques of independently confirmed, reciprocal equivalence claims."""
     remaining = {item.id: item for item in findings}
@@ -79,7 +84,7 @@ def aggregate_findings(findings):
             and left.verification.severity is not None
             and right.verification.severity is not None
             and finding_severity(left) == finding_severity(right)
-            and left.candidate.attribution == right.candidate.attribution
+            and finding_attribution(left) == finding_attribution(right)
             and left.candidate.affected_path == right.candidate.affected_path
             and abs(left.candidate.line - right.candidate.line) <= 20)
 
@@ -107,7 +112,8 @@ def verify_finding(candidate, result, service, changed_files, related_candidates
     if decision == "refuted" and not (refs or output.counterevidence_ids):
         raise ValueError("refutation_source_missing")
     if decision == "confirmed":
-        if output.attribution == "uncertain" or output.attribution != candidate.attribution:
+        # 候选归因只是初始假设；核验方基于 BASE/HEAD 证据给出最终归因。
+        if output.attribution == "uncertain":
             raise ValueError("finding_attribution_unverified")
         if output.counterevidence_ids:
             raise ValueError("finding_counterevidence_unresolved")

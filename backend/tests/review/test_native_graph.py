@@ -12,7 +12,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from app.review.checkpointer import _checkpoint_serializer
 from app.review.context import AgentContext, ReviewContext
-from app.review.findings import candidate_gate, collect_candidates, verify_finding
+from app.review.findings import candidate_gate, collect_candidates, finding_attribution, verify_finding
 from app.review.graph import build_review_graph
 from app.review.models import CandidateFinding, ReviewLimits, ReviewReport
 from app.services.review.review_outcome import derive_review_outcome
@@ -183,6 +183,26 @@ async def test_verifier_cannot_confirm_head_bug_using_only_base(source_service):
     with pytest.raises(ValueError, match="not_read_by_agent"):
         candidate_gate(candidate, source_service,
                        [{"id": "other-agent", "evidence_ids": [identity]}], [CHANGE])
+
+
+async def test_verifier_corrects_discovery_attribution_with_evidence(source_service):
+    head = await source_service.read("safe.py", 1, 1)
+    base = await source_service.read("safe.py", 1, 1, "base")
+    identities = [head["evidence"]["id"], base["evidence"]["id"]]
+    candidate = CandidateFinding(id="candidate", assignment_ids=["behavior"], title="问题",
+        trigger="输入", expected_behavior="正常", actual_behavior="失败", impact="丢失",
+        recommendation="修复", severity="high", affected_path="safe.py", line=1,
+        evidence_ids=identities, attribution="introduced")
+    output = {"status": "completed", "evidence_ids": identities, "output": {
+        "decision": "confirmed", "explanation": "BASE 已存在缺陷，本次 PR 扩大了影响",
+        "evidence_ids": identities, "attribution": "exposed", "severity": "high"}}
+    decision, finding = verify_finding(candidate, output, source_service, [CHANGE])
+    assert decision.attribution == finding_attribution(finding) == "exposed"
+    assert finding.candidate.attribution == "introduced"  # 候选初始假设保持原样
+
+    output["output"]["attribution"] = "uncertain"
+    with pytest.raises(ValueError, match="finding_attribution_unverified"):
+        verify_finding(candidate, output, source_service, [CHANGE])
 
 
 async def test_database_cancel_is_checked_between_native_model_calls(source_service):

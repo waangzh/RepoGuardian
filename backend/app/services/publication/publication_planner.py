@@ -10,7 +10,7 @@ from app.services.publication.publication_renderer import (
 from app.services.publication.review_merge_decision import merge_decision
 from app.services.publication.review_presentation import build_presentation
 from app.services.publication.review_publication import validated_findings
-from app.review.findings import finding_severity
+from app.review.findings import finding_attribution, finding_severity
 from app.services.review.review_findings import finding_views
 from app.services.review.review_outcome import derive_review_outcome, snapshot_valid
 
@@ -85,7 +85,7 @@ class PublicationPlanner:
                     "recommendation": candidate.recommendation}
             change = next(item for item in task.changed_files if item.file_path == candidate.affected_path)
             draft = PublicationFinding(finding_key=finding.id, candidate_id=finding.id,
-                attribution=candidate.attribution,
+                attribution=finding_attribution(finding),
                 severity=finding_severity(finding), placement="inline" if finding.inline_line else "summary",
                 anchor=PublicationAnchor(file_path=candidate.affected_path, start_line=candidate.line,
                     end_line=candidate.line, side="base" if change.change_type == "deleted" else "head"),
@@ -98,7 +98,7 @@ class PublicationPlanner:
             draft.body_markdown += "\n\n**变更归因：** " + {
                 "introduced": "由本次 PR 引入", "exposed": "由本次 PR 暴露或扩大影响",
                 "pre_existing": "既有问题，不计作本次 PR 新增", "uncertain": "尚未确定",
-            }[candidate.attribution]
+            }[finding_attribution(finding)]
             (plan.inline_drafts if finding.inline_line else plan.summary_findings).append(draft)
         rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
         for drafts in (plan.inline_drafts, plan.summary_findings):

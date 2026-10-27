@@ -1,7 +1,7 @@
 """Human dispositions do not override machine evidence or publication eligibility."""
 
 from app.models.review_plan import FindingLocation, FindingVerification, FindingView
-from app.review.findings import finding_severity
+from app.review.findings import finding_attribution, finding_severity
 from app.services.publication.review_publication import validated_findings
 
 
@@ -29,7 +29,7 @@ def finding_views(task, dispositions, artifacts=None):
             location = FindingLocation(path=candidate.affected_path, start_line=candidate.line,
                 end_line=candidate.line, side="left" if change.change_type == "deleted" else "right")
         items.append(FindingView(id=candidate.id, status=state, review_status=state,
-            attribution=candidate.attribution,
+            attribution=finding_attribution(accepted) if accepted else candidate.attribution,
             title=candidate.title, message="\n".join(dict.fromkeys(
                 item.trigger + "；" + item.actual_behavior for item in members)),
             impact="\n".join(dict.fromkeys(item.impact for item in members)),
