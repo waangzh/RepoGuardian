@@ -23,6 +23,9 @@ class AgentContext:
     budget: Any = None
     budget_agent_id: str = ""
     discovery_agent_ids: frozenset[str] = frozenset()
+    goals: tuple[dict, ...] = ()
+    material_evidence_ids: frozenset[str] = frozenset()
+    review_limitations: tuple[dict, ...] = ()
 
 
 @dataclass

@@ -1,6 +1,7 @@
 """Derive conclusions from current graph results, preserving every unknown."""
 
 from app.models.publication import CoverageKind, OutcomeReason as Reason, ReviewOutcome
+from app.review.limitations import review_limitations
 
 
 def snapshot_valid(task):
@@ -12,7 +13,7 @@ def snapshot_valid(task):
         and report.snapshot.pr_number == task.pr.number)
 
 
-def derive_review_outcome(task, *, publishable_count=None):
+def derive_review_outcome(task, *, publishable_count=None, evidence=None):
     report = task.review_report
     reasons = []
     if task.status == "cancelled":
@@ -37,20 +38,20 @@ def derive_review_outcome(task, *, publishable_count=None):
         reasons.append(Reason.REVIEW_PLAN_LIMITED)
     if unresolved:
         reasons.append(Reason.VERIFICATION_UNRESOLVED)
-    results = [*report.discovery_results, *report.verification_results]
+    results = [*report.discovery_results, *report.verification_results, *report.limitation_results]
     if any(result.input_tokens is None or result.output_tokens is None for result in results):
         reasons.append(Reason.USAGE_INTEGRITY_UNKNOWN)
     if any(result.status != "completed" for result in results):
         reasons.append(Reason.TERMINATION_INCOMPLETE)
     elif report.termination != "completed":
         reasons.append(Reason.TERMINATION_INCOMPLETE)
-    # decisions 是仲裁后的当前裁决；已完成调查覆盖的初始核验限制不再计入。
-    # 历史执行记录仍完整保留在报告中用于审计。
-    incomplete_investigations = sum(
-        bool(result.investigation_limitations) for result in report.discovery_results
-    ) + sum(bool(decision.limitations) for decision in report.decisions)
+    limitations = review_limitations(report, evidence)
+    incomplete_investigations = sum(item.status == "unresolved" for item in limitations)
+    pending_limitations = sum(item.status == "pending" for item in limitations)
     if incomplete_investigations:
         reasons.append(Reason.INVESTIGATION_INCOMPLETE)
+    if pending_limitations:
+        reasons.append(Reason.LIMITATION_ASSESSMENT_INCOMPLETE)
     if task.error == "review_deadline":
         reasons.append(Reason.DEADLINE_EXCEEDED)
     confirmed = len(report.findings)
@@ -62,6 +63,8 @@ def derive_review_outcome(task, *, publishable_count=None):
     return ReviewOutcome(kind=kind, coverage=coverage, confirmed_count=confirmed,
         publishable_count=publishable_count or 0, unresolved_count=unresolved,
         incomplete_investigations=incomplete_investigations,
+        pending_limitation_count=pending_limitations,
+        review_limitations=limitations,
         total_goals=total, examined_goals=examined, reason_codes=reasons,
         finding_conclusion="confirmed" if confirmed else "unresolved" if unresolved else "no_confirmed_findings",
         review_completeness=coverage,

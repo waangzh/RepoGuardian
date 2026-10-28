@@ -2,7 +2,7 @@
 
 import asyncio
 
-from app.review.evidence import SourceReadError, digest, source_lines
+from app.review.evidence import SourceReadError, digest, source_lines, uncovered_ranges
 from app.review.tool_scope import ReviewPathPolicyError
 
 DIFF_CHARS = 12_000
@@ -108,6 +108,16 @@ def _context_requests(context, payload):
     return requests
 
 
+def _merge_ranges(ranges):
+    merged = []
+    for start, end in sorted(ranges):
+        if merged and start <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
 def _expand(context, side, path, ranges, length):
     symbols = ([item for item in context.symbols if item.get("file") == path]
                if side == "head" else [])
@@ -121,13 +131,7 @@ def _expand(context, side, path, ranges, length):
         else:
             start, end = max(1, start - CONTEXT_BEFORE), end + CONTEXT_AFTER
         expanded.append((start, min(end, length)))
-    merged = []
-    for start, end in sorted(expanded):
-        if merged and start <= merged[-1][1] + 1:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-        else:
-            merged.append((start, end))
-    return merged
+    return _merge_ranges(expanded)
 
 
 async def prepare_materials(context, payload, depth="standard"):
@@ -142,7 +146,7 @@ async def prepare_materials(context, payload, depth="standard"):
                     "this quick pass preloads no source context. Read frozen source only where the "
                     "changed behavior or a direct caller requires it."}, set()
     metadata, packets, issued, omitted = [], [], set(), []
-    remaining, requested = chars_limit, set()
+    remaining, sources, read_ranges, refused = chars_limit, [], {}, {}
     for (side, path), ranges in _context_requests(context, payload).items():
         if context.check_active:
             await context.check_active()
@@ -159,27 +163,38 @@ async def prepare_materials(context, payload, depth="standard"):
             continue
         metadata.append({"path": path, "side": side, "total_lines": len(lines),
                          "max_read_lines": context.evidence.max_lines})
-        for start, end in _expand(context, side, path, ranges, len(lines)):
-            for first in range(start, end + 1, context.evidence.max_lines):
-                last = min(end, first + context.evidence.max_lines - 1)
-                key = (side, path, first, last)
-                if key in requested:
-                    continue
-                requested.add(key)
-                content = "".join(lines[first - 1:last])
-                if not content:
-                    continue
-                if len(packets) >= packets_limit or len(content) > remaining:
-                    omitted.append({"path": path, "side": side, "start_line": first,
-                                    "end_line": last, "reason": "material_budget"})
-                    continue
-                try:
-                    packet = await context.evidence.read(path, first, last, side)
-                except (ValueError, OSError):
-                    continue
-                packets.append(packet)
-                issued.add(packet["evidence"]["id"])
-                remaining -= len(packet["content"])
+        sources.append((side, path, lines, _merge_ranges(ranges),
+                        _expand(context, side, path, ranges, len(lines))))
+        read_ranges[side, path], refused[side, path] = [], []
+    # Cover required ranges across files/sides before spending on expanded context.
+    for expanded in (False, True):
+        for side, path, lines, core, context_ranges in sources:
+            for start, end in context_ranges if expanded else core:
+                for offset in range(start, end + 1, context.evidence.max_lines):
+                    stop = min(end, offset + context.evidence.max_lines - 1)
+                    for first, last in uncovered_ranges(
+                            offset, stop, read_ranges[side, path] + refused[side, path]):
+                        content = "".join(lines[first - 1:last])
+                        if not content or len(packets) >= packets_limit or len(content) > remaining:
+                            continue
+                        try:
+                            packet = await context.evidence.read(path, first, last, side)
+                        except (ValueError, OSError) as exc:
+                            refused[side, path].append((first, last))
+                            omitted.append({"path": path, "side": side, "start_line": first,
+                                "end_line": last, "reason": exc.code if isinstance(exc, SourceReadError)
+                                    else "source_unavailable"})
+                            continue
+                        packets.append(packet)
+                        issued.add(packet["evidence"]["id"])
+                        read_ranges[side, path].append((first, last))
+                        remaining -= len(packet["content"])
+    for side, path, _, core, context_ranges in sources:
+        for start, end in _merge_ranges(core + context_ranges):
+            for first, last in uncovered_ranges(
+                    start, end, read_ranges[side, path] + refused[side, path]):
+                omitted.append({"path": path, "side": side, "start_line": first,
+                                "end_line": last, "reason": "material_budget"})
     return {"change_materials": change_materials, "files": metadata, "source_materials": packets,
             "context_omitted": omitted,
             "material_boundary": "change_materials is the fixed diff, not source evidence; coverage and "

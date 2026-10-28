@@ -3,6 +3,7 @@ from langgraph.runtime import Runtime
 from app.review.context import ReviewContext
 from app.review.state import ReviewState
 from app.review.findings import collect_candidates
+from app.review.limitations import limitation_discoveries
 from app.review.nodes.agent_execution import run_agent
 
 
@@ -17,6 +18,7 @@ async def discover(state: ReviewState, runtime: Runtime[ReviewContext]):
 
 async def collect(state: ReviewState, runtime: Runtime[ReviewContext]):
     await runtime.context.active()
-    candidates = collect_candidates(state.get("discovery_results", []))
+    candidates = collect_candidates(state.get("discovery_results", []) + limitation_discoveries(
+        state.get("limitation_results", [])))
     await runtime.context.emit(phase="collect", candidates=len(candidates))
     return {"candidates": candidates}

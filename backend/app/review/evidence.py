@@ -28,6 +28,23 @@ def source_lines(content: str) -> list[str]:
     return [line + "\n" for line in lines[:-1]] + ([lines[-1]] if lines[-1] else [])
 
 
+def uncovered_ranges(start: int, end: int, intervals) -> list[tuple[int, int]]:
+    missing, cursor = [], start
+    for first, last in sorted(intervals):
+        if last < cursor:
+            continue
+        if first > end:
+            break
+        if first > cursor:
+            missing.append((cursor, first - 1))
+        cursor = max(cursor, last + 1)
+        if cursor > end:
+            break
+    if cursor <= end:
+        missing.append((cursor, end))
+    return missing
+
+
 class SourceReadError(ValueError):
     def __init__(self, code, **details):
         super().__init__(code)
@@ -93,7 +110,10 @@ class EvidenceService(EvidenceArchive):
         if type(start) is not int or type(end) is not int or start < 1 or end < start:
             raise SourceReadError("invalid_source_range")
         if end - start + 1 > self.max_lines:
-            raise SourceReadError("source_range_too_large", max_lines=self.max_lines)
+            raise SourceReadError("source_range_too_large", max_lines=self.max_lines,
+                requested_range=[start, end], requested_lines=end - start + 1,
+                suggested_range=[start, start + self.max_lines - 1],
+                next_start=start + self.max_lines, retryable_with_corrected_arguments=True)
         sha, source = self._source(path, side)
         lines = source_lines(source)
         if end > len(lines):

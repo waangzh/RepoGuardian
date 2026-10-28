@@ -124,9 +124,62 @@ class DiscoveryOutput(ReviewModel):
     findings: list[CandidateProposal] = Field(default_factory=list, max_length=30)
     examined: list[ExaminedGoal] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list, max_length=20,
-        description="Only missing evidence necessary for the conclusion; not general static-review boundaries.")
+        description="Proposed missing premises, not accepted blockers. Name the specific missing fact, "
+            "which conclusion about this change depends on it, and the smallest source check needed. "
+            "Not running code/tests/builds is a general boundary, even for numerical changes: put that in "
+            "boundary_notes. Do not require exhaustive unrelated consumers or optional tests.")
     boundary_notes: list[str] = Field(default_factory=list, max_length=10,
-        description="General static-review boundaries that do not prevent the stated conclusions.")
+        description="General static-review boundaries, including not running code/tests/builds. "
+            "Static source reasoning is allowed and does not itself imply missing evidence.")
+
+
+class LimitationResolution(ReviewModel):
+    limitation_id: str
+    status: Literal["resolved", "boundary"]
+    explanation: str = Field(min_length=1, max_length=2000)
+    evidence_ids: list[str] = Field(min_length=1, max_length=32)
+
+
+class LimitationAssessment(ReviewModel):
+    limitation_id: str
+    status: Literal["unresolved", "resolved", "boundary"]
+    explanation: str = Field(min_length=1, max_length=2000)
+    goal_ids: list[str] = Field(min_length=1, max_length=20)
+    evidence_ids: list[str] = Field(min_length=1, max_length=32)
+    missing_fact: str | None = Field(default=None, max_length=1000)
+    dependent_conclusion: str | None = Field(default=None, max_length=1000)
+    change_relevance: str | None = Field(default=None, max_length=1000)
+    next_check: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def necessary_gap_requires_dependency(self):
+        if self.status == "unresolved" and not all(
+                value and value.strip() for value in (
+                    self.missing_fact, self.dependent_conclusion, self.change_relevance, self.next_check)):
+            raise ValueError("necessary_gap_requires_change_dependency_and_next_check")
+        return self
+
+
+class LimitationReviewOutput(ReviewModel):
+    assessments: list[LimitationAssessment] = Field(min_length=1, max_length=3,
+        description="Exactly one assessment for each supplied limitation ID, independently of bug candidates. "
+            "unresolved is only a necessary evidence gap with a concrete change dependency. "
+            "General boundaries and unnecessary universal proofs belong to boundary.")
+    findings: list[CandidateProposal] = Field(default_factory=list, max_length=5,
+        description="Only concrete bugs discovered during this check; they still require independent verification.")
+
+
+class ReviewLimitation(ReviewModel):
+    id: str
+    source: Literal["discovery", "verification"]
+    source_id: str
+    text: str
+    candidate_ids: list[str] = Field(default_factory=list)
+    goal_ids: list[str] = Field(default_factory=list)
+    status: Literal["pending", "unresolved", "resolved", "boundary"] = "pending"
+    resolution: LimitationResolution | None = None
+    assessment: LimitationAssessment | None = None
+    resolved_by: str | None = None
 
 
 class VerificationOutput(ReviewModel):
@@ -142,6 +195,12 @@ class VerificationOutput(ReviewModel):
         description="Necessary evidence gaps. MUST be empty for confirmed/refuted; otherwise choose insufficient_evidence.")
     boundary_notes: list[str] = Field(default_factory=list, max_length=10,
         description="General boundaries such as not executing tests; these do not imply missing decision evidence.")
+    limitation_resolutions: list[LimitationResolution] = Field(default_factory=list, max_length=20,
+        description="Explicit assessments of supplied review_limitations relevant to this candidate. "
+            "Use only supplied limitation IDs and independently read source evidence. "
+            "resolved means the specific missing premise was established; boundary means an explained "
+            "general review boundary, not a necessary missing premise. Omit genuinely unresolved or unrelated gaps. "
+            "Refuting a candidate does not automatically resolve any limitation.")
 
     @model_validator(mode="after")
     def limitations_require_uncertainty(self):
@@ -218,6 +277,7 @@ class ReviewReport(ReviewModel):
     goals: list[ReviewGoal]
     discovery_results: list[AgentResult]
     verification_results: list[AgentResult]
+    limitation_results: list[AgentResult] = Field(default_factory=list)
     candidates: list[CandidateFinding]
     decisions: list[VerificationResult]
     findings: list[VerifiedFinding]

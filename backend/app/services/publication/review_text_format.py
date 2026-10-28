@@ -20,7 +20,8 @@ REASON_LABELS = {
     "budget_exhausted": "审查预算耗尽，请核对是否仍有未完成目标",
     "deadline_exceeded": "审查达到时间上限，请核对是否仍有未完成目标或调查",
     "scope_empty": "没有实际审查目标", "verification_unresolved": "仍有未核实的候选问题",
-    "finding_status_unknown": "存在未知的问题状态", "investigation_incomplete": "仍有未完成或证据不足的调查",
+    "finding_status_unknown": "存在未知的问题状态", "investigation_incomplete": "仍有必要证据缺口未解决",
+    "limitation_assessment_incomplete": "仍有审查限制声明尚未完成必要性复核",
     "unscheduled_investigation": "仍有未处理的调查线索", "usage_integrity_unknown": "模型请求计量不完整或不一致",
     "snapshot_missing": "审查快照缺失或身份无效", "runtime_report_missing": "缺少任务运行报告",
     "runtime_report_invalid": "任务运行报告格式无效",
@@ -75,9 +76,24 @@ def _finding_location_text(finding) -> str:
 
 
 
+def review_limitation_text(item):
+    source = "主审" if item.source == "discovery" else "候选核验"
+    related = "、".join(identity[:12] for identity in item.candidate_ids)
+    label = "待复核的限制声明" if item.status == "pending" else "必要证据缺口"
+    text = (f"{label}：{item.text}（来源：{source} {item.source_id[:12]}"
+            + (f"；关联候选：{related}" if related else "") + "）")
+    if item.assessment and item.status == "unresolved":
+        text += (f"；依赖结论：{item.assessment.dependent_conclusion}"
+                 f"；变更关联：{item.assessment.change_relevance}；缺少事实：{item.assessment.missing_fact}"
+                 f"；下一步：{item.assessment.next_check}")
+    return text
+
+
 def _comment_risks(plan):
     """只列当前审查限制；计量未知单独说明，不作为代码缺陷。"""
     risks = list(plan.digest.merge_decision.limits)
+    risks.extend(review_limitation_text(item) for item in plan.outcome.review_limitations
+                 if item.status in {"pending", "unresolved"})
     if "usage_integrity_unknown" in plan.outcome.reason_codes:
         risks.append("运行计量记录不完整：模型请求计量不完整或不一致；未知用量不能当作完整统计。"
                      "运行或计量异常本身不代表发现代码缺陷。")

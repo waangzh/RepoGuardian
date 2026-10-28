@@ -96,7 +96,10 @@ def _review_conclusion(plan):
     if outcome.finding_conclusion == "no_confirmed_findings":
         if outcome.incomplete_investigations:
             return (f"❓ 结论：未发现已确认代码问题，但有 {outcome.incomplete_investigations} 项"
-                    "关联调查尚未完成，暂不能给出完整结论")
+                    "必要证据缺口尚未解决，暂不能给出完整结论")
+        if outcome.pending_limitation_count:
+            return (f"❓ 结论：未发现已确认代码问题，但有 {outcome.pending_limitation_count} 条"
+                    "审查限制声明尚未完成必要性复核，暂不能给出完整结论")
         if outcome.unresolved_count:
             return (f"❓ 结论：未发现已确认代码问题，但有 {outcome.unresolved_count} 项候选"
                     "尚待核实，暂不能给出完整结论")

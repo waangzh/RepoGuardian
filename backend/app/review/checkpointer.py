@@ -16,7 +16,10 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from app.core.config import settings
-from app.review.models import BatchVerificationOutput, DiscoveryOutput, VerificationOutput, VerificationResult
+from app.review.models import (
+    BatchVerificationOutput, DiscoveryOutput, LimitationAssessment, LimitationResolution,
+    LimitationReviewOutput, VerificationOutput, VerificationResult,
+)
 
 _checkpointer: AsyncSqliteSaver | None = None
 _connection: aiosqlite.Connection | None = None
@@ -49,7 +52,8 @@ def _checkpoint_serializer() -> JsonPlusSerializer:
     """父图只保存原生数据，拒绝任意额外模块构造器与 pickle。"""
     return JsonPlusSerializer(allowed_msgpack_modules=[
         (model.__module__, model.__name__) for model in (
-            DiscoveryOutput, VerificationOutput, BatchVerificationOutput, VerificationResult)
+            DiscoveryOutput, VerificationOutput, BatchVerificationOutput, VerificationResult,
+            LimitationResolution, LimitationAssessment, LimitationReviewOutput)
     ])
 
 

@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from app.models.review_plan import FindingView
+from app.review.models import ReviewLimitation
 
 
 class ReviewOutcomeKind(StrEnum):
@@ -35,6 +36,7 @@ class OutcomeReason(StrEnum):
     VERIFICATION_UNRESOLVED = "verification_unresolved"
     FINDING_STATUS_UNKNOWN = "finding_status_unknown"
     INVESTIGATION_INCOMPLETE = "investigation_incomplete"
+    LIMITATION_ASSESSMENT_INCOMPLETE = "limitation_assessment_incomplete"
     UNSCHEDULED_INVESTIGATION = "unscheduled_investigation"
     USAGE_INTEGRITY_UNKNOWN = "usage_integrity_unknown"
     SNAPSHOT_MISSING = "snapshot_missing"
@@ -52,7 +54,10 @@ class ReviewOutcome(BaseModel):
     unresolved_count: int = Field(default=0, ge=0)
     examined_goals: int = Field(default=0, ge=0)
     total_goals: int = Field(default=0, ge=0)
-    incomplete_investigations: int = Field(default=0, ge=0)
+    incomplete_investigations: int = Field(default=0, ge=0,
+        description="Number of independently assessed necessary evidence gaps still unresolved.")
+    pending_limitation_count: int = Field(default=0, ge=0)
+    review_limitations: list[ReviewLimitation] = Field(default_factory=list)
     reason_codes: list[OutcomeReason] = Field(default_factory=list)
     finding_conclusion: Literal["confirmed", "unresolved", "no_confirmed_findings", "unknown"] = "unknown"
     review_completeness: CoverageKind = CoverageKind.UNKNOWN

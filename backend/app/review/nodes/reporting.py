@@ -16,18 +16,22 @@ async def report(state: ReviewState, runtime: Runtime[ReviewContext]):
     complete = bool(goals) and all(goal["status"] == "examined" for goal in goals)
     verification = state.get("verification_results", [])
     investigations = state.get("investigation_results", [])
+    limitations = state.get("limitation_results", [])
     discovery_complete = ({item["id"] for item in results}
                           == {item["id"] for item in state["assignments"]})
     verification_complete = ({item["id"] for item in verification}
                              == {item["id"] for item in state["eligible_candidates"]})
-    execution_complete = discovery_complete and verification_complete and all(
-        item["status"] == "completed" for item in results + verification + investigations)
+    limitation_complete = ({item["id"] for item in state.get("limitation_batches", [])}
+                           <= {item["id"] for item in limitations})
+    execution_complete = discovery_complete and verification_complete and limitation_complete and all(
+        item["status"] == "completed" for item in results + verification + investigations + limitations)
     termination = "completed" if execution_complete else "partial"
     if state["assignments"] and not any(item["status"] == "completed" for item in results):
         termination = "failed"
     output = ReviewReport(snapshot=state["snapshot"],
         review_units=state.get("review_units", []), assignments=state["assignments"],
         goals=goals, discovery_results=results, verification_results=verification + investigations,
+        limitation_results=limitations,
         candidates=state["candidates"],
         decisions=state["decisions"], findings=state["findings"], complete=complete,
         termination=termination,

@@ -61,6 +61,10 @@ def merge_decision(
             decision.label = f"有 {outcome.unresolved_count} 项疑点需要进一步确认"
         elif outcome.confirmed_count > outcome.publishable_count:
             decision.label = "部分已确认记录未通过发布准入，需核对证据"
+        elif outcome.incomplete_investigations:
+            decision.label = f"仍有 {outcome.incomplete_investigations} 项必要证据缺口，暂不能给出完整结论"
+        elif outcome.pending_limitation_count:
+            decision.label = f"仍有 {outcome.pending_limitation_count} 条限制声明待复核，暂不能给出完整结论"
         else:
             decision.label = "审查执行仍有限制，暂不能给出完整结论"
         decision.advice = "请核对限制说明，补齐未完成范围、候选核验或执行记录后，再结合 CI 和人工评审决定是否合并。"

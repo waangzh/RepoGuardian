@@ -2,7 +2,8 @@
 
 import json
 
-from app.review.evidence import digest
+from app.review.evidence import digest, uncovered_ranges
+from app.review.limitations import validate_resolutions
 from app.review.models import (
     CandidateFinding, CandidateProposal, DiscoveryOutput, VerificationOutput, VerificationResult, VerifiedFinding,
 )
@@ -99,10 +100,12 @@ def aggregate_findings(findings):
     return aggregated
 
 
-def verify_finding(candidate, result, service, changed_files, related_candidates=()):
+def verify_finding(candidate, result, service, changed_files, related_candidates=(), limitations=()):
     if result.get("status") != "completed":
         raise ValueError("verification_not_completed")
     output = VerificationOutput.model_validate(result["output"])
+    validate_resolutions(output.limitation_resolutions, limitations, candidate.id,
+                         result["evidence_ids"], service)
     refs = (source_refs(service, output.evidence_ids, result["evidence_ids"])
             if output.evidence_ids else [])
     if output.counterevidence_ids:
@@ -160,29 +163,48 @@ def verify_finding(candidate, result, service, changed_files, related_candidates
 
 def covered_goals(goals, results, service, assignments):
     by_assignment = {item["id"]: set(item["goal_ids"]) for item in assignments}
-    accepted = {}
+    assigned = set().union(*by_assignment.values())
+    accepted, claimed, invalid = {}, set(), set()
     for result in results:
         if result["status"] != "completed":
             continue
         for examined in DiscoveryOutput.model_validate(result["output"]).examined:
             if examined.goal_id not in by_assignment.get(result["id"], set()):
                 continue
+            claimed.add(examined.goal_id)
             try:
                 refs = source_refs(service, examined.evidence_ids, result["evidence_ids"])
             except (ValueError, OSError):
+                invalid.add(examined.goal_id)
                 continue
             accepted.setdefault(examined.goal_id, []).extend(refs)
     output = []
     for goal in goals:
         goal = dict(goal)
-        intervals = sorted((ref.start_line, ref.end_line) for ref in accepted.get(goal["id"], [])
-                           if ref.path == goal["path"] and ref.side == goal["side"])
-        end = goal["start_line"] - 1
-        for first, last in intervals:
-            if first > end + 1:
-                break
-            end = max(end, last)
-        if goal["status"] != "blocked" and end >= goal["end_line"]:
+        if goal["status"] == "blocked":
+            output.append(goal)
+            continue
+        refs = accepted.get(goal["id"], [])
+        paths = [ref for ref in refs if ref.path == goal["path"]]
+        sides = [ref for ref in paths if ref.side == goal["side"]]
+        missing = uncovered_ranges(goal["start_line"], goal["end_line"],
+                                   [(ref.start_line, ref.end_line) for ref in sides])
+        goal["status"] = "not_examined"
+        if not missing:
             goal["status"] = "examined"
+            goal["reason"] = None
+        elif goal["id"] not in assigned:
+            goal["reason"] = "该目标没有派发审查任务"
+        elif goal["id"] not in claimed:
+            goal["reason"] = "未提交该目标的源码检查结果"
+        elif goal["id"] in invalid and not sides:
+            goal["reason"] = "引用的证据未在当前分支读取或未通过校验"
+        elif not paths:
+            goal["reason"] = "引用证据的文件与目标不匹配"
+        elif not sides:
+            goal["reason"] = f"引用证据的侧别不匹配：需要 {goal['side'].upper()} 源码"
+        else:
+            ranges = "、".join(f"{first}–{last}" for first, last in missing[:4])
+            goal["reason"] = "源码证据未覆盖完整范围：" + ranges
         output.append(goal)
     return output

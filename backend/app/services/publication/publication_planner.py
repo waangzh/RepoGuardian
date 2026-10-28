@@ -11,6 +11,8 @@ from app.services.publication.review_merge_decision import merge_decision
 from app.services.publication.review_presentation import build_presentation
 from app.services.publication.review_publication import validated_findings
 from app.review.findings import finding_attribution, finding_severity
+from app.review.evidence import EvidenceArchive
+from app.services.review.artifact_store import LocalArtifactStore
 from app.services.review.review_findings import finding_views
 from app.services.review.review_outcome import derive_review_outcome, snapshot_valid
 from app.services.publication.review_prose import author_goal_text
@@ -71,7 +73,8 @@ class PublicationPlanner:
             digest.discussion_stats = {"collected": task.pr_discussion["thread_count"],
                 "status": "complete" if all(value == "complete" for value in task.pr_discussion["sources"].values())
                     else "partial", "limitations": task.pr_discussion["limitations"]}
-        outcome = derive_review_outcome(task, publishable_count=len(selected))
+        evidence = EvidenceArchive(snapshot=report.snapshot, artifacts=self.artifacts or LocalArtifactStore()) if report else None
+        outcome = derive_review_outcome(task, publishable_count=len(selected), evidence=evidence)
         plan = PublicationPlan(review_id=task.id, snapshot=PublicationSnapshot(
             head_sha=task.snapshot.head_sha, effective_base_sha=task.snapshot.effective_base_sha),
             outcome=outcome, digest=digest, content_eligible=not blockers,

@@ -257,11 +257,11 @@ async def test_native_investigation_limits_survive_report_projection_without_leg
     assert saved.review_report.termination == "completed"
     saved.review_report.discovery_results[0].investigation_limitations = ["调用方搜索还有未核实范围"]
     plan = PublicationPlanner(repository._artifacts).build(saved)
-    assert plan.outcome.incomplete_investigations == 1
-    assert "investigation_incomplete" in plan.outcome.reason_codes
+    assert plan.outcome.incomplete_investigations == 0 and plan.outcome.pending_limitation_count == 1
+    assert "limitation_assessment_incomplete" in plan.outcome.reason_codes
     assert plan.outcome.runtime_reliability == "reliable"
     assert plan.presentation.verdict.status in {"fix_blockers", "resolve_unknowns"}
-    label = "仍有未完成或证据不足的调查"
+    label = "仍有审查限制声明尚未完成必要性复核"
     assert any(label in item for item in plan.presentation.limitations)
     for text in (plan.summary_markdown, plan.review_comment_markdown, plan.user_report_markdown):
         assert label in text

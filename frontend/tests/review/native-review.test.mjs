@@ -9,8 +9,8 @@ test('当前图投影分离候选、覆盖、确认和未知用量',async()=>{
  try{
   const {observedUsage,terminal,safeGitHubLink}=await server.ssrLoadModule('/src/utils/nativeReview.ts');
   const results=[{model_calls:2,input_tokens:10,output_tokens:5}];
-  assert.deepEqual(observedUsage({discovery_results:results,verification_results:[]}),{calls:2,tokens:15});
-  assert.deepEqual(observedUsage({discovery_results:[{model_calls:1,input_tokens:null,output_tokens:null}],verification_results:[]}),{calls:1,tokens:null});
+  assert.deepEqual(observedUsage({discovery_results:results,verification_results: [], limitation_results: []}),{calls:2,tokens:15});
+  assert.deepEqual(observedUsage({discovery_results:[{model_calls:1,input_tokens:null,output_tokens:null}],verification_results: [], limitation_results: []}),{calls:1,tokens:null});
   assert.deepEqual(observedUsage(null),{calls:null,tokens:null});
   assert.equal(terminal('failed'),true);assert.equal(terminal('verifying_issues'),false);
   assert.equal(safeGitHubLink('javascript:alert(1)'),undefined);
@@ -51,8 +51,8 @@ test('失败分支补查入口受一次次数、剩余额度和原总期限限�
  try{
   const {resumeLabel,orderedProgress}=await server.ssrLoadModule('/src/utils/nativeReview.ts');
   const task={status:'completed_with_warnings',retry_count:0,created_at:new Date().toISOString(),
-   configuration:{limits:{model_calls:24,tool_calls:80,timeout_seconds:1800}},
-   review_report:{termination:'partial',discovery_results:[{status:'failed',model_calls:17,tool_calls:21}],verification_results:[]},
+   configuration:{options:{depth:'standard'},limits:{model_calls:24,tool_calls:80,timeout_seconds:1800}},
+   review_report:{termination:'partial',discovery_results:[{status:'failed',model_calls:17,tool_calls:21}],verification_results: [], limitation_results: []},
    steps:[{name:'later',started_at:'2026-10-27T11:56:02Z',updated_at:'2026-10-27T11:56:20Z'},
     {name:'earlier',started_at:'2026-10-27T11:56:00Z',updated_at:'2026-10-27T11:56:38Z'}]};
   assert.equal(resumeLabel(task),'补查失败分支');
@@ -85,7 +85,7 @@ test('活动页直接显示分支失败原因、实际用量和无候选核验�
     committed_input_tokens:200000,outstanding_input_tokens:55550,held_input_tokens:40000,
     held_model_calls:2,input_token_factor:0.25,input_token_limit:500000,unknown_calls:1},
     review_units:[],assignments:[{id:'agent',unit_id:'unit',reviewer:'reviewer',objective:'<script>untrusted</script>',focus_paths:['safe.py']}],
-    discovery_results:[failure],verification_results:[]}};
+    discovery_results:[failure],verification_results: [], limitation_results: []}};
   const html=await renderToString(createSSRApp(Component,{task}));
   assert.match(html,/达到执行步数上限，未提交最终审查结果/);
   assert.match(html,/17 \/ 24/);assert.match(html,/工具失败 12 次/);
@@ -102,9 +102,25 @@ test('整轮预算优先使用账本，共享批量结果不重复计量',async(
  try{
   const {observedUsage}=await server.ssrLoadModule('/src/utils/nativeReview.ts');
   const result={execution_id:'shared',model_calls:2,input_tokens:10,output_tokens:5};
-  const report={discovery_results:[],verification_results:[{...result,id:'a'},{...result,id:'b'}],budget:{}};
+  const report={discovery_results:[],verification_results:[{...result,id:'a'},{...result,id:'b'}],limitation_results:[],budget:{}};
   assert.deepEqual(observedUsage(report),{calls:2,tokens:15});
   assert.deepEqual(observedUsage({...report,budget:{model_calls:3,input_tokens:100,output_tokens:20}}),{calls:3,tokens:120});
   assert.deepEqual(observedUsage({...report,budget:{model_calls:3,input_tokens:null,output_tokens:20}}),{calls:3,tokens:null});
+  assert.deepEqual(observedUsage({...report,limitation_results:[{model_calls:1,input_tokens:7,output_tokens:3}]}),{calls:3,tokens:25});
+ }finally{await server.close();}
+});
+
+test('限制复核失败只在原深度分支预算有余额时允许补查',async()=>{
+ const server=await createServer({server:{middlewareMode:true,hmr:false},optimizeDeps:{noDiscovery:true,entries:[],include:[]},appType:'custom'});
+ try{
+  const {resumeLabel,phaseLabel}=await server.ssrLoadModule('/src/utils/nativeReview.ts');
+  const task={status:'completed_with_warnings',retry_count:0,created_at:new Date().toISOString(),
+   configuration:{options:{depth:'standard'},limits:{model_calls:12,tool_calls:80,timeout_seconds:1800}},
+   review_report:{termination:'partial',discovery_results:[],verification_results:[],
+    limitation_results:[{status:'failed',model_calls:4,tool_calls:5}]}};
+  assert.equal(resumeLabel(task),'补查失败分支');
+  task.review_report.limitation_results[0].model_calls=5;
+  assert.equal(resumeLabel(task),null);
+  assert.equal(phaseLabel('limitation_reviewer'),'限制必要性复核');
  }finally{await server.close();}
 });

@@ -37,7 +37,11 @@ def safe_read(function):
 @tool
 @safe_read
 async def read_file(path: str, start: int, end: int, runtime: ToolRuntime[AgentContext]) -> dict:
-    """Read a bounded range from the frozen HEAD; returns trusted source evidence."""
+    """Read frozen HEAD source evidence. Line numbers are 1-based and both ends inclusive.
+
+    end - start + 1 must fit max_read_lines from files metadata. Split larger reads;
+    range errors provide suggested_range and next_start. Reuse already provided source.
+    """
     if path in runtime.context.denied_paths:
         raise ValueError("path_not_authorized")
     return await runtime.context.evidence.read(path, start, end)
@@ -46,7 +50,11 @@ async def read_file(path: str, start: int, end: int, runtime: ToolRuntime[AgentC
 @tool
 @safe_read
 async def read_base_file(path: str, start: int, end: int, runtime: ToolRuntime[AgentContext]) -> dict:
-    """Read frozen BASE source, including files deleted by the PR."""
+    """Read frozen BASE evidence, including deleted files. Both range ends are inclusive.
+
+    Use this for BASE goals; HEAD evidence cannot cover them. Split using max_read_lines
+    from files metadata or suggested_range and next_start from range errors.
+    """
     if path in runtime.context.denied_paths:
         raise ValueError("path_not_authorized")
     return await runtime.context.evidence.read(path, start, end, "base")

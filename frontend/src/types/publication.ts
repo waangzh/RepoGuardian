@@ -10,6 +10,8 @@ export interface ReviewOutcome {
   examined_goals: number;
   total_goals: number;
   incomplete_investigations: number;
+  pending_limitation_count: number;
+  review_limitations: import('./review').ReviewLimitation[];
   reason_codes: string[];
   finding_conclusion: "confirmed" | "unresolved" | "no_confirmed_findings" | "unknown";
   review_completeness: CoverageKind;

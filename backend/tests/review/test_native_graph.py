@@ -334,15 +334,15 @@ def test_investigation_routes_only_once_for_high_impact_uncertainty():
     state = {"review_id": "review", "decisions": [{"candidate_id": "a", "decision": "insufficient_evidence"}],
              "eligible_candidates": [{"id": "a"}], "candidates": [{"id": "a", "severity": "high"}]}
     assert len(route_investigation(state)) == 1
-    assert route_investigation({**state, "investigation_round": 1}) == "report"
+    assert route_investigation({**state, "investigation_round": 1}) == "plan_limitations"
 
 
 def test_investigation_depth_follows_the_review_strategy():
     from app.review.graph import route_investigation
     state = {"review_id": "review", "decisions": [{"candidate_id": "a", "decision": "insufficient_evidence"}],
              "eligible_candidates": [{"id": "a"}], "candidates": [{"id": "a", "severity": "medium"}]}
-    assert route_investigation({**state, "review_depth": "quick"}) == "report"
-    assert route_investigation({**state, "review_depth": "standard"}) == "report"
+    assert route_investigation({**state, "review_depth": "quick"}) == "plan_limitations"
+    assert route_investigation({**state, "review_depth": "standard"}) == "plan_limitations"
     assert len(route_investigation({**state, "review_depth": "deep"})) == 1
     high = {**state, "candidates": [{"id": "a", "severity": "high"}]}
     assert len(route_investigation({**high, "review_depth": "standard"})) == 1
@@ -458,5 +458,5 @@ async def test_explicit_investigation_limitations_do_not_masquerade_as_execution
     )
     outcome = derive_review_outcome(task)
     assert outcome.kind == "findings"
-    assert outcome.incomplete_investigations == 1
-    assert "investigation_incomplete" in {item.value for item in outcome.reason_codes}
+    assert outcome.incomplete_investigations == 0 and outcome.pending_limitation_count == 1
+    assert "limitation_assessment_incomplete" in {item.value for item in outcome.reason_codes}

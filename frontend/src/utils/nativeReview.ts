@@ -1,9 +1,9 @@
 import type { ReviewTask, ReviewReport, AgentResult, FileContext } from '../types/review';
 
 export const terminal = (status: string) => ['completed', 'completed_with_warnings', 'failed', 'cancelled'].includes(status);
-export const reviewerLabel = (role: string) => ({ reviewer: '主审', contract: '契约审查', specialist: '风险专家', verifier: '独立核验', investigator: '定向调查' }[role] || role);
+export const reviewerLabel = (role: string) => ({ reviewer: '主审', contract: '契约审查', specialist: '风险专家', verifier: '独立核验', investigator: '定向调查', limitation_reviewer: '限制必要性复核' }[role] || role);
 export const decisionLabel = (decision: string) => ({ confirmed: '已确认', refuted: '已排除', insufficient_evidence: '证据不足' }[decision] || '尚未核验');
-export const phaseLabel = (phase: string) => ({ queued:'等待执行', prepare:'准备固定快照', planning:'规划完成', reviewing:'独立审查中', verifying_issues:'核验候选问题', reviewer:'主审', contract:'契约审查', specialist:'风险专家审查', collect:'聚合候选', verifier:'独立核验', investigator:'定向调查', arbitrate:'证据仲裁', report:'生成报告', completed:'审查结束', failed:'执行失败', cancelled:'已停止' }[phase] || phase);
+export const phaseLabel = (phase: string) => ({ queued:'等待执行', prepare:'准备固定快照', planning:'规划完成', reviewing:'独立审查中', verifying_issues:'核验候选与必要前提', reviewer:'主审', contract:'契约审查', specialist:'风险专家审查', collect:'聚合候选', verifier:'独立核验', investigator:'定向调查', limitation_reviewer:'限制必要性复核', arbitrate:'证据仲裁', report:'生成报告', completed:'审查结束', failed:'执行失败', cancelled:'已停止' }[phase] || phase);
 export const executionErrorLabel = (code: string | null) => ({
   ReviewBudgetExceeded: '达到整轮模型调用或累计输入预算，未完成范围保留为未知',
   BatchVerificationIncomplete: '批量核验裁决缺失、重复或超出范围',
@@ -21,11 +21,15 @@ export function resumeLabel(task: ReviewTask): string | null {
   if (!['failed', 'completed_with_warnings'].includes(task.status)) return null;
   const report = task.review_report;
   if (!report || report.termination === 'completed') return task.status === 'failed' ? '从检查点继续' : null;
-  const failed = [...report.discovery_results, ...report.verification_results].filter(item => item.status === 'failed');
+  const failed = [...report.discovery_results, ...report.verification_results, ...report.limitation_results].filter(item => item.status === 'failed');
   const limits = task.configuration.limits;
   if (task.retry_count || !failed.length || !limits) return null;
   if (!failed.every(item => item.model_calls != null && item.tool_calls != null
     && item.model_calls < limits.model_calls && item.tool_calls < limits.tool_calls)) return null;
+  const assessmentLimit = Math.min(limits.model_calls, { quick:3, standard:5, deep:7 }[task.configuration.options.depth]);
+  if (report.limitation_results.some(item => item.status === 'failed'
+    && (item.model_calls == null || item.model_calls >= assessmentLimit
+      || item.tool_calls == null || item.tool_calls >= Math.min(limits.tool_calls,24)))) return null;
   if (Date.now() - Date.parse(task.created_at) >= limits.timeout_seconds * 1000) return null;
   const budget = report.budget;
   if (budget && ((budget.model_calls ?? 0) >= limits.total_model_calls
@@ -52,7 +56,7 @@ export function observedUsage(report: ReviewReport | null) {
       ? null : budget.input_tokens + budget.output_tokens };
   }
   const seen = new Set<string>();
-  const results: AgentResult[] = [...report.discovery_results, ...report.verification_results].filter(item => {
+  const results: AgentResult[] = [...report.discovery_results, ...report.verification_results, ...report.limitation_results].filter(item => {
     if (!item.execution_id) return true;
     if (seen.has(item.execution_id)) return false;
     seen.add(item.execution_id); return true;

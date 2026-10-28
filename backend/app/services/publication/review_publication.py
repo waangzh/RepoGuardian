@@ -2,6 +2,7 @@
 
 from app.review.evidence import EvidenceArchive
 from app.review.findings import aggregate_findings, candidate_gate, comparison_candidates, verify_finding
+from app.review.limitations import candidate_limitations, limitation_discoveries
 from app.services.review.artifact_store import LocalArtifactStore
 
 
@@ -20,7 +21,8 @@ def validated_findings(task, artifacts=None):
     decisions = {decision.candidate_id: decision for decision in report.decisions}
     results = {result.id: result.model_dump() for result in report.verification_results
                if result.status == "completed"}
-    discovery = [result.model_dump() for result in report.discovery_results]
+    discovery = [result.model_dump() for result in report.discovery_results] + limitation_discoveries(
+        [result.model_dump() for result in report.limitation_results])
     changed = [item.model_dump(mode="json") for item in task.changed_files]
     if task.configuration.options.scope.mode == "selected":
         selected_paths = set(task.configuration.options.scope.primary_files)
@@ -65,7 +67,9 @@ def validated_findings(task, artifacts=None):
             for identity in members:
                 candidate = candidates[identity]
                 decision, rebuilt = verify_finding(candidate, results[identity], archive, changed,
-                    comparison_candidates(candidate.model_dump(), raw_candidates))
+                    comparison_candidates(candidate.model_dump(), raw_candidates),
+                    candidate_limitations({"discovery_results": discovery, "candidates": raw_candidates},
+                                          [candidate.model_dump()]))
                 if rebuilt is None or decision != decisions[identity]:
                     raise ValueError("finding_subject_mismatch")
                 rebuilt_members.append(rebuilt)

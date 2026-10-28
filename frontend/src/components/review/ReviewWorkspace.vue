@@ -78,7 +78,7 @@ onBeforeUnmount(() => { generation++; controller?.abort(); });
   <p v-if="task.error" class="notice warn space-bottom">{{ executionErrorLabel(task.error) }}。错误类别：<code>{{ task.error }}</code>；缺失与未知不能视为通过。</p>
   <p v-if="resumeAction === '补查失败分支'" class="muted small space-bottom">补查只重跑失败分支，沿用本轮固定快照、剩余调用预算和总期限；最多一次。</p>
   <ReviewOverviewPage v-if="tab === 'overview'" :task="task" :plan="plan" :loading="loading" @navigate="tab = $event" @filter="filterFindings" />
-  <ReviewFindingsPage v-else-if="tab === 'findings'" :key="task.id" :task="task" :findings="findings" :focus-key="focusKey" :initial-filter="findingFilter" :loading="loading" @updated="updated" @file="openFile" />
+  <ReviewFindingsPage v-else-if="tab === 'findings'" :key="task.id" :task="task" :findings="findings" :limitations="plan?.outcome.review_limitations || []" :focus-key="focusKey" :initial-filter="findingFilter" :loading="loading" @updated="updated" @file="openFile" />
   <ReviewScopePage v-else-if="tab === 'scope'" :task="task" :plan="plan" />
   <ReviewFilesPage v-else-if="tab === 'files'" :task="task" :findings="findings" :initial-path="focusedFile" @finding="openFinding" />
   <ReviewActivityPage v-else-if="tab === 'activity'" :task="task" />

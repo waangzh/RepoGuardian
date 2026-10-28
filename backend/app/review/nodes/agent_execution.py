@@ -9,7 +9,10 @@ from langchain_core.callbacks import AsyncCallbackHandler
 from langsmith import Client, tracing_context
 
 from app.review.agents import agent_recursion_limit, build_agent
-from app.review.models import AgentAttempt, AgentResult, BatchVerificationOutput, DiscoveryOutput, VerificationOutput
+from app.review.models import (
+    AgentAttempt, AgentResult, BatchVerificationOutput, DiscoveryOutput, LimitationReviewOutput, VerificationOutput,
+)
+from app.review.limitations import LIMITATION_CALL_LIMITS, validate_assessments
 from app.review.tools import REVIEW_TOOLS
 from app.review.materials import prepare_materials
 
@@ -49,7 +52,7 @@ class AgentUsage(AsyncCallbackHandler):
         if isinstance(outputs, dict):
             for message in outputs.get("messages", []):
                 if (isinstance(message, ToolMessage) and message.name in {
-                        "DiscoveryOutput", "VerificationOutput", "BatchVerificationOutput"}
+                        "DiscoveryOutput", "VerificationOutput", "BatchVerificationOutput", "LimitationReviewOutput"}
                         and str(message.content).startswith("Error:")):
                     self.structured_errors.add(message.tool_call_id)
             self.structured_output_retries = len(self.structured_errors)
@@ -62,7 +65,7 @@ class AgentUsage(AsyncCallbackHandler):
         message = getattr(generation, "message", None)
         self.tool_calls += len(getattr(message, "tool_calls", []))
         final_schemas = {schema.__name__: schema for schema in (
-            DiscoveryOutput, VerificationOutput, BatchVerificationOutput)}
+            DiscoveryOutput, VerificationOutput, BatchVerificationOutput, LimitationReviewOutput)}
         finals = [call for call in getattr(message, "tool_calls", []) if call["name"] in final_schemas]
         for call in finals:
             try:
@@ -151,7 +154,7 @@ class AgentUsage(AsyncCallbackHandler):
         self.policy_exclusions = self.incomplete_searches = 0
         for message in messages:
             if (isinstance(message, ToolMessage) and message.name in {
-                    "DiscoveryOutput", "VerificationOutput", "BatchVerificationOutput"}
+                    "DiscoveryOutput", "VerificationOutput", "BatchVerificationOutput", "LimitationReviewOutput"}
                     and str(message.content).startswith("Error:")):
                 self.structured_errors.add(message.tool_call_id)
             if isinstance(message, ToolMessage) and message.name in SOURCE_TOOLS:
@@ -163,8 +166,9 @@ class AgentUsage(AsyncCallbackHandler):
 
 async def run_agent(context, identity, reviewer, payload, *, discovery_agent_ids=()):
     sources = replace(await context.sources(), budget=context.budget, budget_agent_id=identity,
-                      discovery_agent_ids=frozenset(discovery_agent_ids))
-    await context.emit(phase=reviewer, agent_id=identity, status="running")
+                      discovery_agent_ids=frozenset(discovery_agent_ids),
+                      goals=tuple(payload.get("goals", [])),
+                      review_limitations=tuple(payload.get("review_limitations", [])))
     payload = {**payload, "snapshot": sources.evidence.snapshot.model_dump(),
                "author_context": sources.author_context,
                "discussions": [{"index": index, "id": item.get("id"), "path": item.get("path"),
@@ -175,9 +179,15 @@ async def run_agent(context, identity, reviewer, payload, *, discovery_agent_ids
         previous = next((item for (role, _), item in context.retry_results.items()
                          if role == reviewer and item.get("execution_id") == identity), None)
     limits = context.limits.model_copy(deep=True)
+    if reviewer == "limitation_reviewer":
+        limits.model_calls = min(limits.model_calls, LIMITATION_CALL_LIMITS[context.depth])
+        limits.tool_calls = min(limits.tool_calls, 24)
+    model_call_limit, tool_call_limit = limits.model_calls, limits.tool_calls
     if previous:
         limits.model_calls -= previous["model_calls"]
         limits.tool_calls -= previous["tool_calls"]
+    await context.emit(phase=reviewer, agent_id=identity, status="running",
+                       model_call_limit=model_call_limit, tool_call_limit=tool_call_limit)
     usage_observer = AgentUsage(sources.evidence.snapshot.review_id, identity, reviewer)
     logger.info("审查分支开始 review_id=%s agent_id=%s reviewer=%s model_limit=%s tool_limit=%s",
         sources.evidence.snapshot.review_id, identity, reviewer, limits.model_calls, limits.tool_calls)
@@ -187,6 +197,7 @@ async def run_agent(context, identity, reviewer, payload, *, discovery_agent_ids
         if limits.model_calls <= 0 or limits.tool_calls <= 0:
             raise ValueError("agent_budget_exhausted")
         materials, material_ids = await prepare_materials(sources, payload, context.depth)
+        sources.material_evidence_ids = frozenset(material_ids)
         payload = {**payload, **materials}
         agent = await asyncio.to_thread(build_agent, context.model, reviewer, limits,
                                        batch="candidates" in payload)
@@ -202,6 +213,9 @@ async def run_agent(context, identity, reviewer, payload, *, discovery_agent_ids
         await context.active()
         await usage_observer.reconcile(result["messages"])
         output = result["structured_response"].model_dump()
+        if reviewer == "limitation_reviewer":
+            await asyncio.to_thread(validate_assessments, LimitationReviewOutput.model_validate(output),
+                sources.review_limitations, sources.goals, usage_observer.evidence | material_ids, sources.evidence)
     except (asyncio.CancelledError, KeyboardInterrupt):
         raise
     except Exception as exc:
@@ -220,7 +234,8 @@ async def run_agent(context, identity, reviewer, payload, *, discovery_agent_ids
     envelope.structured_output_retries = usage_observer.structured_output_retries
     envelope.cached_input_tokens = (usage_observer.cached_input_tokens
         if not usage_observer.unknown and usage_observer.cache_known else None)
-    node = "verify" if reviewer == "verifier" else "investigate" if reviewer == "investigator" else "discover"
+    node = ("review_limitation" if reviewer == "limitation_reviewer" else
+            "verify" if reviewer == "verifier" else "investigate" if reviewer == "investigator" else "discover")
     if node in context.replaying_nodes:
         # A wrapper node may restart read-only work after interruption. Prior
         # transport completion is unknown; do not label only new calls as total.
@@ -249,5 +264,6 @@ async def run_agent(context, identity, reviewer, payload, *, discovery_agent_ids
         error=envelope.error, model_calls=envelope.model_calls, tool_calls=envelope.tool_calls,
         tool_failures=envelope.tool_failures, elapsed_seconds=elapsed,
         policy_exclusions=envelope.policy_exclusions, incomplete_searches=envelope.incomplete_searches,
-        structured_output_retries=envelope.structured_output_retries)
+        structured_output_retries=envelope.structured_output_retries,
+        model_call_limit=model_call_limit, tool_call_limit=tool_call_limit)
     return envelope.model_dump()

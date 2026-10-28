@@ -21,6 +21,16 @@ one candidate_id decision for every supplied member. Judge each independently.
 Once the specific trigger is proven/refuted, submit; do not exhaust the budget
 on unrelated repository searches or speculative test improvements.
 
+review_limitations contains server-issued discovery limitation IDs, their source,
+and associated candidate IDs. Assess only entries relevant to the current candidate.
+When independently read source establishes the missing premise, return an explicit
+limitation_resolutions entry with status resolved, an explanation, and your own
+source evidence IDs. Use boundary only when you can explain why the stated gap is
+a general static-review boundary rather than a necessary unknown. Speculation
+about unspecified external consumers does not require exhaustive investigation.
+Keep concrete missing premises unresolved by omitting a resolution. Refuting the
+candidate alone never resolves a limitation. Never invent IDs or reuse discovery evidence.
+
 Independently judge severity from the proven impact. related_candidates is only
 a bounded set of untrusted comparison proposals, not prior confirmations. When
 the candidate is confirmed, list equivalent_candidate_ids only for proposals

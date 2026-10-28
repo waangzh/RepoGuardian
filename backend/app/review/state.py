@@ -27,6 +27,11 @@ class ReviewState(TypedDict, total=False):
     gate_rejections: list[dict]
     verification_results: Annotated[list[dict], merge_results]
     investigation_results: Annotated[list[dict], merge_results]
+    limitation_results: Annotated[list[dict], merge_results]
+    limitation_batches: list[dict]
+    limitation_batch_id: str
+    limitation_round: int
+    limitation_new_candidates: bool
     decisions: list[dict]
     findings: list[dict]
     investigation_round: int
@@ -35,6 +40,7 @@ class ReviewState(TypedDict, total=False):
     assignment: dict
     candidate: dict
     related_candidates: list[dict]
+    review_limitations: list[dict]
     retry_count: int
     retry_results: list[dict]
     batch_id: str

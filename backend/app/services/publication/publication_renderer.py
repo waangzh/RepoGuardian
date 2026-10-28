@@ -9,7 +9,7 @@ from app.services.publication.review_prose import author_goal_text
 from app.services.publication.review_text_format import (
     MERGE_SYMBOLS, OUTCOME_DESCRIPTIONS, REASON_LABELS,
     _comment_risks, _finding_location_text, _ordered_findings, _sentence, STATIC_BOUNDARY,
-    markdown_text,
+    markdown_text, review_limitation_text,
 )
 
 
@@ -195,7 +195,7 @@ def _appendix_lines(plan, task):
     lines = ["", "## 附录：审查范围与限制", "",
         f"- 审查目标完成：{outcome.examined_goals} / {outcome.total_goals}",
         f"- 本轮确认的问题（含归因单独标注的既有问题）：{outcome.confirmed_count}；未确认候选：{outcome.unresolved_count}",
-        f"- 审查完整性：{ {'complete': '完整', 'partial': '不完整', 'unknown': '未知'}[outcome.review_completeness] }；"
+        f"- 约定源码目标覆盖：{ {'complete': '完整', 'partial': '不完整', 'unknown': '未知'}[outcome.review_completeness] }；"
         f"运行可靠性：{ {'reliable': '可靠', 'unreliable': '存在限制', 'unknown': '未知'}[outcome.runtime_reliability] }",
         f"- 审查 Commit：{markdown_text(plan.snapshot.head_sha or '未记录', 64)}",
         f"- 审查记录：{markdown_text(plan.review_id, 160)}"]
@@ -214,6 +214,15 @@ def _appendix_lines(plan, task):
     lines += ["", "### 来源与验证边界", "", *_author_source_lines(plan), *_validation_lines(plan)]
     if outcome.reason_codes:
         lines += ["", "### 原因代码", "", *[f"- {REASON_LABELS[reason]}（{reason.value}）" for reason in outcome.reason_codes]]
+    resolved = [item for item in outcome.review_limitations if item.status in {"resolved", "boundary"}]
+    if resolved:
+        lines += ["", "### 已处理的审查限制", ""]
+        for item in resolved:
+            status = "已解决" if item.status == "resolved" else "一般审查边界"
+            lines.append(f"- {markdown_text(item.text)}；处理结果：{status}；"
+                         f"说明：{markdown_text(item.resolution.explanation)}；"
+                         f"来源：{markdown_text(item.source_id[:12])}；"
+                         f"复核记录：{markdown_text(item.resolved_by[:12])}")
     if plan.withheld_findings:
         lines += ["", "未进入发布正文的记录：", *[
             f"- {markdown_text(item.candidate_id, 160)}：{markdown_text(item.reason_code)}"
@@ -299,6 +308,8 @@ def _risk_section(plan):
     items = []
     for reason in outcome.reason_codes:
         items.append(f"- {REASON_LABELS[reason]}")
+    items.extend(f"- {markdown_text(review_limitation_text(item))}"
+                 for item in outcome.review_limitations if item.status in {"pending", "unresolved"})
     for goal in plan.digest.incomplete_goals[:5]:
         items.append(f"- 未完成目标：{markdown_text(goal.path or '文件未记录', 500)}"
                      + (f":{goal.start_line}–{goal.end_line}" if goal.start_line else "")
@@ -322,7 +333,9 @@ def _next_steps(plan):
     if plan.digest.incomplete_goals:
         steps.append("- 补查未完成目标，再判断整轮审查是否完整。")
     if outcome.incomplete_investigations:
-        steps.append("- 处理未决调查；初始目标检查完成不代表调用链调查已经得到答案。")
+        steps.append("- 补齐列出的必要证据，或明确其一般边界归类；源码目标检查完成不代表审查限制已解决。")
+    if outcome.pending_limitation_count:
+        steps.append("- 完成限制声明的必要性复核；尚未复核的声明不能当作已确认的证据缺口。")
     if outcome.unresolved_count:
         steps.append("- 在问题与证据页核对未决候选，补齐证据后再决定是否作为缺陷处理。")
     if not steps:
@@ -513,7 +526,7 @@ def render_review_comment(plan, *, detail="compact", exclude_resolved=False):
     if full:
         scope_lines += ["", "### 审查范围", "",
             f"约定目标已检查 {plan.outcome.examined_goals} / {plan.outcome.total_goals}；"
-            f"未决候选 {plan.outcome.unresolved_count} 项；未完成调查 {plan.outcome.incomplete_investigations} 项。"]
+            f"未决候选 {plan.outcome.unresolved_count} 项；未解决审查限制 {plan.outcome.incomplete_investigations} 项。"]
         scope_lines += _goal_lines(plan.digest.examined_goals, "已检查目标", limit=None)
         scope_lines += _goal_lines(plan.digest.incomplete_goals, "未完成目标", limit=None)
         scope_lines += [f"- 排除文件：{markdown_text(item.path)}；{markdown_text(item.reason)}" for item in plan.digest.excluded_files]

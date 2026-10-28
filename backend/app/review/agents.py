@@ -8,21 +8,26 @@ from typing import NotRequired
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
     AgentMiddleware, AgentState, ExtendedModelResponse, ModelCallLimitMiddleware, ToolCallLimitMiddleware,
+    hook_config,
 )
 from langchain.agents.structured_output import ToolStrategy
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.types import Command
 
 from app.review.budget import ReviewBudgetExceeded
 from app.review.context import AgentContext
-from app.review.models import BatchVerificationOutput, DiscoveryOutput, ReviewLimits, VerificationOutput
+from app.review.models import (
+    BatchVerificationOutput, DiscoveryOutput, LimitationReviewOutput, ReviewLimits, VerificationOutput,
+)
+from app.review.submission import issued_source_ids, submission_feedback
 from app.review.tools import REVIEW_TOOLS
 
 
 class ReviewAgentState(AgentState):
     review_finalizing: NotRequired[bool]
     review_final_requests: NotRequired[int]
+    review_feedback_sent: NotRequired[bool]
 
 
 class ReviewGuardMiddleware(AgentMiddleware):
@@ -43,6 +48,9 @@ class ReviewGuardMiddleware(AgentMiddleware):
     async def abefore_model(self, state, runtime):
         if runtime.context.check_active:
             await runtime.context.check_active()
+        finalizing, _ = await self.final_state(state, runtime.context)
+        if finalizing:
+            return None
         remaining = self.limits.model_calls - state.get("thread_model_call_count", 0)
         tools = state.get("thread_tool_call_count", {}).get("__all__", 0)
         closing = remaining <= min(3, self.limits.model_calls) or tools >= max(0, self.limits.tool_calls - 2)
@@ -59,6 +67,42 @@ class ReviewGuardMiddleware(AgentMiddleware):
                     "用最终结构化输出提交已有发现、合格覆盖和未完成限制；"
                     "不要继续重复失败请求，不要将未检查范围标为完成。",
                 id="review-budget-reminder")]}
+
+    @hook_config(can_jump_to=["model"])
+    async def aafter_model(self, state, runtime):
+        output = state.get("structured_response")
+        if (not isinstance(output, (DiscoveryOutput, VerificationOutput, BatchVerificationOutput, LimitationReviewOutput))
+                or state.get("review_feedback_sent")
+                or state.get("thread_model_call_count", 0) >= self.limits.model_calls):
+            return None
+        context = runtime.context
+        if context.check_active:
+            await context.check_active()
+        _, final_requests = await self.final_state(state, context)
+        if final_requests >= 2:
+            return None
+        if context.budget is not None:
+            summary = await context.budget.summary()
+            if (summary["model_calls"] >= summary["model_call_limit"]
+                    or summary["committed_input_tokens"] > summary["input_token_limit"]):
+                return None
+        issued = issued_source_ids(state["messages"], context.material_evidence_ids)
+        feedback = await asyncio.to_thread(
+            submission_feedback, output, context.goals, context.evidence, issued, context.budget_agent_id,
+            context.review_limitations)
+        if feedback is None:
+            return None
+        message = next((item for item in reversed(state["messages"])
+                        if isinstance(item, ToolMessage) and item.name in FINAL_SCHEMAS), None)
+        if message is None:
+            return None
+        update = {"messages": [message.model_copy(update={"content": feedback, "status": "error"})],
+                  "structured_response": None, "review_feedback_sent": True}
+        last = next(item for item in reversed(state["messages"]) if isinstance(item, AIMessage))
+        completed = {item.tool_call_id for item in state["messages"] if isinstance(item, ToolMessage)}
+        if all(call["id"] in completed or call["name"] in FINAL_SCHEMAS for call in last.tool_calls):
+            update["jump_to"] = "model"
+        return update
 
     async def awrap_model_call(self, request, handler):
         context = request.runtime.context
@@ -145,7 +189,7 @@ class FinalizationRequired(RuntimeError):
     pass
 
 
-FINAL_SCHEMAS = {"DiscoveryOutput", "VerificationOutput", "BatchVerificationOutput"}
+FINAL_SCHEMAS = {"DiscoveryOutput", "VerificationOutput", "BatchVerificationOutput", "LimitationReviewOutput"}
 
 
 def agent_recursion_limit(limits: ReviewLimits):
@@ -154,10 +198,11 @@ def agent_recursion_limit(limits: ReviewLimits):
 
 
 def build_agent(model, reviewer: str, limits: ReviewLimits, *, batch=False):
-    if reviewer not in {"reviewer", "contract", "specialist", "verifier", "investigator"}:
+    if reviewer not in {"reviewer", "contract", "specialist", "verifier", "investigator", "limitation_reviewer"}:
         raise ValueError("unknown_reviewer")
     prompt = (Path(__file__).parent / "prompts" / f"{reviewer}.md").read_text(encoding="utf-8")
-    schema = (BatchVerificationOutput if batch else VerificationOutput
+    schema = (LimitationReviewOutput if reviewer == "limitation_reviewer" else
+              BatchVerificationOutput if batch else VerificationOutput
               if reviewer in {"verifier", "investigator"} else DiscoveryOutput)
     return create_agent(
         model=model, tools=REVIEW_TOOLS, system_prompt=prompt,

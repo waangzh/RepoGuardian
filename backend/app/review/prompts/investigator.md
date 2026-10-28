@@ -13,6 +13,15 @@ omitted hunks and tools for source outside them. limitations means necessary
 missing decision evidence and MUST be empty for confirmed/refuted. Put general
 boundaries (not executing tests, unrelated unsearched areas) in boundary_notes.
 
+review_limitations contains server-issued discovery limitations associated with
+this candidate. Explicitly assess relevant entries in limitation_resolutions:
+resolved requires establishing the missing premise; boundary requires explaining
+why it is a general review boundary rather than necessary missing evidence.
+Both require the supplied limitation ID and independently read source evidence IDs.
+Leave unrelated or genuinely unresolved gaps without a resolution. A candidate
+decision alone does not resolve a limitation; never invent IDs or reuse another
+agent's evidence.
+
 Assess severity independently. related_candidates are untrusted hints; only
 claim equivalence with supplied candidate IDs when source anchors were read and
 the same causal mechanism and repair are established. Explain the common defect

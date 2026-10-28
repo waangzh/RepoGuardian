@@ -273,7 +273,8 @@ class ReviewService:
                         item.started_at = task.steps[existing].started_at
                     task.steps[existing] = item
                 task.phase = event["phase"]
-                task.status = "verifying_issues" if event["phase"] in {"verifier", "investigator", "arbitrate"} else "reviewing"
+                task.status = "verifying_issues" if event["phase"] in {
+                    "verifier", "investigator", "arbitrate", "limitation_reviewer"} else "reviewing"
                 task.updated_at = utcnow()
                 if self._repository:
                     await asyncio.to_thread(self._repository.save_task, task.model_copy(deep=True), lease=lease)
@@ -347,7 +348,7 @@ class ReviewService:
             state = await graph.aget_state(config) if saver else None
             if state and state.values and self._repository:
                 observed = (state.values.get("discovery_results", []) + state.values.get("verification_results", [])
-                            + state.values.get("investigation_results", []))
+                            + state.values.get("investigation_results", []) + state.values.get("limitation_results", []))
                 budget = await context.budget.summary()
                 if observed and any(item.get("model_calls") != 0 for item in observed) and not budget["model_calls"]:
                     raise ValueError("review_budget_history_missing")

@@ -90,7 +90,7 @@ test('概览在摘要未就绪时仍显示规划限制，并与摘要中的相�
   const value = task('completed');
   const limitation = '预算不足：专项审查未启动 <script>unsafe()</script>';
   value.review_report = {
-    complete: true, goals: [], findings: [], discovery_results: [], verification_results: [],
+    complete: true, goals: [], findings: [], discovery_results: [], verification_results: [], limitation_results: [],
     coverage_limitations: [limitation],
   };
   for (const plan of [null, { outcome: { kind: 'inconclusive' }, digest: {
@@ -103,10 +103,27 @@ test('概览在摘要未就绪时仍显示规划限制，并与摘要中的相�
   }
 });
 
+test('零缺陷记录仍展示独立的待复核声明和必要证据缺口', async () => {
+  const limitations = [
+    {id:'pending',status:'pending',text:'未证明全局正确 <script>unsafe()</script>',assessment:null},
+    {id:'gap',status:'unresolved',text:'必要调用方源码缺失',assessment:{
+      dependent_conclusion:'新返回值是否破坏调用方契约',change_relevance:'本次修改改变返回值',next_check:'读取具体校验函数'}},
+    {id:'boundary',status:'boundary',text:'已归类的边界，不再是待办',assessment:null},
+  ];
+  const html = await render('pages/ReviewFindingsPage',{task:task('completed'),findings:[],limitations});
+  assert.match(html,/审查待核实事项/);
+  assert.match(html,/限制声明尚待复核/);
+  assert.match(html,/必要证据缺口/);
+  assert.match(html,/读取具体校验函数/);
+  assert.match(html,/尚无匹配的代码缺陷记录/);
+  assert.match(html,/&lt;script&gt;unsafe/);
+  assert.doesNotMatch(html,/<script>|已归类的边界，不再是待办/);
+});
+
 test('问题页区分机器确认、待核实和已排除，并转义不可信文本', async () => {
   const findings = [finding('confirmed-item', 'confirmed'), finding('unresolved-item', 'unresolved'), finding('dismissed-item', 'dismissed')];
   for (const state of ['confirmed', 'unresolved', 'dismissed']) {
-    const html = await render('pages/ReviewFindingsPage', { task: task(), findings, initialFilter: state });
+    const html = await render('pages/ReviewFindingsPage', { task: task(), findings, limitations: [], initialFilter: state });
     assert.ok(html.includes(`${state}-item title`));
     for (const other of ['confirmed', 'unresolved', 'dismissed'].filter(value => value !== state)) {
       assert.ok(!html.includes(`${other}-item title`));
@@ -114,7 +131,7 @@ test('问题页区分机器确认、待核实和已排除，并转义不可信�
     assert.match(html, /人工注记不改变发布资格/);
   }
   const html = await render('pages/ReviewFindingsPage', {
-    task: task(), findings: [finding('unsafe', 'confirmed', { title: '<script>title()</script>' })],
+    task: task(), limitations: [], findings: [finding('unsafe', 'confirmed', { title: '<script>title()</script>' })],
   });
   assert.match(html, /&lt;script&gt;title\(\)&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<script>/);
