@@ -6,27 +6,25 @@ import { renderToString } from "@vue/server-renderer";
 
 const fixtures = {findings:{plan:{review_id:"review",snapshot:{head_sha:"a".repeat(40)},review_comment_markdown:"已核验评论",inline_drafts:[],summary_findings:[]}}};
 
-test("发布页在进入前区分复制评论与直接发布，未启用时不展示口令入口", async () => {
+test("发布面板未启用时只说明复制可用，启用后展示问题选择、授权与预检", async () => {
   const server = await createServer({ server: { middlewareMode: true, hmr: false }, optimizeDeps: { noDiscovery: true, entries: [], include: [] }, appType: "custom" });
   try {
     const { default: Panel } = await server.ssrLoadModule("/src/components/review/publication/GitHubPublicationPanel.vue");
     const { plan } = fixtures.findings;
-    const render = capability => renderToString(createSSRApp({ render: () => h(Panel, { reviewId: plan.review_id, plan, capability }) }));
+    const render = (capability, capabilityError = false) => renderToString(createSSRApp({ render: () => h(Panel, { reviewId: plan.review_id, plan, capability, capabilityError }) }));
 
     const disabled = await render({ enabled: false, mode: "copy_only" });
-    // 两种交付路径同时可见，且明确说明复制不写入 GitHub。
-    for (const text of ["复制评论", "直接发布到 GitHub", "只把评论正文写入剪贴板", "当前仅支持", "复制评论"]) assert.ok(disabled.includes(text), text);
-    assert.ok(disabled.includes("REPOGUARDIAN_GITHUB_PUBLISH_ENABLED"));
-    // 未启用时不应让用户先输入操作口令再发现功能不可用。
-    assert.ok(!disabled.includes("本地发布操作口令"));
+    // 未启用时评论仍可阅读和复制，配置说明按需展开。
+    for (const text of ["服务端未启用直接发布", "完整评论仍可在上方阅读和复制", "如何启用直接发布", "REPOGUARDIAN_GITHUB_PUBLISH_ENABLED"]) assert.ok(disabled.includes(text), text);
+    assert.ok(!disabled.includes("2. 发布授权"));
     assert.ok(!disabled.includes("检查发布条件并预览"));
 
+    assert.ok((await render(null)).includes("正在检查服务端是否启用直接发布"));
+    assert.ok((await render(null, true)).includes("重新检查发布能力"));
+
     const enabled = await render({ enabled: true, mode: "publish" });
-    assert.ok(enabled.includes("本地发布操作口令"));
-    assert.ok(enabled.includes("检查发布条件并预览"));
-    assert.ok(!enabled.includes("当前仅支持"));
-    // 复制路径在两种状态下都可用，且不依赖操作口令。
-    assert.ok(enabled.includes("复制 PR 评论"));
+    for (const text of ["2. 发布授权", "检查发布条件并预览", "选择要发布的已核验问题"]) assert.ok(enabled.includes(text), text);
+    assert.ok(!enabled.includes("服务端未启用直接发布"));
   } finally { await server.close(); }
 });
 

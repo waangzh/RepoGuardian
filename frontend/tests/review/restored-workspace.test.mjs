@@ -1,14 +1,17 @@
 import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { createSSRApp } from 'vue';
 import { renderToString } from '@vue/server-renderer';
 
+const dompurifyStub = fileURLToPath(new URL('../fixtures/dompurify-stub.mjs', import.meta.url));
 let server;
 before(async () => {
   server = await createServer({
     server: { middlewareMode: true, hmr: false },
     optimizeDeps: { noDiscovery: true, entries: [], include: [] },
+    resolve: { alias: { dompurify: dompurifyStub } },
     appType: 'custom',
   });
 });
@@ -41,6 +44,20 @@ function task(status = 'failed') {
     configuration: { provider: 'fixture', model: 'fixture-model', options, limits },
     changed_files: [file], review_report: null, warnings: [], error: null,
     steps: [{ name: 'stale-agent', status: 'running', message: '不应仍在运行', data: {}, updated_at: '2026-10-27T00:00:00Z' }],
+  };
+}
+function publicationPlan(overrides = {}) {
+  return {
+    review_id: 'a'.repeat(32),
+    snapshot: { head_sha: snapshot.head_sha, effective_base_sha: snapshot.effective_base_sha },
+    outcome: { kind: 'findings', coverage: 'complete', confirmed_count: 1, publishable_count: 1, unresolved_count: 0,
+      examined_goals: 1, total_goals: 1, incomplete_investigations: 0, pending_limitation_count: 0,
+      review_limitations: [], reason_codes: [], finding_conclusion: 'confirmed', review_completeness: 'complete', runtime_reliability: 'reliable' },
+    digest: { examined_goals: [], incomplete_goals: [], reviewed_files: [], excluded_files: [], checked_areas: [] },
+    summary_markdown: '总结', user_report_markdown: '## 详细报告正文',
+    review_comment_markdown: '## 审查结果\n\n已确认 1 个问题。',
+    inline_drafts: [], summary_findings: [], withheld_findings: [], content_eligible: true, blocking_reasons: [],
+    ...overrides,
   };
 }
 function finding(id, review_status, overrides = {}) {
@@ -172,9 +189,24 @@ test('覆盖页不把缺失结算显示为完整，保留受阻范围和原因',
   assert.match(html, /BASE/);
 });
 
+test('审查意见默认展示完整评论正文，重要状态提示不折叠', async () => {
+  const html = await render('pages/ReviewReportPage', { task: task('completed'), plan: publicationPlan(), report: '', loading: false });
+  for (const label of ['审查意见', '详细报告', '技术记录', '复制完整 PR 评论', '发布到 GitHub']) assert.ok(html.includes(label), label);
+  assert.match(html, /class="active"[^>]*aria-current="page"[^>]*>审查意见</);
+  assert.match(html, /<h2>审查结果<\/h2>/);
+  assert.match(html, /已确认 1 个问题/);
+  assert.ok(html.includes(snapshot.head_sha) && html.includes(snapshot.effective_base_sha));
+  const failed = await render('pages/ReviewReportPage', { task: task('failed'), plan: publicationPlan(), report: '', loading: false });
+  assert.match(failed.replace(/<details[\s\S]*?<\/details>/g, ''), /审查未正常结束/);
+  const outcome = { ...publicationPlan().outcome, review_completeness: 'partial', coverage: 'partial', incomplete_investigations: 2, pending_limitation_count: 1 };
+  const partial = await render('pages/ReviewReportPage', { task: task('completed'), plan: publicationPlan({ outcome }), report: '', loading: false });
+  assert.match(partial.replace(/<details[\s\S]*?<\/details>/g, ''), /覆盖不完整：2 项调查未完成，1 项限制待复核/);
+});
+
 test('恢复的侧栏与设置可在无 document 和 localStorage 的环境渲染', async () => {
   const sidebar = await render('layout/AppSidebar', { modelValue: 'dashboard', section: 'overview', hasReview: true, taskActive: false, mobileOpen: false, busy: false });
-  for (const label of ['主导航', '审查历史', '系统设置', '补充证据']) assert.ok(sidebar.includes(label));
+  for (const label of ['主导航', '审查历史', '系统设置', '补充证据', '审查意见']) assert.ok(sidebar.includes(label));
+  assert.ok(!sidebar.includes('发布或复制'));
   const settings = await render('pages/SettingsPage', {});
   assert.match(settings, /主题/);
   assert.match(settings, /信息密度/);

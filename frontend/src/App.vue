@@ -35,7 +35,7 @@ const taskActive = computed(() => !!task.value && !terminal(task.value.status));
 const planDirty = computed(() => !!preview.value && (previewModel.value !== model.value || previewUrl.value !== prUrl.value
   || JSON.stringify(toRaw(options.value)) !== JSON.stringify(preview.value.effective_plan)));
 const pageTitle = computed(() => page.value === 'history' ? '审查历史' : page.value === 'settings' ? '系统设置'
-  : task.value ? [...reviewPrimarySections,...reviewSecondarySections,{id:'publish',label:'发布或复制'}].find(item => item.id === section.value)?.label || '当前审查'
+  : task.value ? [...reviewPrimarySections,...reviewSecondarySections].find(item => item.id === section.value)?.label || '当前审查'
   : preview.value ? '确认审查方案' : previewStage.value ? '准备审查方案' : '新建审查');
 const statusText = computed(() => tracking.value ? '准备固定快照中' : task.value ? phaseLabel(task.value.phase) : '只读静态审查');
 function forgetTask() {

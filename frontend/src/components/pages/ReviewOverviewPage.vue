@@ -22,7 +22,7 @@ const running = computed(() => terminal(props.task.status) ? [] : props.task.ste
     <section class="ov-panel ov-verdict" :data-tone="tone"><div class="ov-verdict__inner">
       <div class="ov-verdict__kicker"><AppIcon name="shield" />本轮结论 · {{ terminal(task.status) ? '固定快照审查' : '执行中' }}</div>
       <h2>{{ headline }}</h2><p class="ov-verdict__description">{{ plan?.digest.merge_decision?.advice || '行为、契约与风险视角分别读取源码，候选经过独立核验后才可能进入交付草稿。' }}</p>
-      <div class="ov-verdict__bottom"><div class="ov-verdict__meta"><span><AppIcon name="activity" />{{ phaseLabel(task.phase) }}</span><span><AppIcon name="units" />{{ report ? `${report.goals.filter(goal => goal.status === 'examined').length} / ${report.goals.length} 个源码范围已检查` : '覆盖范围尚未结算' }}</span></div><button class="ov-link" @click="$emit('navigate','report')">查看完整报告 <AppIcon name="arrow-right" /></button></div>
+      <div class="ov-verdict__bottom"><div class="ov-verdict__meta"><span><AppIcon name="activity" />{{ phaseLabel(task.phase) }}</span><span><AppIcon name="units" />{{ report ? `${report.goals.filter(goal => goal.status === 'examined').length} / ${report.goals.length} 个源码范围已检查` : '覆盖范围尚未结算' }}</span></div><button class="ov-link" @click="$emit('navigate','report')">查看审查意见 <AppIcon name="arrow-right" /></button></div>
     </div></section>
     <section v-if="running.length" class="ov-panel ov-understanding"><header class="ov-section-head"><h2>当前工作</h2><button class="ov-link" @click="$emit('navigate','activity')">查看 Agent 活动</button></header><p v-for="step in running" :key="step.name" class="rg-running-agent"><span class="rg-live-dot" />{{ phaseLabel(step.message) }}<code>{{ step.name.slice(0,12) }}</code></p></section>
     <div class="ov-main">

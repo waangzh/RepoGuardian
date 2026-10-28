@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AppPage } from '../../types/operations';
-import { reviewPrimarySections, reviewSecondarySections, reviewPublishSection, type ReviewSection } from '../../types/workspace';
+import { reviewPrimarySections, reviewSecondarySections, type ReviewSection } from '../../types/workspace';
 import AppIcon from '../common/AppIcon.vue';
 import brandIcon from '../../assets/repoguardian-icon.png';
 defineProps<{ modelValue: AppPage; section: ReviewSection; hasReview: boolean; hasPreview?: boolean; taskActive: boolean; mobileOpen: boolean; busy: boolean }>();
@@ -17,7 +17,7 @@ defineEmits<{ 'update:modelValue': [page: AppPage]; section: [value: ReviewSecti
       <div class="nav-divider" /><div class="nav-heading">当前 PR 审查</div>
       <button v-for="item in reviewPrimarySections" :key="item.id" class="side-link" :class="{ active: hasReview && modelValue === 'dashboard' && section === item.id }" :disabled="!hasReview" :aria-current="hasReview && modelValue === 'dashboard' && section === item.id ? 'page' : undefined" @click="$emit('section', item.id)"><AppIcon :name="item.icon" /><span class="nav-text">{{ item.label }}</span></button>
       <div class="nav-heading nav-subheading">补充证据</div>
-      <button v-for="item in [...reviewSecondarySections, reviewPublishSection]" :key="item.id" class="side-link" :class="{ active: hasReview && modelValue === 'dashboard' && section === item.id }" :disabled="!hasReview" :aria-current="hasReview && modelValue === 'dashboard' && section === item.id ? 'page' : undefined" @click="$emit('section', item.id)"><AppIcon :name="item.icon" /><span class="nav-text">{{ item.label }}</span></button>
+      <button v-for="item in reviewSecondarySections" :key="item.id" class="side-link" :class="{ active: hasReview && modelValue === 'dashboard' && section === item.id }" :disabled="!hasReview" :aria-current="hasReview && modelValue === 'dashboard' && section === item.id ? 'page' : undefined" @click="$emit('section', item.id)"><AppIcon :name="item.icon" /><span class="nav-text">{{ item.label }}</span></button>
     </nav>
   </aside>
 </template>

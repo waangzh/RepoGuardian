@@ -4,7 +4,7 @@ import { getFindings, getPublicationPlan, getReport } from '../../api/client';
 import type { ReviewTask } from '../../types/review';
 import type { FindingView } from '../../types/reviewPlan';
 import type { PublicationPlan } from '../../types/publication';
-import { reviewPrimarySections, reviewSecondarySections, reviewPublishSection, type ReviewSection } from '../../types/workspace';
+import { reviewPrimarySections, reviewSecondarySections, type ReviewSection } from '../../types/workspace';
 import { executionErrorLabel, phaseLabel, resumeLabel, safeGitHubLink, terminal } from '../../utils/nativeReview';
 import AppIcon from '../common/AppIcon.vue';
 import StatusBadge from '../common/StatusBadge.vue';
@@ -16,7 +16,6 @@ import ReviewFilesPage from '../pages/ReviewFilesPage.vue';
 import ReviewActivityPage from '../pages/ReviewActivityPage.vue';
 import ReviewDiscussionsPage from '../pages/ReviewDiscussionsPage.vue';
 import ReviewReportPage from '../pages/ReviewReportPage.vue';
-import GitHubPublicationPanel from './publication/GitHubPublicationPanel.vue';
 const props = defineProps<{ task: ReviewTask; section?: ReviewSection; busy?: boolean }>();
 const emit = defineEmits<{ navigate: [value: ReviewSection]; cancel: []; resume: []; rereview: [] }>();
 const localSection = ref<ReviewSection>('overview');
@@ -73,7 +72,7 @@ onBeforeUnmount(() => { generation++; controller?.abort(); });
   <header class="pr-title"><div class="min0"><div class="eyebrow">{{ task.pr.owner }} / {{ task.pr.repo }} / PR #{{ task.pr.number }}</div><h1>{{ task.pr.title }}</h1><div class="meta"><StatusBadge :status="task.status" /><span class="muted small">{{ phaseLabel(task.phase) }}</span><code>{{ task.snapshot.effective_base_sha.slice(0,8) }} ← {{ task.snapshot.head_sha.slice(0,8) }}</code></div></div>
     <div class="head-actions"><a v-if="safeGitHubLink(task.pr.html_url)" class="btn secondary" :href="safeGitHubLink(task.pr.html_url)" target="_blank" rel="noreferrer">GitHub <AppIcon name="external" :size="14" /></a><button v-if="!terminal(task.status)" class="btn secondary" :disabled="busy" @click="$emit('cancel')">停止审查</button><button v-if="resumeAction" class="btn secondary" :disabled="busy" @click="$emit('resume')">{{ resumeAction }}</button><button class="btn secondary" :disabled="!terminal(task.status) || busy" @click="$emit('rereview')">重新审查此 PR</button></div>
   </header>
-  <nav class="subnav" aria-label="审查结果导航"><button v-for="item in reviewPrimarySections" :key="item.id" :class="{ active: tab === item.id }" :aria-current="tab === item.id ? 'page' : undefined" @click="tab = item.id">{{ item.label }}{{ item.id === 'findings' && findings.length ? ` (${findings.length})` : '' }}</button><span class="tab-spacer" /><div class="tab-group" role="group" aria-label="补充证据"><button v-for="item in reviewSecondarySections" :key="item.id" :class="{ active: tab === item.id }" :aria-current="tab === item.id ? 'page' : undefined" @click="tab = item.id">{{ item.label }}</button></div><button class="tab-action" :class="{ active: tab === 'publish' }" @click="tab = 'publish'">{{ reviewPublishSection.label }}</button></nav>
+  <nav class="subnav" aria-label="审查结果导航"><button v-for="item in reviewPrimarySections" :key="item.id" :class="{ active: tab === item.id }" :aria-current="tab === item.id ? 'page' : undefined" @click="tab = item.id">{{ item.label }}{{ item.id === 'findings' && findings.length ? ` (${findings.length})` : '' }}</button><span class="tab-spacer" /><div class="tab-group" role="group" aria-label="补充证据"><button v-for="item in reviewSecondarySections" :key="item.id" :class="{ active: tab === item.id }" :aria-current="tab === item.id ? 'page' : undefined" @click="tab = item.id">{{ item.label }}</button></div></nav>
   <p v-if="error" class="notice warn space-bottom" role="alert">{{ error }} <button class="link" @click="load">重试读取结果</button></p>
   <p v-if="task.error" class="notice warn space-bottom">{{ executionErrorLabel(task.error) }}。错误类别：<code>{{ task.error }}</code>；缺失与未知不能视为通过。</p>
   <p v-if="resumeAction === '补查失败分支'" class="muted small space-bottom">补查只重跑失败分支，沿用本轮固定快照、剩余调用预算和总期限；最多一次。</p>
@@ -84,6 +83,5 @@ onBeforeUnmount(() => { generation++; controller?.abort(); });
   <ReviewActivityPage v-else-if="tab === 'activity'" :task="task" />
   <ReviewDiscussionsPage v-else-if="tab === 'discussions'" :task="task" @file="openFile" />
   <ReviewReportPage v-else-if="tab === 'report'" :task="task" :plan="plan" :report="report" :loading="loading" @export="exportReport" />
-  <template v-else-if="tab === 'publish'"><div class="page-head"><div><h2>发布或复制到 GitHub</h2><p class="title-sub">复制只写入剪贴板。直接发布需要独立授权、预检及二次确认。</p></div></div><GitHubPublicationPanel v-if="plan && terminal(task.status)" :review-id="task.id" :plan="plan" /><section v-else class="card card-pad"><p class="muted">{{ loading ? '正在读取发布计划…' : '请等待审查结束并取得后端发布计划。' }}</p></section></template>
   <footer class="app-footer"><span>只读静态审查 · 未执行目标代码、测试或构建 · 结论仅适用于本次快照</span><code>{{ task.snapshot.head_sha.slice(0,12) }}</code></footer>
 </template>
