@@ -3,6 +3,7 @@ import json
 import subprocess
 import sys
 import threading
+import time
 
 import pytest
 
@@ -51,6 +52,7 @@ def test_real_process_exit_is_l1_and_quarantined(tmp_path, monkeypatch, quaranti
     assert "exit_code=23 (0x00000017)" in result.diagnostics[0]
     record = json.loads(next(quarantine.glob("*.json")).read_text(encoding="utf-8"))
     assert record["relative_path"] == "lib.rs" and record["exit_code"] == 23
+    assert [item["reason"] for item in record["attempts"]] == ["process_exit", "process_exit"]
     assert "pub fn" not in json.dumps(record)
     assert "lib.rs" in caplog.text and "exit_code=23" in caplog.text
 
@@ -89,7 +91,7 @@ def test_quarantine_survives_a_new_interpreter(tmp_path, monkeypatch, quarantine
     assert recovered.level == AnalysisLevel.heuristic
     assert "exit_code=29" in recovered.diagnostics[0]
     assert "quarantined input" in recovered.diagnostics[0]
-    assert marker.read_text() == "x"
+    assert marker.read_text() == "xx"
 
 
 @pytest.mark.parametrize("change", ["source", "parser"])
@@ -105,6 +107,173 @@ def test_changed_content_or_parser_can_retry(tmp_path, monkeypatch, change):
         monkeypatch.setattr(isolation, "parser_fingerprint", lambda: "replacement-parser")
     result = analyze(path)
     assert result.level == AnalysisLevel.semantic, result.diagnostics
+
+
+def test_process_failure_retries_with_fresh_worker_and_clears_quarantine(
+    tmp_path, monkeypatch, quarantine,
+):
+    path = source_file(tmp_path)
+    original_worker = isolation._WORKER
+    failed_worker = worker_script(tmp_path, monkeypatch, "import os\nos._exit(19)\n")
+    processes = []
+    popen = subprocess.Popen
+
+    def spawn(*args, **kwargs):
+        process = popen(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(isolation.subprocess, "Popen", spawn)
+    original_run = isolation._run_worker
+    calls = 0
+
+    def fail_once(request, cancel_event, **kwargs):
+        nonlocal calls
+        calls += 1
+        monkeypatch.setattr(isolation, "_WORKER",
+                            failed_worker if calls == 1 else original_worker)
+        return original_run(request, cancel_event, **kwargs)
+
+    monkeypatch.setattr(isolation, "_run_worker", fail_once)
+    result = analyze(path)
+
+    assert calls == 2
+    assert result.level == AnalysisLevel.semantic, result.diagnostics
+    assert not list(quarantine.glob("*.json"))
+    assert isolation._load_failure(isolation._digest({
+        "relative_path": path.name, "language_id": "rust",
+        "source_sha256": isolation.hashlib.sha256(path.read_bytes()).hexdigest(),
+        "parser_fingerprint": isolation.parser_fingerprint(),
+    })) is None
+    assert len(processes) == 2
+    assert processes[0].poll() is not None
+
+
+def test_non_retryable_output_limit_is_attempted_once(tmp_path, monkeypatch):
+    path = source_file(tmp_path)
+    worker_script(
+        tmp_path, monkeypatch,
+        "import sys\nsys.stdout.buffer.write(b'x'*8192)\n")
+    monkeypatch.setattr(isolation, "MAX_OUTPUT_BYTES", 512)
+    processes = []
+    popen = subprocess.Popen
+
+    def spawn(*args, **kwargs):
+        process = popen(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(isolation.subprocess, "Popen", spawn)
+    result = analyze(path)
+
+    assert result.level == AnalysisLevel.heuristic
+    assert "output_limit" in result.diagnostics[0]
+    assert len(processes) == 1
+    assert processes[0].poll() is not None
+
+
+def test_non_retryable_failure_stays_quarantined_after_cooldown(tmp_path, monkeypatch):
+    path = source_file(tmp_path)
+    worker_script(
+        tmp_path, monkeypatch,
+        "import sys\nsys.stdout.buffer.write(b'x'*8192)\n")
+    monkeypatch.setattr(isolation, "MAX_OUTPUT_BYTES", 512)
+    monkeypatch.setattr(isolation, "FAILURE_COOLDOWN_SECONDS", 0)
+    assert analyze(path).level == AnalysisLevel.heuristic
+    monkeypatch.setattr(isolation, "_run_worker",
+                        lambda *args, **kwargs: pytest.fail("fixed boundary retried"))
+    assert analyze(path).level == AnalysisLevel.heuristic
+
+
+def test_retry_shares_original_deadline(tmp_path, monkeypatch, quarantine):
+    path = source_file(tmp_path)
+    original_worker = isolation._WORKER
+    failed_worker = worker_script(tmp_path, monkeypatch, "import os\nos._exit(19)\n")
+    processes = []
+    popen = subprocess.Popen
+
+    def spawn(*args, **kwargs):
+        process = popen(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(isolation.subprocess, "Popen", spawn)
+    monkeypatch.setattr(isolation, "PARSER_TIMEOUT_SECONDS", 0.5)
+    original_run = isolation._run_worker
+    calls = 0
+
+    def fail_then_hang(request, cancel_event, **kwargs):
+        nonlocal calls
+        calls += 1
+        monkeypatch.setattr(isolation, "_WORKER",
+                            failed_worker if calls == 1 else original_worker)
+        if calls == 2:
+            monkeypatch.setattr(isolation, "_WORKER",
+                                worker_script(tmp_path, monkeypatch, "import time\ntime.sleep(30)\n"))
+        return original_run(request, cancel_event, **kwargs)
+
+    monkeypatch.setattr(isolation, "_run_worker", fail_then_hang)
+    started = time.monotonic()
+    result = analyze(path)
+    elapsed = time.monotonic() - started
+
+    assert calls == 2
+    assert result.level == AnalysisLevel.heuristic
+    assert "timeout" in result.diagnostics[0]
+    assert elapsed < 1.5
+    assert len(processes) == 2
+    assert all(process.poll() is not None for process in processes)
+    record = json.loads(next(quarantine.glob("*.json")).read_text(encoding="utf-8"))
+    assert [item["reason"] for item in record["attempts"]] == ["process_exit", "timeout"]
+
+
+def test_failed_input_retries_after_cooldown(tmp_path, monkeypatch, quarantine):
+    path = source_file(tmp_path)
+    original_worker = isolation._WORKER
+    worker_script(tmp_path, monkeypatch, "import os\nos._exit(23)\n")
+    first = analyze(path)
+    assert first.level == AnalysisLevel.heuristic
+    record_path = next(quarantine.glob("*.json"))
+    record = isolation.FailureRecord.model_validate_json(record_path.read_bytes())
+    monkeypatch.setattr(isolation.time, "time", lambda: record.created_at + 301)
+    isolation._RECENT_FAILURES.clear()
+    calls = []
+    original = isolation._run_worker
+
+    def run(request, cancel_event, **kwargs):
+        calls.append(request.relative_path)
+        return original(request, cancel_event, **kwargs)
+
+    monkeypatch.setattr(isolation, "_run_worker", run)
+    monkeypatch.setattr(isolation, "_WORKER", original_worker)
+    second = analyze(path)
+
+    assert second.level == AnalysisLevel.semantic, second.diagnostics
+    assert calls == ["lib.rs"]
+    assert not list(quarantine.glob("*.json"))
+    assert isolation._load_failure(record.key) is None
+
+
+def test_cancellation_during_retry_does_not_quarantine(tmp_path, monkeypatch, quarantine):
+    path = source_file(tmp_path)
+    worker_script(tmp_path, monkeypatch, "import os\nos._exit(23)\n")
+    cancel = threading.Event()
+    original = isolation._run_worker
+    calls = 0
+
+    def cancel_after_first(request, cancel_event, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            cancel.set()
+        return original(request, cancel_event, **kwargs)
+
+    monkeypatch.setattr(isolation, "_run_worker", cancel_after_first)
+    with pytest.raises(isolation.ParserCancelled):
+        analyze(path, cancel_event=cancel)
+    assert calls == 2
+    assert not isolation._WORKERS and not isolation._IDLE_WORKERS
+    assert not list(quarantine.glob("*.json"))
 
 
 @pytest.mark.parametrize("failure", ["timeout", "output_limit"])
@@ -129,7 +298,8 @@ def test_bounded_worker_is_reaped(tmp_path, monkeypatch, failure):
     result = analyze(path)
     assert result.level == AnalysisLevel.heuristic
     assert failure in result.diagnostics[0]
-    assert len(processes) == 1 and processes[0].poll() is not None
+    assert len(processes) == 1 and all(
+        process.poll() is not None for process in processes)
 
 
 def test_cancellation_propagates_and_does_not_quarantine(tmp_path, monkeypatch, quarantine):
@@ -278,7 +448,7 @@ async def test_async_index_cancellation_reaps_worker(tmp_path, monkeypatch, quar
 
 
 @pytest.mark.asyncio
-async def test_crashing_file_does_not_block_index_and_is_not_parsed_twice(tmp_path, monkeypatch):
+async def test_crashing_file_retries_once_without_blocking_other_index_files(tmp_path, monkeypatch):
     source_file(tmp_path, "boom.rs")
     (tmp_path / "good.py").write_text("def good():\n    return 1\n", encoding="utf-8")
     original_worker = isolation._WORKER
@@ -287,12 +457,12 @@ async def test_crashing_file_does_not_block_index_and_is_not_parsed_twice(tmp_pa
     original_run = isolation._run_worker
     calls = []
 
-    def run(request, cancel):
+    def run(request, cancel, **kwargs):
         calls.append(request.relative_path)
         with monkeypatch.context() as scoped:
             if request.relative_path == "boom.rs":
                 scoped.setattr(isolation, "_WORKER", crash)
-            return original_run(request, cancel)
+            return original_run(request, cancel, **kwargs)
 
     monkeypatch.setattr(isolation, "_run_worker", run)
     result = await RepoIndexer().execute(repo_path=str(tmp_path))
@@ -301,7 +471,7 @@ async def test_crashing_file_does_not_block_index_and_is_not_parsed_twice(tmp_pa
     assert "exit_code=23" in files["boom.rs"]["diagnostics"][0]
     assert files["good.py"]["analysis_level"] == 2
     assert any(item["symbol"] == "good" for item in result["symbol_index"])
-    assert calls.count("boom.rs") == calls.count("good.py") == 1
+    assert calls.count("boom.rs") == 2 and calls.count("good.py") == 1
 
 
 def test_rust_large_line_numbers_and_chained_calls(tmp_path):

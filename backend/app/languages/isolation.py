@@ -29,12 +29,14 @@ from app.languages.base import AnalysisLevel, FileAnalysis
 from app.languages import parser_cache
 
 logger = logging.getLogger("RepoGuardian.Parser")
-PARSER_PROTOCOL = "isolated-parser-v3"
+PARSER_PROTOCOL = "isolated-parser-v4"
 MAX_SOURCE_BYTES = 4 * 1024 * 1024
 MAX_OUTPUT_BYTES = 16 * 1024 * 1024
 PARSER_TIMEOUT_SECONDS = 15.0
+FAILURE_COOLDOWN_SECONDS = 300.0
 MAX_WORKER_REQUESTS = 256
 MAX_WORKER_SOURCE_BYTES = 64 * 1024 * 1024
+_RETRYABLE_FAILURES = frozenset({"start_failed", "process_exit", "timeout", "invalid_response"})
 _WORKER = Path(__file__).with_name("parser_worker.py").resolve()
 _SERVER_ROOT = Path(__file__).resolve().parents[2]
 _SLOTS = threading.BoundedSemaphore(2)
@@ -56,16 +58,28 @@ class ParserCancelled(Exception):
 
 
 class ParserFailure(Exception):
-    def __init__(self, reason: str, exit_code: int | None = None):
+    def __init__(
+        self, reason: str, exit_code: int | None = None, *,
+        attempts: list["FailureAttempt"] | None = None,
+    ):
         self.reason = reason
         self.exit_code = exit_code
+        self.attempts = attempts or []
         super().__init__(reason)
+
+
+class FailureAttempt(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    reason: str
+    exit_code: int | None
+    occurred_at: float = Field(default_factory=time.time, allow_inf_nan=False)
 
 
 class ParserRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    protocol: Literal["isolated-parser-v3"]
+    protocol: Literal["isolated-parser-v4"]
     request_id: str = Field(default_factory=lambda: uuid4().hex, pattern=r"^[a-f0-9]{32}$")
     language_id: Literal["python", "javascript", "typescript", "go", "java", "rust"]
     relative_path: str = Field(min_length=1, max_length=1000)
@@ -96,6 +110,8 @@ class FailureRecord(BaseModel):
     parser_fingerprint: str
     reason: str
     exit_code: int | None
+    attempts: list[FailureAttempt] = Field(min_length=1, max_length=2)
+    created_at: float = Field(default_factory=time.time, allow_inf_nan=False)
 
 
 def parser_fingerprint() -> str:
@@ -142,6 +158,21 @@ def _load_failure(key: str) -> FailureRecord | None:
         return None
     except (OSError, ValueError) as exc:
         raise ParserFailure("quarantine_unavailable") from exc
+
+
+def _failure_is_cooling(record: FailureRecord) -> bool:
+    if record.reason not in _RETRYABLE_FAILURES:
+        return True
+    return time.time() - record.created_at < FAILURE_COOLDOWN_SECONDS
+
+
+def _clear_failure(key: str) -> None:
+    with _FAILURE_LOCK:
+        _RECENT_FAILURES.pop(key, None)
+    try:
+        (_failure_directory() / f"{key}.json").unlink(missing_ok=True)
+    except OSError:
+        logger.warning("解析隔离记录清理失败，继续使用成功结果")
 
 
 def _save_failure(record: FailureRecord) -> bool:
@@ -211,7 +242,10 @@ class _ParserWorker:
             output.extend(chunk)
         return bytes(output)
 
-    def exchange(self, request: ParserRequest, cancel_event: threading.Event | None) -> bytes:
+    def exchange(
+        self, request: ParserRequest, cancel_event: threading.Event | None,
+        deadline: float | None = None,
+    ) -> bytes:
         completed: queue.Queue = queue.Queue(maxsize=1)
         pending = request.model_dump_json().encode("utf-8")
 
@@ -229,11 +263,12 @@ class _ParserWorker:
                 completed.put(exc)
 
         self._io = threading.Thread(target=transfer, name="parser-io", daemon=True)
-        started = time.monotonic()
+        request_deadline = (deadline if deadline is not None
+                            else time.monotonic() + PARSER_TIMEOUT_SECONDS)
         self._io.start()
         while True:
             _check_cancelled(cancel_event)
-            remaining = PARSER_TIMEOUT_SECONDS - (time.monotonic() - started)
+            remaining = request_deadline - time.monotonic()
             if remaining <= 0:
                 raise ParserFailure("timeout", self.process.poll())
             try:
@@ -278,9 +313,16 @@ def close_parser_workers() -> None:
 atexit.register(close_parser_workers)
 
 
-def _run_worker(request: ParserRequest, cancel_event: threading.Event | None) -> FileAnalysis:
-    while not _SLOTS.acquire(timeout=0.1):
+def _run_worker(
+    request: ParserRequest, cancel_event: threading.Event | None,
+    *, deadline: float | None = None, force_new: bool = False,
+) -> FileAnalysis:
+    while True:
         _check_cancelled(cancel_event)
+        if deadline is not None and time.monotonic() >= deadline:
+            raise ParserFailure("timeout")
+        if _SLOTS.acquire(timeout=0.1):
+            break
     worker = None
     reusable = False
     try:
@@ -289,13 +331,16 @@ def _run_worker(request: ParserRequest, cancel_event: threading.Event | None) ->
             generation = _POOL_GENERATION
             worker = _IDLE_WORKERS.pop() if _IDLE_WORKERS else None
         if worker is not None and (
-            worker.identity != (str(_WORKER), PARSER_PROTOCOL)
+            force_new or worker.identity != (str(_WORKER), PARSER_PROTOCOL)
             or worker.process.poll() is not None or worker.closed
         ):
             worker.close()
             with _POOL_LOCK:
                 _WORKERS.discard(worker)
             worker = None
+        _check_cancelled(cancel_event)
+        if deadline is not None and time.monotonic() >= deadline:
+            raise ParserFailure("timeout")
         if worker is None:
             worker = _ParserWorker()
             with _POOL_LOCK:
@@ -303,12 +348,14 @@ def _run_worker(request: ParserRequest, cancel_event: threading.Event | None) ->
                     worker.close()
                     raise ParserCancelled()
                 _WORKERS.add(worker)
-        raw = worker.exchange(request, cancel_event)
+        raw = worker.exchange(request, cancel_event, deadline)
         try:
             result = _validate_result(raw, request, request.source_bytes())
         except ValueError as exc:
             raise ParserFailure("invalid_response", 0) from exc
         _check_cancelled(cancel_event)
+        if deadline is not None and time.monotonic() >= deadline:
+            raise ParserFailure("timeout", worker.process.poll())
         reusable = True
         return result
     except OSError as exc:
@@ -371,13 +418,16 @@ def analyze_isolated(adapter, source: bytes, relative_path: str, extension: str,
                 "source_sha256": hashlib.sha256(source).hexdigest(),
                 "parser_fingerprint": parser_fingerprint()}
     key = _digest(identity)
-    repeated = False
+    failure_record = None
+    cooling = False
     persisted = True
+    deadline = time.monotonic() + PARSER_TIMEOUT_SECONDS
     try:
-        record = _load_failure(key)
-        if record is not None:
-            repeated = True
-            raise ParserFailure(record.reason, record.exit_code)
+        failure_record = _load_failure(key)
+        cooling = failure_record is not None and _failure_is_cooling(failure_record)
+        if cooling:
+            raise ParserFailure(failure_record.reason, failure_record.exit_code,
+                                attempts=failure_record.attempts)
         cache_key = cache_key or _digest({"cache": parser_cache.CACHE_PROTOCOL, **identity})
         cached = parser_cache.load(cache_key)
         if cached is not None:
@@ -385,29 +435,61 @@ def analyze_isolated(adapter, source: bytes, relative_path: str, extension: str,
                 result = _validate_result(cached, request, source)
                 if result.level == AnalysisLevel.semantic:
                     _check_cancelled(cancel_event)
+                    if failure_record is not None:
+                        _clear_failure(key)
                     return result
             except ValueError:
                 logger.warning("解析成功缓存校验失败，重新解析 file=%r", relative_path)
         logger.info("解析开始 file=%r language=%s input=%s",
                     relative_path, adapter.language_id, key[:12])
-        result = _run_worker(request, cancel_event)
+        result = _run_worker_with_retry(request, cancel_event, deadline)
         _check_cancelled(cancel_event)
+        if failure_record is not None:
+            _clear_failure(key)
         if result.level == AnalysisLevel.semantic:
             parser_cache.save(cache_key, result.model_dump_json().encode("utf-8"))
         _check_cancelled(cancel_event)
         return result
     except ParserFailure as exc:
-        if not repeated and exc.reason != "quarantine_unavailable":
-            persisted = _save_failure(FailureRecord(key=key, **identity,
-                                                   reason=exc.reason, exit_code=exc.exit_code))
+        _check_cancelled(cancel_event)
+        if not cooling and exc.reason != "quarantine_unavailable":
+            attempts = exc.attempts or [
+                FailureAttempt(reason=exc.reason, exit_code=exc.exit_code)]
+            persisted = _save_failure(FailureRecord(
+                key=key, **identity, reason=exc.reason, exit_code=exc.exit_code,
+                attempts=attempts, created_at=time.time()))
         code = "unknown" if exc.exit_code is None else f"{exc.exit_code} (0x{exc.exit_code & 0xffffffff:08X})"
         diagnostic = f"isolated parser {exc.reason}; exit_code={code}; downgraded to L1"
-        if repeated:
+        if cooling:
             diagnostic += "; quarantined input, native retry skipped"
+        if exc.attempts:
+            diagnostic += "; attempts=" + ",".join(
+                f"{item.reason}(exit_code={item.exit_code})" for item in exc.attempts)
         if not persisted:
             diagnostic += "; quarantine persistence failed"
-        logger.warning("解析降级 file=%r language=%s input=%s reason=%s exit_code=%s repeated=%s persisted=%s",
-                       relative_path, adapter.language_id, key[:12], exc.reason, code, repeated, persisted)
+        logger.warning("解析降级 file=%r language=%s input=%s reason=%s exit_code=%s cooling=%s persisted=%s",
+                       relative_path, adapter.language_id, key[:12], exc.reason, code, cooling, persisted)
         result = adapter.analyze_source(source, relative_path)
         result.diagnostics.append(diagnostic)
         return result
+
+
+def _run_worker_with_retry(
+    request: ParserRequest, cancel_event: threading.Event | None,
+    deadline: float,
+) -> FileAnalysis:
+    attempts: list[FailureAttempt] = []
+    for attempt in range(2):
+        _check_cancelled(cancel_event)
+        try:
+            return _run_worker(request, cancel_event, deadline=deadline, force_new=attempt > 0)
+        except ParserFailure as exc:
+            _check_cancelled(cancel_event)
+            attempts.append(FailureAttempt(reason=exc.reason, exit_code=exc.exit_code))
+            if (attempt == 0 and exc.reason in _RETRYABLE_FAILURES
+                    and time.monotonic() < deadline):
+                logger.warning("隔离解析器首次失败，销毁 worker 后重试 file=%r reason=%s",
+                               request.relative_path, exc.reason)
+                continue
+            raise ParserFailure(exc.reason, exc.exit_code,
+                                attempts=attempts) from exc

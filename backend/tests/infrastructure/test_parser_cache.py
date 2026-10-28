@@ -34,7 +34,7 @@ def test_success_survives_new_interpreter(tmp_path, monkeypatch):
         "from app.languages.registry import default_language_registry\n"
         f"parser_cache._cache_path=lambda:Path({str(cache_path)!r})\n"
         f"isolation._failure_directory=lambda:Path({str(cache_path.parent / 'failures')!r})\n"
-        "def forbidden(*args): raise AssertionError('cached input launched worker')\n"
+        "def forbidden(*args, **kwargs): raise AssertionError('cached input launched worker')\n"
         "isolation._run_worker=forbidden\n"
         f"p=Path({str(path)!r})\n"
         "print(default_language_registry.analyze(p,p.name).model_dump_json())\n"
@@ -51,9 +51,9 @@ def test_content_identity_change_misses_success_cache(tmp_path, monkeypatch, cha
     calls = []
     original = isolation._run_worker
 
-    def run(*args):
+    def run(*args, **kwargs):
         calls.append(args[0].relative_path)
-        return original(*args)
+        return original(*args, **kwargs)
 
     monkeypatch.setattr(isolation, "_run_worker", run)
     if change == "source":
@@ -93,9 +93,9 @@ def test_damaged_success_cache_recomputes_instead_of_returning_bad_data(
     calls = []
     original = isolation._run_worker
 
-    def run(*args):
+    def run(*args, **kwargs):
         calls.append(args[0].relative_path)
-        return original(*args)
+        return original(*args, **kwargs)
 
     monkeypatch.setattr(isolation, "_run_worker", run)
     assert analyze(path) == expected
@@ -115,7 +115,7 @@ def test_failed_or_cancelled_results_are_not_saved(tmp_path, monkeypatch):
     monkeypatch.setattr(isolation, "_failure_directory", lambda: tmp_path / "quarantine")
     original = isolation._run_worker
 
-    def crash(*args):
+    def crash(*args, **kwargs):
         raise isolation.ParserFailure("process_exit", 23)
 
     monkeypatch.setattr(isolation, "_run_worker", crash)
@@ -136,6 +136,7 @@ def test_quarantine_takes_precedence_over_success_cache(tmp_path, monkeypatch):
         key="a" * 64, relative_path=path.name, language_id="python",
         source_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
         parser_fingerprint=isolation.parser_fingerprint(), reason="timeout", exit_code=None,
+        attempts=[isolation.FailureAttempt(reason="timeout", exit_code=None)],
     )
     monkeypatch.setattr(isolation, "_load_failure", lambda key: record)
     result = analyze(path)
@@ -170,20 +171,20 @@ async def test_interrupted_index_reuses_completed_files_on_retry(tmp_path, monke
     source_file(tmp_path, "b.py")
     original = isolation._run_worker
 
-    def interrupt(request, cancel):
+    def interrupt(request, cancel, **kwargs):
         if request.relative_path == "b.py":
             cancel.set()
             raise isolation.ParserCancelled()
-        return original(request, cancel)
+        return original(request, cancel, **kwargs)
 
     monkeypatch.setattr(isolation, "_run_worker", interrupt)
     with pytest.raises(isolation.ParserCancelled):
         await RepoIndexer().execute(repo_path=str(tmp_path))
     calls = []
 
-    def resume(request, cancel):
+    def resume(request, cancel, **kwargs):
         calls.append(request.relative_path)
-        return original(request, cancel)
+        return original(request, cancel, **kwargs)
 
     monkeypatch.setattr(isolation, "_run_worker", resume)
     result = await RepoIndexer().execute(repo_path=str(tmp_path))

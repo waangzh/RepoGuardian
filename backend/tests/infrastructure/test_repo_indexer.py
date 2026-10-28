@@ -541,9 +541,9 @@ async def test_blob_cache_invalidates_on_content_parser_and_path_change(
     calls = []
     original = isolation._run_worker
 
-    def analyze(request, cancel_event):
+    def analyze(request, cancel_event, **kwargs):
         calls.append(request.relative_path)
-        return original(request, cancel_event)
+        return original(request, cancel_event, **kwargs)
 
     monkeypatch.setattr(isolation, "_run_worker", analyze)
 
@@ -666,9 +666,9 @@ async def test_blob_cache_revalidates_identity_and_ranges(tmp_path, monkeypatch,
     calls = []
     original = isolation._run_worker
 
-    def run(request, cancel_event):
+    def run(request, cancel_event, **kwargs):
         calls.append(request.relative_path)
-        return original(request, cancel_event)
+        return original(request, cancel_event, **kwargs)
 
     monkeypatch.setattr(isolation, "_run_worker", run)
     actual = await RepoIndexer().execute(repo_path=str(repo), changed_paths={"a.py"})
