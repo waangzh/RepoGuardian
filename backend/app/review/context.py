@@ -6,6 +6,7 @@ from typing import Any, Awaitable, Callable
 
 from app.review.evidence import EvidenceService
 from app.review.models import ReviewLimits
+from app.review.planning import ReviewPlan
 
 
 @dataclass
@@ -15,6 +16,7 @@ class AgentContext:
     denied_paths: frozenset[str] = frozenset()
     symbols: list[dict] = field(default_factory=list)
     repository_graph: dict = field(default_factory=dict)
+    ensure_index: Callable[[frozenset[str] | None], Awaitable[None]] | None = None
     discussions: list[dict] = field(default_factory=list)
     author_context: dict = field(default_factory=dict)
     check_active: Callable[[], Awaitable[None]] | None = None
@@ -36,6 +38,7 @@ class ReviewContext:
     depth: str = "standard"
     focus: tuple[str, ...] = ("correctness", "security", "performance", "compatibility")
     selected_paths: frozenset[str] | None = None
+    confirmed_plan: ReviewPlan | None = None
     replaying_nodes: frozenset[str] = frozenset()
     retry_results: dict[tuple[str, str], dict] = field(default_factory=dict)
     budget: Any = None

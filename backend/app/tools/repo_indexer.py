@@ -9,6 +9,8 @@
 
 import ast
 import asyncio
+import hashlib
+import json
 import os
 import re
 import threading
@@ -17,11 +19,16 @@ from typing import Any
 
 from app.languages.registry import default_language_registry
 from app.languages.base import AnalysisLevel, FileAnalysis
-from app.languages.isolation import ParserCancelled
+from app.languages.isolation import ParserCancelled, parser_fingerprint
 from app.tools.base import BaseTool
-from app.review.tool_scope import ReviewPathPolicyError, validate_repository_file
+from app.review.tool_scope import (
+    ReviewPathPolicyError, git_worktree_matches_index, list_git_tracked_blobs,
+    validate_repository_file,
+)
 from app.tools.git_tool import GitTool
-from app.tools.repository_graph import build_repository_graph
+from app.tools.repository_graph import (
+    build_repository_graph, related_test_paths, resolved_import_targets,
+)
 
 # 扫描时跳过的目录和文件
 _IGNORED_DIRS = frozenset({
@@ -31,6 +38,9 @@ _IGNORED_DIRS = frozenset({
 })
 
 _IGNORED_FILES = frozenset({".DS_Store", "Thumbs.db"})
+
+# 索引产物缓存的语义版本；索引字段或解析输入含义变化时递增。
+ANALYSIS_CACHE_PROTOCOL = "file-analysis-v2"
 
 # 项目配置文件（用于 detect_project_meta）
 _PROJECT_CONFIG_FILES = {
@@ -75,12 +85,15 @@ class RepoIndexer(BaseTool):
             self._symbol_index = None
 
     async def _execute(self, **kwargs: Any) -> dict[str, Any]:
-        """执行完整扫描，返回三层索引。"""
+        """执行扫描，返回三层索引；changed_paths 限定实际解析范围。"""
         repo_path = kwargs["repo_path"]
+        changed_paths = kwargs.get("changed_paths")
         progress = kwargs.get("progress")
         if progress:
             await asyncio.to_thread(progress, "index_files", "正在建立文件索引")
-        file_index = await self.build_file_index(repo_path)
+        file_index = (await self.build_file_index(repo_path) if changed_paths is None
+                      else await self.build_file_index(
+                          repo_path, changed_paths=frozenset(changed_paths)))
         if progress:
             await asyncio.to_thread(progress, "index_symbols", "正在建立符号索引")
         symbol_index = await self.build_symbol_index(repo_path)
@@ -89,6 +102,16 @@ class RepoIndexer(BaseTool):
         repository_graph = await asyncio.to_thread(
             build_repository_graph, file_index, symbol_index
         )
+        code_files = [item for item in file_index if item["language"] != "unknown"]
+        unparsed = sum(item["parser_id"] == "unparsed" for item in code_files)
+        degraded = sum(item["parser_id"] != "unparsed"
+                       and item["analysis_level"] < int(AnalysisLevel.semantic)
+                       for item in code_files)
+        repository_graph["metadata"].update(
+            scope_mode="full" if changed_paths is None else "scoped",
+            indexed_file_count=len(code_files) - unparsed,
+            unparsed_file_count=unparsed, degraded_file_count=degraded,
+            scope_complete=not unparsed and not degraded)
         project_meta = await self.detect_project_meta(repo_path, file_index)
         return {
             "file_index": file_index,
@@ -97,25 +120,48 @@ class RepoIndexer(BaseTool):
             "project_meta": project_meta,
         }
 
-    async def build_file_index(self, repo_path: str) -> list[dict[str, Any]]:
+    async def build_file_index(
+        self, repo_path: str, *, changed_paths: frozenset[str] | None = None
+    ) -> list[dict[str, Any]]:
         try:
-            return await asyncio.to_thread(self._build_file_index_sync, repo_path)
+            return await asyncio.to_thread(
+                self._build_file_index_sync, repo_path, changed_paths)
         except asyncio.CancelledError:
             self._cancel_event.set()
             raise
 
-    def _analyze(self, file_path: Path, relative_path: str) -> FileAnalysis:
+    def _analyze(
+        self, file_path: Path, relative_path: str, *, cache_key: str | None = None,
+    ) -> FileAnalysis:
         if self._cancel_event.is_set():
             raise ParserCancelled()
         return default_language_registry.analyze(
-            file_path, relative_path, cancel_event=self._cancel_event)
+            file_path, relative_path, cancel_event=self._cancel_event, cache_key=cache_key)
 
-    def _build_file_index_sync(self, repo_path: str) -> list[dict[str, Any]]:
-        """遍历仓库目录，构建文件级索引（路径、语言、大小、导入）。"""
-        index: list[dict[str, Any]] = []
+    def _analyze_cached(
+        self, file_path: Path, relative_path: str, language: str, size: int,
+        blob_sha: str | None,
+    ) -> FileAnalysis:
+        """Blob 缓存复用隔离入口的故障优先、内容校验与取消检查。"""
+        key = None
+        if blob_sha:
+            key = hashlib.sha256(json.dumps({
+                "cache": ANALYSIS_CACHE_PROTOCOL, "parser": parser_fingerprint(),
+                "path": relative_path, "language": language, "blob": blob_sha, "size": size,
+            }, sort_keys=True).encode()).hexdigest()
+        return self._analyze(file_path, relative_path, cache_key=key)
+
+    def _build_file_index_sync(
+        self, repo_path: str, changed_paths: frozenset[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """遍历仓库构建文件索引；限定范围时只解析变更文件及其直接导入目标。"""
         root = Path(repo_path)
-        tracked_files = GitTool().list_tracked_files(root)
+        tracked_blobs = list_git_tracked_blobs(root)
+        tracked_files = set(tracked_blobs)
+        cacheable = ({path: blob for path, blob in tracked_blobs.items() if blob}
+                     if tracked_blobs and git_worktree_matches_index(root) else {})
         enforce_tracked = (root / ".git").exists()
+        files: list[tuple[str, Path, str, int]] = []
         for dirpath, dirnames, filenames in os.walk(root):
             rel_dir = Path(dirpath).relative_to(root)
             # 跳过忽略目录
@@ -137,31 +183,79 @@ class RepoIndexer(BaseTool):
                 except (OSError, ReviewPathPolicyError):
                     continue
                 try:
-                    stat = file_path_obj.stat()
-                    size = stat.st_size
+                    size = file_path_obj.stat().st_size
                 except OSError:
                     size = 0
-                analysis = (
-                    self._analyze(file_path_obj, rel_path)
-                    if _detect_language(filename) != "unknown"
-                    else FileAnalysis(language_id="unknown", level=AnalysisLevel.text,
-                                      parser_id="text.v1")
-                )
-                if self._symbol_index is not None:
-                    self._symbol_index.extend(symbol.to_index_entry() for symbol in analysis.symbols)
-                language = analysis.language_id
+                files.append((rel_path, file_path_obj, _detect_language(filename), size))
+
+        analyses = self._analyze_files(files, changed_paths, cacheable)
+        index: list[dict[str, Any]] = []
+        for rel_path, _, language, size in files:
+            analysis = analyses.get(rel_path)
+            if analysis is None:
                 index.append({
                     "path": rel_path,
                     "language": language,
                     "size": size,
-                    "imports": sorted({item.module for item in analysis.imports}),
-                    "import_refs": [item.model_dump(mode="json") for item in analysis.imports],
-                    "python_namespace": analysis.python_namespace,
-                    "analysis_level": int(analysis.level),
-                    "parser_id": analysis.parser_id,
-                    "diagnostics": analysis.diagnostics,
+                    "imports": [],
+                    "import_refs": [],
+                    "python_namespace": {},
+                    "analysis_level": 0,
+                    "parser_id": "text.v1" if language == "unknown" else "unparsed",
+                    "diagnostics": [],
                 })
+                continue
+            if self._symbol_index is not None:
+                self._symbol_index.extend(symbol.to_index_entry() for symbol in analysis.symbols)
+            index.append({
+                "path": rel_path,
+                "language": analysis.language_id,
+                "size": size,
+                "imports": sorted({item.module for item in analysis.imports}),
+                "import_refs": [item.model_dump(mode="json") for item in analysis.imports],
+                "python_namespace": analysis.python_namespace,
+                "analysis_level": int(analysis.level),
+                "parser_id": analysis.parser_id,
+                "diagnostics": analysis.diagnostics,
+            })
         return sorted(index, key=lambda f: f["path"])
+
+    def _analyze_files(
+        self, files: list[tuple[str, Path, str, int]],
+        changed_paths: frozenset[str] | None, cacheable: dict[str, str],
+    ) -> dict[str, FileAnalysis]:
+        by_path = {path: (file_path, language, size)
+                   for path, file_path, language, size in files}
+        if changed_paths is None:
+            selected = {path for path, (_, language, _) in by_path.items()
+                        if language != "unknown"}
+        else:
+            selected = {path for path in changed_paths
+                        if path in by_path and by_path[path][1] != "unknown"}
+        analyses = {
+            path: self._analyze_cached(by_path[path][0], path, by_path[path][1],
+                                       by_path[path][2], cacheable.get(path))
+            for path in sorted(selected)
+        }
+        if changed_paths is not None and analyses:
+            entries = [{
+                "path": path, "language": language,
+                "imports": (sorted({item.module for item in analyses[path].imports})
+                            if path in analyses else []),
+                "import_refs": ([item.model_dump(mode="json") for item in analyses[path].imports]
+                                if path in analyses else []),
+            } for path, (_, language, _) in by_path.items()]
+            targets = resolved_import_targets(entries, analyses) | related_test_paths(entries, analyses)
+            related = {
+                path for path in targets
+                if path in by_path and path not in analyses
+                and by_path[path][1] != "unknown"
+            }
+            for path in sorted(related):
+                analyses[path] = self._analyze_cached(
+                    by_path[path][0], path, by_path[path][1], by_path[path][2],
+                    cacheable.get(path))
+        return analyses
 
     async def build_symbol_index(self, repo_path: str) -> list[dict[str, Any]]:
         if self._symbol_index is not None:

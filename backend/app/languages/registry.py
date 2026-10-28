@@ -36,7 +36,9 @@ class LanguageAnalysisRegistry:
     def for_path(self, path: str | Path) -> LanguageAnalysisAdapter | None:
         return self._by_extension.get(Path(path).suffix.casefold())
 
-    def analyze(self, file_path: Path, relative_path: str, *, cancel_event=None) -> FileAnalysis:
+    def analyze(
+        self, file_path: Path, relative_path: str, *, cancel_event=None, cache_key=None,
+    ) -> FileAnalysis:
         if cancel_event is not None and cancel_event.is_set():
             raise ParserCancelled()
         adapter = self.for_path(relative_path)
@@ -48,7 +50,8 @@ class LanguageAnalysisRegistry:
             )
         try:
             if isinstance(adapter, TreeSitterLanguageAdapter):
-                return adapter.analyze(file_path, relative_path, cancel_event=cancel_event)
+                return adapter.analyze(file_path, relative_path, cancel_event=cancel_event,
+                                       cache_key=cache_key)
             return adapter.analyze(file_path, relative_path)
         except ParserCancelled:
             raise

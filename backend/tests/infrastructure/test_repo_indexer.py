@@ -1,8 +1,36 @@
+import hashlib
+import json
+import sqlite3
+import subprocess
 import threading
 
 import pytest
 
+from app.languages import isolation, parser_cache
+from app.languages.registry import default_language_registry
 from app.tools.repo_indexer import RepoIndexer
+
+
+def _write(path, text):
+    path.write_text(text, encoding="utf-8", newline="\n")
+
+
+def _git_repo(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "config", "core.autocrlf", "false"],
+                   check=True, capture_output=True)
+    return repo
+
+
+def _git_commit(repo, *paths):
+    subprocess.run(["git", "-C", str(repo), "add", *paths], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=Test", "-c",
+         "user.email=test@example.test", "commit", "-m", "fixture"],
+        check=True, capture_output=True,
+    )
 
 
 @pytest.mark.asyncio
@@ -300,7 +328,8 @@ async def test_execute_builds_repository_graph_off_event_loop_thread(monkeypatch
 
     async def fake_build_file_index(repo_path: str):
         assert repo_path == "repo"
-        return [{"path": "app.py", "language": "python", "imports": []}]
+        return [{"path": "app.py", "language": "python", "imports": [],
+                 "parser_id": "tree-sitter.python.v1", "analysis_level": 2}]
 
     async def fake_build_symbol_index(repo_path: str):
         assert repo_path == "repo"
@@ -448,3 +477,219 @@ async def test_indexer_real_mixed_files_keeps_python_calls_out_of_frontend(tmp_p
     assert any(symbol["file"] == "web.js" and symbol["symbol"].endswith(".int") for symbol in index["symbol_index"])
     assert not [edge for edge in index["repository_graph"]["edges"] if edge["type"] == "calls"
                 and edge.get("source_file") == "model.py" and edge.get("target_file") == "web.js"]
+
+
+@pytest.mark.asyncio
+async def test_scoped_index_parses_changed_file_and_direct_import_only(tmp_path, monkeypatch):
+    (tmp_path / "app").mkdir()
+    _write(tmp_path / "app" / "service.py",
+           "from app.model import value\ndef call():\n    return value()\n")
+    _write(tmp_path / "app" / "model.py", "def value():\n    return 1\n")
+    _write(tmp_path / "app" / "unrelated.py", "def other():\n    return 2\n")
+    calls = []
+    original = default_language_registry.analyze
+
+    def analyze(path, relative_path, **kwargs):
+        calls.append(relative_path)
+        return original(path, relative_path, **kwargs)
+
+    monkeypatch.setattr(default_language_registry, "analyze", analyze)
+    index = await RepoIndexer().execute(
+        repo_path=str(tmp_path), changed_paths={"app/service.py"})
+
+    assert sorted(calls) == ["app/model.py", "app/service.py"]
+    files = {item["path"]: item for item in index["file_index"]}
+    assert set(files) == {"app/model.py", "app/service.py", "app/unrelated.py"}
+    assert files["app/unrelated.py"]["imports"] == []
+    assert files["app/unrelated.py"]["parser_id"] == "unparsed"
+    assert {item["file"] for item in index["symbol_index"]} == {
+        "app/model.py", "app/service.py"}
+    assert any(
+        edge["type"] == "imports" and edge["source"] == "app/service.py"
+        and edge["target"] == "app/model.py"
+        for edge in index["repository_graph"]["edges"])
+
+
+@pytest.mark.asyncio
+async def test_blob_cache_reuses_unchanged_analysis_across_heads(tmp_path, monkeypatch):
+    repo = _git_repo(tmp_path)
+    _write(repo / "a.py", "def entry():\n    return 1\n")
+    _write(repo / "b.py", "from a import entry\n")
+    _git_commit(repo, "a.py", "b.py")
+    first = await RepoIndexer().execute(repo_path=str(repo), changed_paths={"a.py"})
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("unchanged file was re-analyzed")
+
+    _write(repo / "b.py", "from a import entry\nCHANGED = True\n")
+    _git_commit(repo, "b.py")
+    monkeypatch.setattr(isolation, "_run_worker", forbidden)
+    second = await RepoIndexer().execute(repo_path=str(repo), changed_paths={"a.py"})
+
+    assert second["file_index"][0] == first["file_index"][0]
+    assert second["symbol_index"] == first["symbol_index"]
+
+
+@pytest.mark.asyncio
+async def test_blob_cache_invalidates_on_content_parser_and_path_change(
+    tmp_path, monkeypatch,
+):
+    repo = _git_repo(tmp_path)
+    _write(repo / "a.py", "def entry():\n    return 1\n")
+    _git_commit(repo, "a.py")
+    await RepoIndexer().execute(repo_path=str(repo), changed_paths={"a.py"})
+    calls = []
+    original = isolation._run_worker
+
+    def analyze(request, cancel_event):
+        calls.append(request.relative_path)
+        return original(request, cancel_event)
+
+    monkeypatch.setattr(isolation, "_run_worker", analyze)
+
+    _write(repo / "a.py", "def entry():\n    return 2\n")
+    _git_commit(repo, "a.py")
+    await RepoIndexer().execute(repo_path=str(repo), changed_paths={"a.py"})
+    assert calls == ["a.py"]
+
+    calls.clear()
+    monkeypatch.setattr("app.tools.repo_indexer.parser_fingerprint",
+                        lambda: "replacement-parser")
+    await RepoIndexer().execute(repo_path=str(repo), changed_paths={"a.py"})
+    assert calls == ["a.py"]
+
+    calls.clear()
+    monkeypatch.setattr("app.tools.repo_indexer.ANALYSIS_CACHE_PROTOCOL", "replacement-analysis")
+    await RepoIndexer().execute(repo_path=str(repo), changed_paths={"a.py"})
+    assert calls == ["a.py"]
+
+    calls.clear()
+    subprocess.run(["git", "-C", str(repo), "mv", "a.py", "renamed.py"],
+                   check=True, capture_output=True)
+    _git_commit(repo, "renamed.py")
+    await RepoIndexer().execute(repo_path=str(repo), changed_paths={"renamed.py"})
+    assert calls == ["renamed.py"]
+
+
+@pytest.mark.asyncio
+async def test_dirty_worktree_disables_blob_cache(tmp_path, monkeypatch):
+    repo = _git_repo(tmp_path)
+    _write(repo / "a.py", "def entry():\n    return 1\n")
+    _git_commit(repo, "a.py")
+    await RepoIndexer().execute(repo_path=str(repo), changed_paths={"a.py"})
+    _write(repo / "a.py", "def entry():\n    return 2\n")
+    calls = []
+    original = default_language_registry.analyze
+
+    def analyze(path, relative_path, **kwargs):
+        calls.append(relative_path)
+        return original(path, relative_path, **kwargs)
+
+    monkeypatch.setattr(default_language_registry, "analyze", analyze)
+    index = await RepoIndexer().execute(repo_path=str(repo), changed_paths={"a.py"})
+
+    assert calls == ["a.py"]
+    assert index["file_index"][0]["parser_id"].startswith("tree-sitter.python")
+
+
+@pytest.mark.parametrize("import_line,source", [
+    ("from pkg import model", "main.py"),
+    ("from . import model", "pkg/use.py"),
+])
+async def test_scoped_index_includes_from_import_submodules(tmp_path, import_line, source):
+    (tmp_path / "pkg").mkdir()
+    _write(tmp_path / "pkg" / "__init__.py", "")
+    _write(tmp_path / "pkg" / "model.py", "def value():\n    return 1\n")
+    _write(tmp_path / source, import_line + "\ndef call():\n    return model.value()\n")
+
+    index = await RepoIndexer().execute(repo_path=str(tmp_path), changed_paths={source})
+
+    assert any(item["file"] == "pkg/model.py" for item in index["symbol_index"])
+    assert any(edge["type"] == "calls" and edge["source_file"] == source
+               and edge["target_file"] == "pkg/model.py"
+               and edge["resolution_status"] == "resolved"
+               for edge in index["repository_graph"]["edges"])
+
+
+async def test_scoped_index_includes_neighbor_tests_and_exposes_missing_scope(tmp_path):
+    (tmp_path / "tests").mkdir()
+    _write(tmp_path / "service.py", "def entry():\n    return 1\n")
+    _write(tmp_path / "other.py", "def other():\n    return 2\n")
+    _write(tmp_path / "tests" / "test_service.py",
+           "from service import entry\ndef test_entry():\n    assert entry() == 1\n")
+
+    index = await RepoIndexer().execute(repo_path=str(tmp_path), changed_paths={"service.py"})
+
+    assert {item["file"] for item in index["symbol_index"]} == {
+        "service.py", "tests/test_service.py"}
+    metadata = index["repository_graph"]["metadata"]
+    assert metadata["scope_mode"] == "scoped"
+    assert not metadata["scope_complete"]
+    assert metadata["unparsed_file_count"] == 1
+    full = await RepoIndexer().execute(repo_path=str(tmp_path))
+    assert full["repository_graph"]["metadata"]["scope_complete"]
+
+
+async def test_blob_cache_preserves_quarantine_failure_and_diagnostics(tmp_path, monkeypatch):
+    repo = _git_repo(tmp_path)
+    _write(repo / "a.py", "def entry():\n    return 1\n")
+    _git_commit(repo, "a.py")
+    await RepoIndexer().execute(repo_path=str(repo), changed_paths={"a.py"})
+
+    def unavailable(key):
+        raise isolation.ParserFailure("quarantine_unavailable")
+
+    monkeypatch.setattr(isolation, "_load_failure", unavailable)
+    index = await RepoIndexer().execute(repo_path=str(repo), changed_paths={"a.py"})
+
+    assert index["file_index"][0]["analysis_level"] == 1
+    assert "quarantine_unavailable" in index["file_index"][0]["diagnostics"][0]
+    assert index["repository_graph"]["metadata"]["degraded_file_count"] == 1
+    assert not index["repository_graph"]["metadata"]["scope_complete"]
+
+
+@pytest.mark.parametrize("fault", ["file", "parser_id", "end_line"])
+async def test_blob_cache_revalidates_identity_and_ranges(tmp_path, monkeypatch, fault):
+    repo = _git_repo(tmp_path)
+    _write(repo / "a.py", "def entry():\n    return 1\n")
+    _git_commit(repo, "a.py")
+    expected = await RepoIndexer().execute(repo_path=str(repo), changed_paths={"a.py"})
+    with sqlite3.connect(parser_cache._cache_path()) as db:
+        key, payload = db.execute("SELECT key, payload FROM analyses").fetchone()
+        value = json.loads(payload)
+        value["symbols"][0][fault] = {
+            "file": "other.py", "parser_id": "invalid-parser", "end_line": 999,
+        }[fault]
+        raw = json.dumps(value).encode()
+        db.execute("UPDATE analyses SET payload=?, digest=?, size=? WHERE key=?",
+                   (raw, hashlib.sha256(raw).hexdigest(), len(raw), key))
+    calls = []
+    original = isolation._run_worker
+
+    def run(request, cancel_event):
+        calls.append(request.relative_path)
+        return original(request, cancel_event)
+
+    monkeypatch.setattr(isolation, "_run_worker", run)
+    actual = await RepoIndexer().execute(repo_path=str(repo), changed_paths={"a.py"})
+
+    assert calls == ["a.py"]
+    assert actual == expected
+
+
+async def test_blob_cache_hit_preserves_cancellation(tmp_path, monkeypatch):
+    repo = _git_repo(tmp_path)
+    _write(repo / "a.py", "def entry():\n    return 1\n")
+    _git_commit(repo, "a.py")
+    await RepoIndexer().execute(repo_path=str(repo), changed_paths={"a.py"})
+    cancel = threading.Event()
+    original = default_language_registry.analyze
+
+    def cancelled(*args, **kwargs):
+        cancel.set()
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(default_language_registry, "analyze", cancelled)
+    with pytest.raises(isolation.ParserCancelled):
+        await RepoIndexer().execute(repo_path=str(repo), changed_paths={"a.py"},
+                                    cancel_event=cancel)

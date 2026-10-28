@@ -357,7 +357,8 @@ def _validate_result(raw: bytes, request: ParserRequest, source: bytes) -> FileA
 
 
 def analyze_isolated(adapter, source: bytes, relative_path: str, extension: str,
-                     cancel_event: threading.Event | None = None) -> FileAnalysis:
+                     cancel_event: threading.Event | None = None, *,
+                     cache_key: str | None = None) -> FileAnalysis:
     _check_cancelled(cancel_event)
     if len(source) > MAX_SOURCE_BYTES:
         return FileAnalysis(language_id=adapter.language_id, level=AnalysisLevel.text,
@@ -377,7 +378,7 @@ def analyze_isolated(adapter, source: bytes, relative_path: str, extension: str,
         if record is not None:
             repeated = True
             raise ParserFailure(record.reason, record.exit_code)
-        cache_key = _digest({"cache": parser_cache.CACHE_PROTOCOL, **identity})
+        cache_key = cache_key or _digest({"cache": parser_cache.CACHE_PROTOCOL, **identity})
         cached = parser_cache.load(cache_key)
         if cached is not None:
             try:

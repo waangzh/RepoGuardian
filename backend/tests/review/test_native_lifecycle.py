@@ -170,12 +170,14 @@ async def test_planning_limitations_survive_summary_and_report_without_changing_
         assert limitation in plan.review_comment_markdown
 
 
-async def test_preview_and_execution_use_the_same_related_file_plan(pipeline, monkeypatch):
+async def test_execution_index_does_not_change_confirmed_diff_plan(pipeline, monkeypatch):
     service, repository, _, pr, _ = pipeline
     prepare = service._prepare
 
     async def related_prepare(*args, **kwargs):
         repo, prepared = await prepare(*args, **kwargs)
+        if "index" not in prepared:
+            return repo, prepared
         prepared["index"]["symbol_index"].append(
             {"file": "safe.py", "symbol_id": "safe::value", "start_line": 1, "end_line": 1})
         prepared["index"]["repository_graph"]["edges"].append({
@@ -189,16 +191,153 @@ async def test_preview_and_execution_use_the_same_related_file_plan(pipeline, mo
     preview = await service.preview(ReviewPreviewRequest(
         pr_url=pr.html_url, plan={"include_pr_discussions": False,
             "scope": {"mode": "selected", "primary_files": ["safe.py", "removed.py"]}}))
-    assert len(preview.review_units) == 1 and len(preview.assignments) == 1
-    assert all(item.focus_paths == ["removed.py", "safe.py"] for item in preview.assignments)
+    assert preview.review_units
+    assert all(not unit.changed_symbols for unit in preview.review_units)
     task = await service.create_confirmed_task(ReviewCreateRequest(pr_url=pr.html_url,
         preview_id=preview.preview_id, expected_head_sha=preview.snapshot.head_sha,
         expected_effective_base_sha=preview.snapshot.effective_base_sha))
     assert await service._worker.run_once()
     report = repository.get_task(task.id).review_report
     assert report is not None
+    assert report.review_units == preview.review_units
     assert report.assignments == preview.assignments
     assert {item.id for item in report.goals} == {item.id for item in preview.goals}
+
+
+@pytest.mark.parametrize("depth", ["quick", "standard", "deep"])
+async def test_preview_skips_index_and_execution_uses_requested_depth(pipeline, monkeypatch, depth):
+    from app.tools import repo_indexer
+
+    scopes = []
+    original = repo_indexer.RepoIndexer.execute
+
+    async def execute(self, **kwargs):
+        paths = kwargs.get("changed_paths")
+        scopes.append(None if paths is None else frozenset(paths))
+        return await original(self, **kwargs)
+
+    monkeypatch.setattr(repo_indexer.RepoIndexer, "execute", execute)
+    service, _, _, _, _ = pipeline
+    preview = await service.preview(ReviewPreviewRequest(
+        pr_url="https://github.com/local/repo/pull/1",
+        plan={"depth": depth, "include_pr_discussions": False,
+              "scope": {"mode": "selected", "primary_files": ["safe.py"]}}))
+    assert scopes == []
+    task = await service.create_confirmed_task(ReviewCreateRequest(
+        pr_url="https://github.com/local/repo/pull/1", preview_id=preview.preview_id,
+        expected_head_sha=preview.snapshot.head_sha,
+        expected_effective_base_sha=preview.snapshot.effective_base_sha))
+    assert await service._worker.run_once()
+    assert scopes == [None if depth == "deep" else frozenset({"safe.py"})]
+    assert service.get_task(task.id).status == "completed"
+
+
+async def test_symbol_reads_and_relations_expand_shared_index_once(
+    pipeline, source_service, monkeypatch,
+):
+    from dataclasses import replace
+    from app.services.review import review_service
+    from app.review.tools import find_references, get_callers, read_symbol
+    from app.tools.repo_indexer import RepoIndexer
+
+    service, _, _, pr, _ = pipeline
+    (source_service.repo_path / "other.py").write_text(
+        "def other():\n    return 2\n", encoding="utf-8", newline="\n")
+    (source_service.repo_path / "consumer.py").write_text(
+        "from other import other\ndef consumer():\n    return other()\n",
+        encoding="utf-8", newline="\n")
+    for args in (("add", "other.py", "consumer.py"),
+                 ("-c", "user.name=Test", "-c", "user.email=test@example.test",
+                  "commit", "-m", "add callable fixture")):
+        subprocess.run(["git", "-C", str(source_service.repo_path), *args],
+                       check=True, capture_output=True)
+    head = subprocess.run(["git", "-C", str(source_service.repo_path), "rev-parse", "HEAD"],
+                          check=True, capture_output=True).stdout.decode().strip()
+    source_service.snapshot.head_sha = pr.head.sha = head
+    scopes = []
+    observed = {}
+    execute = RepoIndexer.execute
+
+    async def indexed(self, **kwargs):
+        paths = kwargs.get("changed_paths")
+        scopes.append(None if paths is None else frozenset(paths))
+        return await execute(self, **kwargs)
+
+    monkeypatch.setattr(RepoIndexer, "execute", indexed)
+    build_graph = review_service.build_review_graph
+
+    def graph(saver):
+        result = build_graph(saver)
+        invoke = result.ainvoke
+
+        async def checked(*args, context, **kwargs):
+            sources = await context.sources()
+            branch = replace(sources)
+            runtime = SimpleNamespace(context=branch)
+            assert not any(item["file"] == "other.py" for item in sources.symbols)
+            symbol = await read_symbol.coroutine(path="other.py", symbol="other", runtime=runtime)
+            observed["symbol"] = symbol
+            assert symbol["ok"] and "return 2" in symbol["content"]
+            assert any(item["file"] == "other.py" for item in sources.symbols)
+            before = len(scopes)
+            denied = await read_symbol.coroutine(path=".env", symbol="SECRET", runtime=runtime)
+            assert not denied["ok"] and len(scopes) == before
+            callers, references = await asyncio.gather(
+                get_callers.coroutine(symbol="other", runtime=runtime),
+                find_references.coroutine(symbol="other", runtime=runtime))
+            observed.update(callers=callers, references=references)
+            assert callers["scope_complete"] and references["scope_complete"]
+            assert any(edge["source_file"] == "consumer.py" for edge in callers["edges"])
+            assert scopes.count(None) == 1
+            assert sources.repository_graph["metadata"]["scope_mode"] == "full"
+            return await invoke(*args, context=context, **kwargs)
+
+        monkeypatch.setattr(result, "ainvoke", checked)
+        return result
+
+    monkeypatch.setattr(review_service, "build_review_graph", graph)
+    _, _, task = await preview_and_create(service)
+    assert await service._worker.run_once()
+    assert service.get_task(task.id).status == "completed", observed
+    assert len(scopes) == 3
+
+
+async def test_cancelled_review_refuses_lazy_index_expansion(pipeline, monkeypatch):
+    from app.services.review import review_service
+    from app.tools.repo_indexer import RepoIndexer
+
+    service, repository, _, _, _ = pipeline
+    calls = []
+    workspaces = []
+    execute = RepoIndexer.execute
+
+    async def indexed(self, **kwargs):
+        calls.append(kwargs.get("changed_paths"))
+        return await execute(self, **kwargs)
+
+    monkeypatch.setattr(RepoIndexer, "execute", indexed)
+    build_graph = review_service.build_review_graph
+
+    def graph(saver):
+        result = build_graph(saver)
+
+        async def cancelled(*args, context, **kwargs):
+            sources = await context.sources()
+            workspaces.append(sources.evidence.repo_path)
+            assert service.cancel_task(sources.evidence.snapshot.review_id)
+            await sources.ensure_index(None)
+            pytest.fail("cancelled review expanded its index")
+
+        monkeypatch.setattr(result, "ainvoke", cancelled)
+        return result
+
+    monkeypatch.setattr(review_service, "build_review_graph", graph)
+    _, _, task = await preview_and_create(service)
+    with pytest.raises(ReviewStopped):
+        await service._run_graph(task.id)
+    assert calls == [{"safe.py"}]
+    assert repository.get_task(task.id).status == "cancelled"
+    assert workspaces and not workspaces[0].exists()
 
 
 async def test_confirmation_refuses_changed_pr_and_unapproved_plan(pipeline):

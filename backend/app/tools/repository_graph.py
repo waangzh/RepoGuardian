@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -287,6 +288,49 @@ def resolve_import(
         if len(matches) == 1:
             candidates.append((matches[0], 0.68))
     return sorted(set(candidates), key=lambda item: (-item[1], item[0]))
+
+
+def resolved_import_targets(
+    file_index: list[dict[str, Any]], sources: Iterable[str],
+) -> set[str]:
+    """解析给定文件的导入目标，用于确定变更文件的直接关联范围。"""
+    files = {str(item["path"]): item for item in file_index if item.get("path")}
+    lookup = _build_lookup(files)
+    targets: set[str] = set()
+    for source in sources:
+        item = files.get(source)
+        if item is None:
+            continue
+        refs = item.get("import_refs") or [
+            {"module": imported} for imported in item.get("imports", [])]
+        for ref in refs:
+            module = str(ref.get("module", ""))
+            targets.update(path for path, _ in resolve_import(source, module, files, lookup))
+            member = ref.get("imported_name")
+            if item.get("language") == "python" and member and member != "*":
+                submodule = module + ("" if module.endswith(".") else ".") + str(member)
+                targets.update(path for path, confidence in
+                               resolve_import(source, submodule, files, lookup)
+                               if confidence >= 0.94)
+    return targets
+
+
+def related_test_paths(
+    file_index: list[dict[str, Any]], sources: Iterable[str],
+) -> set[str]:
+    """沿用关系图的测试匹配评分，选择直接关联的测试文件。"""
+    files = {str(item["path"]): item for item in file_index if item.get("path")}
+    lookup = _build_lookup(files)
+    selected = set(sources)
+    tests = set()
+    for test_path in lookup["test_files"]:
+        candidates = _candidate_sources_for_test(test_path, lookup)
+        ranked = sorted((_test_match_score(test_path, source), source) for source in candidates)
+        if ranked and ranked[-1][0] > 0:
+            best_score = ranked[-1][0]
+            if any(source in selected for score, source in ranked if score == best_score):
+                tests.add(test_path)
+    return tests
 
 
 def _build_lookup(files: dict[str, dict[str, Any]]) -> dict[str, Any]:

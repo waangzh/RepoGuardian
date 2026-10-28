@@ -75,10 +75,14 @@ async def read_diff(path: str, runtime: ToolRuntime[AgentContext], hunk_index: i
 @tool
 @safe_read
 async def read_symbol(path: str, symbol: str, runtime: ToolRuntime[AgentContext]) -> dict:
-    """Read a unique HEAD symbol definition. Use a symbol ID for overloaded names."""
-    if path in runtime.context.denied_paths:
+    """Read a unique HEAD symbol, indexing this file on demand. Use IDs for overloads."""
+    context = runtime.context
+    if (path in context.denied_paths or path not in context.evidence.allowed_paths
+            or is_sensitive_repository_path(path)):
         raise ValueError("path_not_authorized")
-    matches = [item for item in runtime.context.symbols if item.get("file") == path
+    if context.ensure_index:
+        await context.ensure_index(frozenset({path}))
+    matches = [item for item in context.symbols if item.get("file") == path
                and symbol in {item.get("symbol"), item.get("symbol_id")}]
     if len(matches) != 1:
         raise ValueError("symbol_missing_or_ambiguous")
@@ -111,6 +115,8 @@ async def find_files(runtime: ToolRuntime[AgentContext], query: str = "", path: 
 
 async def _relations(symbol: str, runtime, direction: str | None):
     context = runtime.context
+    if context.ensure_index:
+        await context.ensure_index(None)
     matches = [item for item in context.symbols
                if symbol in {item.get("symbol_id"), item.get("symbol")}
                and item.get("file") in context.evidence.allowed_paths
@@ -126,29 +132,34 @@ async def _relations(symbol: str, runtime, direction: str | None):
                  (edge.get("source") in identities or edge.get("target") in identities))]
     visible = [{key: item.get(key) for key in ("symbol_id", "file", "symbol", "start_line", "end_line")}
                for item in matches[:12]]
+    metadata = context.repository_graph.get("metadata", {})
+    complete = metadata.get("scope_complete", False)
+    limitation = "Static relations do not establish runtime binding; read source to verify."
+    if not complete:
+        limitation += " Index scope is incomplete or degraded; use search_code for missing relations."
     return {"ok": True, "source": "static_relation_hint", "symbols": visible,
             "edges": edges[:24], "truncated": len(matches) > 12 or len(edges) > 24,
-            "limitation": "Static relations do not establish runtime binding; read source to verify."}
+            "scope_complete": complete, "limitation": limitation}
 
 
 @tool
 @safe_read
 async def find_references(symbol: str, runtime: ToolRuntime[AgentContext]) -> dict:
-    """Find indexed symbol relations as static hints, without granting source evidence."""
+    """Expand the static index for cross-module relations; hints are not source evidence."""
     return await _relations(symbol, runtime, None)
 
 
 @tool
 @safe_read
 async def get_callers(symbol: str, runtime: ToolRuntime[AgentContext]) -> dict:
-    """Find possible static callers; verify actual binding with source reads."""
+    """Expand the index to find possible static callers; verify binding with source reads."""
     return await _relations(symbol, runtime, "in")
 
 
 @tool
 @safe_read
 async def get_callees(symbol: str, runtime: ToolRuntime[AgentContext]) -> dict:
-    """Find possible static callees; verify actual binding with source reads."""
+    """Expand the index to find possible static callees; verify binding with source reads."""
     return await _relations(symbol, runtime, "out")
 
 

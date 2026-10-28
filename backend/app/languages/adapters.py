@@ -122,13 +122,15 @@ class TreeSitterLanguageAdapter(RegexLanguageAdapter):
         super().__init__(language_id, extensions)
         self._grammar_loader = grammar_loader
 
-    def analyze(self, file_path: Path, relative_path: str, *, cancel_event=None) -> FileAnalysis:
+    def analyze(
+        self, file_path: Path, relative_path: str, *, cancel_event=None, cache_key=None,
+    ) -> FileAnalysis:
         from app.languages.isolation import MAX_SOURCE_BYTES, analyze_isolated
 
         with file_path.open("rb") as stream:
             source = stream.read(MAX_SOURCE_BYTES + 1)
         return analyze_isolated(self, source, relative_path, file_path.suffix.casefold(),
-                                cancel_event=cancel_event)
+                                cancel_event=cancel_event, cache_key=cache_key)
 
     def _analyze_native(self, source: bytes, relative_path: str, extension: str) -> FileAnalysis:
         """Only the trusted parser worker may call this native entry point."""

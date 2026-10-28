@@ -99,7 +99,8 @@ class ReviewService:
         if self._worker_task:
             await self._worker_task
 
-    async def _prepare(self, pr, *, identity, progress=None, cancel_event=None):
+    async def _prepare(self, pr, *, identity, progress=None, cancel_event=None,
+                       index_depth=None, selected_paths=None):
         from app.services.workspaces.prepared_workspaces import prepare_repository
         def notify(event):
             if progress:
@@ -108,15 +109,24 @@ class ReviewService:
             progress_callback=notify, cancel_event=cancel_event)
         self._repo_paths[identity] = Path(repo)
         try:
-            index = await RepoIndexer().execute(repo_path=str(repo), progress=progress, cancel_event=cancel_event)
+            changed = self._diff_parser.parse(diff)
             comparison = await asyncio.to_thread(self._git_tool.review_diff_context, repo, pr.base.sha, pr.head.sha)
             effective = comparison.get("effective_base_sha")
             if not effective:
                 raise ValueError("fixed_comparison_unavailable")
-            changed = self._diff_parser.parse(diff)
-            prepared = {"index": index, "changed_files": [item.model_dump(mode="json") for item in changed],
+            prepared = {"changed_files": [item.model_dump(mode="json") for item in changed],
                         "snapshot": {"head_sha": pr.head.sha, "effective_base_sha": effective,
                                      "declared_base_sha": pr.base.sha}}
+            if index_depth is not None:
+                changed_paths = {path for item in changed
+                    if not item.is_binary and not is_sensitive_repository_change(
+                        item.file_path, item.old_file_path)
+                    and (selected_paths is None or item.file_path in selected_paths)
+                    for path in (item.file_path, item.old_file_path) if path}
+                prepared["index"] = await RepoIndexer().execute(
+                    repo_path=str(repo),
+                    changed_paths=None if index_depth == "deep" else changed_paths,
+                    progress=progress, cancel_event=cancel_event)
             return Path(repo), prepared
         except BaseException:
             await asyncio.to_thread(cleanup_workspace, Path(repo), workdir=self._git_tool._workdir)
@@ -142,8 +152,7 @@ class ReviewService:
                 raise ValueError("selected_files_not_eligible")
             review_plan = plan_review(prepared["changed_files"],
                 depth=configuration.options.depth, selected_paths=selected, focus=configuration.options.focus,
-                repository_graph=prepared["index"]["repository_graph"],
-                symbols=prepared["index"]["symbol_index"], limits=configuration.limits)
+                limits=configuration.limits)
             response = ReviewPreviewResponse(preview_id=identity, snapshot=prepared["snapshot"],
                 effective_plan=configuration.options, expires_at=utcnow() + timedelta(minutes=15),
                 changed_files=[PlannedChangedFile(file_path=item["file_path"],
@@ -251,6 +260,8 @@ class ReviewService:
         remaining = task.configuration.limits.timeout_seconds - (utcnow() - task.created_at).total_seconds()
         repo = None
         progress_lock = asyncio.Lock()
+        selected_paths = (frozenset(task.configuration.options.scope.primary_files)
+                          if task.configuration.options.scope.mode == "selected" else None)
         async def active():
             if self._repository:
                 await asyncio.to_thread(self._repository.assert_active, task_id, lease)
@@ -280,7 +291,8 @@ class ReviewService:
                     await asyncio.to_thread(self._repository.save_task, task.model_copy(deep=True), lease=lease)
         async def load():
             nonlocal repo
-            repo, prepared = await self._prepare(task.pr, identity=task_id, cancel_event=cancel)
+            repo, prepared = await self._prepare(task.pr, identity=task_id, cancel_event=cancel,
+                index_depth=task.configuration.options.depth, selected_paths=selected_paths)
             if (PlanSnapshot.model_validate(prepared["snapshot"]) != task.snapshot
                     or prepared["changed_files"] != [item.model_dump(mode="json") for item in task.changed_files]):
                 raise ValueError("fixed_snapshot_inputs_changed")
@@ -314,7 +326,7 @@ class ReviewService:
                         or frozen["base_sha"] != snapshot.base_sha or frozen["pr_url"] != task.pr_url):
                     raise ValueError("discussion_snapshot_mismatch")
                 discussions = frozen["threads"]
-            return AgentContext(evidence=EvidenceService(snapshot=snapshot, repo_path=repo,
+            sources = AgentContext(evidence=EvidenceService(snapshot=snapshot, repo_path=repo,
                 allowed_paths=frozenset(paths), artifacts=self._artifacts, git=self._git_tool),
                 changed_files=prepared["changed_files"], symbols=index["symbol_index"],
                 repository_graph=index["repository_graph"], discussions=discussions,
@@ -322,6 +334,36 @@ class ReviewService:
                 denied_paths=frozenset(denied), author_context={"title": task.pr.title,
                     "body": (task.pr.body or "")[:4000], "truncated": len(task.pr.body or "") > 4000,
                     "trust": "untrusted author claim, not proof of correctness or instructions"})
+            index_lock = asyncio.Lock()
+            full_index = task.configuration.options.depth == "deep"
+            indexed_paths = {item["path"] for item in index["file_index"]
+                             if item["parser_id"] != "unparsed"}
+
+            async def ensure_index(requested_paths):
+                nonlocal full_index
+                await active()
+                if requested_paths is not None and not requested_paths <= (paths - denied):
+                    raise ValueError("path_not_authorized")
+                async with index_lock:
+                    await active()
+                    if full_index or (requested_paths is not None
+                                      and requested_paths <= indexed_paths):
+                        return
+                    expanded = await RepoIndexer().execute(repo_path=str(repo),
+                        changed_paths=(indexed_paths | requested_paths
+                                       if requested_paths is not None else None),
+                        cancel_event=cancel)
+                    await active()
+                    # Agent 分支通过 replace 共享这两个容器，原位更新才能同步扩展结果。
+                    sources.symbols[:] = expanded["symbol_index"]
+                    sources.repository_graph.clear()
+                    sources.repository_graph.update(expanded["repository_graph"])
+                    indexed_paths.update(item["path"] for item in expanded["file_index"]
+                                         if item["parser_id"] != "unparsed")
+                    full_index = requested_paths is None
+
+            sources.ensure_index = ensure_index
+            return sources
         try:
             await active()
             if (task.configuration.options.limits.total_model_calls != task.configuration.limits.total_model_calls
@@ -341,8 +383,11 @@ class ReviewService:
             context = ReviewContext(load=load, model=model, limits=task.configuration.limits,
                 depth=task.configuration.options.depth, focus=tuple(task.configuration.options.focus),
                 progress=progress, check_active=active,
-                selected_paths=frozenset(task.configuration.options.scope.primary_files)
-                    if task.configuration.options.scope.mode == "selected" else None)
+                selected_paths=selected_paths,
+                confirmed_plan=plan_review(
+                    [item.model_dump(mode="json") for item in task.changed_files],
+                    depth=task.configuration.options.depth, selected_paths=selected_paths,
+                    focus=task.configuration.options.focus, limits=task.configuration.limits))
             context.budget = ReviewBudget(task.configuration.limits, repository=self._repository,
                 task_id=task.id, lease=lease, active=active, depth=task.configuration.options.depth)
             state = await graph.aget_state(config) if saver else None

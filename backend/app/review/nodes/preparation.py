@@ -17,7 +17,7 @@ async def prepare(state: ReviewState, runtime: Runtime[ReviewContext]):
 async def plan(state: ReviewState, runtime: Runtime[ReviewContext]):
     context = runtime.context
     sources = await context.sources()
-    review_plan = plan_review(
+    review_plan = context.confirmed_plan or plan_review(
         sources.changed_files, depth=context.depth, selected_paths=context.selected_paths,
         focus=context.focus, repository_graph=sources.repository_graph, symbols=sources.symbols,
         limits=context.limits)

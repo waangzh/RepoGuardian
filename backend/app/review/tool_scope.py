@@ -77,6 +77,47 @@ def list_git_tracked_files(repository_root: str | Path, git_executable: str = "g
     }
 
 
+def list_git_tracked_blobs(
+    repository_root: str | Path, git_executable: str = "git"
+) -> dict[str, str]:
+    """返回 Git 索引路径到 blob SHA；符号链接的内容不是 blob，值为空串。"""
+    root = Path(repository_root).resolve()
+    completed = subprocess.run(
+        [git_executable, "-C", str(root), "ls-files", "-s", "-z", "--cached"],
+        check=False,
+        capture_output=True,
+        env=git_safety_environment(),
+    )
+    if completed.returncode != 0:
+        return {}
+    blobs = {}
+    for item in completed.stdout.split(b"\0"):
+        if not item:
+            continue
+        try:
+            fields, raw_path = item.split(b"\t", 1)
+            mode, identity, _ = fields.split()
+        except ValueError:
+            continue
+        blobs[raw_path.decode("utf-8", errors="surrogateescape")] = (
+            "" if mode == b"120000" else identity.decode("ascii"))
+    return blobs
+
+
+def git_worktree_matches_index(
+    repository_root: str | Path, git_executable: str = "git"
+) -> bool:
+    """工作树与索引一致时，blob SHA 才能代表待解析文件的内容。"""
+    root = Path(repository_root).resolve()
+    completed = subprocess.run(
+        [git_executable, "-C", str(root), "diff", "--quiet", "--no-ext-diff", "--"],
+        check=False,
+        capture_output=True,
+        env=git_safety_environment(),
+    )
+    return completed.returncode == 0
+
+
 def _validate_repository_relative_path(file_path: str) -> str:
     """规范化与遍历校验；与工作树状态无关。"""
     if not isinstance(file_path, str) or not file_path or "\\" in file_path or "\x00" in file_path:
