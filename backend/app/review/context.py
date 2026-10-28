@@ -45,12 +45,22 @@ class ReviewContext:
     check_active: Callable[[], Awaitable[None]] | None = None
     progress: Callable[[dict], Awaitable[None]] | None = None
     synthesis_facts: Callable[[Any], Awaitable[tuple[str, dict]]] | None = None
+    save_report: Callable[[Any], Awaitable[None]] | None = None
+    check_running: Callable[[], Awaitable[None]] | None = None
+    remaining_seconds: Callable[[], float] | None = None
+    previous_synthesis: Any = None
     _agent_context: AgentContext | None = None
     _load_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     async def active(self):
         if self.check_active:
             await self.check_active()
+
+    async def running(self):
+        if self.check_running:
+            await self.check_running()
+        else:
+            await self.active()
 
     async def sources(self) -> AgentContext:
         await self.active()
@@ -64,6 +74,9 @@ class ReviewContext:
         return self._agent_context
 
     async def emit(self, **event):
-        await self.active()
+        if event.get("phase") == "synthesis":
+            await self.running()
+        else:
+            await self.active()
         if self.progress:
             await self.progress(event)

@@ -41,5 +41,7 @@ async def report(state: ReviewState, runtime: Runtime[ReviewContext]):
         observations=observations, observation_errors=observation_errors,
         coverage_limitations=state.get("coverage_limitations", []),
         budget=await runtime.context.budget.summary() if runtime.context.budget else {})
+    if runtime.context.save_report:
+        await runtime.context.save_report(output)
     await runtime.context.emit(phase="report", status="completed", termination=termination)
     return {"report": output.model_dump(), "goals": goals, "status": termination}

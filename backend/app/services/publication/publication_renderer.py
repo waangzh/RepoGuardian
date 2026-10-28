@@ -186,7 +186,8 @@ def _change_understanding(plan, *, full=False):
                 "综合材料省略：" + markdown_text(str(synthesis.omitted))]
         if full:
             for observation in plan.presentation.observations:
-                lines += ["", f"- 观察 `{observation.id}`：{markdown_text(observation.change)}"]
+                lines += ["", f"- 原始观察（不代表核验结论）`{observation.id}`："
+                          + markdown_text(observation.change)]
                 lines += [f"  - {markdown_text(ref.path)}:{ref.start_line}–{ref.end_line}"
                           f"（{ref.side.upper()}，证据 `{ref.id}`）" for ref in observation.sources]
     if full and plan.digest.actual_changes:
@@ -236,10 +237,18 @@ def _appendix_lines(plan, task):
     lines += ["", "### 来源与验证边界", "", *_author_source_lines(plan), *_validation_lines(plan)]
     if outcome.reason_codes:
         lines += ["", "### 原因代码", "", *[f"- {REASON_LABELS[reason]}（{reason.value}）" for reason in outcome.reason_codes]]
-    resolved = [item for item in outcome.review_limitations if item.status in {"resolved", "boundary"}]
+    resolved = [item for item in outcome.review_limitations
+                if item.status in {"resolved", "boundary", "nonblocking"}]
     if resolved:
         lines += ["", "### 已处理的审查限制", ""]
         for item in resolved:
+            if item.status == "nonblocking":
+                lines.append(f"- {markdown_text(item.text)}；处理结果：相关候选均不受此项阻塞。")
+                for claim in item.resolution_claims:
+                    label = "已解决" if claim.status == "resolved" else "不影响该候选"
+                    lines.append(f"  - 候选 {markdown_text(claim.candidate_id[:12])}：{label}；"
+                                 + markdown_text(claim.explanation))
+                continue
             status = "已解决" if item.status == "resolved" else "一般审查边界"
             lines.append(f"- {markdown_text(item.text)}；处理结果：{status}；"
                          f"说明：{markdown_text(item.resolution.explanation)}；"

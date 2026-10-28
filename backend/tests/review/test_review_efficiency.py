@@ -42,6 +42,7 @@ class FinalizingModel(ToolCallingModel):
     calls: int = 0
     correct_once: bool = False
     never_finalize: bool = False
+    read_until: int = 1
 
     def bind_tools(self, tools, **kwargs):
         self.tools_seen.append([tool.name if hasattr(tool, "name") else tool["function"]["name"]
@@ -50,7 +51,7 @@ class FinalizingModel(ToolCallingModel):
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         self.calls += 1
-        if self.calls == 1 or self.never_finalize:
+        if self.calls <= self.read_until or self.never_finalize:
             calls = [{"name": "read_file", "args": {"path": "safe.py", "start": 1, "end": 1},
                       "id": f"read-{self.calls}"}]
         else:
@@ -102,7 +103,47 @@ async def test_finalization_rejects_hallucinated_exploration_not_only_hiding_too
     with pytest.raises(Exception, match="finalization_required"):
         await build_agent(model, "verifier", ReviewLimits(model_calls=3)).ainvoke(
             {"messages": [("user", "Never finishes")]}, context=AgentContext(evidence=source_service))
-    assert model.calls == 2 and reads == 1
+    assert model.calls == 3 and reads == 1
+
+
+async def test_finalization_tool_feedback_uses_only_the_remaining_reserved_submission(source_service):
+    from app.review.budget import ReviewBudget, ReviewBudgetExceeded
+
+    class PressureBudget(ReviewBudget):
+        explores = 0
+
+        async def reserve(self, *args, stage="explore", **kwargs):
+            if stage == "explore":
+                self.explores += 1
+                if self.explores == 3:
+                    raise ReviewBudgetExceeded("input_tokens")
+            return await super().reserve(*args, stage=stage, **kwargs)
+
+    limits = ReviewLimits(model_calls=5, tool_calls=24)
+    budget = PressureBudget(limits)
+    model = FinalizingModel(read_until=3)
+    reads = []
+    original = source_service.read
+
+    async def read(*args, **kwargs):
+        reads.append(args)
+        return await original(*args, **kwargs)
+
+    source_service.read = read
+    result = await build_agent(model, "verifier", limits).ainvoke(
+        {"messages": [("user", "Review fixture")]},
+        context=AgentContext(evidence=source_service, budget=budget, budget_agent_id="scope"))
+    assert result["structured_response"].decision == "refuted"
+    assert model.calls == 4 and len(reads) == 2
+    assert model.tools_seen[-2:] == [["VerificationOutput"], ["VerificationOutput"]]
+    feedback = [m for m in result["messages"] if isinstance(m, ToolMessage)
+                and str(m.content).startswith("Error: review_final_submission_required")]
+    assert len(feedback) == 1
+    assert (await budget.branch_state("scope"))["final_requests"] == 2
+    assert (await budget.summary())["model_calls"] == 4
+    observer = AgentUsage("review", "scope", "verifier")
+    await observer.reconcile(result["messages"])
+    assert observer.structured_output_retries == 1 and observer.tool_failures == 0
 
 
 async def test_search_policy_and_paging_are_not_tool_failures(caplog):

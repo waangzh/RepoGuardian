@@ -121,10 +121,14 @@ class ExaminedGoal(ReviewModel):
 
 
 class ChangeObservationProposal(ReviewModel):
-    change: str = Field(min_length=1, max_length=600)
+    change: str = Field(min_length=1, max_length=600,
+        description="Neutral source-backed description of what changed. No suspected defects, "
+            "test-quality criticism, unverified omissions or recommendations; submit those as candidates.")
     before: str | None = Field(default=None, max_length=400)
     after: str | None = Field(default=None, max_length=400)
-    impact: str = Field(min_length=1, max_length=400)
+    impact: str = Field(min_length=1, max_length=400,
+        description="Direct affected behavior, not a defect verdict. This analysis is kept for audit, "
+            "not admitted as a verified finding.")
     kind: Literal["implementation", "test_source"]
     evidence_ids: list[str] = Field(min_length=1, max_length=12)
 
@@ -155,6 +159,10 @@ class LimitationResolution(ReviewModel):
     status: Literal["resolved", "boundary"]
     explanation: str = Field(min_length=1, max_length=2000)
     evidence_ids: list[str] = Field(min_length=1, max_length=32)
+
+
+class CandidateLimitationResolution(LimitationResolution):
+    candidate_id: str
 
 
 class LimitationAssessment(ReviewModel):
@@ -193,10 +201,11 @@ class ReviewLimitation(ReviewModel):
     text: str
     candidate_ids: list[str] = Field(default_factory=list)
     goal_ids: list[str] = Field(default_factory=list)
-    status: Literal["pending", "unresolved", "resolved", "boundary"] = "pending"
+    status: Literal["pending", "unresolved", "resolved", "boundary", "nonblocking"] = "pending"
     resolution: LimitationResolution | None = None
     assessment: LimitationAssessment | None = None
     resolved_by: str | None = None
+    resolution_claims: list[CandidateLimitationResolution] = Field(default_factory=list)
 
 
 class AuthorComment(ReviewModel):
@@ -321,8 +330,9 @@ class ReviewLimits(ReviewModel):
 class SynthesisParagraph(ReviewModel):
     source_ids: list[str] = Field(min_length=1, max_length=8)
     text: str = Field(min_length=1, max_length=3000,
-        description="Use complete verbatim sentences from the referenced facts. "
-        "Arrange and combine them to explain changes and priorities; do not invent facts.")
+        description="Write a concise natural-language synthesis supported by the referenced facts. "
+        "Preserve conditions, negation and uncertainty; do not invent facts or policy conclusions. "
+        "Follow the input source_policy for this section. Observations describe changes, not defects.")
 
 
 class SynthesisOutput(ReviewModel):
@@ -330,6 +340,27 @@ class SynthesisOutput(ReviewModel):
     review_overview: list[SynthesisParagraph] = Field(min_length=1, max_length=2)
     actions: list[SynthesisParagraph] = Field(min_length=1, max_length=2)
     disclosed_status_ids: list[str] = Field(default_factory=list, max_length=200)
+
+
+class SynthesisGrounding(ReviewModel):
+    supported: bool
+    explanation: str = Field(min_length=1, max_length=2000)
+
+
+class SynthesisAttempt(ReviewModel):
+    stage: Literal["generation", "grounding"]
+    number: Literal[1, 2]
+    request_id: str
+    reservation_id: str | None = None
+    timeout_seconds: float = Field(gt=0)
+    status: Literal["started", "completed", "timeout", "failed", "unknown"]
+    retryable: bool = False
+    feedback: str | None = None
+    error: str | None = None
+    result: dict | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cached_input_tokens: int | None = None
 
 
 class ReviewSynthesis(ReviewModel):
@@ -342,7 +373,10 @@ class ReviewSynthesis(ReviewModel):
     input_tokens: int | None = None
     output_tokens: int | None = None
     cached_input_tokens: int | None = None
-    prose_fallbacks: int = Field(default=0, ge=0)
+    attempts: list[SynthesisAttempt] = Field(default_factory=list, max_length=4)
+    grounding: SynthesisGrounding | None = None
+    grounded_output_hash: str | None = None
+    started_at: float | None = None
 
 
 class ReviewReport(ReviewModel):

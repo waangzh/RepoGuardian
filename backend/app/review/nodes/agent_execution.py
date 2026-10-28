@@ -51,9 +51,11 @@ class AgentUsage(AsyncCallbackHandler):
     async def on_chain_end(self, outputs, **kwargs):
         if isinstance(outputs, dict):
             for message in outputs.get("messages", []):
-                if (isinstance(message, ToolMessage) and message.name in {
-                        "DiscoveryOutput", "VerificationOutput", "BatchVerificationOutput", "LimitationReviewOutput"}
-                        and str(message.content).startswith("Error:")):
+                if (isinstance(message, ToolMessage) and (
+                        message.name in {"DiscoveryOutput", "VerificationOutput", "BatchVerificationOutput",
+                                         "LimitationReviewOutput"}
+                        and str(message.content).startswith("Error:")
+                        or str(message.content).startswith("Error: review_final_submission_required"))):
                     self.structured_errors.add(message.tool_call_id)
             self.structured_output_retries = len(self.structured_errors)
 
@@ -153,11 +155,14 @@ class AgentUsage(AsyncCallbackHandler):
         self.tool_calls = sum(len(message.tool_calls) for message in messages if isinstance(message, AIMessage))
         self.policy_exclusions = self.incomplete_searches = 0
         for message in messages:
-            if (isinstance(message, ToolMessage) and message.name in {
-                    "DiscoveryOutput", "VerificationOutput", "BatchVerificationOutput", "LimitationReviewOutput"}
-                    and str(message.content).startswith("Error:")):
+            final_feedback = (isinstance(message, ToolMessage)
+                              and str(message.content).startswith("Error: review_final_submission_required"))
+            if (isinstance(message, ToolMessage) and (
+                    message.name in {"DiscoveryOutput", "VerificationOutput", "BatchVerificationOutput",
+                                     "LimitationReviewOutput"}
+                    and str(message.content).startswith("Error:") or final_feedback)):
                 self.structured_errors.add(message.tool_call_id)
-            if isinstance(message, ToolMessage) and message.name in SOURCE_TOOLS:
+            if isinstance(message, ToolMessage) and message.name in SOURCE_TOOLS and not final_feedback:
                 self.tools_started[message.tool_call_id] = message.name
                 await self.on_tool_end(message, run_id=message.tool_call_id)
         self.structured_output_retries = len(self.structured_errors)

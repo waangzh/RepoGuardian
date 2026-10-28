@@ -27,6 +27,7 @@ class LimitationModel(ReviewModel):
     empty: bool = False
     investigate: bool = False
     verdict: str = "refuted"
+    mixed_assessment: bool = False
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         payload = json.loads(next(message.content for message in messages if message.type == "human"))
@@ -62,8 +63,13 @@ class LimitationModel(ReviewModel):
                     if self.investigate and not investigating:
                         output.update(decision="insufficient_evidence", limitations=["尚缺调用链前提"])
                     elif self.assessment:
+                        candidates = payload.get("candidates", [payload.get("candidate")])
+                        current = next((item for item in candidates if item and
+                            item["id"] == output.get("candidate_id", candidates[0]["id"])), candidates[0])
+                        status = ("boundary" if current["title"] == "另一候选" else "resolved"
+                                  ) if self.mixed_assessment else self.assessment
                         output["limitation_resolutions"] = [{
-                            "limitation_id": item["id"], "status": self.assessment,
+                            "limitation_id": item["id"], "status": status,
                             "explanation": "源码已核查必要读取点，未指定的仓库外使用不构成本次必要前提",
                             "evidence_ids": output["evidence_ids"],
                         } for item in payload["review_limitations"] if item["text"] == GAP]
@@ -131,6 +137,40 @@ async def test_resolution_survives_batch_splitting_and_serialization(source_serv
     serializer = _checkpoint_serializer()
     for decision in report.decisions:
         assert serializer.loads_typed(serializer.dumps_typed(decision)) == decision
+
+
+@pytest.mark.parametrize("case", ["mixed", "missing", "independent_gap"])
+async def test_nonblocking_judgments_reconcile_per_candidate_without_erasing_gaps(source_service, case):
+    from app.review.evidence import digest
+
+    report = await run_review(source_service, assessment="resolved", multiple_candidates=True,
+                              mixed_assessment=True)
+    assert not report.limitation_results
+    record = review_limitations(report, source_service)[0]
+    assert record.status == "nonblocking"
+    assert {item.status for item in record.resolution_claims} == {"resolved", "boundary"}
+    assert {item.candidate_id for item in record.resolution_claims} == set(record.candidate_ids)
+    if case == "missing":
+        missing = report.decisions[0].candidate_id
+        report.decisions[0].limitation_resolutions = []
+        next(item for item in report.verification_results if item.id == missing).output["limitation_resolutions"] = []
+        assert review_limitations(report, source_service)[0].status == "pending"
+    elif case == "independent_gap":
+        source = report.verification_results[0]
+        assessment = {
+            "limitation_id": record.id, "status": "unresolved", "explanation": "独立复核发现具体必要前提",
+            "goal_ids": record.goal_ids, "evidence_ids": source.evidence_ids,
+            "missing_fact": "存储调用方校验", "dependent_conclusion": "存储契约是否被破坏",
+            "change_relevance": "返回值变化", "next_check": "读取存储调用方",
+        }
+        report.limitation_results = [source.model_copy(update={
+            "id": "scope-" + digest(record.id),
+            "output": {"assessments": [assessment], "findings": []}})]
+        assert review_limitations(report, source_service)[0].status == "unresolved"
+    else:
+        restored = ReviewReport.model_validate_json(report.model_dump_json())
+        outcome = derive_review_outcome(task_for(restored), evidence=source_service)
+        assert outcome.kind == "clean" and outcome.pending_limitation_count == 0
 
 
 async def test_investigator_receives_and_resolves_original_discovery_limitations(source_service):

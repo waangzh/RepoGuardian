@@ -14,6 +14,8 @@ defineEmits<{ export: [] }>();
 const mode = ref<'comment' | 'readable' | 'audit'>('comment');
 const display = ref<'preview' | 'markdown'>('preview');
 const showPublish = ref(false);
+const publishOpened = ref(false);
+function togglePublish() { publishOpened.value = true; showPublish.value = !showPublish.value; }
 const deliveryResult = ref<{ tone: 'success' | 'warn' | 'muted'; text: string } | null>(null);
 const capability = ref<PublicationCapability | null>(null);
 const capabilityError = ref(false);
@@ -56,15 +58,16 @@ onMounted(() => { void loadCapability(); });
     </div>
     <div class="rd-shell"><div class="rd-shell-top"><nav class="rd-tabs" aria-label="审查意见视图"><button v-for="item in ([['comment','审查意见'],['readable','详细报告'],['audit','技术记录']] as const)" :key="item[0]" :class="{ active: mode === item[0] }" :aria-current="mode === item[0] ? 'page' : undefined" @click="mode = item[0]">{{ item[1] }}</button></nav><small class="rd-shell-caption">固定快照记录</small></div>
       <main class="rd-main">
-        <p v-if="loading" role="status">正在读取审查意见…</p>
+        <p v-if="loading && !plan" role="status">正在读取审查意见…</p>
         <p v-else-if="!plan" class="muted">审查尚未形成可读取的交付计划。</p>
-        <template v-else-if="mode === 'comment'">
+        <template v-else>
+        <section v-show="mode === 'comment'">
           <div class="rd-toolbar">
             <div class="segmented" role="group" aria-label="正文显示模式"><button :class="{ active: display === 'preview' }" @click="display = 'preview'">预览</button><button :class="{ active: display === 'markdown' }" @click="display = 'markdown'">Markdown</button></div>
             <div class="rd-toolbar-actions">
               <span v-if="deliveryResult" class="rd-delivery-result" :data-tone="deliveryResult.tone" role="status">{{ deliveryResult.text }}</span>
               <button class="btn secondary" :disabled="checking || !commentMarkdown" @click="copyCheckedComment"><AppIcon name="copy" />{{ checking ? '正在核对 PR 版本…' : copied ? '已复制' : '复制完整 PR 评论' }}</button>
-              <button class="btn secondary" :aria-expanded="showPublish" @click="showPublish = !showPublish"><AppIcon name="send" />{{ showPublish ? '收起发布面板' : '发布到 GitHub' }}</button>
+              <button class="btn secondary" :aria-expanded="showPublish" @click="togglePublish"><AppIcon name="send" />{{ showPublish ? '收起发布面板' : '发布到 GitHub' }}</button>
             </div>
           </div>
           <p v-if="capability && !capability.enabled" class="rd-toolbar-note">服务端未启用直接发布，评论仍可复制后手动粘贴。</p>
@@ -76,13 +79,14 @@ onMounted(() => { void loadCapability(); });
             <div v-if="display === 'preview'" class="rd-pr-comment"><ReportMarkdown :content="commentBody" /></div>
             <pre v-else class="rd-comment-source">{{ commentBody }}</pre>
           </section>
-          <GitHubPublicationPanel v-if="showPublish && terminal(task.status)" :review-id="task.id" :plan="plan" :capability="capability" :capability-error="capabilityError" @result="deliveryResult = $event" @retry-capability="loadCapability" />
-        </template>
-        <template v-else-if="mode === 'readable'">
+          <GitHubPublicationPanel v-if="publishOpened && terminal(task.status)" v-show="showPublish" :review-id="task.id" :plan="plan" :capability="capability" :capability-error="capabilityError" @result="deliveryResult = $event" @retry-capability="loadCapability" />
+        </section>
+        <template v-if="mode === 'readable'">
           <div class="rd-toolbar"><span class="rd-toolbar-note">本轮审查的完整报告，包含变更理解、问题证据与限制。</span><div class="rd-toolbar-actions"><button class="btn secondary" @click="$emit('export')"><AppIcon name="download" />导出详细报告</button></div></div>
           <ReportMarkdown :content="plan.user_report_markdown" />
         </template>
-        <template v-else><p class="notice small">结构化图执行记录来自本任务，包含候选、核验及覆盖；不包含共享消息历史。</p><pre v-if="task.review_report" class="rg-json space-top">{{ JSON.stringify(task.review_report,null,2) }}</pre><p v-else class="muted space-top">尚无已保存的图执行记录。</p><details v-if="report" class="space-top"><summary class="link">完整归档报告</summary><ReportMarkdown :content="report" /></details></template>
+        <template v-else-if="mode === 'audit'"><p class="notice small">结构化图执行记录来自本任务，包含候选、核验及覆盖；不包含共享消息历史。</p><pre v-if="task.review_report" class="rg-json space-top">{{ JSON.stringify(task.review_report,null,2) }}</pre><p v-else class="muted space-top">尚无已保存的图执行记录。</p><details v-if="report" class="space-top"><summary class="link">完整归档报告</summary><ReportMarkdown :content="report" /></details></template>
+        </template>
       </main>
     </div>
   </div>

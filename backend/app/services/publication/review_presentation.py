@@ -3,8 +3,8 @@
 import re
 
 from app.models.publication import PresentationDelivery, ReviewPresentation
-from app.review.observations import observation_text
-from app.review.synthesis import synthesis_materials, validate_synthesis
+from app.review.observations import fallback_observations, observation_text
+from app.review.synthesis import synthesis_materials, validate_grounding, validate_synthesis
 from app.services.publication.review_prose import author_goal_text
 from app.services.publication.review_text_format import (
     _comment_risks, _finding_location_text, _ordered_findings, _sentence, STATIC_BOUNDARY,
@@ -140,8 +140,9 @@ def build_presentation(plan, *, report=None, observations=()):
     understanding = plan.digest.change_understanding
     purpose = (author_goal_text(understanding.author_goal) if understanding else "") or None
     summary, summary_source = _fallback_summary(plan)
-    if observations:
-        summary = "\n".join(observation_text(item) for item in observations[:6])
+    fallback = fallback_observations(report, observations)
+    if fallback:
+        summary = "\n".join(observation_text(item) for item in fallback[:6])
         summary_source = "observations"
     review_summary = _review_summary(plan)
     action_summary = ""
@@ -152,7 +153,8 @@ def build_presentation(plan, *, report=None, observations=()):
         try:
             if synthesis.material_version != version:
                 raise ValueError("synthesis_material_changed")
-            output, _ = validate_synthesis(synthesis.output, material)
+            output = validate_synthesis(synthesis.output, material)
+            validate_grounding(synthesis, output)
             summary = "\n\n".join(item.text for item in output.change_overview)
             review_summary = "\n\n".join(item.text for item in output.review_overview)
             action_summary = "\n\n".join(item.text for item in output.actions)
@@ -170,7 +172,8 @@ def build_presentation(plan, *, report=None, observations=()):
         change_summary=summary or "未保存足以概括主要变更的代码观察，请结合固定快照 Diff 人工核对。",
         # 问题概述只由确定性 finding 生成；编辑摘要不再改写问题结论。
         review_summary=review_summary, action_summary=action_summary,
-        test_changes=[observation_text(item) for item in observations if item.kind == "test_source"],
+        test_changes=([observation_text(item) for item in fallback if item.kind == "test_source"]
+                      if synthesis_status != "ready" else []),
         verdict=plan.digest.merge_decision, findings=findings,
         delivery=PresentationDelivery(confirmed=plan.outcome.confirmed_count, eligible=len(findings),
             selected=len(findings), inline_ready=len(plan.inline_drafts),

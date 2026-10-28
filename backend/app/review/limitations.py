@@ -4,7 +4,8 @@ import json
 
 from app.review.evidence import digest
 from app.review.models import (
-    LimitationResolution, LimitationReviewOutput, ReviewLimitation, VerificationOutput, VerificationResult,
+    CandidateLimitationResolution, LimitationResolution, LimitationReviewOutput,
+    ReviewLimitation, VerificationOutput, VerificationResult,
 )
 
 LIMITATION_CALL_LIMITS = {"quick": 3, "standard": 5, "deep": 7}
@@ -151,7 +152,18 @@ def review_limitations(report, service=None):
             assessments.setdefault(resolution.limitation_id, []).append((decision.candidate_id, resolution))
     for record in records:
         claims = assessments.get(record.id, [])
-        if claims and len({claim.status for _, claim in claims}) == 1:
+        record.resolution_claims = [CandidateLimitationResolution(
+            candidate_id=identity, **claim.model_dump()) for identity, claim in claims]
+        # Candidate-local judgments cannot erase an independent necessary gap.
+        if record.assessment is not None:
+            continue
+        covered = {identity for identity, _ in claims}
+        if not claims or not set(record.candidate_ids) <= covered:
+            continue
+        if len({claim.status for _, claim in claims}) == 1:
             record.resolved_by, record.resolution = claims[0]
             record.status = record.resolution.status
+        else:
+            # Both categories are explicitly nonblocking, for different reasons.
+            record.status = "nonblocking"
     return records

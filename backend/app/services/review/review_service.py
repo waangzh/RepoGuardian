@@ -18,9 +18,9 @@ from app.review.contracts import (
     ReviewConfiguration, ReviewPreviewResponse, ReviewProgress, ReviewTask,
     TERMINAL_STATUSES, utcnow,
 )
-from app.review.evidence import EvidenceService
+from app.review.evidence import EvidenceService, digest
 from app.review.graph import build_review_graph
-from app.review.models import ReviewReport, ReviewSnapshot
+from app.review.models import ReviewReport, ReviewSnapshot, ReviewSynthesis
 from app.review.planning import plan_review
 from app.review.recovery import retry_updates
 from app.review.budget import ReviewBudget
@@ -259,19 +259,52 @@ class ReviewService:
         lease = {"job_id": job.id, "owner": job.lease_owner, "attempt": job.attempts} if job else None
         remaining = task.configuration.limits.timeout_seconds - (utcnow() - task.created_at).total_seconds()
         repo = None
+        from app.services.review.review_outcome import snapshot_valid
+        facts_saved = bool(task.review_report and snapshot_valid(task))
+        context = None
         progress_lock = asyncio.Lock()
         selected_paths = (frozenset(task.configuration.options.scope.primary_files)
                           if task.configuration.options.scope.mode == "selected" else None)
-        async def active():
+        async def running():
             if self._repository:
                 await asyncio.to_thread(self._repository.assert_active, task_id, lease)
             elif self._tasks[task_id].status == "cancelled":
                 raise ReviewStopped("review_cancelled")
-            if (utcnow() - task.created_at).total_seconds() >= task.configuration.limits.timeout_seconds:
+
+        def time_left():
+            return task.configuration.limits.timeout_seconds - (utcnow() - task.created_at).total_seconds()
+
+        async def active():
+            await running()
+            if time_left() <= 0:
                 raise TimeoutError("review_deadline")
+
+        async def persist_report(report):
+            nonlocal facts_saved
+            await running()
+            task.review_report = report.model_copy(deep=True)
+            task.updated_at = utcnow()
+            if self._repository:
+                await asyncio.to_thread(self._repository.save_task, task.model_copy(deep=True), lease=lease)
+            facts_saved = True
+
+        async def finalize_report():
+            await running()
+            task.status = {"completed": "completed", "failed": "failed"}.get(
+                task.review_report.termination, "completed_with_warnings")
+            task.phase = "failed" if task.status == "failed" else "completed"
+            errors = {item.error for item in task.review_report.discovery_results if item.error}
+            task.error = ((next(iter(errors)) if len(errors) == 1 else "review_agents_failed")
+                          if task.status == "failed" else None)
+            task.report_markdown = await asyncio.to_thread(self._report_service.generate, task)
+            await running()
+
         async def progress(event):
             async with progress_lock:
-                await active()
+                if event["phase"] == "synthesis":
+                    await running()
+                else:
+                    await active()
                 name = event.get("agent_id") or event["phase"]
                 status = event.get("status", "completed")
                 item = ReviewProgress(name=name, status=status, message=event["phase"], data=event,
@@ -402,6 +435,9 @@ class ReviewService:
                 depth=task.configuration.options.depth, focus=tuple(task.configuration.options.focus),
                 progress=progress, check_active=active,
                 synthesis_facts=synthesis_facts,
+                save_report=persist_report, check_running=running, remaining_seconds=time_left,
+                previous_synthesis=(task.review_report.synthesis.model_copy(deep=True)
+                    if task.review_report and task.review_report.synthesis else None),
                 selected_paths=selected_paths,
                 confirmed_plan=plan_review(
                     [item.model_dump(mode="json") for item in task.changed_files],
@@ -432,24 +468,32 @@ class ReviewService:
             async with asyncio.timeout(max(0, remaining)):
                 result = await graph.ainvoke(None if state and state.values else {"review_id": task_id},
                                             config, context=context, durability="sync")
-            await active()
+            await running()
             task.review_report = ReviewReport.model_validate(result["report"])
-            task.status = {"completed": "completed", "failed": "failed"}.get(
-                task.review_report.termination, "completed_with_warnings")
-            task.phase = "failed" if task.status == "failed" else "completed"
-            errors = {item.error for item in task.review_report.discovery_results if item.error}
-            task.error = ((next(iter(errors)) if len(errors) == 1 else "review_agents_failed")
-                          if task.status == "failed" else None)
-            task.report_markdown = await asyncio.to_thread(self._report_service.generate, task)
-            await active()
+            await finalize_report()
         except (ReviewLeaseLost, ReviewStopped):
             raise
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            task.status, task.phase = "failed", "failed"
-            task.error = "review_deadline" if isinstance(exc, TimeoutError) else type(exc).__name__
-            logger.error("审查任务失败 review_id=%s code=%s", task.id, task.error)
+            if isinstance(exc, TimeoutError) and facts_saved:
+                await running()
+                saved = task.review_report.synthesis
+                if saved is None:
+                    saved = ReviewSynthesis(material_version=digest(task.review_report.snapshot.model_dump_json()))
+                if saved.status != "ready":
+                    saved.status, saved.error = "fallback", "synthesis_deadline"
+                    for attempt in saved.attempts:
+                        if attempt.status == "started":
+                            attempt.status, attempt.error = "unknown", "synthesis_deadline"
+                task.review_report.synthesis = saved
+                if context is not None:
+                    task.review_report.budget = await context.budget.summary()
+                await finalize_report()
+            else:
+                task.status, task.phase = "failed", "failed"
+                task.error = "review_deadline" if isinstance(exc, TimeoutError) else type(exc).__name__
+                logger.error("审查任务失败 review_id=%s code=%s", task.id, task.error)
         finally:
             cancel.set()
             self._repo_paths.pop(task_id, None)

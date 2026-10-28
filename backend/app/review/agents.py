@@ -120,7 +120,18 @@ class ReviewGuardMiddleware(AgentMiddleware):
                                          or calls >= self.limits.tool_calls - 1 or round_closing)
         if finalizing:
             tools = []  # ToolStrategy adds the final schema tool; no further exploration.
-        request = request.override(tools=tools)
+        def final_request(current):
+            schema = getattr(current.response_format, "schema", None)
+            name = getattr(schema, "__name__", "本轮最终结构化输出工具")
+            instruction = HumanMessage(
+                content=f"当前已进入仅提交阶段。只调用 {name} 提交一次结构化结果，"
+                    "禁止继续调用读取、搜索或其他探索工具。复用本分支已有证据；"
+                    "不能证明的事项如实保留未决，不得伪造证据或宣称完成。",
+                id="review-final-submission")
+            return current.override(tools=[], messages=[
+                message for message in current.messages if message.id != instruction.id] + [instruction])
+
+        request = final_request(request) if finalizing else request.override(tools=tools)
         if finalizing and final_requests >= 2:
             raise FinalizationRequired("finalization_attempts_exhausted")
 
@@ -148,7 +159,7 @@ class ReviewGuardMiddleware(AgentMiddleware):
             if finalizing:
                 raise
             finalizing, tools = True, []
-            request = request.override(tools=tools)
+            request = final_request(request)
             ticket = await context.budget.reserve(context.budget_agent_id, encoded(tools),
                 stage="finalize", hold=max(0, 1 - final_requests), **scope)
         try:
@@ -181,6 +192,14 @@ class ReviewGuardMiddleware(AgentMiddleware):
         if name not in FINAL_SCHEMAS and ((self.limits.model_calls >= 3 and self.limits.model_calls - calls < 2)
                 or tools > self.limits.tool_calls - 1 or round_closing
                 or finalizing):
+            if finalizing and self.limits.model_calls - calls >= 1:
+                _, requests = await self.final_state(request.state, context)
+                if requests < 2:
+                    return ToolMessage(
+                        content="Error: review_final_submission_required\n"
+                            "该探索工具未执行。请只调用本轮要求的最终结构化输出工具，"
+                            "使用已经取得的证据；缺失前提保持未决。本次纠错不增加原预算。",
+                        name=name, tool_call_id=request.tool_call["id"], status="error")
             raise FinalizationRequired("finalization_required")
         return await handler(request)
 

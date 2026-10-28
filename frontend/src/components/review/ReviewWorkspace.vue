@@ -19,8 +19,10 @@ import ReviewReportPage from '../pages/ReviewReportPage.vue';
 const props = defineProps<{ task: ReviewTask; section?: ReviewSection; busy?: boolean }>();
 const emit = defineEmits<{ navigate: [value: ReviewSection]; cancel: []; resume: []; rereview: [] }>();
 const localSection = ref<ReviewSection>('overview');
+const reportOpened = ref(false);
 const resumeAction = computed(() => resumeLabel(props.task));
 const tab = computed({ get: () => props.section ?? localSection.value, set: value => { localSection.value = value; emit('navigate',value); } });
+watch(tab, value => { if (value === 'report') reportOpened.value = true; }, { immediate: true });
 const plan = ref<PublicationPlan | null>(null), findings = ref<FindingView[]>([]), report = ref('');
 const error = ref(''), loading = ref(false), findingFilter = ref('all'), focusKey = ref(''), focusedFile = ref('');
 let controller: AbortController | null = null;
@@ -82,6 +84,6 @@ onBeforeUnmount(() => { generation++; controller?.abort(); });
   <ReviewFilesPage v-else-if="tab === 'files'" :task="task" :findings="findings" :initial-path="focusedFile" @finding="openFinding" />
   <ReviewActivityPage v-else-if="tab === 'activity'" :task="task" />
   <ReviewDiscussionsPage v-else-if="tab === 'discussions'" :task="task" @file="openFile" />
-  <ReviewReportPage v-else-if="tab === 'report'" :task="task" :plan="plan" :report="report" :loading="loading" @export="exportReport" />
+  <ReviewReportPage v-if="reportOpened" v-show="tab === 'report'" :task="task" :plan="plan" :report="report" :loading="loading" @export="exportReport" />
   <footer class="app-footer"><span>只读静态审查 · 未执行目标代码、测试或构建 · 结论仅适用于本次快照</span><code>{{ task.snapshot.head_sha.slice(0,12) }}</code></footer>
 </template>

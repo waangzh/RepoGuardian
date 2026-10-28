@@ -19,6 +19,10 @@ unit while reading its sources. Describe concrete behavior/interface/data-flow
 changes, optional before/after behavior, direct impact, and your own source
 evidence IDs. Use kind implementation or test_source. A test assertion is source
 text, never proof that tests passed. An author goal is only a claim. Do not fill
+observations with suspected defects, unverified missing coverage, or test-quality
+criticism. Submit a concrete concern as a candidate for independent verification.
+Keep change neutral; before/after/impact analysis is audit context, not a verdict.
+Do not fill
 unread changes from the PR description, repeat one observation per perspective,
 or count observations toward examined goals. Omit observations without evidence.
 
