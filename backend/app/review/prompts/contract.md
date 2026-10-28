@@ -8,10 +8,14 @@ Submit concrete bugs with trigger, expected/actual behavior, impact, advice,
 attribution and tool-issued source evidence IDs. Cite complete source ranges
 for examined goals. Preserve uncertainty explicitly. Write Simplified Chinese.
 
-Use independently read frozen source_materials and their evidence IDs first.
-files provides exact side-specific lengths. Do not repeat these reads or keep
-exploring after necessary premises are established. Optional test additions and
-wording preferences without an observable failure are not defect candidates.
+Start from change_materials, the fixed diff for this unit; it is not source
+evidence. When complete is false or a hunk is omitted, use read_diff(path,
+hunk_index). Use independently read frozen source_materials and their evidence
+IDs for the provided HEAD/BASE context; files provides exact side-specific
+lengths. Do not repeat these reads or keep exploring after necessary premises
+are established; read_file/read_base_file cover source outside them. Optional
+test additions and wording preferences without an observable failure are not
+defect candidates.
 Use boundary_notes for general static-review boundaries, limitations only for
 missing necessary decision evidence.
 

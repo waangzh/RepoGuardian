@@ -14,12 +14,14 @@ from app.review.context import AgentContext
 from app.review.materials import prepare_materials
 from app.review.models import AgentResult, ReviewLimits, VerificationOutput
 from app.review.nodes.agent_execution import AgentUsage, run_agent
+from app.review.planning import plan_review
 from app.review.tools import read_discussion
 from app.review.verification_batches import split_batch_result, verification_batches
 from app.services.review.review_repository import ReviewLeaseLost, ReviewStopped
 from tests.review.test_native_agents import ToolCallingModel
 from tests.review.test_native_graph import CHANGE, review_context
 from tests.review.test_native_lifecycle import preview_and_create
+from tests.review.test_retrieval import commit_sources
 
 pytest_plugins = ["tests.review.test_native_lifecycle"]
 
@@ -115,10 +117,15 @@ async def test_search_policy_and_paging_are_not_tool_failures(caplog):
     assert "工具拒绝" not in caplog.text and "搜索范围诊断" in caplog.text
 
 
-async def test_prepared_sources_have_frozen_side_ranges_and_real_evidence(source_service):
+async def test_prepared_sources_are_diff_first_with_frozen_evidence(source_service):
     packet, ids = await prepare_materials(AgentContext(evidence=source_service, changed_files=[CHANGE]),
         {"goals": [{"path": "safe.py", "side": side, "start_line": 1, "end_line": 1}
                    for side in ("head", "base")]})
+    diff = packet["change_materials"]
+    assert diff["complete"] and diff["included_hunks"] == 1 and not diff["omitted_hunks"]
+    assert "-     1 VALUE = 1" in diff["files"][0]["hunks"][0]["text"]
+    assert "+     1 VALUE = 2" in diff["files"][0]["hunks"][0]["text"]
+    assert diff["digest"] not in ids
     assert len(ids) == 2
     assert all(item["total_lines"] == 1 and item["max_read_lines"] == 240 for item in packet["files"])
     for item in packet["source_materials"]:
@@ -127,6 +134,82 @@ async def test_prepared_sources_have_frozen_side_ranges_and_real_evidence(source
     denied, ids = await prepare_materials(AgentContext(evidence=source_service, denied_paths=frozenset({"safe.py"})),
         {"goals": [{"path": "safe.py", "side": "head", "start_line": 1, "end_line": 1}]})
     assert not ids and not denied["source_materials"] and not denied["files"]
+    assert not denied["change_materials"]["files"]
+
+
+async def test_candidate_context_covers_head_anchor_and_base_comparison(source_service):
+    packet, ids = await prepare_materials(AgentContext(evidence=source_service, changed_files=[CHANGE]),
+        {"candidate": {"affected_path": "safe.py", "line": 1}})
+    assert {item["evidence"]["side"] for item in packet["source_materials"]} == {"head", "base"}
+    assert all(item["evidence"]["path"] == "safe.py" for item in packet["source_materials"])
+    assert len(ids) == 2
+
+
+@pytest.mark.parametrize("reverse", [False, True], ids=["rename-first", "added-first"])
+@pytest.mark.parametrize("modified", [False, True], ids=["pure-rename", "modified-rename"])
+async def test_materials_distinguish_renamed_file_from_reused_old_path(source_service, reverse, modified):
+    renamed_source = "VALUE = 2\n" if modified else "VALUE = 1\n"
+    commit_sources(source_service, {"renamed.py": renamed_source, "safe.py": "REPLACEMENT = 3\n"})
+    renamed = {"file_path": "renamed.py", "old_file_path": "safe.py", "change_type": "renamed",
+               "additions": int(modified), "deletions": int(modified),
+               "hunks": CHANGE["hunks"] if modified else []}
+    added = {"file_path": "safe.py", "change_type": "added", "additions": 1, "deletions": 0,
+             "hunks": [{"old_start": 0, "old_length": 0, "new_start": 1, "new_length": 1,
+                        "lines": [{"kind": "added", "new_line_no": 1, "content": "REPLACEMENT = 3"}]}]}
+    changes = [added, renamed] if reverse else [renamed, added]
+    context = AgentContext(evidence=source_service, changed_files=changes)
+    goals, assignments, _ = plan_review(changes, depth="standard")
+    for assignment in (item for item in assignments if item.reviewer == "behavior"):
+        packet, ids = await prepare_materials(context, {
+            "assignment": assignment.model_dump(),
+            "goals": [item.model_dump() for item in goals if item.id in assignment.goal_ids],
+        })
+        diff = packet["change_materials"]
+        assert [item["file_path"] for item in diff["files"]] == assignment.focus_paths
+        assert diff["complete"] and not diff["omitted_hunks"]
+        if assignment.focus_paths == ["safe.py"]:
+            assert diff["included_hunks"] == 1
+            assert "REPLACEMENT = 3" in diff["files"][0]["hunks"][0]["text"]
+            assert {item["evidence"]["side"] for item in packet["source_materials"]} == {"head"}
+            assert ids
+        else:
+            assert diff["included_hunks"] == int(modified)
+
+    base_only, _ = await prepare_materials(context, {
+        "goals": [{"path": "safe.py", "side": "base", "start_line": 1, "end_line": 1}],
+    })
+    assert [item["file_path"] for item in base_only["change_materials"]["files"]] == ["renamed.py"]
+    assert base_only["source_materials"][0]["content"] == "VALUE = 1\n"
+
+    for path in ("safe.py", "renamed.py"):
+        packet, ids = await prepare_materials(context, {"candidate": {"affected_path": path, "line": 1}})
+        assert [item["file_path"] for item in packet["change_materials"]["files"]] == [path]
+        sources = {(item["evidence"]["side"], item["evidence"]["path"]): item["content"]
+                   for item in packet["source_materials"]}
+        expected = ({("head", "safe.py"): "REPLACEMENT = 3\n"} if path == "safe.py" else {
+            ("head", "renamed.py"): renamed_source, ("base", "safe.py"): "VALUE = 1\n",
+        })
+        assert sources == expected
+        assert ids == {item["evidence"]["id"] for item in packet["source_materials"]}
+        for identity in ids:
+            source_service.resolve(identity)
+
+
+async def test_large_diff_records_omitted_hunks_without_fake_evidence(source_service):
+    change = {"file_path": "safe.py", "change_type": "modified", "additions": 2, "deletions": 0,
+              "hunks": [
+                  {"old_start": 1, "old_length": 0, "new_start": 1, "new_length": 1,
+                   "lines": [{"kind": "added", "new_line_no": 1, "content": "A" * 7_000}]},
+                  {"old_start": 1, "old_length": 0, "new_start": 2, "new_length": 1,
+                   "lines": [{"kind": "added", "new_line_no": 2, "content": "B" * 7_000}]}]}
+    packet, ids = await prepare_materials(AgentContext(evidence=source_service, changed_files=[change]),
+        {"candidate": {"affected_path": "safe.py", "line": 1}})
+    diff = packet["change_materials"]
+    assert not diff["complete"] and diff["included_hunks"] == 1
+    assert diff["omitted_hunks"] == [{"file_path": "safe.py", "hunk_index": 1,
+        "old_range": [1, 0], "new_range": [2, 2]}]
+    assert diff["files"][0]["omitted_hunk_indexes"] == [1]
+    assert diff["digest"] not in ids
 
 
 def candidate(identity, line=1, path="safe.py"):

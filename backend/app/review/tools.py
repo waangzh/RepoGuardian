@@ -58,6 +58,7 @@ async def read_diff(path: str, runtime: ToolRuntime[AgentContext], hunk_index: i
                     start: int = 0, cursor: str = "", limit: int = 60) -> dict:
     """List fixed diff hunks, or read hunk_index from zero-based start. Continue as needed.
 
+    change_materials may be truncated; use this for omitted hunks.
     Large lines carry line_index/content_offset/continued fragments. Diff is not source evidence.
     """
     return await asyncio.to_thread(diff_page, runtime.context, path, hunk_index, start, cursor, limit)
