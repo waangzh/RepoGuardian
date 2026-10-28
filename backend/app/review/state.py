@@ -36,6 +36,7 @@ class ReviewState(TypedDict, total=False):
     findings: list[dict]
     investigation_round: int
     report: dict
+    synthesis: dict
     status: str
     assignment: dict
     candidate: dict

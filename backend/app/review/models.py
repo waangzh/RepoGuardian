@@ -120,8 +120,25 @@ class ExaminedGoal(ReviewModel):
     evidence_ids: list[str] = Field(min_length=1, max_length=32)
 
 
+class ChangeObservationProposal(ReviewModel):
+    change: str = Field(min_length=1, max_length=600)
+    before: str | None = Field(default=None, max_length=400)
+    after: str | None = Field(default=None, max_length=400)
+    impact: str = Field(min_length=1, max_length=400)
+    kind: Literal["implementation", "test_source"]
+    evidence_ids: list[str] = Field(min_length=1, max_length=12)
+
+
+class ChangeObservation(ChangeObservationProposal):
+    id: str
+    unit_id: str
+    assignment_id: str
+    sources: list[EvidenceRef]
+
+
 class DiscoveryOutput(ReviewModel):
     findings: list[CandidateProposal] = Field(default_factory=list, max_length=30)
+    observations: list[ChangeObservationProposal] = Field(default_factory=list, max_length=6)
     examined: list[ExaminedGoal] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list, max_length=20,
         description="Proposed missing premises, not accepted blockers. Name the specific missing fact, "
@@ -182,6 +199,26 @@ class ReviewLimitation(ReviewModel):
     resolved_by: str | None = None
 
 
+class AuthorComment(ReviewModel):
+    trigger: str = Field(min_length=1, max_length=800)
+    cause: str = Field(min_length=1, max_length=1000)
+    impact: str = Field(min_length=1, max_length=800)
+    recommendation: str = Field(min_length=1, max_length=800)
+    body: str | None = Field(default=None,
+        description="Final Simplified Chinese prose for the author: one or two plain-text paragraphs, "
+        "with trigger, causal failure, actual impact and repair. No title, severity, links or evidence log.")
+
+    @field_validator("body", mode="before")
+    @classmethod
+    def valid_body(cls, value):
+        if (not isinstance(value, str) or not value.strip() or len(value) > 3000
+                or len(value.strip().split("\n\n")) > 2
+                or any(ord(char) < 32 and char not in "\n\t" for char in value)
+                or any(mark in value for mark in ("<", ">", "://", "```", "**", "\n#", "\n- "))):
+            return None
+        return value.strip()
+
+
 class VerificationOutput(ReviewModel):
     decision: Decision
     explanation: str = Field(min_length=1, max_length=4000)
@@ -189,6 +226,7 @@ class VerificationOutput(ReviewModel):
     counterevidence_ids: list[str] = Field(default_factory=list, max_length=32)
     attribution: Literal["introduced", "exposed", "pre_existing", "uncertain"]
     severity: Severity | None = None
+    author_comment: AuthorComment | None = None
     equivalent_candidate_ids: list[str] = Field(default_factory=list, max_length=8)
     equivalence_reason: str | None = Field(default=None, max_length=2000)
     limitations: list[str] = Field(default_factory=list, max_length=20,
@@ -201,6 +239,16 @@ class VerificationOutput(ReviewModel):
             "resolved means the specific missing premise was established; boundary means an explained "
             "general review boundary, not a necessary missing premise. Omit genuinely unresolved or unrelated gaps. "
             "Refuting a candidate does not automatically resolve any limitation.")
+
+    @field_validator("author_comment", mode="before")
+    @classmethod
+    def valid_author_comment(cls, value):
+        if value is None or isinstance(value, AuthorComment):
+            return value
+        try:
+            return AuthorComment.model_validate(value)
+        except (ValueError, TypeError):
+            return None
 
     @model_validator(mode="after")
     def limitations_require_uncertainty(self):
@@ -270,6 +318,33 @@ class ReviewLimits(ReviewModel):
     total_input_tokens: int = Field(default=500_000, ge=1000, le=10_000_000)
 
 
+class SynthesisParagraph(ReviewModel):
+    source_ids: list[str] = Field(min_length=1, max_length=8)
+    text: str = Field(min_length=1, max_length=3000,
+        description="Use complete verbatim sentences from the referenced facts. "
+        "Arrange and combine them to explain changes and priorities; do not invent facts.")
+
+
+class SynthesisOutput(ReviewModel):
+    change_overview: list[SynthesisParagraph] = Field(min_length=1, max_length=3)
+    review_overview: list[SynthesisParagraph] = Field(min_length=1, max_length=2)
+    actions: list[SynthesisParagraph] = Field(min_length=1, max_length=2)
+    disclosed_status_ids: list[str] = Field(default_factory=list, max_length=200)
+
+
+class ReviewSynthesis(ReviewModel):
+    status: Literal["ready", "fallback"] = "fallback"
+    material_version: str
+    error: str | None = None
+    omitted: dict[str, int] = Field(default_factory=dict)
+    output: SynthesisOutput | None = None
+    model_calls: int = Field(default=0, ge=0)
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cached_input_tokens: int | None = None
+    prose_fallbacks: int = Field(default=0, ge=0)
+
+
 class ReviewReport(ReviewModel):
     snapshot: ReviewSnapshot
     review_units: list[ReviewUnit] = Field(default_factory=list)
@@ -281,6 +356,9 @@ class ReviewReport(ReviewModel):
     candidates: list[CandidateFinding]
     decisions: list[VerificationResult]
     findings: list[VerifiedFinding]
+    observations: list[ChangeObservation] = Field(default_factory=list)
+    observation_errors: list[str] = Field(default_factory=list)
+    synthesis: ReviewSynthesis | None = None
     complete: bool
     termination: Literal["completed", "partial", "cancelled", "deadline", "failed"]
     coverage_limitations: list[str] = Field(default_factory=list)

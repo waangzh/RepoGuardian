@@ -72,6 +72,45 @@ function finding(id, review_status, overrides = {}) {
   };
 }
 
+test('概览优先展示保存的行为观察、综述与行动，元数据明确称为范围', async () => {
+  const current = task('completed');
+  const presentation = {
+    summary_source: 'model', synthesis_status: 'ready',
+    change_summary: '评论改为批次投递并保存恢复标识。',
+    review_summary: '问题集中在响应丢失后的恢复路径。',
+    action_summary: '优先确认远端回执再重试。',
+    synthesis: { omitted: { observations: 1 } },
+  };
+  const html = await render('pages/ReviewOverviewPage', {
+    task: current, plan: publicationPlan({ presentation }), loading: false,
+  });
+  assert.match(html, /评论改为批次投递并保存恢复标识/);
+  assert.match(html, /响应丢失后的恢复路径/);
+  assert.match(html, /优先确认远端回执再重试/);
+  assert.match(html, /总览材料存在省略/);
+  const fallback = await render('pages/ReviewOverviewPage', {
+    task: current, plan: publicationPlan({ presentation: { ...presentation, summary_source: 'metadata', synthesis_status: 'fallback' } }), loading: false,
+  });
+  assert.match(fallback, /变更范围/);
+  assert.match(fallback, /尚缺少有证据的行为观察/);
+  assert.doesNotMatch(fallback, /评论改为批次投递并保存恢复标识/);
+});
+
+test('默认阅读核验正文，技术理由留在可展开详情且文本经过转义', async () => {
+  const item = finding('verified', 'confirmed', {
+    author_body: '仅在响应丢失时会重复发布。<script>unsafe()</script>',
+    verification_reason: 'BASE 和 HEAD 已分别核对。',
+    impact: '不应默认显示的旧影响',
+  });
+  const html = await render('pages/ReviewFindingsPage', {
+    task: task('completed'), findings: [item], limitations: [], loading: false,
+  });
+  assert.match(html, /仅在响应丢失时会重复发布/);
+  assert.match(html, /&lt;script&gt;unsafe\(\)&lt;\/script&gt;/);
+  assert.match(html, /<details[^>]*>[\s\S]*独立核验理由[\s\S]*BASE 和 HEAD 已分别核对/);
+  assert.doesNotMatch(html, /不应默认显示的旧影响/);
+});
+
 test('修改配置后必须更新冻结方案，并展示当前派发视角和额度', async () => {
   const preview = {
     preview_id: 'e'.repeat(32), snapshot, effective_plan: options, limits, warnings: [],

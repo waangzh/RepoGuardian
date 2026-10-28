@@ -3,7 +3,7 @@ import type { ReviewTask, ReviewReport, AgentResult, FileContext } from '../type
 export const terminal = (status: string) => ['completed', 'completed_with_warnings', 'failed', 'cancelled'].includes(status);
 export const reviewerLabel = (role: string) => ({ reviewer: '主审', contract: '契约审查', specialist: '风险专家', verifier: '独立核验', investigator: '定向调查', limitation_reviewer: '限制必要性复核' }[role] || role);
 export const decisionLabel = (decision: string) => ({ confirmed: '已确认', refuted: '已排除', insufficient_evidence: '证据不足' }[decision] || '尚未核验');
-export const phaseLabel = (phase: string) => ({ queued:'等待执行', prepare:'准备固定快照', planning:'规划完成', reviewing:'独立审查中', verifying_issues:'核验候选与必要前提', reviewer:'主审', contract:'契约审查', specialist:'风险专家审查', collect:'聚合候选', verifier:'独立核验', investigator:'定向调查', limitation_reviewer:'限制必要性复核', arbitrate:'证据仲裁', report:'生成报告', completed:'审查结束', failed:'执行失败', cancelled:'已停止' }[phase] || phase);
+export const phaseLabel = (phase: string) => ({ queued:'等待执行', prepare:'准备固定快照', planning:'规划完成', reviewing:'独立审查中', verifying_issues:'核验候选与必要前提', reviewer:'主审', contract:'契约审查', specialist:'风险专家审查', collect:'聚合候选', verifier:'独立核验', investigator:'定向调查', limitation_reviewer:'限制必要性复核', arbitrate:'证据仲裁', report:'汇总审查事实', synthesis:'综合 PR 总览', completed:'审查结束', failed:'执行失败', cancelled:'已停止' }[phase] || phase);
 export const executionErrorLabel = (code: string | null) => ({
   ReviewBudgetExceeded: '达到整轮模型调用或累计输入预算，未完成范围保留为未知',
   BatchVerificationIncomplete: '批量核验裁决缺失、重复或超出范围',

@@ -5,13 +5,15 @@ from app.models.publication import (
     PublicationSnapshot, ReviewDigest, ReviewSummary, ReviewSummaryDigest, WithheldFinding,
 )
 from app.services.publication.publication_renderer import (
-    finding_body, render_summary, render_user_report, render_review_comment,
+    render_summary, render_user_report, render_review_comment,
 )
 from app.services.publication.review_merge_decision import merge_decision
 from app.services.publication.review_presentation import build_presentation
 from app.services.publication.review_publication import validated_findings
 from app.review.findings import finding_attribution, finding_severity
 from app.review.evidence import EvidenceArchive
+from app.review.observations import author_comment_text, validated_observations
+from app.services.publication.review_text_format import markdown_text
 from app.services.review.artifact_store import LocalArtifactStore
 from app.services.review.review_findings import finding_views
 from app.services.review.review_outcome import derive_review_outcome, snapshot_valid
@@ -88,6 +90,16 @@ class PublicationPlanner:
                     "failure_scenario": "\n".join(dict.fromkeys(
                         item.trigger + "；" + item.actual_behavior for item in members)),
                     "recommendation": candidate.recommendation}
+            comment = finding.verification.author_comment
+            if comment:
+                text.update(affected_behavior=comment.impact,
+                    failure_scenario=comment.trigger + "；" + comment.cause,
+                    recommendation=comment.recommendation)
+            body = author_comment_text(finding.verification)
+            member_decisions = {item.candidate_id: item for item in report.decisions}
+            related_bodies = [author_comment_text(member_decisions[identity])
+                              for identity in finding.related_candidate_ids]
+            body = "\n\n".join(dict.fromkeys([body, *related_bodies]))
             change = next(item for item in task.changed_files if item.file_path == candidate.affected_path)
             draft = PublicationFinding(finding_key=finding.id, candidate_id=finding.id,
                 attribution=finding_attribution(finding),
@@ -97,9 +109,10 @@ class PublicationPlanner:
                 title=candidate.title, category="correctness",
                 evidence_summary=finding.verification.explanation, evidence_ids=finding.evidence_ids,
                 affected_behavior=text["affected_behavior"], failure_scenario=text["failure_scenario"],
-                recommendation=candidate.recommendation,
-                body_markdown=finding_body(text, finding_severity(finding), category="correctness",
-                                           evidence_summary=finding.verification.explanation))
+                recommendation=text["recommendation"],
+                body_markdown=(f"**[{finding_severity(finding).title()}] "
+                    f"{markdown_text(candidate.title, 200)}**\n\n" +
+                    "\n\n".join(markdown_text(part, 3000) for part in body.split("\n\n"))))
             draft.body_markdown += "\n\n**变更归因：** " + {
                 "introduced": "由本次 PR 引入", "exposed": "由本次 PR 暴露或扩大影响",
                 "pre_existing": "既有问题，不计作本次 PR 新增", "uncertain": "尚未确定",
@@ -113,7 +126,8 @@ class PublicationPlanner:
             execution_complete=bool(report and report.termination == "completed"),
             coverage_limitations=report.coverage_limitations if report else [],
         )
-        plan.presentation = build_presentation(plan)
+        observations = validated_observations(report, evidence) if report and snapshot_valid(task) else []
+        plan.presentation = build_presentation(plan, report=report, observations=observations)
         if include_markdown:
             plan.summary_markdown = render_summary(plan)
             plan.user_report_markdown = render_user_report(task, plan)

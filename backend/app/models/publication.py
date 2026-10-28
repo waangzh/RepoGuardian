@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from app.models.review_plan import FindingView
-from app.review.models import ReviewLimitation
+from app.review.models import ChangeObservation, ReviewLimitation, ReviewSynthesis
 
 
 class ReviewOutcomeKind(StrEnum):
@@ -186,12 +186,15 @@ class ReviewPresentation(BaseModel):
     snapshot: PublicationSnapshot
     language: Literal["zh-CN"] = "zh-CN"
     synthesis_status: Literal["ready", "fallback", "unavailable"] = "fallback"
-    summary_source: Literal["metadata", "unavailable"] = "metadata"
+    summary_source: Literal["model", "observations", "metadata", "unavailable"] = "metadata"
     purpose_text: str | None = None
     purpose_source: Literal["author_claim", "code_inferred", "unknown"] = "unknown"
     change_summary: str
     test_changes: list[str] = Field(default_factory=list)
     review_summary: str = ""
+    action_summary: str = ""
+    observations: list[ChangeObservation] = Field(default_factory=list)
+    synthesis: ReviewSynthesis | None = None
     verdict: MergeDecision
     findings: list[PublicationFinding] = Field(default_factory=list)
     delivery: PresentationDelivery

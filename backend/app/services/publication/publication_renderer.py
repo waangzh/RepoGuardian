@@ -158,6 +158,8 @@ def _author_source_lines(plan):
 
 
 def _change_understanding(plan, *, full=False):
+    from app.services.publication.review_presentation import _change_overview
+
     understanding = plan.digest.change_understanding
     author_goal = _author_goal(plan) or "未记录明确的作者目标。"
     actual = ((understanding.implementation_changes or understanding.diff_summary
@@ -165,10 +167,28 @@ def _change_understanding(plan, *, full=False):
     alignment = ("尚未形成完整的行为核验结论，不能判断作者目标是否实现。"
                  if plan.outcome.review_completeness != "complete"
                  else "源码范围检查已完成；覆盖记录不等于对作者全部目标的实现证明。")
+    actual = _change_overview(plan.presentation) if plan.presentation else markdown_text(actual, 2000)
     lines = ["", "## PR 变更理解", "",
         "**PR 目标：** " + markdown_text(author_goal, 1200 if full else 400), "",
-        "**代码实际改变了什么：** " + markdown_text(actual, 2000 if full else 600), "",
+        "**变更概述：** " + actual, "",
         "**吻合与未确认：** " + markdown_text(alignment, 1600 if full else 500)]
+    if plan.presentation:
+        if plan.presentation.review_summary:
+            lines += ["", "**审查综述：** " + markdown_text(plan.presentation.review_summary, 6000)]
+        if plan.presentation.action_summary:
+            lines += ["", "**行动说明：** " + markdown_text(plan.presentation.action_summary, 6000)]
+        synthesis = plan.presentation.synthesis
+        if plan.presentation.synthesis_status != "ready":
+            lines += ["", "变更总览未生成；以上为已保存观察或变更范围。"]
+        if full and synthesis:
+            lines += ["", f"综合状态：{synthesis.status}；材料版本：`{synthesis.material_version}`；"
+                f"原因：{markdown_text(synthesis.error or '无')}；模型请求：{synthesis.model_calls}。",
+                "综合材料省略：" + markdown_text(str(synthesis.omitted))]
+        if full:
+            for observation in plan.presentation.observations:
+                lines += ["", f"- 观察 `{observation.id}`：{markdown_text(observation.change)}"]
+                lines += [f"  - {markdown_text(ref.path)}:{ref.start_line}–{ref.end_line}"
+                          f"（{ref.side.upper()}，证据 `{ref.id}`）" for ref in observation.sources]
     if full and plan.digest.actual_changes:
         lines += ["", "**变更文件（固定 Diff 事实）：**", "",
                   *[f"- {markdown_text(item, 1000)}" for item in plan.digest.actual_changes]]
@@ -186,6 +206,8 @@ def _human_lines(view):
 def _report_finding_lines(plan, finding, view):
     lines = ["", "---", "", f"### {finding_markdown_title(finding)}", "", finding_location(plan, finding), "",
              render_finding(finding)]
+    if finding.evidence_summary:
+        lines += ["", "**核验理由：** " + markdown_text(finding.evidence_summary, 4000)]
     lines += _human_lines(view) if view else []
     return lines
 

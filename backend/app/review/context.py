@@ -44,6 +44,7 @@ class ReviewContext:
     budget: Any = None
     check_active: Callable[[], Awaitable[None]] | None = None
     progress: Callable[[dict], Awaitable[None]] | None = None
+    synthesis_facts: Callable[[Any], Awaitable[tuple[str, dict]]] | None = None
     _agent_context: AgentContext | None = None
     _load_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 

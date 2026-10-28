@@ -14,6 +14,7 @@ from app.review.nodes.verification import (
 from app.review.nodes.reporting import report
 from app.review.nodes.limitation_review import plan_limitations, review_limitation, collect_limitations
 from app.review.state import ReviewState
+from app.review.synthesis import synthesize
 from app.review.verification_batches import verification_batches
 
 
@@ -87,6 +88,7 @@ def build_review_graph(checkpointer=None):
         ("investigate", investigate), ("finish_investigation", finish_investigation), ("report", report),
         ("plan_limitations", plan_limitations), ("review_limitation", review_limitation),
         ("collect_limitations", collect_limitations),
+        ("synthesize", synthesize),
     ):
         graph.add_node(name, node)
     graph.add_edge(START, "prepare")
@@ -104,5 +106,6 @@ def build_review_graph(checkpointer=None):
     graph.add_conditional_edges("collect_limitations",
         lambda state: "evidence_gate" if state["limitation_new_candidates"] else "report",
         ["evidence_gate", "report"])
-    graph.add_edge("report", END)
+    graph.add_edge("report", "synthesize")
+    graph.add_edge("synthesize", END)
     return graph.compile(checkpointer=checkpointer)

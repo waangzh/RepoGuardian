@@ -30,6 +30,7 @@ export interface FindingView {
   review_status: 'candidate' | 'confirmed' | 'unresolved' | 'dismissed' | 'unknown';
   title: string | null; message: string | null; impact: string | null;
   recommendation: string | null; category: string | null;
+  author_body: string | null; verification_reason: string | null;
   location: FindingLocation | null; verification: FindingVerification;
   severity: string | null; anchor: Record<string, unknown> | null; source_ids: string[];
   human_confirmation_reason: string | null;

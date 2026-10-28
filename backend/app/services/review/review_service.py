@@ -380,9 +380,28 @@ class ReviewService:
             graph = build_review_graph(saver)
             config = {**review_thread_config(task_id), "max_concurrency": task.configuration.limits.concurrency,
                       "recursion_limit": 40}
+            async def synthesis_facts(report):
+                from app.review.observations import validated_observations
+                from app.review.synthesis import synthesis_materials
+                from app.services.publication.publication_planner import PublicationPlanner
+
+                def prepare_facts():
+                    projected = task.model_copy(deep=True)
+                    projected.review_report = report
+                    projected.status = {"completed": "completed", "failed": "failed"}.get(
+                        report.termination, "completed_with_warnings")
+                    plan = PublicationPlanner(self._artifacts).build(projected, include_markdown=False)
+                    from app.review.evidence import EvidenceArchive
+                    archive = EvidenceArchive(snapshot=report.snapshot, artifacts=self._artifacts)
+                    observations = validated_observations(report, archive)
+                    return synthesis_materials(report, plan, observations)
+
+                return await asyncio.to_thread(prepare_facts)
+
             context = ReviewContext(load=load, model=model, limits=task.configuration.limits,
                 depth=task.configuration.options.depth, focus=tuple(task.configuration.options.focus),
                 progress=progress, check_active=active,
+                synthesis_facts=synthesis_facts,
                 selected_paths=selected_paths,
                 confirmed_plan=plan_review(
                     [item.model_dump(mode="json") for item in task.changed_files],

@@ -2,6 +2,7 @@
 
 from app.models.review_plan import FindingLocation, FindingVerification, FindingView
 from app.review.findings import finding_attribution, finding_severity
+from app.review.observations import author_comment_text
 from app.services.publication.review_publication import validated_findings
 
 
@@ -29,11 +30,19 @@ def finding_views(task, dispositions, artifacts=None):
             location = FindingLocation(path=candidate.affected_path, start_line=candidate.line,
                 end_line=candidate.line, side="left" if change.change_type == "deleted" else "right")
         items.append(FindingView(id=candidate.id, status=state, review_status=state,
+            author_body=("\n\n".join(dict.fromkeys(
+                author_comment_text(decisions[item.id]) for item in members))) if accepted else None,
+            verification_reason=accepted.verification.explanation if accepted else None,
             attribution=finding_attribution(accepted) if accepted else candidate.attribution,
             title=candidate.title, message="\n".join(dict.fromkeys(
                 item.trigger + "；" + item.actual_behavior for item in members)),
-            impact="\n".join(dict.fromkeys(item.impact for item in members)),
-            recommendation=candidate.recommendation, category="correctness",
+            impact=(accepted.verification.author_comment.impact
+                    if accepted and accepted.verification.author_comment else
+                    accepted.verification.explanation if accepted else
+                    "\n".join(dict.fromkeys(item.impact for item in members))),
+            recommendation=(accepted.verification.author_comment.recommendation
+                if accepted and accepted.verification.author_comment else None if accepted else candidate.recommendation),
+            category="correctness",
             location=location, severity=finding_severity(accepted) if accepted else candidate.severity,
             evidence_status=status,
             verification=FindingVerification(evidence_status=status),

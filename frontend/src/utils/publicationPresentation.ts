@@ -42,6 +42,7 @@ export function summarySourceLabel(source: ReviewPresentation["summary_source"])
   if (!source) return "使用已冻结的摘要";
   return {
     model: "使用已冻结的模型摘要",
+    observations: "使用带源码证据的变更观察",
     metadata: "使用确定性变更元数据",
     unavailable: "没有足够资料生成变更概述",
   }[source];

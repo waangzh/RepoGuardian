@@ -120,6 +120,8 @@ class FindingView(PlanModel):
     message: str | None = None
     impact: str | None = None
     recommendation: str | None = None
+    author_body: str | None = None
+    verification_reason: str | None = None
     category: str | None = None
     location: FindingLocation | None = None
     verification: FindingVerification = Field(default_factory=FindingVerification)

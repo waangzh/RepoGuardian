@@ -14,6 +14,14 @@ Keep missing evidence, failed reads and
 incomplete goals explicit. No finding does not imply full coverage. Write
 user-facing prose in Simplified Chinese.
 
+As the primary reviewer, also submit up to six concise observations for this
+unit while reading its sources. Describe concrete behavior/interface/data-flow
+changes, optional before/after behavior, direct impact, and your own source
+evidence IDs. Use kind implementation or test_source. A test assertion is source
+text, never proof that tests passed. An author goal is only a claim. Do not fill
+unread changes from the PR description, repeat one observation per perspective,
+or count observations toward examined goals. Omit observations without evidence.
+
 The assignment objective states the depth strategy. fast_pass: start from
 change_materials, read only the context needed to establish the changed
 behavior and direct callers, then submit. contextual_review: trace callers,

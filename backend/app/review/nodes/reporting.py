@@ -6,6 +6,7 @@ from app.review.context import ReviewContext
 from app.review.state import ReviewState
 from app.review.findings import covered_goals
 from app.review.models import ReviewReport
+from app.review.observations import collect_observations
 
 
 async def report(state: ReviewState, runtime: Runtime[ReviewContext]):
@@ -28,6 +29,8 @@ async def report(state: ReviewState, runtime: Runtime[ReviewContext]):
     termination = "completed" if execution_complete else "partial"
     if state["assignments"] and not any(item["status"] == "completed" for item in results):
         termination = "failed"
+    observations, observation_errors = await asyncio.to_thread(
+        collect_observations, results, state["assignments"], state.get("review_units", []), sources.evidence)
     output = ReviewReport(snapshot=state["snapshot"],
         review_units=state.get("review_units", []), assignments=state["assignments"],
         goals=goals, discovery_results=results, verification_results=verification + investigations,
@@ -35,6 +38,7 @@ async def report(state: ReviewState, runtime: Runtime[ReviewContext]):
         candidates=state["candidates"],
         decisions=state["decisions"], findings=state["findings"], complete=complete,
         termination=termination,
+        observations=observations, observation_errors=observation_errors,
         coverage_limitations=state.get("coverage_limitations", []),
         budget=await runtime.context.budget.summary() if runtime.context.budget else {})
     await runtime.context.emit(phase="report", status="completed", termination=termination)

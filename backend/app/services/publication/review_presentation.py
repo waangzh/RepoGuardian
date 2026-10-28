@@ -3,6 +3,8 @@
 import re
 
 from app.models.publication import PresentationDelivery, ReviewPresentation
+from app.review.observations import observation_text
+from app.review.synthesis import synthesis_materials, validate_synthesis
 from app.services.publication.review_prose import author_goal_text
 from app.services.publication.review_text_format import (
     _comment_risks, _finding_location_text, _ordered_findings, _sentence, STATIC_BOUNDARY,
@@ -51,7 +53,8 @@ def _trim_summary(text, limit=600):
 def _change_overview(presentation):
     """只从投影选取已有观察；缺少观察时不把作者目标改写成实现事实。"""
     summary = _observation_text(presentation.change_summary)
-    summary = _trim_summary(summary)
+    if presentation.summary_source == "metadata":
+        summary = _trim_summary(summary)
     seen = {part.strip().rstrip("。；; .") for part in _overview_sentences(summary)}
     tests = []
     for value in presentation.test_changes:
@@ -62,7 +65,7 @@ def _change_overview(presentation):
             seen.add(key)
     parts = []
     if summary:
-        parts.append(summary)
+        parts.append(("变更范围：" if presentation.summary_source == "metadata" else "") + summary)
     elif presentation.purpose_text:
         label = {"author_claim": "作者目标为", "code_inferred": "基于代码观察的目的归纳"}.get(
             presentation.purpose_source, "记录中的目标为")
@@ -82,7 +85,7 @@ def _change_overview(presentation):
         if selected:
             text = " ".join(selected)
             parts.append(f"测试源码变化（不表示测试已运行）：{text}")
-    return _editorial_markdown(presentation, " ".join(parts), 1200)
+    return _editorial_markdown(presentation, " ".join(parts), 12000)
 
 
 def _review_conclusion(plan):
@@ -133,21 +136,41 @@ def _fallback_summary(plan):
     return "未保存足以概括主要变更的代码观察，请结合固定快照 Diff 人工核对。", "unavailable"
 
 
-def build_presentation(plan):
+def build_presentation(plan, *, report=None, observations=()):
     understanding = plan.digest.change_understanding
     purpose = (author_goal_text(understanding.author_goal) if understanding else "") or None
     summary, summary_source = _fallback_summary(plan)
+    if observations:
+        summary = "\n".join(observation_text(item) for item in observations[:6])
+        summary_source = "observations"
+    review_summary = _review_summary(plan)
+    action_summary = ""
+    synthesis = report.synthesis.model_copy(deep=True) if report and report.synthesis else None
+    synthesis_status = "fallback"
+    if synthesis and synthesis.status == "ready":
+        version, material = synthesis_materials(report, plan, observations)
+        try:
+            if synthesis.material_version != version:
+                raise ValueError("synthesis_material_changed")
+            output, _ = validate_synthesis(synthesis.output, material)
+            summary = "\n\n".join(item.text for item in output.change_overview)
+            review_summary = "\n\n".join(item.text for item in output.review_overview)
+            action_summary = "\n\n".join(item.text for item in output.actions)
+            summary_source, synthesis_status = "model", "ready"
+        except ValueError:
+            synthesis.status, synthesis.error = "fallback", "synthesis_material_changed"
     findings = _ordered_findings(plan)
     limitations = list(dict.fromkeys(_comment_risks(plan)))
     return ReviewPresentation(
         review_id=plan.review_id, snapshot=plan.snapshot,
-        synthesis_status="fallback",
+        synthesis_status=synthesis_status, synthesis=synthesis, observations=list(observations),
         summary_source=summary_source,
         purpose_text=purpose,
         purpose_source="author_claim" if purpose else "unknown",
         change_summary=summary or "未保存足以概括主要变更的代码观察，请结合固定快照 Diff 人工核对。",
         # 问题概述只由确定性 finding 生成；编辑摘要不再改写问题结论。
-        review_summary=_review_summary(plan),
+        review_summary=review_summary, action_summary=action_summary,
+        test_changes=[observation_text(item) for item in observations if item.kind == "test_source"],
         verdict=plan.digest.merge_decision, findings=findings,
         delivery=PresentationDelivery(confirmed=plan.outcome.confirmed_count, eligible=len(findings),
             selected=len(findings), inline_ready=len(plan.inline_drafts),
@@ -196,11 +219,17 @@ def render_presentation(plan, *, copy=False, detail="compact", exclude_resolved=
         verdict += (f"；本轮已确认 {delivery.confirmed} 项，本次{'包含' if copy else '选择'} {count} 项"
                     f"；未选择的问题仍属于审查结论，不能视为已修复或已投递")
     lines += ["### 审查结果", "", verdict + "。", ""]
+    if presentation.review_summary:
+        lines += [_editorial_markdown(presentation, presentation.review_summary, 6000), ""]
+    if presentation.action_summary:
+        lines += ["处理重点：" + _editorial_markdown(presentation, presentation.action_summary, 6000), ""]
+    if presentation.synthesis_status != "ready":
+        lines += ["变更总览未生成，以上为已保存观察或变更范围；具体问题和检查限制见下方。", ""]
+    if presentation.synthesis and any(presentation.synthesis.omitted.values()):
+        lines += ["总览材料存在省略，完整问题与证据以下方记录为准。", ""]
     if detail == "full":
         lines += [f"本轮已确认 {delivery.confirmed} 项；具备发布资格 {delivery.eligible} 项；"
                   f"本次包含 {count} 项；未包含 {delivery.eligible - count} 项。", ""]
-        if presentation.review_summary and findings:
-            lines += [f"问题概述：{_editorial_markdown(presentation, presentation.review_summary, 600)}", ""]
     for finding in findings:
         if copy or finding.placement == "summary":
             lines += [finding.body_markdown, "", finding_location(plan, finding), ""]
