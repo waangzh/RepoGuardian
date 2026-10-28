@@ -91,20 +91,22 @@ class ReviewGuardMiddleware(AgentMiddleware):
             }, ensure_ascii=False).encode("utf-8"))
 
         ticket = None
+        scope = ({"discovery_agent_ids": context.discovery_agent_ids}
+                 if context.discovery_agent_ids else {})
         try:
             # An exploring request must leave room for this branch's final submission
             # and one schema correction, or it cannot conclude at all.
             if context.budget is not None:
                 ticket = await context.budget.reserve(context.budget_agent_id, encoded(tools),
                     stage="finalize" if finalizing else "explore",
-                    hold=max(0, 1 - final_requests) if finalizing else 2)
+                    hold=max(0, 1 - final_requests) if finalizing else 2, **scope)
         except ReviewBudgetExceeded:
             if finalizing:
                 raise
             finalizing, tools = True, []
             request = request.override(tools=tools)
             ticket = await context.budget.reserve(context.budget_agent_id, encoded(tools),
-                stage="finalize", hold=max(0, 1 - final_requests))
+                stage="finalize", hold=max(0, 1 - final_requests), **scope)
         try:
             response = await handler(request)
         except asyncio.CancelledError:
@@ -152,7 +154,7 @@ def agent_recursion_limit(limits: ReviewLimits):
 
 
 def build_agent(model, reviewer: str, limits: ReviewLimits, *, batch=False):
-    if reviewer not in {"behavior", "contract", "specialist", "verifier", "investigator"}:
+    if reviewer not in {"reviewer", "contract", "specialist", "verifier", "investigator"}:
         raise ValueError("unknown_reviewer")
     prompt = (Path(__file__).parent / "prompts" / f"{reviewer}.md").read_text(encoding="utf-8")
     schema = (BatchVerificationOutput if batch else VerificationOutput

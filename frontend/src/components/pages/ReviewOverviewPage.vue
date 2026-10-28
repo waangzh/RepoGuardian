@@ -14,7 +14,7 @@ const tone = computed(() => props.task.status === 'failed' ? 'danger' : props.ta
 const headline = computed(() => props.task.status === 'failed' ? '审查中断，尚无完整结论'
   : props.task.status === 'cancelled' ? '审查已停止，保留已有结果'
   : props.plan?.digest.merge_decision?.label || (terminal(props.task.status) ? props.loading ? '正在读取审查结论' : '审查结论暂不可用' : '不同视角正在独立检查本次变更'));
-const limits = computed(() => [...new Set([...(props.task.warnings ?? []), ...(props.plan?.digest.merge_decision?.limits ?? [])])]);
+const limits = computed(() => [...new Set([...(props.task.warnings ?? []), ...(report.value?.coverage_limitations ?? []), ...(props.plan?.digest.merge_decision?.limits ?? [])])]);
 const running = computed(() => terminal(props.task.status) ? [] : props.task.steps.filter(step => step.status === 'running'));
 </script>
 <template>

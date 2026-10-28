@@ -30,6 +30,7 @@ class OutcomeReason(StrEnum):
     BUDGET_EXHAUSTED = "budget_exhausted"
     DEADLINE_EXCEEDED = "deadline_exceeded"
     SCOPE_INCOMPLETE = "scope_incomplete"
+    REVIEW_PLAN_LIMITED = "review_plan_limited"
     SCOPE_EMPTY = "scope_empty"
     VERIFICATION_UNRESOLVED = "verification_unresolved"
     FINDING_STATUS_UNKNOWN = "finding_status_unknown"

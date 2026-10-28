@@ -96,13 +96,15 @@ async def test_native_graph_discovery_union_independent_verification_and_coverag
         "results": [item.model_dump() for item in report.discovery_results],
         "observed": model.observed}, ensure_ascii=False)
     assert report.termination == "completed"
-    assert len(report.assignments) == 2
+    assert len(report.review_units) == 1 and len(report.assignments) == 1
+    assert report.assignments[0].reviewer == "reviewer"
+    assert report.assignments[0].unit_id == report.review_units[0].id
     assert len(report.goals) == 2  # Two sides, independent of reviewer count.
     assert len(report.candidates) == len(report.findings) == 1
-    assert len(report.candidates[0].assignment_ids) == 2
+    assert len(report.candidates[0].assignment_ids) == 1
     assert report.findings[0].inline_line == 1
-    assert len(model.observed) == 3
-    assert all("assignment" in item and "candidate" not in item for item in model.observed[:2])
+    assert len(model.observed) == 2
+    assert "assignment" in model.observed[0] and "candidate" not in model.observed[0]
     assert "candidate" in model.observed[-1] and "assignment" not in model.observed[-1]
     assert "messages" not in result
 
@@ -116,6 +118,44 @@ async def test_invalid_verification_does_not_become_confirmed_or_clean(source_se
     assert report.complete  # Code coverage is independent of verification.
     assert report.termination == "completed"
     assert report.decisions[0].decision == "insufficient_evidence"
+
+
+@pytest.mark.parametrize("depth,model_calls", [("quick", 6), ("standard", 12), ("deep", 20)])
+async def test_discovery_cannot_spend_the_verification_reserve(source_service, depth, model_calls):
+    from app.review.configuration import discovery_limits
+
+    class InvestigatingModel(ReviewModel):
+        visible: list[str] = []
+
+        def bind_tools(self, tools, **kwargs):
+            self.visible = [tool.name if hasattr(tool, "name") else tool["function"]["name"]
+                            for tool in tools]
+            return self
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            payload = json.loads(next(message.content for message in messages if message.type == "human"))
+            if "assignment" in payload and "read_file" in self.visible:
+                return ChatResult(generations=[ChatGeneration(message=AIMessage(content="",
+                    tool_calls=[{"name": name, "args": {"path": "safe.py", "start": 1, "end": 1},
+                                 "id": f"{name}-{len(messages)}"}
+                                for name in ("read_file", "read_base_file")],
+                    usage_metadata={"input_tokens": 20, "output_tokens": 10, "total_tokens": 30}))])
+            result = super()._generate(messages, stop, run_manager, **kwargs)
+            for call in result.generations[0].message.tool_calls:
+                if call["name"] == "DiscoveryOutput":
+                    call["args"]["findings"][0]["severity"] = "high"
+            return result
+
+    context = review_context(source_service, InvestigatingModel(), depth=depth)
+    context.limits = ReviewLimits(model_calls=model_calls, total_model_calls=8)
+    result = await build_review_graph().ainvoke({"review_id": "review"}, context=context)
+    report = ReviewReport.model_validate(result["report"])
+    assert report.complete and report.termination == "completed"
+    assert not report.coverage_limitations
+    assert report.discovery_results[0].model_calls <= discovery_limits(context.limits, depth).total_model_calls
+    assert all(item.status == "completed" for item in report.verification_results)
+    assert report.decisions[0].decision == "confirmed"
+    assert report.budget["model_calls"] <= 8
 
 
 async def test_completed_send_branches_are_recovered_without_replaying_discovery(source_service):
@@ -133,9 +173,9 @@ async def test_completed_send_branches_are_recovered_without_replaying_discovery
     with pytest.raises(RuntimeError, match="injected"):
         await graph.ainvoke({"review_id": "review"}, config,
                             context=review_context(source_service, model, progress=progress))
-    assert len(model.observed) == 2
+    assert len(model.observed) == 1
     recovered = await graph.ainvoke(None, config, context=review_context(source_service, model))
-    assert len(model.observed) == 3  # Only the verifier started on resume.
+    assert len(model.observed) == 2  # Only the verifier started on resume.
     assert len(recovered["report"]["findings"]) == 1
     assert not (await graph.aget_state(config)).next
 
@@ -165,7 +205,7 @@ def test_candidate_union_does_not_merge_different_triggers():
         "impact": "丢失", "recommendation": "检查输入", "severity": "high", "affected_path": "safe.py",
         "line": 1, "evidence_ids": ["source"], "attribution": "introduced",
     }
-    results = [{"id": "behavior", "status": "completed", "output": {"findings": [proposal]}},
+    results = [{"id": "reviewer", "status": "completed", "output": {"findings": [proposal]}},
                {"id": "contract", "status": "completed",
                 "output": {"findings": [{**proposal, "trigger": "输入 B"}]}}]
     assert len(collect_candidates(results)) == 2
@@ -175,7 +215,7 @@ async def test_verifier_cannot_confirm_head_bug_using_only_base(source_service):
     base = await source_service.read("safe.py", 1, 1, "base")
     identity = base["evidence"]["id"]
     candidate = CandidateFinding(
-        id="candidate", assignment_ids=["behavior"], title="问题", trigger="输入",
+        id="candidate", assignment_ids=["reviewer"], title="问题", trigger="输入",
         expected_behavior="正常", actual_behavior="失败", impact="丢失", recommendation="修复",
         severity="high", affected_path="safe.py", line=1, evidence_ids=[identity],
         attribution="introduced")
@@ -193,7 +233,7 @@ async def test_verifier_corrects_discovery_attribution_with_evidence(source_serv
     head = await source_service.read("safe.py", 1, 1)
     base = await source_service.read("safe.py", 1, 1, "base")
     identities = [head["evidence"]["id"], base["evidence"]["id"]]
-    candidate = CandidateFinding(id="candidate", assignment_ids=["behavior"], title="问题",
+    candidate = CandidateFinding(id="candidate", assignment_ids=["reviewer"], title="问题",
         trigger="输入", expected_behavior="正常", actual_behavior="失败", impact="丢失",
         recommendation="修复", severity="high", affected_path="safe.py", line=1,
         evidence_ids=identities, attribution="introduced")
@@ -245,12 +285,12 @@ async def test_sqlite_reopen_restores_completed_native_branches(source_service, 
             await build_review_graph(saver).ainvoke(
                 {"review_id": "review"}, config,
                 context=review_context(source_service, model, progress=crash))
-    assert len(model.observed) == 2
+    assert len(model.observed) == 1
     async with aiosqlite.connect(database) as connection:
         saver = AsyncSqliteSaver(connection, serde=_checkpoint_serializer())
         result = await build_review_graph(saver).ainvoke(
             None, config, context=review_context(source_service, model))
-    assert len(model.observed) == 3
+    assert len(model.observed) == 2
     assert result["report"]["complete"]
     assert len(result["report"]["findings"]) == 1
 
@@ -295,6 +335,17 @@ def test_investigation_routes_only_once_for_high_impact_uncertainty():
              "eligible_candidates": [{"id": "a"}], "candidates": [{"id": "a", "severity": "high"}]}
     assert len(route_investigation(state)) == 1
     assert route_investigation({**state, "investigation_round": 1}) == "report"
+
+
+def test_investigation_depth_follows_the_review_strategy():
+    from app.review.graph import route_investigation
+    state = {"review_id": "review", "decisions": [{"candidate_id": "a", "decision": "insufficient_evidence"}],
+             "eligible_candidates": [{"id": "a"}], "candidates": [{"id": "a", "severity": "medium"}]}
+    assert route_investigation({**state, "review_depth": "quick"}) == "report"
+    assert route_investigation({**state, "review_depth": "standard"}) == "report"
+    assert len(route_investigation({**state, "review_depth": "deep"})) == 1
+    high = {**state, "candidates": [{"id": "a", "severity": "high"}]}
+    assert len(route_investigation({**high, "review_depth": "standard"})) == 1
 
 
 def test_native_structured_outputs_survive_safe_checkpoint_serialization():
@@ -351,7 +402,7 @@ async def test_resolved_investigation_is_not_reported_as_incomplete(source_servi
     model = InvestigatedReviewModel()
     state = await build_review_graph().ainvoke({"review_id": "review"},
         context=review_context(source_service, model))
-    assert len(model.observed) == 4  # 两个发现、一次初始核验、一次定向调查
+    assert len(model.observed) == 3  # 一次主审发现、一次初始核验、一次定向调查
     saved_report = ReviewReport.model_validate(state["report"])
     assert len(saved_report.verification_results) == 2  # 历史执行记录完整保留
     assert any(item.investigation_limitations for item in saved_report.verification_results)

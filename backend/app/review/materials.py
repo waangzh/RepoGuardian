@@ -6,8 +6,7 @@ from app.review.evidence import SourceReadError, digest, source_lines
 from app.review.tool_scope import ReviewPathPolicyError
 
 DIFF_CHARS = 12_000
-CONTEXT_CHARS = 4_000
-CONTEXT_PACKETS = 6
+CONTEXT_LIMITS = {"quick": (0, 0), "standard": (6, 4_000), "deep": (10, 8_000)}
 CONTEXT_BEFORE = 25
 CONTEXT_AFTER = 35
 CONTEXT_LINES = 160
@@ -131,11 +130,19 @@ def _expand(context, side, path, ranges, length):
     return merged
 
 
-async def prepare_materials(context, payload):
+async def prepare_materials(context, payload, depth="standard"):
     changes = _unit_changes(context, payload)
     change_materials = _change_materials(changes)
+    packets_limit, chars_limit = CONTEXT_LIMITS.get(depth, CONTEXT_LIMITS["standard"])
+    if not packets_limit:
+        # Quick mode is diff-first: context is fetched on demand through tools.
+        return {"change_materials": change_materials, "files": [], "source_materials": [],
+                "context_omitted": [],
+                "material_boundary": "change_materials is the fixed diff, not source evidence; "
+                    "this quick pass preloads no source context. Read frozen source only where the "
+                    "changed behavior or a direct caller requires it."}, set()
     metadata, packets, issued, omitted = [], [], set(), []
-    remaining, requested = CONTEXT_CHARS, set()
+    remaining, requested = chars_limit, set()
     for (side, path), ranges in _context_requests(context, payload).items():
         if context.check_active:
             await context.check_active()
@@ -162,7 +169,7 @@ async def prepare_materials(context, payload):
                 content = "".join(lines[first - 1:last])
                 if not content:
                     continue
-                if len(packets) >= CONTEXT_PACKETS or len(content) > remaining:
+                if len(packets) >= packets_limit or len(content) > remaining:
                     omitted.append({"path": path, "side": side, "start_line": first,
                                     "end_line": last, "reason": "material_budget"})
                     continue

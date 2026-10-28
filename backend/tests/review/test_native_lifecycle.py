@@ -116,7 +116,7 @@ async def test_persistent_pipeline_confirmation_native_graph_report_and_revalida
     monkeypatch.setattr(review_service, "build_review_graph", synchronous_graph)
     service, repository, model, _, _ = pipeline
     preview, request, task = await preview_and_create(service)
-    assert len(preview.assignments) == 2
+    assert len(preview.review_units) == 1 and len(preview.assignments) == 1
     replay = await service.create_confirmed_task(request)
     assert replay.id == task.id
     assert await service._worker.run_once()
@@ -125,7 +125,7 @@ async def test_persistent_pipeline_confirmation_native_graph_report_and_revalida
     assert saved.review_report.complete
     assert len(saved.review_report.findings) == 1
     assert saved.report_markdown
-    assert len(model.observed) == 3
+    assert len(model.observed) == 2
     assert durability == ["sync"]
     plan = PublicationPlanner(repository._artifacts).build(saved)
     assert plan.content_eligible
@@ -133,7 +133,41 @@ async def test_persistent_pipeline_confirmation_native_graph_report_and_revalida
     assert len(plan.inline_drafts) == 1
     assert plan.snapshot.head_sha == saved.snapshot.head_sha
     assert not await service._worker.run_once()
-    assert len(model.observed) == 3
+    assert len(model.observed) == 2
+
+
+async def test_planning_limitations_survive_summary_and_report_without_changing_goal_coverage(pipeline):
+    from app.review.models import ReviewLimits
+    from app.review.planning import plan_review
+    from app.services.publication.publication_planner import summary_projection
+    from tests.review.test_native_graph import CHANGE
+
+    service, repository, _, _, _ = pipeline
+    _, _, task = await preview_and_create(service)
+    assert await service._worker.run_once()
+    saved = repository.get_task(task.id)
+    limited = plan_review([{**CHANGE, "file_path": "auth.py"}],
+                          depth="standard", limits=ReviewLimits(total_model_calls=4))
+    assert [item.reviewer for item in limited.assignments] == ["reviewer"]
+    assert limited.limitations
+    saved.review_report.coverage_limitations = limited.limitations
+    saved.review_report.findings = []
+    saved.review_report.candidates = []
+    saved.review_report.decisions = []
+    repository.save_task(saved)
+
+    reopened = repository.get_task(task.id)
+    plan = PublicationPlanner(repository._artifacts).build(reopened)
+    assert reopened.review_report.complete
+    assert plan.outcome.coverage == "complete"
+    assert plan.outcome.kind == "inconclusive"
+    assert "review_plan_limited" in plan.outcome.reason_codes
+    assert plan.digest.merge_decision.status == "resolve_unknowns"
+    summary = summary_projection(plan)
+    for limitation in limited.limitations:
+        assert limitation in summary.digest.merge_decision.limits
+        assert limitation in plan.user_report_markdown
+        assert limitation in plan.review_comment_markdown
 
 
 async def test_preview_and_execution_use_the_same_related_file_plan(pipeline, monkeypatch):
@@ -155,7 +189,7 @@ async def test_preview_and_execution_use_the_same_related_file_plan(pipeline, mo
     preview = await service.preview(ReviewPreviewRequest(
         pr_url=pr.html_url, plan={"include_pr_discussions": False,
             "scope": {"mode": "selected", "primary_files": ["safe.py", "removed.py"]}}))
-    assert len(preview.assignments) == 2
+    assert len(preview.review_units) == 1 and len(preview.assignments) == 1
     assert all(item.focus_paths == ["removed.py", "safe.py"] for item in preview.assignments)
     task = await service.create_confirmed_task(ReviewCreateRequest(pr_url=pr.html_url,
         preview_id=preview.preview_id, expected_head_sha=preview.snapshot.head_sha,

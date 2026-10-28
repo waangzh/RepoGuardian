@@ -138,7 +138,7 @@ def merge_advice(plan):
             "严重度映射不替代对部署条件和业务影响的判断，仍需满足项目要求的 CI 与必要审批。"
             "上述数量与建议由 RepoGuardian 审查策略生成，不代表 GitHub Mergeability 或分支保护结论。")
     if decision.limits:
-        lines += ["", "仍需解决：", *[f"- {value}" for value in decision.limits]]
+        lines += ["", "仍需解决：", *[f"- {markdown_text(value)}" for value in decision.limits]]
     return "\n\n".join(lines)
 
 
@@ -231,9 +231,10 @@ def render_user_report(task, plan: PublicationPlan) -> str:
              f"本轮确认的问题（含归因单独标注的既有问题） {outcome.confirmed_count} 项（其中 {outcome.publishable_count} 项形成可发布意见）；"
              f"未确认候选 {outcome.unresolved_count} 项。"]
     if plan.digest.merge_decision.limits:
-        lines += ["", "需要补充或确认：", *[f"- {value}" for value in plan.digest.merge_decision.limits]]
+        lines += ["", "需要补充或确认：",
+                  *[f"- {markdown_text(value)}" for value in plan.digest.merge_decision.limits]]
     if task.review_report:
-        roles = {item.id: {"behavior": "行为审查", "contract": "契约审查",
+        roles = {item.id: {"reviewer": "主审", "contract": "契约审查",
                           "specialist": "风险专家审查"}[item.reviewer]
                  for item in task.review_report.assignments}
         failures = [item for item in task.review_report.discovery_results + task.review_report.verification_results

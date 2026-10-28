@@ -15,6 +15,7 @@ from sqlalchemy import create_engine, text
 from app.review.agents import ReviewGuardMiddleware
 from app.review.budget import ReviewBudget, ReviewBudgetExceeded
 from app.review.context import AgentContext
+from app.review.configuration import discovery_limits
 from app.review.models import ReviewLimits, VerificationOutput
 from app.review.tools import REVIEW_TOOLS
 from app.services.review.review_repository import ReviewRepository
@@ -66,6 +67,50 @@ async def test_finish_releases_only_unused_holds_not_unknown_usage():
     summary = await budget.summary()
     assert summary["committed_input_tokens"] == 100 and summary["unknown_calls"] == 1
     assert summary["held_model_calls"] == 0
+
+
+async def test_discovery_stage_counts_unknown_calls_and_all_branch_holds():
+    budget = ReviewBudget(ReviewLimits(total_model_calls=8))
+    scope = {"discovery_agent_ids": frozenset({"a", "b"})}
+    ticket = await budget.reserve("a", 1, hold=2, **scope)
+    await budget.settle(ticket, None)
+    with pytest.raises(ReviewBudgetExceeded, match="model_calls"):
+        await budget.reserve("b", 1, hold=2, **scope)
+    await budget.finish("a")
+    await budget.reserve("b", 1, hold=2, **scope)
+    assert (await budget.summary())["unknown_calls"] == 2
+
+
+async def test_verification_usage_does_not_consume_discovery_quota_on_retry():
+    budget = ReviewBudget(ReviewLimits(total_model_calls=8, total_input_tokens=10_000))
+    scope = {"discovery_agent_ids": frozenset({"a"})}
+    await budget.reserve("a", 1000, **scope)
+    for _ in range(3):
+        await budget.reserve("verifier", 1000)
+    await budget.reserve("a", 1000, **scope)
+    assert (await budget.summary())["model_calls"] == 5
+
+
+async def test_discovery_input_limit_preserves_unknown_reservations():
+    budget = ReviewBudget(ReviewLimits(total_input_tokens=10_000))
+    scope = {"discovery_agent_ids": frozenset({"a", "b"})}
+    ticket = await budget.reserve("a", 2000, hold=2, **scope)
+    await budget.settle(ticket, None)
+    with pytest.raises(ReviewBudgetExceeded, match="input_tokens"):
+        await budget.reserve("b", 500, hold=2, **scope)
+    await budget.finish("a")
+    with pytest.raises(ReviewBudgetExceeded, match="input_tokens"):
+        await budget.reserve("b", 4501, **scope)
+    await budget.reserve("verifier", 6000)
+    summary = await budget.summary()
+    assert summary["committed_input_tokens"] == 8000 and summary["unknown_calls"] == 2
+
+
+async def test_discovery_budget_rejects_an_unassigned_branch():
+    budget = ReviewBudget(ReviewLimits())
+    with pytest.raises(ValueError, match="invalid_discovery_budget_scope"):
+        await budget.reserve("other", 1, discovery_agent_ids={"a"})
+    assert (await budget.summary())["model_calls"] == 0
 
 
 class CorrectingModel(ToolCallingModel):
@@ -179,6 +224,48 @@ async def test_concurrent_branches_atomically_claim_future_submission_budget(pip
     summary = repository.model_budget_summary(task.id, limits)
     assert summary["model_calls"] == 1 and summary["held_model_calls"] == 2
     assert summary["committed_input_tokens"] <= limits.total_input_tokens
+
+
+async def test_discovery_stage_limits_are_atomic_and_survive_database_reopen(pipeline):
+    service, repository, _, _, _ = pipeline
+    _, _, task = await preview_and_create(service)
+    limits = task.configuration.limits
+    scope = {"discovery_agent_ids": frozenset({"a", "b"})}
+    amount = limits.total_input_tokens // 8
+
+    def reserve(agent):
+        try:
+            return repository.reserve_model_call(task.id, agent, amount, limits, hold=2, **scope)
+        except ReviewBudgetExceeded:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        tickets = list(pool.map(reserve, ("a", "b")))
+    assert sum(ticket is not None for ticket in tickets) == 1
+    winner = "a" if tickets[0] else "b"
+    loser = "b" if winner == "a" else "a"
+    reopened = ReviewRepository(repository._session_factory, repository._artifacts, require_migration=False)
+    with pytest.raises(ReviewBudgetExceeded, match="input_tokens"):
+        reopened.reserve_model_call(task.id, loser, amount, limits, hold=2, **scope)
+    reopened.release_branch_budget(task.id, winner)
+    reopened.reserve_model_call(task.id, "verifier", limits.total_input_tokens // 4, limits)
+    reopened.reserve_model_call(task.id, loser, amount, limits, hold=2, **scope)
+    assert reopened.model_budget_summary(task.id, limits)["unknown_calls"] == 3
+
+
+async def test_discovery_model_call_limit_survives_database_reopen(pipeline):
+    service, repository, _, _, _ = pipeline
+    _, _, task = await preview_and_create(service)
+    limits = task.configuration.limits
+    scope = {"discovery_agent_ids": frozenset({"a", "b"})}
+    capacity = discovery_limits(limits, task.configuration.options.depth).total_model_calls
+    for index in range(capacity):
+        repository.reserve_model_call(task.id, "a" if index % 2 else "b", 1, limits, **scope)
+    reopened = ReviewRepository(repository._session_factory, repository._artifacts, require_migration=False)
+    with pytest.raises(ReviewBudgetExceeded, match="model_calls"):
+        reopened.reserve_model_call(task.id, "a", 1, limits, **scope)
+    reopened.reserve_model_call(task.id, "verifier", 1, limits)
+    assert reopened.model_budget_summary(task.id, limits)["model_calls"] == capacity + 1
 
 
 def test_populated_budget_migration_preserves_usage_and_outstanding_holds(tmp_path, monkeypatch):

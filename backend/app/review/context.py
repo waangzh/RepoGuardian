@@ -22,6 +22,7 @@ class AgentContext:
     batch_verification: bool = False
     budget: Any = None
     budget_agent_id: str = ""
+    discovery_agent_ids: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -49,7 +50,7 @@ class ReviewContext:
         async with self._load_lock:
             if self.budget is None:
                 from app.review.budget import ReviewBudget
-                self.budget = ReviewBudget(self.limits, active=self.active)
+                self.budget = ReviewBudget(self.limits, active=self.active, depth=self.depth)
             if self._agent_context is None:
                 self._agent_context = await self.load()
                 self._agent_context.check_active = self.active

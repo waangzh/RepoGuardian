@@ -108,6 +108,7 @@ class PublicationPlanner:
         plan.digest.merge_decision = merge_decision(
             outcome, selected, content_eligible=plan.content_eligible,
             execution_complete=bool(report and report.termination == "completed"),
+            coverage_limitations=report.coverage_limitations if report else [],
         )
         plan.presentation = build_presentation(plan)
         if include_markdown:

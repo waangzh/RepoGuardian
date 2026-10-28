@@ -20,6 +20,11 @@ async def evidence_gate(state: ReviewState, runtime: Runtime[ReviewContext]):
         try:
             await asyncio.to_thread(candidate_gate, candidate, sources.evidence,
                                     state.get("discovery_results", []), changes)
+            if runtime.context.depth == "quick" and candidate.severity not in {"critical", "high"}:
+                rejections.append(VerificationResult(candidate_id=candidate.id,
+                    decision="insufficient_evidence", explanation="快速模式仅核验高影响候选",
+                    attribution="uncertain").model_dump())
+                continue
             eligible.append(raw)
         except (ValueError, OSError):
             rejections.append(VerificationResult(candidate_id=candidate.id,

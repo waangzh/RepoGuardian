@@ -140,19 +140,23 @@ class ReviewService:
                             item["file_path"], item.get("old_file_path"))}
             if selected is not None and not selected <= eligible:
                 raise ValueError("selected_files_not_eligible")
-            goals, assignments, excluded = plan_review(prepared["changed_files"],
+            review_plan = plan_review(prepared["changed_files"],
                 depth=configuration.options.depth, selected_paths=selected, focus=configuration.options.focus,
-                repository_graph=prepared["index"]["repository_graph"], symbols=prepared["index"]["symbol_index"])
+                repository_graph=prepared["index"]["repository_graph"],
+                symbols=prepared["index"]["symbol_index"], limits=configuration.limits)
             response = ReviewPreviewResponse(preview_id=identity, snapshot=prepared["snapshot"],
                 effective_plan=configuration.options, expires_at=utcnow() + timedelta(minutes=15),
                 changed_files=[PlannedChangedFile(file_path=item["file_path"],
                     old_file_path=item.get("old_file_path"), change_type=item["change_type"],
                     additions=item.get("additions", 0), deletions=item.get("deletions", 0),
-                    included=item["file_path"] not in excluded,
-                    excluded_reason="not_in_review_scope" if item["file_path"] in excluded else None)
+                    included=(item["file_path"] not in review_plan.excluded
+                              and item["file_path"] not in review_plan.uncovered),
+                    excluded_reason=("not_in_review_scope" if item["file_path"] in review_plan.excluded
+                                     else review_plan.uncovered.get(item["file_path"])))
                     for item in prepared["changed_files"]],
-                assignments=assignments, goals=goals, limits=configuration.limits,
-                warnings=["源码静态审查不会执行目标仓库的测试或脚本。"])
+                review_units=review_plan.units, assignments=review_plan.assignments,
+                goals=review_plan.goals, limits=configuration.limits,
+                warnings=["源码静态审查不会执行目标仓库的测试或脚本。", *review_plan.limitations])
             if persist:
                 artifact = await asyncio.to_thread(self._artifacts.put_text, task_id=identity,
                     kind="prepared-inputs", content=json.dumps(prepared, ensure_ascii=False))
@@ -339,7 +343,7 @@ class ReviewService:
                 selected_paths=frozenset(task.configuration.options.scope.primary_files)
                     if task.configuration.options.scope.mode == "selected" else None)
             context.budget = ReviewBudget(task.configuration.limits, repository=self._repository,
-                                          task_id=task.id, lease=lease, active=active)
+                task_id=task.id, lease=lease, active=active, depth=task.configuration.options.depth)
             state = await graph.aget_state(config) if saver else None
             if state and state.values and self._repository:
                 observed = (state.values.get("discovery_results", []) + state.values.get("verification_results", [])

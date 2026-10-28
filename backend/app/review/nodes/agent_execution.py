@@ -161,8 +161,9 @@ class AgentUsage(AsyncCallbackHandler):
 
 
 
-async def run_agent(context, identity, reviewer, payload):
-    sources = replace(await context.sources(), budget=context.budget, budget_agent_id=identity)
+async def run_agent(context, identity, reviewer, payload, *, discovery_agent_ids=()):
+    sources = replace(await context.sources(), budget=context.budget, budget_agent_id=identity,
+                      discovery_agent_ids=frozenset(discovery_agent_ids))
     await context.emit(phase=reviewer, agent_id=identity, status="running")
     payload = {**payload, "snapshot": sources.evidence.snapshot.model_dump(),
                "author_context": sources.author_context,
@@ -185,7 +186,7 @@ async def run_agent(context, identity, reviewer, payload):
     try:
         if limits.model_calls <= 0 or limits.tool_calls <= 0:
             raise ValueError("agent_budget_exhausted")
-        materials, material_ids = await prepare_materials(sources, payload)
+        materials, material_ids = await prepare_materials(sources, payload, context.depth)
         payload = {**payload, **materials}
         agent = await asyncio.to_thread(build_agent, context.model, reviewer, limits,
                                        batch="candidates" in payload)

@@ -59,7 +59,8 @@ test('修改配置后必须更新冻结方案，并展示当前派发视角和�
   const preview = {
     preview_id: 'e'.repeat(32), snapshot, effective_plan: options, limits, warnings: [],
     expires_at: '2026-10-27T12:00:00Z', goals: [{ id: 'g1' }],
-    assignments: [{ id: 'contract-1', reviewer: 'contract', objective: '核对当前契约', focus_paths: [file.file_path] }],
+    review_units: [{ id: 'unit-1', changed_paths: [file.file_path], risk_tier: 'low', strategy: 'contextual_review' }],
+    assignments: [{ id: 'contract-1', unit_id: 'unit-1', reviewer: 'contract', objective: '核对当前契约', focus_paths: [file.file_path] }],
     changed_files: [{ file_path: file.file_path, included: true, additions: 1, deletions: 1 }],
   };
   const props = { preview, prUrl: task().pr_url, options, model: 'draft-model', capabilities: null, busy: false };
@@ -82,6 +83,23 @@ test('失败或取消的概览保留未知，不显示遗留运行中步骤', as
     assert.match(html, /未知 次模型调用 · 未知 Tokens/);
     assert.match(html, /覆盖范围尚未结算/);
     assert.doesNotMatch(html, /不应仍在运行|ov-count-danger|NaN|undefined/);
+  }
+});
+
+test('概览在摘要未就绪时仍显示规划限制，并与摘要中的相同限制去重', async () => {
+  const value = task('completed');
+  const limitation = '预算不足：专项审查未启动 <script>unsafe()</script>';
+  value.review_report = {
+    complete: true, goals: [], findings: [], discovery_results: [], verification_results: [],
+    coverage_limitations: [limitation],
+  };
+  for (const plan of [null, { outcome: { kind: 'inconclusive' }, digest: {
+    merge_decision: { label: '审查方案仍有限制', advice: '核对限制', limits: [limitation] },
+  } }]) {
+    const html = await render('pages/ReviewOverviewPage', { task: value, plan, loading: false });
+    assert.equal(html.split('预算不足：专项审查未启动').length - 1, 1);
+    assert.match(html, /&lt;script&gt;unsafe\(\)&lt;\/script&gt;/);
+    assert.doesNotMatch(html, /<script>/);
   }
 });
 

@@ -7,7 +7,9 @@ from pydantic import Field, HttpUrl
 
 from app.models.review.diff import ChangedFile, PlannedChangedFile, PullRequestInfo
 from app.models.review_plan import PlanSnapshot, ReviewPlanOptions
-from app.review.models import ReviewAssignment, ReviewGoal, ReviewLimits, ReviewModel, ReviewReport
+from app.review.models import (
+    ReviewAssignment, ReviewGoal, ReviewLimits, ReviewModel, ReviewReport, ReviewUnit,
+)
 
 TERMINAL_STATUSES = frozenset({"completed", "completed_with_warnings", "failed", "cancelled"})
 
@@ -43,6 +45,7 @@ class ReviewPreviewResponse(ReviewModel):
     effective_plan: ReviewPlanOptions
     expires_at: datetime
     changed_files: list[PlannedChangedFile]
+    review_units: list[ReviewUnit]
     assignments: list[ReviewAssignment]
     goals: list[ReviewGoal]
     limits: ReviewLimits

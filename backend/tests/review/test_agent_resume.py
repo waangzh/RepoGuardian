@@ -137,10 +137,10 @@ def test_sync_checkpoints_resume_tool_messages_without_repeating_completed_calls
     # calls still resume from their persisted ToolMessages without replay.
     tool_reads = [event for event in reads if event["path"] == "other.py"]
     assert sum(event["stage"] == "crash" for event in tool_reads) == 1
-    assert len(tool_reads) == 2
+    assert len(tool_reads) == 1  # The resumed branch reuses persisted tool results.
     assert sum(event["stage"] == "crash" for event in reads) == 4
-    assert len(reads) == 12  # Six explicit tool reads plus bounded material preparation.
-    assert len([event for event in events if event["kind"] == "model"]) == 6
+    assert len(reads) == 7  # Four before the crash, then material and base reads on resume.
+    assert len([event for event in events if event["kind"] == "model"]) == 3
     assert events[-1] == {"stage": "resume", "kind": "done", "complete": True, "termination": "completed"}
 
 

@@ -106,7 +106,7 @@ async def test_finalization_rejects_hallucinated_exploration_not_only_hiding_too
 
 
 async def test_search_policy_and_paging_are_not_tool_failures(caplog):
-    observer = AgentUsage("review", "agent", "behavior")
+    observer = AgentUsage("review", "agent", "reviewer")
     with caplog.at_level(logging.INFO, logger="RepoGuardian.Review"):
         await observer.on_tool_start({"name": "search_code"}, "", run_id="search")
         await observer.on_tool_end(json.dumps({"ok": True, "policy_exclusions": 2,
@@ -137,6 +137,15 @@ async def test_prepared_sources_are_diff_first_with_frozen_evidence(source_servi
     assert not denied["change_materials"]["files"]
 
 
+async def test_quick_depth_preloads_no_source_context(source_service):
+    packet, ids = await prepare_materials(AgentContext(evidence=source_service, changed_files=[CHANGE]),
+        {"goals": [{"path": "safe.py", "side": side, "start_line": 1, "end_line": 1}
+                   for side in ("head", "base")]}, "quick")
+    assert not ids and not packet["source_materials"] and not packet["files"]
+    assert packet["change_materials"]["files"][0]["file_path"] == "safe.py"
+    assert "preloads no source context" in packet["material_boundary"]
+
+
 async def test_candidate_context_covers_head_anchor_and_base_comparison(source_service):
     packet, ids = await prepare_materials(AgentContext(evidence=source_service, changed_files=[CHANGE]),
         {"candidate": {"affected_path": "safe.py", "line": 1}})
@@ -158,11 +167,11 @@ async def test_materials_distinguish_renamed_file_from_reused_old_path(source_se
                         "lines": [{"kind": "added", "new_line_no": 1, "content": "REPLACEMENT = 3"}]}]}
     changes = [added, renamed] if reverse else [renamed, added]
     context = AgentContext(evidence=source_service, changed_files=changes)
-    goals, assignments, _ = plan_review(changes, depth="standard")
-    for assignment in (item for item in assignments if item.reviewer == "behavior"):
+    plan = plan_review(changes, depth="standard")
+    for assignment in plan.assignments:
         packet, ids = await prepare_materials(context, {
             "assignment": assignment.model_dump(),
-            "goals": [item.model_dump() for item in goals if item.id in assignment.goal_ids],
+            "goals": [item.model_dump() for item in plan.goals if item.id in assignment.goal_ids],
         })
         diff = packet["change_materials"]
         assert [item["file_path"] for item in diff["files"]] == assignment.focus_paths
@@ -512,7 +521,7 @@ async def test_same_snapshot_packet_and_batch_comparison_preserves_verdicts_and_
     assert {item["id"] for item in baseline["candidates"]} == {item["id"] for item in optimized["candidates"]}
     assert baseline["decisions"] == optimized["decisions"]
     assert baseline["findings"] == optimized["findings"]
-    assert optimized["budget"]["model_calls"] == 3 < baseline["budget"]["model_calls"] == 8
+    assert optimized["budget"]["model_calls"] == 2 < baseline["budget"]["model_calls"] == 6
     assert optimized["budget"]["input_tokens"] < baseline["budget"]["input_tokens"]
     result = {"kind": "deterministic_offline_fixture_not_live_quality",
         "snapshot": optimized["snapshot"], "candidate_count": 2,

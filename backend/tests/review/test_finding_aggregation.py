@@ -13,7 +13,7 @@ pytest_plugins = ["tests.review.test_native_agents"]
 
 
 def finding(identity, peers, *, severity="high", line=1):
-    candidate = CandidateFinding(id=identity, assignment_ids=["behavior"], title=identity,
+    candidate = CandidateFinding(id=identity, assignment_ids=["reviewer"], title=identity,
         trigger="different event", expected_behavior="once", actual_behavior="twice",
         impact="duplicate payment", recommendation="add idempotency", severity="high",
         affected_path="safe.py", line=line, evidence_ids=["source"], attribution="introduced")
@@ -79,15 +79,16 @@ class EquivalentReviewModel(ReviewModel):
         for call in message.tool_calls:
             if call["name"] == "DiscoveryOutput":
                 proposal = call["args"]["findings"][0]
-                proposal["title"] = "view " + payload["assignment"]["reviewer"]
-                proposal["trigger"] = "event " + payload["assignment"]["reviewer"]
-                proposal["severity"] = "high" if payload["assignment"]["reviewer"] == "behavior" else "low"
-                if self.different_attributions and payload["assignment"]["reviewer"] == "contract":
-                    proposal["attribution"] = "exposed"
+                proposal["title"] = "view one"
+                proposal["trigger"] = "event one"
+                proposal["severity"] = "high"
+                second = {**proposal, "title": "view two", "trigger": "event two",
+                          "attribution": "exposed" if self.different_attributions else "introduced"}
+                call["args"]["findings"].append(second)
             elif call["name"] == "VerificationOutput":
                 call["args"]["severity"] = "high"
                 peers = payload.get("related_candidates", [])
-                if peers and (self.reciprocal or payload["candidate"]["title"].endswith("behavior")):
+                if peers and (self.reciprocal or payload["candidate"]["title"].endswith("two")):
                     call["args"]["equivalent_candidate_ids"] = [item["id"] for item in peers]
                     call["args"]["equivalence_reason"] = "same VALUE contract regression and repair"
             elif call["name"] == "BatchVerificationOutput":
@@ -95,7 +96,7 @@ class EquivalentReviewModel(ReviewModel):
                 for decision in call["args"]["decisions"]:
                     decision["severity"] = "high"
                     candidate = by_id[decision["candidate_id"]]
-                    if self.reciprocal or candidate["title"].endswith("behavior"):
+                    if self.reciprocal or candidate["title"].endswith("two"):
                         decision["equivalent_candidate_ids"] = [identity for identity in by_id
                                                                  if identity != candidate["id"]]
                         decision["equivalence_reason"] = "same VALUE contract regression and repair"
@@ -115,7 +116,7 @@ async def test_graph_keeps_candidate_hashes_and_all_verdicts(
     report = state["report"]
     assert len(report["candidates"]) == len(report["decisions"]) == len(report["verification_results"]) == 2
     assert len(report["findings"]) == count
-    assert len(model.observed) == 3
+    assert len(model.observed) == 2
     assert report["termination"] == "completed"
     assert {item["attribution"] for item in report["candidates"]} == (
         {"introduced", "exposed"} if different_attributions else {"introduced"}

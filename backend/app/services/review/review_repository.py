@@ -61,7 +61,7 @@ class ReviewRepository:
             self._guard(session, task_id, lease)
 
     def _model_budget_rows(self, session, task_id):
-        return [{"reserved_input_bytes": row.reserved_input_bytes,
+        return [{"agent_id": row.agent_id, "reserved_input_bytes": row.reserved_input_bytes,
                  "input_tokens": row.input_tokens, "output_tokens": row.output_tokens,
                  "cached_input_tokens": row.cached_input_tokens, "settled": row.settled}
                 for row in session.scalars(
@@ -92,8 +92,9 @@ class ReviewRepository:
                 branch.held_input_tokens = branch.held_model_calls = 0
 
     def reserve_model_call(self, task_id, agent_id, estimate, limits, *, lease=None,
-                           stage="explore", hold=0):
+                           stage="explore", hold=0, discovery_agent_ids=()):
         from app.review.budget import plan_reservation
+        from app.review.configuration import discovery_limits
         with self._session_factory.begin() as session:
             row = self._guard(session, task_id, lease)
             task = ReviewTask.model_validate(self._load(row))
@@ -103,7 +104,10 @@ class ReviewRepository:
                 raise TimeoutError("review_deadline")
             values = plan_reservation(self._model_budget_rows(session, task_id),
                 self._branch_budget_rows(session, task_id), agent_id, estimate, limits,
-                stage=stage, hold=hold, review_id=task_id)
+                stage=stage, hold=hold, review_id=task_id,
+                discovery_agent_ids=discovery_agent_ids,
+                phase_limits=discovery_limits(limits, task.configuration.options.depth)
+                    if discovery_agent_ids else None)
             branch = session.get(ReviewBranchBudgetOrm, (task_id, agent_id))
             if branch is None:
                 branch = ReviewBranchBudgetOrm(task_id=task_id, agent_id=agent_id)

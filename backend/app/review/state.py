@@ -15,8 +15,12 @@ def merge_results(left: list[dict], right: list[dict]) -> list[dict]:
 class ReviewState(TypedDict, total=False):
     review_id: str
     snapshot: dict
+    review_depth: str
     goals: list[dict]
+    review_units: list[dict]
     assignments: list[dict]
+    discovery_agent_ids: list[str]
+    coverage_limitations: list[str]
     discovery_results: Annotated[list[dict], merge_results]
     candidates: list[dict]
     eligible_candidates: list[dict]

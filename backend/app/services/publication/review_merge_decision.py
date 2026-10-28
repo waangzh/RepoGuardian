@@ -1,5 +1,7 @@
 """显式的报告建议策略；不授予 Approve 或合并权限。"""
 
+from collections.abc import Sequence
+
 from app.models.publication import MergeDecision, OutcomeReason, ReviewOutcome
 from app.review.models import VerifiedFinding
 from app.review.findings import finding_severity
@@ -14,6 +16,7 @@ def merge_decision(
     *,
     content_eligible: bool,
     execution_complete: bool,
+    coverage_limitations: Sequence[str] = (),
 ) -> MergeDecision:
     blocking = sorted({item.id for item in findings if finding_severity(item) in {"critical", "high"}})
     suggestions = sorted({item.id for item in findings if finding_severity(item) in {"medium", "low"}})
@@ -29,10 +32,13 @@ def merge_decision(
         reasons.add("termination_incomplete")
     if outcome.confirmed_count > outcome.publishable_count:
         reasons.add("confirmed_findings_withheld")
+    if coverage_limitations:
+        reasons.add("review_plan_limited")
     limits = {**REASON_LABELS, "confirmed_findings_withheld": "仍有已确认但未通过发布准入的记录"}
     decision = MergeDecision(
         blocking_finding_keys=blocking, nonblocking_finding_keys=suggestions,
-        unresolved_reasons=sorted(reasons), limits=[limits[reason] for reason in sorted(reasons)],
+        unresolved_reasons=sorted(reasons),
+        limits=list(dict.fromkeys([limits[reason] for reason in sorted(reasons)] + list(coverage_limitations))),
     )
     if outcome.kind in {"failed", "cancelled"} or not content_eligible:
         decision.label = {"failed": "审查中断，尚无完整结论",

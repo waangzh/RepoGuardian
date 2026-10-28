@@ -9,7 +9,8 @@ from app.review.nodes.agent_execution import run_agent
 async def discover(state: ReviewState, runtime: Runtime[ReviewContext]):
     assignment = state["assignment"]
     result = await run_agent(runtime.context, assignment["id"], assignment["reviewer"],
-                             {"assignment": assignment, "goals": state["goals"]})
+                             {"assignment": assignment, "goals": state["goals"]},
+                             discovery_agent_ids=state["discovery_agent_ids"])
     return {"discovery_results": [result]}
 
 

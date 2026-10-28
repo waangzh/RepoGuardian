@@ -29,13 +29,13 @@ async def test_aggregated_issue_revalidates_all_members_and_preserves_triggers(
     views = finding_views(task, {}, repository._artifacts)
     assert len(views) == 1 and views[0].review_status == "confirmed" and views[0].severity == "high"
     assert views[0].attribution == "introduced"
-    assert len(views[0].source_ids) == 2
-    assert "event behavior" in views[0].message and "event contract" in views[0].message
+    assert len(views[0].source_ids) == 1
+    assert "event one" in views[0].message and "event two" in views[0].message
     plan = PublicationPlanner(repository._artifacts).build(task)
     drafts = [*plan.inline_drafts, *plan.summary_findings]
     assert len(drafts) == 1 and drafts[0].severity == "high"
     assert drafts[0].attribution == "introduced"
-    assert "event behavior" in drafts[0].failure_scenario and "event contract" in drafts[0].failure_scenario
+    assert "event one" in drafts[0].failure_scenario and "event two" in drafts[0].failure_scenario
     assert plan.outcome.confirmed_count == plan.outcome.publishable_count == 1
     assert len(plan.digest.merge_decision.blocking_finding_keys) == 1
 

@@ -67,7 +67,7 @@ async def test_graph_step_guard_does_not_preempt_the_configured_model_budget(sou
     limits = ReviewLimits(model_calls=24)
     model = LoopModel()
     with pytest.raises(Exception, match="finalization_required") as failure:
-        await build_agent(model, "behavior", limits).ainvoke(
+        await build_agent(model, "reviewer", limits).ainvoke(
             {"messages": [("user", "Offline loop fixture")]},
             context=AgentContext(evidence=source_service),
             config={"recursion_limit": agent_recursion_limit(limits)})
@@ -80,7 +80,7 @@ async def test_exception_retains_tool_failures_and_does_not_leak_error_body(sour
     context = review_context(source_service, model)
     context.limits = ReviewLimits(model_calls=2)
     with caplog.at_level(logging.INFO, logger="RepoGuardian.Review"):
-        result = await run_agent(context, "assignment", "behavior", {"goals": []})
+        result = await run_agent(context, "assignment", "reviewer", {"goals": []})
     assert result["status"] == "failed"
     assert result["error"] == "ModelCallLimitExceededError"
     assert result["model_calls"] == result["tool_calls"] == result["tool_failures"] == 2
@@ -94,12 +94,12 @@ async def test_exception_retains_tool_failures_and_does_not_leak_error_body(sour
 async def test_retry_cannot_reset_remaining_model_budget(source_service):
     model = LoopModel()
     context = review_context(source_service, model)
-    context.retry_results[("behavior", "assignment")] = {
+    context.retry_results[("reviewer", "assignment")] = {
         "id": "assignment", "status": "failed", "model_calls": 22, "tool_calls": 22,
         "input_tokens": 220, "output_tokens": 110, "evidence_ids": [],
         "tool_failures": 22, "unconsumed_pages": 0, "error": "RuntimeError",
     }
-    result = await run_agent(context, "assignment", "behavior", {"goals": []})
+    result = await run_agent(context, "assignment", "reviewer", {"goals": []})
     assert model.calls == 2
     assert result["error"] == "ModelCallLimitExceededError"
     assert result["model_calls"] == 24 and result["tool_calls"] == 24
@@ -112,12 +112,12 @@ async def test_new_attempt_cannot_cite_previous_attempts_without_reading_again(s
     model = ReviewModel()
     context = review_context(source_service, model)
     old = await source_service.read("other.py", 1, 1)
-    context.retry_results[("behavior", "assignment")] = {
+    context.retry_results[("reviewer", "assignment")] = {
         "id": "assignment", "status": "failed", "model_calls": 1, "tool_calls": 1,
         "input_tokens": 10, "output_tokens": 5, "evidence_ids": [old["evidence"]["id"]],
         "tool_failures": 0, "unconsumed_pages": 0, "error": "RuntimeError",
     }
-    result = await run_agent(context, "assignment", "behavior", {"goals": []})
+    result = await run_agent(context, "assignment", "reviewer", {"goals": []})
     assert result["status"] == "completed"
     assert old["evidence"]["id"] not in result["evidence_ids"]
     assert old["evidence"]["id"] in result["previous_attempts"][0]["evidence_ids"]
@@ -125,7 +125,7 @@ async def test_new_attempt_cannot_cite_previous_attempts_without_reading_again(s
 
 
 class FailingReviewModel(ReviewModel):
-    fail_roles: list[str] = ["behavior"]
+    fail_roles: list[str] = ["reviewer"]
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         payload = json.loads(next(message.content for message in messages if message.type == "human"))
@@ -149,7 +149,7 @@ def failing_pipeline(pipeline, roles):
 
 
 async def test_all_failed_discoveries_have_failed_verdict_and_honest_report(pipeline, caplog):
-    service, repository, model = failing_pipeline(pipeline, ["behavior", "contract"])
+    service, repository, model = failing_pipeline(pipeline, ["reviewer"])
     with caplog.at_level(logging.INFO, logger="RepoGuardian.Review"):
         _, _, task = await preview_and_create(service)
         assert await service._worker.run_once()
@@ -165,10 +165,10 @@ async def test_all_failed_discoveries_have_failed_verdict_and_honest_report(pipe
     assert "（HEAD）" in saved.report_markdown and "（BASE）" in saved.report_markdown
     assert "未保存可归纳" not in saved.report_markdown
     assert "未保存逐目标" not in saved.report_markdown
-    assert len(model.observed) == 2
+    assert len(model.observed) == 1
 
 
-@pytest.mark.parametrize("roles", [["behavior"], ["behavior", "contract"], ["verifier"]])
+@pytest.mark.parametrize("roles", [["reviewer"], ["verifier"]])
 async def test_single_retry_reuses_completed_branches_and_accumulates_usage(pipeline, roles):
     service, repository, model = failing_pipeline(pipeline, roles)
     _, _, task = await preview_and_create(service)
@@ -197,13 +197,14 @@ async def test_single_retry_reuses_completed_branches_and_accumulates_usage(pipe
         assert result.model_calls == previous.model_calls + 2
         assert result.tool_calls == previous.tool_calls + 3  # 两次源码读取与一次结构化提交
         assert result.tool_failures == previous.tool_failures
-    assert len(model.observed) - before == len(failed) + (1 if len(roles) == 2 else 0)
+    # A retried discovery also lets the pending verification run; a retried verifier is the last step.
+    assert len(model.observed) - before == (2 if roles == ["reviewer"] else 1)
     with pytest.raises(ValueError, match="unavailable"):
         await service.resume_review(task.id)
 
 
 async def test_retry_claim_is_atomic_and_a_failed_retry_cannot_be_repeated(pipeline):
-    service, repository, _ = failing_pipeline(pipeline, ["behavior"])
+    service, repository, _ = failing_pipeline(pipeline, ["reviewer"])
     _, _, task = await preview_and_create(service)
     assert await service._worker.run_once()
     responses = await asyncio.gather(service.resume_review(task.id), service.resume_review(task.id),
@@ -211,7 +212,7 @@ async def test_retry_claim_is_atomic_and_a_failed_retry_cannot_be_repeated(pipel
     assert sum(not isinstance(item, Exception) for item in responses) == 1
     assert await service._worker.run_once()
     saved = repository.get_task(task.id)
-    assert saved.status == "completed_with_warnings" and saved.retry_count == 1
+    assert saved.status == "failed" and saved.retry_count == 1
     failed = next(item for item in saved.review_report.discovery_results if item.status == "failed")
     assert failed.model_calls == 4
     with pytest.raises(ValueError, match="retry_limit"):
@@ -223,7 +224,7 @@ async def test_retry_claim_is_atomic_and_a_failed_retry_cannot_be_repeated(pipel
     ({"model_calls": 24}, "budget_exhausted"), ({"tool_calls": 80}, "budget_exhausted"),
 ])
 def test_retry_refuses_unknown_or_exhausted_branch_budgets(overrides, code):
-    state = {"assignments": [{"id": "a", "reviewer": "behavior"}],
+    state = {"assignments": [{"id": "a", "reviewer": "reviewer"}],
              "discovery_results": [{"id": "a", "status": "failed", "model_calls": 2,
                                      "tool_calls": 2, **overrides}]}
     with pytest.raises(ValueError, match=code):
@@ -249,7 +250,7 @@ async def test_report_falls_back_to_title_when_body_only_describes_audit_source(
 async def test_partial_checkpoint_survives_maintenance_until_original_deadline(pipeline):
     from app.models.orm import ReviewTaskOrm
 
-    service, repository, _ = failing_pipeline(pipeline, ["behavior"])
+    service, repository, _ = failing_pipeline(pipeline, ["verifier"])
     _, _, task = await preview_and_create(service)
     assert await service._worker.run_once()
     assert repository.get_task(task.id).status == "completed_with_warnings"
@@ -266,7 +267,7 @@ async def test_partial_checkpoint_survives_maintenance_until_original_deadline(p
 async def test_pending_publication_blocks_retry_without_claiming_the_attempt(pipeline, publication_state):
     from app.models.orm import PublicationAttemptOrm
 
-    service, repository, _ = failing_pipeline(pipeline, ["behavior"])
+    service, repository, _ = failing_pipeline(pipeline, ["reviewer"])
     _, _, task = await preview_and_create(service)
     assert await service._worker.run_once()
     with repository._session_factory.begin() as session:
@@ -277,14 +278,14 @@ async def test_pending_publication_blocks_retry_without_claiming_the_attempt(pip
     with pytest.raises(ValueError, match="publication_pending"):
         await service.resume_review(task.id)
     saved = repository.get_task(task.id)
-    assert saved.retry_count == 0 and saved.status == "completed_with_warnings"
+    assert saved.retry_count == 0 and saved.status == "failed"
     assert not await service._worker.run_once()
 
 
 async def test_retry_cancel_and_lost_lease_cannot_prepare_or_overwrite_checkpoint(pipeline):
     from app.services.review.review_repository import ReviewLeaseLost
 
-    service, repository, model = failing_pipeline(pipeline, ["behavior"])
+    service, repository, model = failing_pipeline(pipeline, ["reviewer"])
     _, _, task = await preview_and_create(service)
     assert await service._worker.run_once()
     await service.resume_review(task.id)
@@ -304,7 +305,7 @@ async def test_retry_cancel_and_lost_lease_cannot_prepare_or_overwrite_checkpoin
 
 
 async def test_retry_preparation_checkpoint_survives_worker_restart_without_second_reset(pipeline):
-    service, repository, model = failing_pipeline(pipeline, ["behavior"])
+    service, repository, model = failing_pipeline(pipeline, ["reviewer"])
     _, _, task = await preview_and_create(service)
     assert await service._worker.run_once()
     original = repository.get_task(task.id)
@@ -326,7 +327,7 @@ async def test_retry_preparation_checkpoint_survives_worker_restart_without_seco
 
 
 async def test_claimed_retry_without_checkpoint_refuses_full_review_fallback(pipeline):
-    service, repository, model = failing_pipeline(pipeline, ["behavior"])
+    service, repository, model = failing_pipeline(pipeline, ["reviewer"])
     _, _, task = await preview_and_create(service)
     assert await service._worker.run_once()
     await service.resume_review(task.id)
@@ -340,7 +341,7 @@ async def test_claimed_retry_without_checkpoint_refuses_full_review_fallback(pip
 
 
 async def test_failed_branch_retry_reopens_sqlite_without_replaying_completed_branch(pipeline, tmp_path, monkeypatch):
-    service, repository, model = failing_pipeline(pipeline, ["behavior"])
+    service, repository, model = failing_pipeline(pipeline, ["verifier"])
     database = str(tmp_path / "retry-checkpoints.sqlite")
 
     async def run_with_saver(saver):

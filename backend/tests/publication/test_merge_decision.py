@@ -24,7 +24,7 @@ def outcome(**updates):
 
 def finding(severity, identity="finding", attribution="introduced"):
     candidate = CandidateFinding(
-        id=identity, assignment_ids=["behavior"], title="Regression", trigger="Input",
+        id=identity, assignment_ids=["reviewer"], title="Regression", trigger="Input",
         expected_behavior="Value 1", actual_behavior="Value 2", impact="Incorrect value",
         recommendation="Restore contract", severity=severity, affected_path="safe.py",
         line=1, evidence_ids=["source"], attribution=attribution,
@@ -123,6 +123,25 @@ def test_usage_unknown_is_preserved_without_blocking_complete_code_review():
     for text in (render_summary(plan), render_review_comment(plan)):
         assert "计量" in text
         assert "未知用量不能当作完整统计" in text
+
+
+def test_planning_limitations_block_clean_advice_and_render_as_text():
+    limitation = "预算不足：专项审查未启动，未覆盖 [scope](https://example.test) <script>alert(1)</script>"
+    facts = outcome()
+    decision = merge_decision(facts, [], content_eligible=True, execution_complete=True,
+                              coverage_limitations=[limitation, limitation])
+    assert decision.status == "resolve_unknowns"
+    assert "review_plan_limited" in decision.unresolved_reasons
+    assert decision.limits.count(limitation) == 1
+    plan = PublicationPlan(review_id="review", snapshot=PublicationSnapshot(), outcome=facts,
+        content_eligible=True, digest=ReviewDigest(merge_decision=decision))
+    task = SimpleNamespace(configuration=SimpleNamespace(provider="fixture", model="fixture"), review_report=None)
+    for text in (render_summary(plan), render_user_report(task, plan), render_review_comment(plan)):
+        assert "专项审查未启动" in text
+        assert "[scope](https://example.test)" not in text
+        assert "<script>" not in text
+    plan.presentation = build_presentation(plan)
+    assert any("专项审查未启动" in item for item in plan.presentation.limitations)
 
 
 def test_preexisting_findings_use_current_identity_without_separate_history_counts():

@@ -5,7 +5,14 @@ from app.models.review_plan import ReviewPlanOptions
 from app.review.contracts import ReviewConfiguration
 from app.review.models import ReviewLimits
 
-DEPTHS = {"quick": ("快速初筛", 12), "standard": ("标准审查", 24), "deep": ("深度核验", 48)}
+DEPTHS = {
+    "quick": {"label": "快速初筛", "model_calls": 6, "strategy": "fast_pass",
+              "verification_share": 0.2},
+    "standard": {"label": "标准审查", "model_calls": 12, "strategy": "contextual_review",
+                 "verification_share": 0.35},
+    "deep": {"label": "深度核验", "model_calls": 20, "strategy": "deep_investigation",
+             "verification_share": 0.45},
+}
 
 
 def maxima():
@@ -21,13 +28,26 @@ def maxima():
 
 
 def default_limits(depth):
-    return {**maxima(), "model_calls": min(DEPTHS[depth][1], settings.repoguardian_agent_max_calls)}
+    return {**maxima(), "model_calls": min(DEPTHS[depth]["model_calls"],
+                                           settings.repoguardian_agent_max_calls)}
+
+
+def discovery_limits(limits, depth):
+    share = DEPTHS[depth]["verification_share"]
+    calls = min(max(2, round(limits.total_model_calls * share)),
+                max(0, limits.total_model_calls - 1))
+    tokens = min(max(2000, round(limits.total_input_tokens * share)),
+                 max(0, limits.total_input_tokens - 1000))
+    return limits.model_copy(update={
+        "total_model_calls": limits.total_model_calls - calls,
+        "total_input_tokens": limits.total_input_tokens - tokens,
+    })
 
 
 def capabilities():
     return {
-        "depth_presets": [{"id": key, "label": value[0], "limits": default_limits(key)}
-                          for key, value in DEPTHS.items()],
+        "depth_presets": [{"id": key, "label": value["label"], "strategy": value["strategy"],
+                           "limits": default_limits(key)} for key, value in DEPTHS.items()],
         "focus_categories": ["correctness", "security", "performance", "compatibility"],
         "scope_selection_supported": True,
         "context_boundary": "固定提交中的普通文件；拒绝敏感路径和符号链接逃逸",

@@ -79,7 +79,7 @@ class ToolCallingModel(BaseChatModel):
 
 
 async def test_native_loop_parallel_reads_refusal_and_structured_response(source_service):
-    agent = build_agent(ToolCallingModel(), "behavior", ReviewLimits())
+    agent = build_agent(ToolCallingModel(), "reviewer", ReviewLimits())
     result = await agent.ainvoke(
         {"messages": [("user", "Review this frozen change.")]},
         context=AgentContext(evidence=source_service),
@@ -132,7 +132,7 @@ async def test_source_size_limit(source_service):
 
 
 async def test_native_call_limit_fails_explicitly(source_service):
-    agent = build_agent(ToolCallingModel(), "behavior", ReviewLimits(model_calls=1))
+    agent = build_agent(ToolCallingModel(), "reviewer", ReviewLimits(model_calls=1))
     with pytest.raises(Exception, match="[Mm]odel.*limit"):
         await agent.ainvoke({"messages": [("user", "Review.")]},
                             context=AgentContext(evidence=source_service))
@@ -197,7 +197,7 @@ async def test_chatopenai_http_native_tools_and_structured_response(source_servi
                           max_retries=0)
         model.root_async_client = sdk
         model.async_client = sdk.chat.completions
-        output = await build_agent(model, "behavior", ReviewLimits()).ainvoke(
+        output = await build_agent(model, "reviewer", ReviewLimits()).ainvoke(
             {"messages": [("user", "Read the frozen source and submit.")]},
             context=AgentContext(evidence=source_service))
     assert len(requests) == 2

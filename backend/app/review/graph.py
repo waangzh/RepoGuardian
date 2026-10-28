@@ -18,7 +18,9 @@ from app.review.verification_batches import verification_batches
 def route_discovery(state):
     completed = {item["id"] for item in state.get("discovery_results", [])
                  if item["status"] == "completed"}
+    discovery_agent_ids = [item["id"] for item in state["assignments"]]
     return [Send("discover", {"review_id": state["review_id"], "assignment": item,
+                             "discovery_agent_ids": discovery_agent_ids,
                              "goals": [goal for goal in state["goals"] if goal["id"] in item["goal_ids"]]})
             for item in state["assignments"] if item["id"] not in completed] or "collect"
 
@@ -38,16 +40,25 @@ def route_verification(state):
 
 
 
+INVESTIGATION_SEVERITIES = {
+    "quick": frozenset(),
+    "standard": frozenset({"critical", "high"}),
+    "deep": frozenset({"critical", "high", "medium"}),
+}
+
+
 def route_investigation(state):
     if state.get("investigation_round", 0):
         return "report"
+    severities = INVESTIGATION_SEVERITIES.get(state.get("review_depth", "standard"), frozenset())
     pending = {item["candidate_id"] for item in state["decisions"]
                if item["decision"] == "insufficient_evidence"}
     eligible = {item["id"] for item in state["eligible_candidates"]}
     completed = {item["id"] for item in state.get("investigation_results", [])
                  if item["status"] == "completed"}
     candidates = [item for item in state["candidates"]
-                  if item["id"] in (pending & eligible) - completed and item["severity"] in {"critical", "high"}]
+                  if item["id"] in (pending & eligible) - completed
+                  and item["severity"] in severities]
     return [Send("investigate", {"review_id": state["review_id"], "candidate": item,
                                 "related_candidates": comparison_candidates(item, state["eligible_candidates"])})
             for item in candidates] or "report"

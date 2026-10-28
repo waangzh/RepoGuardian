@@ -77,14 +77,14 @@ test('活动页直接显示分支失败原因、实际用量和无候选核验�
    input_tokens:144450,output_tokens:1315,tool_failures:12,previous_attempts:[],
    policy_exclusions:2,incomplete_searches:1,structured_output_retries:1};
   const task={phase:'failed',configuration:{limits:{model_calls:24,tool_calls:80}},
-   steps:[{name:'agent',message:'behavior',status:'failed',started_at:'2026-10-27T11:56:00Z',
+   steps:[{name:'agent',message:'reviewer',status:'failed',started_at:'2026-10-27T11:56:00Z',
     updated_at:'2026-10-27T11:56:23Z',data:{...failure}},
    {name:'arbitrate',message:'arbitrate',status:'completed',started_at:null,
     updated_at:'2026-10-27T11:56:38Z',data:{candidates:0}}],
    review_report:{budget:{model_calls:17,model_call_limit:64,input_tokens:null,output_tokens:1315,
     committed_input_tokens:200000,outstanding_input_tokens:55550,held_input_tokens:40000,
     held_model_calls:2,input_token_factor:0.25,input_token_limit:500000,unknown_calls:1},
-    assignments:[{id:'agent',reviewer:'behavior',objective:'<script>untrusted</script>',focus_paths:['safe.py']}],
+    review_units:[],assignments:[{id:'agent',unit_id:'unit',reviewer:'reviewer',objective:'<script>untrusted</script>',focus_paths:['safe.py']}],
     discovery_results:[failure],verification_results:[]}};
   const html=await renderToString(createSSRApp(Component,{task}));
   assert.match(html,/达到执行步数上限，未提交最终审查结果/);

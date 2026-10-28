@@ -33,6 +33,8 @@ def derive_review_outcome(task, *, publishable_count=None):
         reasons.append(Reason.SCOPE_EMPTY)
     if not report.complete:
         reasons.append(Reason.SCOPE_INCOMPLETE)
+    if report.coverage_limitations:
+        reasons.append(Reason.REVIEW_PLAN_LIMITED)
     if unresolved:
         reasons.append(Reason.VERIFICATION_UNRESOLVED)
     results = [*report.discovery_results, *report.verification_results]

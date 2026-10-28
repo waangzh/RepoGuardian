@@ -17,9 +17,15 @@ async def prepare(state: ReviewState, runtime: Runtime[ReviewContext]):
 async def plan(state: ReviewState, runtime: Runtime[ReviewContext]):
     context = runtime.context
     sources = await context.sources()
-    goals, assignments, _ = plan_review(
-        sources.changed_files, depth=context.depth, selected_paths=context.selected_paths, focus=context.focus,
-        repository_graph=sources.repository_graph, symbols=sources.symbols)
-    await context.emit(phase="planning", assignments=[item.model_dump() for item in assignments])
-    return {"goals": [item.model_dump() for item in goals],
-            "assignments": [item.model_dump() for item in assignments], "status": "discovering"}
+    review_plan = plan_review(
+        sources.changed_files, depth=context.depth, selected_paths=context.selected_paths,
+        focus=context.focus, repository_graph=sources.repository_graph, symbols=sources.symbols,
+        limits=context.limits)
+    await context.emit(phase="planning", units=[item.model_dump() for item in review_plan.units],
+                       assignments=[item.model_dump() for item in review_plan.assignments],
+                       limitations=review_plan.limitations)
+    return {"goals": [item.model_dump() for item in review_plan.goals],
+            "review_units": [item.model_dump() for item in review_plan.units],
+            "assignments": [item.model_dump() for item in review_plan.assignments],
+            "coverage_limitations": review_plan.limitations, "review_depth": context.depth,
+            "status": "discovering"}

@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.core.paths import validate_repo_relative_path
 
 Severity = Literal["critical", "high", "medium", "low"]
-Reviewer = Literal["behavior", "contract", "specialist"]
+Reviewer = Literal["reviewer", "contract", "specialist"]
 Decision = Literal["confirmed", "refuted", "insufficient_evidence"]
 
 
@@ -23,8 +23,31 @@ class ReviewSnapshot(ReviewModel):
     head_sha: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 
 
+class ReviewUnit(ReviewModel):
+    """A logically related change set reviewed as one unit by default."""
+
+    id: str
+    changed_paths: list[str]
+    changed_hunk_ids: list[str]
+    changed_symbols: list[str]
+    impacted_paths: list[str]
+    risk_tier: Literal["low", "medium", "high"]
+    risk_reasons: list[str]
+    strategy: Literal["fast_pass", "contextual_review", "deep_investigation"]
+    estimated_input_tokens: int = Field(ge=1)
+    min_model_calls: int = Field(ge=1)
+    max_model_calls: int = Field(ge=1)
+    goal_ids: list[str]
+
+    @field_validator("changed_paths")
+    @classmethod
+    def valid_paths(cls, paths):
+        return [validate_repo_relative_path(path) for path in paths]
+
+
 class ReviewAssignment(ReviewModel):
     id: str
+    unit_id: str
     reviewer: Reviewer
     goal_ids: list[str]
     focus_paths: list[str]
@@ -190,6 +213,7 @@ class ReviewLimits(ReviewModel):
 
 class ReviewReport(ReviewModel):
     snapshot: ReviewSnapshot
+    review_units: list[ReviewUnit] = Field(default_factory=list)
     assignments: list[ReviewAssignment]
     goals: list[ReviewGoal]
     discovery_results: list[AgentResult]
@@ -199,4 +223,5 @@ class ReviewReport(ReviewModel):
     findings: list[VerifiedFinding]
     complete: bool
     termination: Literal["completed", "partial", "cancelled", "deadline", "failed"]
+    coverage_limitations: list[str] = Field(default_factory=list)
     budget: dict = Field(default_factory=dict)

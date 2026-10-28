@@ -25,10 +25,13 @@ async def report(state: ReviewState, runtime: Runtime[ReviewContext]):
     termination = "completed" if execution_complete else "partial"
     if state["assignments"] and not any(item["status"] == "completed" for item in results):
         termination = "failed"
-    output = ReviewReport(snapshot=state["snapshot"], assignments=state["assignments"],
+    output = ReviewReport(snapshot=state["snapshot"],
+        review_units=state.get("review_units", []), assignments=state["assignments"],
         goals=goals, discovery_results=results, verification_results=verification + investigations,
         candidates=state["candidates"],
         decisions=state["decisions"], findings=state["findings"], complete=complete,
-        termination=termination, budget=await runtime.context.budget.summary() if runtime.context.budget else {})
+        termination=termination,
+        coverage_limitations=state.get("coverage_limitations", []),
+        budget=await runtime.context.budget.summary() if runtime.context.budget else {})
     await runtime.context.emit(phase="report", status="completed", termination=termination)
     return {"report": output.model_dump(), "goals": goals, "status": termination}

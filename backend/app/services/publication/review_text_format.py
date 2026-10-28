@@ -24,6 +24,7 @@ REASON_LABELS = {
     "unscheduled_investigation": "仍有未处理的调查线索", "usage_integrity_unknown": "模型请求计量不完整或不一致",
     "snapshot_missing": "审查快照缺失或身份无效", "runtime_report_missing": "缺少任务运行报告",
     "runtime_report_invalid": "任务运行报告格式无效",
+    "review_plan_limited": "审查方案存在预算或材料限制",
 }
 
 
@@ -80,7 +81,7 @@ def _comment_risks(plan):
     if "usage_integrity_unknown" in plan.outcome.reason_codes:
         risks.append("运行计量记录不完整：模型请求计量不完整或不一致；未知用量不能当作完整统计。"
                      "运行或计量异常本身不代表发现代码缺陷。")
-    return [f"- {value}" for value in dict.fromkeys(risks)]
+    return [f"- {markdown_text(value)}" for value in dict.fromkeys(risks)]
 
 
 # 只读审查的事实边界；所有报告正文共用同一措辞。
