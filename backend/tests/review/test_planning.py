@@ -5,7 +5,7 @@ import pytest
 from app.review.context import AgentContext, ReviewContext
 from app.review.models import ReviewLimits
 from app.review.nodes.preparation import plan as execution_plan
-from app.review.planning import plan_review
+from app.review.planning import _Unit, _merge, plan_review
 
 
 def change(path, length=1, content=""):
@@ -143,7 +143,11 @@ def test_large_pr_packs_into_budget_and_reports_uncovered_scope():
     covered = {path for unit in plan.units for path in unit.changed_paths}
     assert covered == paths
     assert sum(unit.min_model_calls for unit in plan.units) <= 64
-    assert not plan.limitations
+    # Packing stops once the budget fits instead of merging every legal pair.
+    assert len(plan.units) == 21
+    assert plan.limitations and all(
+        "合并" in item and "pkg" in item for item in plan.limitations)
+    assert not plan.uncovered
     assert len(plan.assignments) == len(plan.units)
 
     tight = plan_review(changes, depth="standard",
@@ -528,3 +532,64 @@ def test_comment_only_units_can_pack_within_the_discovery_budget():
     assert all(unit.risk_tier == "low" for unit in plan.units)
     assert all(assignment.reviewer == "reviewer" for assignment in plan.assignments)
     assert not plan.uncovered
+
+
+def test_budget_removes_only_enough_specialists():
+    changes = [change(f"pkg{index}/mod{index}.py", content="subprocess.run(cmd)")
+               for index in range(11)]
+    plan = plan_review(changes, depth="standard", limits=ReviewLimits(total_model_calls=64))
+    assert sum(assignment.reviewer == "specialist" for assignment in plan.assignments) == 10
+    assert len(plan.limitations) == 1
+    assert "专项风险" in plan.limitations[0]
+    assert "pkg0/mod0.py" in plan.limitations[0]
+    assert "按风险相关性排序移除" in plan.limitations[0]
+
+
+def test_budget_keeps_contract_on_most_units():
+    paths, edges = [], []
+    for index in range(6):
+        group = [f"m{index}a/x.py", f"m{index}b/x.py", f"m{index}c/x.py"]
+        paths += group
+        edges += [edge(group[0], group[1]), edge(group[1], group[2])]
+    plan = plan_review([change(path, content="subprocess.run(cmd)") for path in paths],
+                       depth="deep", limits=ReviewLimits(total_model_calls=64),
+                       repository_graph={"edges": edges})
+    assert len(plan.units) == 6
+    assert sum(assignment.reviewer == "specialist" for assignment in plan.assignments) == 6
+    assert sum(assignment.reviewer == "contract" for assignment in plan.assignments) == 5
+    assert len(plan.limitations) == 1 and "契约核验" in plan.limitations[0]
+
+
+def test_budget_packing_merges_low_risk_units_first():
+    changes = [{**change("med0/a0.py"), "change_type": "added"},
+               {**change("med1/a1.py"), "change_type": "added"},
+               change("low0/b0.py"), change("low1/b1.py")]
+    plan = plan_review(changes, depth="standard", limits=ReviewLimits(total_model_calls=9))
+    assert len(plan.units) == 3
+    merged = next(unit for unit in plan.units
+                  if unit.changed_paths == ["low0/b0.py", "low1/b1.py"])
+    assert merged.risk_tier == "low"
+    assert len(plan.limitations) == 1 and "合并" in plan.limitations[0]
+
+
+def test_merge_refuses_to_drop_independent_roles():
+    changes = {"a.py": {"hunks": []}, "b.py": {"hunks": []}}
+
+    def unit(path, roles):
+        return _Unit(paths=[path], hunk_ids=[], symbols=[], impacted=[], goals=[],
+                     risk="medium", reasons=[], strategy="contextual_review",
+                     estimated=2000, roles=list(roles), min_calls=2 * len(roles),
+                     max_calls=12 * len(roles))
+
+    assert _merge(unit("a.py", ["reviewer", "contract"]), unit("b.py", ["reviewer"]),
+                  changes, "deep") is None
+    assert _merge(unit("a.py", ["reviewer"]), unit("b.py", ["reviewer"]),
+                  changes, "deep") is not None
+
+
+def test_assignment_objective_exposes_risk_reasons():
+    plan = plan_review([change("pkg/mod.py", content="subprocess.run(cmd)")],
+                       depth="standard")
+    assert [assignment.reviewer for assignment in plan.assignments] == ["reviewer", "specialist"]
+    assert all("风险信号：sensitive_operation:command_execution" in assignment.objective
+               for assignment in plan.assignments)

@@ -13,6 +13,7 @@ from app.models.review.diff import PullRequestInfo
 from app.review.contracts import ReviewCreateRequest, ReviewPreviewRequest
 from app.services.publication.publication_planner import PublicationPlanner
 from app.services.publication.publication_repository import PublicationRepository, PublicationConflict
+from app.services.publication.review_text_format import markdown_text
 from app.models.publication import PublicationSelection
 from app.core.fingerprints import stable_hash
 from app.services.review.artifact_store import LocalArtifactStore
@@ -169,8 +170,8 @@ async def test_planning_limitations_survive_summary_and_report_without_changing_
     summary = summary_projection(plan)
     for limitation in limited.limitations:
         assert limitation in summary.digest.merge_decision.limits
-        assert limitation in plan.user_report_markdown
-        assert limitation in plan.review_comment_markdown
+        assert markdown_text(limitation) in plan.user_report_markdown
+        assert markdown_text(limitation) in plan.review_comment_markdown
 
 
 async def test_execution_plan_uses_index_without_expanding_confirmed_scope(pipeline, monkeypatch):

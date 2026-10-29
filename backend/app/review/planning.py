@@ -96,6 +96,7 @@ ROLE_OBJECTIVES = {
     "specialist": "检查本次变更中的权限、并发、事务和资源生命周期风险",
     "contract": "独立核对跨模块调用者、消费者与数据契约，挑战主审的接口假设",
 }
+ROLE_LABELS = {"reviewer": "综合审查", "specialist": "专项风险", "contract": "契约核验"}
 
 
 @dataclass(frozen=True)
@@ -410,10 +411,40 @@ def _paths_text(paths):
 
 
 def _priority(unit):
+    # Drop order: keep high-risk and larger units first.
     return ({"high": 0, "medium": 1, "low": 2}[unit.risk], -unit.estimated, unit.paths)
 
 
+def _merge_priority(unit):
+    # Merge order: low-risk, signal-free, documentation and small units first.
+    return ({"low": 0, "medium": 1, "high": 2}[unit.risk],
+            len(unit.reasons),
+            0 if all(_documentation_support(path) for path in unit.paths) else 1,
+            unit.estimated, unit.paths)
+
+
+def _role_value(unit, role):
+    # Incremental cost is identical for every optional role, so ordering by
+    # relevance x risk is equivalent to ordering by value / incremental cost.
+    reasons = set(unit.reasons)
+    if role == "contract":
+        relevance = 2 if "cross_module" in reasons else 0
+        relevance += 2 if "public_api_change" in reasons else 0
+        relevance += 1 if "structural_change" in reasons else 0
+    else:
+        relevance = 2 * sum(reason.startswith("sensitive_operation:") for reason in reasons)
+        relevance += 2 * sum(reason.startswith("sensitive_path:") for reason in reasons)
+        relevance += 1 if "public_api_change" in reasons else 0
+        relevance += 1 if "cross_module" in reasons else 0
+        relevance += 1 if "large_change" in reasons else 0
+    return relevance * {"low": 1, "medium": 2, "high": 3}[unit.risk]
+
+
 def _merge(left, right, changes, depth):
+    # Merging is a coverage-preserving budget measure; it must not silently
+    # discard an independent specialist/contract perspective.
+    if left.roles != ["reviewer"] or right.roles != ["reviewer"]:
+        return None
     paths = sorted(set(left.paths) | set(right.paths))
     if len(paths) > MAX_UNIT_PATHS:
         return None
@@ -436,29 +467,34 @@ def _merge(left, right, changes, depth):
         structural=left.structural or right.structural)
 
 
-def _pack(units, changes, depth):
-    units = sorted(units, key=_priority)
+def _pack(units, changes, depth, capacity):
+    units = sorted(units, key=_merge_priority)
+    cost = sum(unit.min_calls for unit in units)
+    limitations = []
     changed = True
-    while changed:
+    while changed and cost > capacity:
         changed = False
         for index, left in enumerate(units):
-            if left.risk == "high":
+            if left.risk == "high" or left.roles != ["reviewer"]:
                 continue
             for offset in range(index + 1, len(units)):
                 right = units[offset]
-                if right.risk == "high":
+                if right.risk == "high" or right.roles != ["reviewer"]:
                     continue
                 merged = _merge(left, right, changes, depth)
                 if merged is None:
                     continue
                 units = [unit for position, unit in enumerate(units)
                          if position not in {index, offset}] + [merged]
-                units.sort(key=_priority)
+                units.sort(key=_merge_priority)
+                cost -= left.min_calls + right.min_calls - merged.min_calls
+                limitations.append("预算不足：已将以下变更合并为一个审查单元以控制调用量："
+                                   + _paths_text(merged.paths))
                 changed = True
                 break
             if changed:
                 break
-    return units
+    return units, limitations
 
 
 def _compact_documents(units, changes, depth):
@@ -496,24 +532,32 @@ def _fit(units, changes, depth, limits):
     limitations, uncovered = [], {}
     discovery = discovery_limits(limits, depth)
     capacity = discovery.total_model_calls
+    min_each = 1 if depth == "quick" else 2
     cost = sum(unit.min_calls for unit in units)
     if cost > capacity:
-        dropped = False
-        for role in ("contract", "specialist"):
+        candidates = [(unit, role) for unit in units for role in unit.roles
+                      if role != "reviewer"]
+        # Remove the least valuable perspective first and stop as soon as the
+        # remaining units fit, so one unit's overflow cannot strip every role.
+        candidates.sort(key=lambda item: (
+            _role_value(item[0], item[1]),
+            {"low": 0, "medium": 1, "high": 2}[item[0].risk],
+            item[0].estimated, item[0].paths, item[1]))
+        for unit, role in candidates:
             if cost <= capacity:
                 break
-            for unit in units:
-                if role not in unit.roles or len(unit.roles) == 1:
-                    continue
-                unit.roles.remove(role)
-                unit.min_calls -= 1 if depth == "quick" else 2
-                unit.max_calls -= limits.model_calls
-                dropped = True
-            cost = sum(unit.min_calls for unit in units)
-        if dropped:
-            limitations.append("预算不足：部分高风险或跨模块单元的专项/独立审查未启动。")
+            if role not in unit.roles or len(unit.roles) == 1:
+                continue
+            unit.roles.remove(role)
+            unit.min_calls -= min_each
+            unit.max_calls -= limits.model_calls
+            cost = sum(item.min_calls for item in units)
+            limitations.append("预算不足：" + _paths_text(unit.paths) + " 的"
+                               + ROLE_LABELS[role]
+                               + "视角未启动（按风险相关性排序移除）。")
     if cost > capacity:
-        units = _pack(units, changes, depth)
+        units, pack_limitations = _pack(units, changes, depth, capacity)
+        limitations.extend(pack_limitations)
         cost = sum(unit.min_calls for unit in units)
     if cost > capacity:
         kept, remaining = [], capacity
@@ -536,6 +580,8 @@ def _assignments(unit, depth, focus):
             objective += "；联合核对相关变更，不把静态关联当作源码证据"
         objective += (f"；审查深度：{depth}（{STRATEGY_LABELS[unit.strategy]}）"
                       f"；重点：{', '.join(focus)}")
+        if unit.reasons:
+            objective += "；风险信号：" + "、".join(sorted(unit.reasons))
         if unit.symbols:
             objective += "；变更符号：" + ", ".join(unit.symbols[:8])
         if unit.impacted:
