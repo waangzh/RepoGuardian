@@ -8,7 +8,7 @@ import pytest
 
 from app.languages import isolation, parser_cache
 from app.languages.registry import default_language_registry
-from app.tools.repo_indexer import RepoIndexer
+from app.tools.repo_indexer import RepoIndexer, _scan_imports
 
 
 def _write(path, text):
@@ -693,3 +693,246 @@ async def test_blob_cache_hit_preserves_cancellation(tmp_path, monkeypatch):
     with pytest.raises(isolation.ParserCancelled):
         await RepoIndexer().execute(repo_path=str(repo), changed_paths={"a.py"},
                                     cancel_event=cancel)
+
+
+async def test_scoped_index_reports_unmodified_consumer_without_parsing_it(tmp_path):
+    (tmp_path / "models").mkdir()
+    (tmp_path / "services").mkdir()
+    _write(tmp_path / "models" / "order.py", "def total(tax):\n    return tax\n")
+    _write(tmp_path / "services" / "checkout.py",
+           "from models.order import total\n"
+           "def pay():\n"
+           "    return total(1)\n")
+
+    index = await RepoIndexer().execute(
+        repo_path=str(tmp_path), changed_paths={"models/order.py"})
+
+    files = {item["path"]: item for item in index["file_index"]}
+    consumer = files["services/checkout.py"]
+    assert consumer["parser_id"] == "unparsed" and consumer["imports"] == []
+    assert consumer["import_hints"] == [{
+        "module": "models.order", "imported_name": "total",
+        "target": "models/order.py", "confidence": 0.8,
+        "parser_id": "import_scan.v1"}]
+    symbols = {item["symbol"]: item for item in index["symbol_index"]}
+    assert symbols["total"]["signature"] == "def total(tax)"
+    edge = next(item for item in index["repository_graph"]["edges"]
+                if item["type"] == "imports" and item["source"] == "services/checkout.py")
+    assert edge["target"] == "models/order.py"
+    assert edge["resolution_status"] == "candidate"
+    assert edge["relationship_level"] == "import_candidate"
+    assert edge["confidence"] < 0.9
+    assert not [item for item in index["repository_graph"]["edges"] if item["type"] == "calls"]
+
+    confirmed = await RepoIndexer().execute(
+        repo_path=str(tmp_path),
+        changed_paths={"models/order.py", "services/checkout.py"})
+    call = next(item for item in confirmed["repository_graph"]["edges"]
+                if item["type"] == "calls" and item.get("source_file") == "services/checkout.py")
+    assert call["target_file"] == "models/order.py"
+    assert call["resolution_status"] == "resolved"
+
+
+async def test_reverse_import_candidates_do_not_cross_languages(tmp_path):
+    (tmp_path / "backend").mkdir()
+    (tmp_path / "frontend").mkdir()
+    _write(tmp_path / "backend" / "models.py", "def load():\n    return 1\n")
+    _write(tmp_path / "backend" / "use.py",
+           "from models import load\ndef run():\n    return load()\n")
+    _write(tmp_path / "frontend" / "models.ts",
+           "export function load() { return 1 }\n")
+    _write(tmp_path / "frontend" / "use.ts",
+           "import { load } from './models'\nexport const run = () => load()\n")
+
+    index = await RepoIndexer().execute(
+        repo_path=str(tmp_path), changed_paths={"backend/models.py"})
+    edges = index["repository_graph"]["edges"]
+    assert any(item["source"] == "backend/use.py" and item["target"] == "backend/models.py"
+               and item["resolution_status"] == "candidate"
+               for item in edges if item["type"] == "imports")
+    assert not any(item["source"] == "frontend/use.ts" and item["target"] == "backend/models.py"
+                   for item in edges if item["type"] == "imports")
+
+
+async def test_reverse_import_candidates_terminate_on_cycles(tmp_path):
+    _write(tmp_path / "a.py", "from b import bee\ndef aye():\n    return bee()\n")
+    _write(tmp_path / "b.py", "from a import aye\ndef bee():\n    return 1\n")
+    _write(tmp_path / "c.py", "from b import bee\ndef see():\n    return bee()\n")
+
+    index = await RepoIndexer().execute(repo_path=str(tmp_path), changed_paths={"a.py"})
+    files = {item["path"]: item for item in index["file_index"]}
+    assert files["b.py"]["parser_id"] != "unparsed"
+    assert files["c.py"]["parser_id"] == "unparsed"
+    imports = [item for item in index["repository_graph"]["edges"] if item["type"] == "imports"]
+    assert any(item["source"] == "a.py" and item["target"] == "b.py"
+               and item["resolution_status"] == "resolved" for item in imports)
+    assert any(item["source"] == "b.py" and item["target"] == "a.py"
+               and item["resolution_status"] == "resolved" for item in imports)
+    assert any(item["source"] == "c.py" and item["target"] == "b.py"
+               and item["resolution_status"] == "candidate" for item in imports)
+
+
+async def test_reverse_import_candidates_refresh_after_consumer_edit(tmp_path):
+    _write(tmp_path / "model.py", "def value():\n    return 1\n")
+    _write(tmp_path / "other.py", "def other():\n    return 2\n")
+    _write(tmp_path / "consumer.py",
+           "from model import value\ndef run():\n    return value()\n")
+    first = await RepoIndexer().execute(repo_path=str(tmp_path), changed_paths={"model.py"})
+    assert any(item["source"] == "consumer.py" and item["target"] == "model.py"
+               for item in first["repository_graph"]["edges"] if item["type"] == "imports")
+
+    _write(tmp_path / "consumer.py",
+           "from other import other\ndef run():\n    return other()\n")
+    second = await RepoIndexer().execute(
+        repo_path=str(tmp_path), changed_paths={"model.py", "other.py"})
+    imports = [item for item in second["repository_graph"]["edges"] if item["type"] == "imports"]
+    assert not any(item["source"] == "consumer.py" and item["target"] == "model.py"
+                   for item in imports)
+    assert any(item["source"] == "consumer.py" and item["target"] == "other.py"
+               for item in imports)
+
+
+async def test_reverse_scan_handles_deep_expressions_without_parsing_ast(tmp_path, monkeypatch):
+    import ast
+
+    _write(tmp_path / "api.py", "def api():\n    return 1\n")
+    _write(tmp_path / "consumer.py",
+           "from api import api\nvalue = " + "+".join(["1"] * 10000) + "\n")
+    parsed = []
+    original = default_language_registry.analyze
+
+    def analyze(path, relative_path, **kwargs):
+        parsed.append(relative_path)
+        return original(path, relative_path, **kwargs)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("reverse scan must not construct an AST in the server")
+
+    monkeypatch.setattr(default_language_registry, "analyze", analyze)
+    monkeypatch.setattr(ast, "parse", forbidden)
+    index = await RepoIndexer().execute(repo_path=str(tmp_path), changed_paths={"api.py"})
+
+    assert parsed == ["api.py"]
+    consumer = next(item for item in index["file_index"] if item["path"] == "consumer.py")
+    assert consumer["parser_id"] == "unparsed"
+    assert consumer["import_hints"][0]["target"] == "api.py"
+
+
+@pytest.mark.parametrize("language", ["python", "typescript"])
+def test_import_scan_bounds_source_reads_and_reports_skips(tmp_path, monkeypatch, language):
+    from io import BytesIO
+    from pathlib import Path
+
+    source = b"#" * (isolation.MAX_SOURCE_BYTES + 1) + b"\nfrom api import api\n"
+    sizes = []
+
+    class Source(BytesIO):
+        def read(self, size=-1):
+            sizes.append(size)
+            return super().read(size)
+
+    monkeypatch.setattr(Path, "open", lambda *args, **kwargs: Source(source))
+    diagnostics = []
+    assert _scan_imports(tmp_path / "large.py", language, diagnostics=diagnostics) == []
+    assert sizes == [isolation.MAX_SOURCE_BYTES + 1]
+    assert diagnostics == ["import scan source exceeds 4 MiB; skipped"]
+
+
+def test_python_import_scan_preserves_multiline_relative_and_aliased_imports(tmp_path):
+    source = tmp_path / "consumer.py"
+    _write(source, '"""from fake import nope"""\n'
+           "# import fake\nimport pkg.api as api, other\n"
+           "from ..pkg import (\n    value as renamed,\n    helper,\n)\n"
+           "from . import sibling; import tail\n")
+    assert _scan_imports(source) == [
+        {"module": "pkg.api"}, {"module": "other"},
+        {"module": "..pkg", "imported_name": "value"},
+        {"module": "..pkg", "imported_name": "helper"},
+        {"module": ".", "imported_name": "sibling"}, {"module": "tail"},
+    ]
+
+
+def test_import_scan_keeps_partial_tokenization_diagnostic(tmp_path):
+    source = tmp_path / "consumer.py"
+    _write(source, "from api import api\nvalue = (\n")
+    diagnostics = []
+    assert _scan_imports(source, diagnostics=diagnostics) == [
+        {"module": "api", "imported_name": "api"}]
+    assert diagnostics == ["import scan tokenization incomplete"]
+
+
+def test_import_scan_preserves_read_failure_diagnostic(tmp_path):
+    diagnostics = []
+    assert _scan_imports(tmp_path / "missing.py", diagnostics=diagnostics) == []
+    assert diagnostics == ["import scan could not read source"]
+
+
+@pytest.mark.parametrize("cancel_at", ["before_read", "after_read", "during_tokens"])
+def test_import_scan_propagates_cancellation(tmp_path, monkeypatch, cancel_at):
+    from io import BytesIO
+    from pathlib import Path
+    from app.tools import repo_indexer
+
+    cancel = threading.Event()
+    source = tmp_path / "consumer.py"
+    _write(source, "from api import api\n")
+    original_open = Path.open
+    original_tokens = repo_indexer.tokenize.generate_tokens
+
+    def open_source(*args, **kwargs):
+        if cancel_at == "before_read":
+            pytest.fail("cancelled scan must not open source")
+        if cancel_at == "after_read":
+            cancel.set()
+            return BytesIO(b"from api import api\n")
+        return original_open(*args, **kwargs)
+
+    def tokens(*args, **kwargs):
+        for token in original_tokens(*args, **kwargs):
+            if token.string == "api":
+                cancel.set()
+            yield token
+
+    monkeypatch.setattr(Path, "open", open_source)
+    monkeypatch.setattr(repo_indexer.tokenize, "generate_tokens", tokens)
+    if cancel_at == "before_read":
+        cancel.set()
+    with pytest.raises(isolation.ParserCancelled):
+        _scan_imports(source, cancel_event=cancel)
+
+
+@pytest.mark.parametrize("extension", ["ts", "js"])
+async def test_reverse_scan_normalizes_parent_imports_without_stem_fallback(tmp_path, extension):
+    (tmp_path / "src" / "models").mkdir(parents=True)
+    (tmp_path / "src" / "services").mkdir()
+    target = f"src/models/order.{extension}"
+    consumer = f"src/services/checkout.{extension}"
+    _write(tmp_path / target, "export function total(tax) { return tax }\n")
+    _write(tmp_path / consumer,
+           "import { total } from '../models/order'\n"
+           "export function pay() { return total(1) }\n")
+    _write(tmp_path / f"src/models/unused.{extension}", "export const unused = 1\n")
+    index = await RepoIndexer().execute(repo_path=str(tmp_path), changed_paths={target})
+    files = {item["path"]: item for item in index["file_index"]}
+    assert files[consumer]["parser_id"] == "unparsed"
+    assert files[consumer]["import_hints"][0]["target"] == target
+    candidate = next(edge for edge in index["repository_graph"]["edges"]
+                     if edge["type"] == "imports" and edge["source"] == consumer)
+    assert candidate["resolution_status"] == "candidate" and candidate["confidence"] == 0.8
+
+    confirmed = await RepoIndexer().execute(
+        repo_path=str(tmp_path), changed_paths={target, consumer})
+    edge = next(edge for edge in confirmed["repository_graph"]["edges"]
+                if edge["type"] == "imports" and edge["source"] == consumer)
+    assert edge["resolution_status"] == "resolved" and edge["confidence"] >= 0.9
+    assert next(item for item in confirmed["file_index"]
+                if item["path"].endswith(f"unused.{extension}"))["parser_id"] == "unparsed"
+
+
+def test_relative_import_cannot_escape_repository_or_fall_back_to_same_stem():
+    from app.tools.repository_graph import resolve_import
+
+    files = {"src/consumer.ts": {"language": "typescript"},
+             "order.ts": {"language": "typescript"}}
+    assert resolve_import("src/consumer.ts", "../../order", files) == []
+    assert resolve_import("src/consumer.ts", "../order", files) == [("order.ts", 0.99)]

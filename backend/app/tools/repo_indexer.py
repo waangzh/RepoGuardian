@@ -7,19 +7,20 @@
     4. project_meta — 多语言、框架、测试目录、入口点
 """
 
-import ast
 import asyncio
 import hashlib
+import io
 import json
 import os
 import re
 import threading
+import tokenize
 from pathlib import Path
 from typing import Any
 
 from app.languages.registry import default_language_registry
 from app.languages.base import AnalysisLevel, FileAnalysis
-from app.languages.isolation import ParserCancelled, parser_fingerprint
+from app.languages.isolation import MAX_SOURCE_BYTES, ParserCancelled, parser_fingerprint
 from app.tools.base import BaseTool
 from app.review.tool_scope import (
     ReviewPathPolicyError, git_worktree_matches_index, list_git_tracked_blobs,
@@ -28,6 +29,7 @@ from app.review.tool_scope import (
 from app.tools.git_tool import GitTool
 from app.tools.repository_graph import (
     build_repository_graph, related_test_paths, resolved_import_targets,
+    reverse_import_hints,
 )
 
 # 扫描时跳过的目录和文件
@@ -218,6 +220,20 @@ class RepoIndexer(BaseTool):
                 "parser_id": analysis.parser_id,
                 "diagnostics": analysis.diagnostics,
             })
+        if changed_paths is not None and analyses:
+            scanned = {}
+            entries = {item["path"]: item for item in index}
+            for path, file_path, language, _ in files:
+                if self._cancel_event.is_set():
+                    raise ParserCancelled()
+                if path not in analyses and language != "unknown":
+                    scanned[path] = _scan_imports(
+                        file_path, language, cancel_event=self._cancel_event,
+                        diagnostics=entries[path]["diagnostics"])
+            hints = reverse_import_hints(index, scanned, analyses)
+            for item in index:
+                if item["path"] in hints:
+                    item["import_hints"] = hints[item["path"]]
         return sorted(index, key=lambda f: f["path"])
 
     def _analyze_files(
@@ -349,25 +365,50 @@ def _detect_language(filename: str) -> str:
 
 def _extract_imports(file_path: Path, language: str = "python") -> list[str]:
     """提取完整导入标识；解析失败时返回空列表而不影响索引。"""
+    return sorted({ref["module"] for ref in _scan_imports(file_path, language)})
+
+
+def _scan_imports(
+    file_path: Path, language: str = "python", *, cancel_event=None, diagnostics=None,
+) -> list[dict[str, str]]:
+    """轻量扫描导入语句，供未解析文件的反向候选发现使用。"""
+    if cancel_event is not None and cancel_event.is_set():
+        raise ParserCancelled()
     try:
-        content = file_path.read_text(encoding="utf-8", errors="ignore")
-    except Exception:
+        with file_path.open("rb") as stream:
+            source = stream.read(MAX_SOURCE_BYTES + 1)
+    except OSError:
+        if diagnostics is not None:
+            diagnostics.append("import scan could not read source")
         return []
-    imports: list[str] = []
+    if cancel_event is not None and cancel_event.is_set():
+        raise ParserCancelled()
+    if len(source) > MAX_SOURCE_BYTES:
+        if diagnostics is not None:
+            diagnostics.append("import scan source exceeds 4 MiB; skipped")
+        return []
+    content = source.decode("utf-8", errors="ignore")
+    imports: list[dict[str, str]] = []
     if language == "python":
         try:
-            tree = ast.parse(content)
-        except SyntaxError:
-            return []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imports.extend(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom):
-                prefix = "." * node.level
-                if node.module:
-                    imports.append(prefix + node.module)
-                elif prefix:
-                    imports.append(prefix)
+            tokens = tokenize.generate_tokens(io.StringIO(content).readline)
+            for token in tokens:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise ParserCancelled()
+                if token.type != tokenize.NAME or token.string not in {"from", "import"}:
+                    continue
+                statement = []
+                for part in tokens:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise ParserCancelled()
+                    if part.type in {tokenize.NEWLINE, tokenize.ENDMARKER} or part.string == ";":
+                        break
+                    if part.type in {tokenize.NAME, tokenize.OP}:
+                        statement.append(part.string)
+                imports.extend(_python_import_refs(token.string, statement))
+        except (tokenize.TokenError, IndentationError):
+            if diagnostics is not None:
+                diagnostics.append("import scan tokenization incomplete")
     elif language in {"javascript", "typescript"}:
         patterns = (
             r"\b(?:import|export)\s+(?:[^;]*?\s+from\s+)?[\"']([^\"']+)[\"']",
@@ -375,17 +416,51 @@ def _extract_imports(file_path: Path, language: str = "python") -> list[str]:
             r"\bimport\s*\(\s*[\"']([^\"']+)[\"']\s*\)",
         )
         for pattern in patterns:
-            imports.extend(re.findall(pattern, content))
+            imports.extend({"module": module} for module in re.findall(pattern, content))
     elif language == "java":
-        imports.extend(re.findall(r"^\s*import\s+(?:static\s+)?([\w.]+)(?:\.\*)?\s*;", content, re.MULTILINE))
+        imports.extend({"module": module} for module in re.findall(
+            r"^\s*import\s+(?:static\s+)?([\w.]+)(?:\.\*)?\s*;", content, re.MULTILINE))
     elif language == "go":
-        imports.extend(re.findall(r"\bimport\s+(?:[\w.]+\s+)?\"([^\"]+)\"", content))
+        imports.extend({"module": module} for module in re.findall(
+            r"\bimport\s+(?:[\w.]+\s+)?\"([^\"]+)\"", content))
         for block in re.findall(r"\bimport\s*\((.*?)\)", content, re.DOTALL):
-            imports.extend(re.findall(r"(?:^|\n)\s*(?:[\w.]+\s+)?\"([^\"]+)\"", block))
+            imports.extend({"module": module} for module in re.findall(
+                r"(?:^|\n)\s*(?:[\w.]+\s+)?\"([^\"]+)\"", block))
     elif language == "rust":
-        imports.extend(re.findall(r"^\s*use\s+([^;{]+)", content, re.MULTILINE))
-        imports.extend(re.findall(r"^\s*mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;", content, re.MULTILINE))
-    return sorted(set(imports))
+        imports.extend({"module": module} for module in re.findall(
+            r"^\s*use\s+([^;{]+)", content, re.MULTILINE))
+        imports.extend({"module": module} for module in re.findall(
+            r"^\s*mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;", content, re.MULTILINE))
+    if cancel_event is not None and cancel_event.is_set():
+        raise ParserCancelled()
+    return imports
+
+
+def _python_import_refs(kind: str, tokens: list[str]) -> list[dict[str, str]]:
+    module = ""
+    if kind == "from":
+        if "import" not in tokens:
+            return []
+        boundary = tokens.index("import")
+        module, tokens = "".join(tokens[:boundary]), tokens[boundary + 1:]
+        if not module:
+            return []
+    refs = []
+    parts: list[str] = []
+    for token in [*tokens, ","]:
+        if token in {"(", ")"}:
+            continue
+        if token != ",":
+            parts.append(token)
+            continue
+        if "as" in parts:
+            parts = parts[:parts.index("as")]
+        name = "".join(parts)
+        if name:
+            refs.append({"module": module, "imported_name": name}
+                        if kind == "from" else {"module": name})
+        parts = []
+    return refs
 
 
 def _detect_framework(

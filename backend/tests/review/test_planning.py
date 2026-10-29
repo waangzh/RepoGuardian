@@ -63,6 +63,17 @@ def test_resolved_imports_merge_related_changes_but_unresolved_calls_do_not():
     assert len(split.units) == 2 and len(split.assignments) == 2
 
 
+def test_candidate_import_surfaces_unmodified_consumer_as_impacted_hint():
+    changes = [change("models/order.py")]
+    graph = {"edges": [edge("services/checkout.py", "models/order.py",
+                            resolution_status="candidate",
+                            relationship_level="import_candidate", confidence=0.8)]}
+    plan = plan_review(changes, depth="standard", repository_graph=graph)
+    assert plan.units[0].changed_paths == ["models/order.py"]
+    assert plan.units[0].impacted_paths == ["services/checkout.py"]
+    assert "services/checkout.py" in plan.assignments[0].objective
+
+
 def test_same_directory_changes_form_one_unit():
     plan = plan_review([change("pkg/a.py"), change("pkg/b.py")], depth="standard")
     assert len(plan.units) == 1

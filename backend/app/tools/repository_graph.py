@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable
+import posixpath
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -41,12 +42,32 @@ def build_repository_graph(
             imported = str(import_ref.get("module", ""))
             resolved = resolve_import(source, imported, files, lookup)
             for target, confidence in resolved:
+                edge_confidence = min(
+                    confidence, float(import_ref.get("confidence", confidence)))
+                if confidence >= 0.9:
+                    status = "resolved" if edge_confidence >= 0.9 else "candidate"
+                    basis = "module_resolution"
+                else:
+                    status, basis = "hint", "stem_fallback"
                 edges.append(_edge(
                     "file", source, "file", target, "imports",
-                    min(confidence, float(import_ref.get("confidence", confidence))),
-                    f"{source} imports {imported}",
+                    edge_confidence, f"{source} imports {imported}",
                     parser_id=import_ref.get("parser_id"),
+                    resolution_status=status, resolution_basis=basis,
+                    **({"relationship_level": "search_hint"} if status == "hint" else {}),
                 ))
+        for hint in item.get("import_hints") or []:
+            target = str(hint.get("target", ""))
+            if target not in files:
+                continue
+            edges.append(_edge(
+                "file", source, "file", target, "imports",
+                float(hint.get("confidence", 0.8)),
+                f"{source} imports {hint.get('module', '')} (text scan)",
+                parser_id=hint.get("parser_id", "import_scan.v1"),
+                resolution_status="candidate", resolution_basis="text_import_scan",
+                relationship_level="import_candidate",
+            ))
 
     by_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for symbol in symbols:
@@ -254,7 +275,9 @@ def resolve_import(
             for path in lookup["python_modules"].get(candidate, ()):
                 candidates.append((path, 0.99 if index == 0 else 0.94))
     elif language in {"javascript", "typescript"} and module.startswith("."):
-        base = (source_path.parent / module).as_posix()
+        base = posixpath.normpath((source_path.parent / module).as_posix())
+        if base == ".." or base.startswith("../"):
+            return []
         for ext in _SOURCE_EXTENSIONS[language]:
             for path in (f"{base}{ext}", f"{base}/index{ext}"):
                 if path in files:
@@ -313,6 +336,51 @@ def resolved_import_targets(
                                resolve_import(source, submodule, files, lookup)
                                if confidence >= 0.94)
     return targets
+
+
+def reverse_import_hints(
+    file_index: list[dict[str, Any]],
+    imports_by_source: dict[str, list[dict[str, Any]]],
+    targets: Iterable[str],
+) -> dict[str, list[dict[str, Any]]]:
+    """Match text-scanned imports of unparsed files against parsed targets.
+
+    Only module-path resolution counts; stem fallback is a name hint and is
+    excluded so a same-named module in another language is never a consumer.
+    """
+    files = {str(item["path"]): item for item in file_index if item.get("path")}
+    lookup = _build_lookup(files)
+    wanted = set(targets)
+    hints: dict[str, list[dict[str, Any]]] = {}
+    for source, refs in imports_by_source.items():
+        item = files.get(source)
+        if item is None or item.get("language", "unknown") not in _SOURCE_EXTENSIONS:
+            continue
+        matches: dict[tuple[str, str], dict[str, Any]] = {}
+        for ref in refs:
+            module = str(ref.get("module", ""))
+            if not module:
+                continue
+            candidates = [(path, confidence) for path, confidence in
+                          resolve_import(source, module, files, lookup)
+                          if confidence >= 0.9]
+            member = ref.get("imported_name")
+            if item.get("language") == "python" and member and member != "*":
+                submodule = module + ("" if module.endswith(".") else ".") + str(member)
+                candidates.extend(
+                    (path, confidence) for path, confidence in
+                    resolve_import(source, submodule, files, lookup)
+                    if confidence >= 0.94)
+            for path, _ in candidates:
+                if path in wanted:
+                    matches[(path, module)] = {
+                        "module": module, "imported_name": member, "target": path,
+                        "confidence": 0.8, "parser_id": "import_scan.v1",
+                    }
+        if matches:
+            hints[source] = sorted(matches.values(),
+                                   key=lambda entry: (entry["target"], entry["module"]))
+    return hints
 
 
 def related_test_paths(

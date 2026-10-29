@@ -292,14 +292,21 @@ async def test_symbol_reads_and_relations_expand_shared_index_once(
             before = len(scopes)
             denied = await read_symbol.coroutine(path=".env", symbol="SECRET", runtime=runtime)
             assert not denied["ok"] and len(scopes) == before
+            assert any(edge["type"] == "imports" and edge["source"] == "consumer.py"
+                       and edge["target"] == "other.py"
+                       and edge["resolution_status"] == "candidate"
+                       for edge in sources.repository_graph["edges"])
             callers, references = await asyncio.gather(
                 get_callers.coroutine(symbol="other", runtime=runtime),
                 find_references.coroutine(symbol="other", runtime=runtime))
             observed.update(callers=callers, references=references)
             assert callers["scope_complete"] and references["scope_complete"]
-            assert any(edge["source_file"] == "consumer.py" for edge in callers["edges"])
-            assert scopes.count(None) == 1
-            assert sources.repository_graph["metadata"]["scope_mode"] == "full"
+            assert any(edge["source_file"] == "consumer.py"
+                       and edge["type"] == "calls"
+                       and edge["resolution_status"] == "resolved"
+                       for edge in callers["edges"])
+            assert None not in scopes
+            assert sources.repository_graph["metadata"]["scope_mode"] == "scoped"
             return await invoke(*args, context=context, **kwargs)
 
         monkeypatch.setattr(result, "ainvoke", checked)
@@ -310,6 +317,75 @@ async def test_symbol_reads_and_relations_expand_shared_index_once(
     assert await service._worker.run_once()
     assert service.get_task(task.id).status == "completed", observed
     assert len(scopes) == 3
+
+
+@pytest.mark.parametrize("query", ["get_callees", "find_references"])
+async def test_outgoing_relations_expand_only_direct_targets(tmp_path, query):
+    from app.review.context import AgentContext
+    from app.review import tools
+    from app.tools.repo_indexer import RepoIndexer
+
+    for name, content in {
+        "entry.py": "from helper import helper\ndef entry():\n    return helper()\n",
+        "helper.py": "from deep import deep\ndef helper():\n    return deep()\n",
+        "deep.py": "def deep():\n    return 1\n",
+        "unrelated.py": "def unrelated():\n    return 2\n",
+    }.items():
+        (tmp_path / name).write_text(content, encoding="utf-8")
+    index = await RepoIndexer().execute(repo_path=str(tmp_path), changed_paths={"entry.py"})
+    indexed_paths = {item["path"] for item in index["file_index"]
+                     if item["parser_id"] != "unparsed"}
+    assert indexed_paths == {"entry.py", "helper.py"}
+    context = AgentContext(
+        evidence=SimpleNamespace(allowed_paths=frozenset(item["path"] for item in index["file_index"])),
+        symbols=index["symbol_index"], repository_graph=index["repository_graph"])
+    scopes = []
+
+    async def ensure_index(paths):
+        assert paths is not None
+        scopes.append(paths)
+        expanded = await RepoIndexer().execute(
+            repo_path=str(tmp_path), changed_paths=indexed_paths | paths)
+        context.symbols[:] = expanded["symbol_index"]
+        context.repository_graph.clear()
+        context.repository_graph.update(expanded["repository_graph"])
+        indexed_paths.update(item["path"] for item in expanded["file_index"]
+                             if item["parser_id"] != "unparsed")
+
+    context.ensure_index = ensure_index
+    result = await getattr(tools, query).coroutine(
+        symbol="helper", runtime=SimpleNamespace(context=context))
+    assert result["ok"] and not result["scope_complete"]
+    assert any(edge["type"] == "calls" and edge["source_file"] == "helper.py"
+               and edge["target_file"] == "deep.py" and edge["resolution_status"] == "resolved"
+               for edge in result["edges"])
+    assert scopes == [frozenset({"deep.py"})]
+    assert "unrelated.py" not in indexed_paths
+    assert context.repository_graph["metadata"]["scope_mode"] == "scoped"
+
+
+async def test_outgoing_expansion_rejects_denied_sensitive_and_unauthorized_paths():
+    from app.review.context import AgentContext
+    from app.review.tools import get_callees
+
+    paths = {"caller.py", "allowed.py", "denied.py", ".env"}
+    edges = [{"type": "imports", "source": "caller.py", "target": path,
+              "resolution_status": "resolved"}
+             for path in ["allowed.py", "denied.py", ".env", "outside.py"]]
+    edges.append({"type": "imports", "source": "caller.py", "target": "hint.py",
+                  "resolution_status": "hint"})
+    scopes = []
+
+    async def ensure_index(requested):
+        scopes.append(requested)
+
+    context = AgentContext(evidence=SimpleNamespace(allowed_paths=frozenset(paths | {"hint.py"})),
+        denied_paths=frozenset({"denied.py"}),
+        symbols=[{"file": "caller.py", "symbol": "caller"}],
+        repository_graph={"edges": edges}, ensure_index=ensure_index)
+    result = await get_callees.coroutine(symbol="caller", runtime=SimpleNamespace(context=context))
+    assert result["ok"]
+    assert scopes == [frozenset({"allowed.py"})]
 
 
 async def test_cancelled_review_refuses_lazy_index_expansion(pipeline, monkeypatch):

@@ -113,14 +113,40 @@ async def find_files(runtime: ToolRuntime[AgentContext], query: str = "", path: 
     return await asyncio.to_thread(find_paths, runtime.context, query, path, glob, cursor, limit)
 
 
+def _symbol_matches(context, symbol: str):
+    return [item for item in context.symbols
+            if symbol in {item.get("symbol_id"), item.get("symbol")}
+            and item.get("file") in context.evidence.allowed_paths
+            and item.get("file") not in context.denied_paths]
+
+
+async def _expand_relation_files(context, matches, direction):
+    """Expand incoming candidates and outgoing module targets, never the whole repo."""
+    if not context.ensure_index or not matches:
+        return
+    targets = {item.get("file") for item in matches}
+    candidates = set()
+    for edge in context.repository_graph.get("edges", []):
+        if edge.get("type") != "imports":
+            continue
+        if (direction in {None, "in"} and edge.get("resolution_status") == "candidate"
+                and edge.get("target") in targets):
+            candidates.add(edge.get("source"))
+        if (direction in {None, "out"} and edge.get("resolution_status") == "resolved"
+                and edge.get("source") in targets):
+            candidates.add(edge.get("target"))
+    candidates = {path for path in candidates if path in context.evidence.allowed_paths
+                  and path not in context.denied_paths
+                  and not is_sensitive_repository_path(path)}
+    if candidates:
+        await context.ensure_index(frozenset(candidates))
+
+
 async def _relations(symbol: str, runtime, direction: str | None):
     context = runtime.context
-    if context.ensure_index:
-        await context.ensure_index(None)
-    matches = [item for item in context.symbols
-               if symbol in {item.get("symbol_id"), item.get("symbol")}
-               and item.get("file") in context.evidence.allowed_paths
-               and item.get("file") not in context.denied_paths]
+    matches = _symbol_matches(context, symbol)
+    await _expand_relation_files(context, matches, direction)
+    matches = _symbol_matches(context, symbol)
     identities = {item.get("symbol_id") or f"{item['file']}::{item['symbol']}" for item in matches}
     edges = [edge for edge in context.repository_graph.get("edges", [])
              if edge.get("source_file") not in context.denied_paths
@@ -134,9 +160,13 @@ async def _relations(symbol: str, runtime, direction: str | None):
                for item in matches[:12]]
     metadata = context.repository_graph.get("metadata", {})
     complete = metadata.get("scope_complete", False)
-    limitation = "Static relations do not establish runtime binding; read source to verify."
+    limitation = ("Static relations do not establish runtime binding; read source to verify. "
+                  "resolved imports come from parsed files; candidate imports are text-scan "
+                  "leads; only resolved calls carry confirmed symbol binding.")
     if not complete:
         limitation += " Index scope is incomplete or degraded; use search_code for missing relations."
+    if not matches:
+        limitation += " Symbol is not indexed; read its file with read_symbol or locate it with search_code."
     return {"ok": True, "source": "static_relation_hint", "symbols": visible,
             "edges": edges[:24], "truncated": len(matches) > 12 or len(edges) > 24,
             "scope_complete": complete, "limitation": limitation}

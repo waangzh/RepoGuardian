@@ -80,7 +80,8 @@ def test_local_import_and_nested_calls_have_actual_scope_and_all_call_sites(tmp_
 def test_unstable_target_definition_is_not_proven(tmp_path, target_source):
     graph, _ = indexed_graph(tmp_path, "from pkg.stats import measure\ndef run():\n    return measure([])\n",
                               target_source=target_source)
-    assert not [edge for edge in graph["edges"] if edge.get("resolution_status") == "resolved"]
+    assert not [edge for edge in graph["edges"] if edge["type"] == "calls"
+                and edge.get("resolution_status") == "resolved"]
 
 
 def test_unproven_name_hint_cannot_replace_a_proven_call_to_same_target(tmp_path):
@@ -117,5 +118,6 @@ def test_package_attributes_cannot_be_guessed_as_submodules(tmp_path, initialize
         target="src/pkg/hardware.py", target_source="def demo():\n    return 1\n",
         extra={"src/pkg/__init__.py": initializer, "src/pkg/stats.py": "def demo():\n    return 2\n"},
         )
-    assert not [edge for edge in graph["edges"] if edge.get("resolution_status") == "resolved"]
+    assert not [edge for edge in graph["edges"] if edge["type"] == "calls"
+                and edge.get("resolution_status") == "resolved"]
     assert all(edge.get("relationship_level") != "symbol" for edge in graph["edges"] if edge["type"] == "calls")
