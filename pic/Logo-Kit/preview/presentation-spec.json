@@ -1,0 +1,49 @@
+{
+  "brand": "RepoGuardian",
+  "tagline": "Evidence-grounded code review",
+  "date": "2026-10-29",
+  "deck_title": "Source Pair / selected identity",
+  "brief": "A read-only AI code review agent for developers and maintainers. The identity should feel precise, observant and restrained.",
+  "adjectives": [
+    "Precise",
+    "Observant",
+    "Context-aware",
+    "Restrained"
+  ],
+  "criteria": "Distinct paired-source geometry; consistent monochrome rendering; a separate 16px cut; no promise of defect-free code.",
+  "industry": "software",
+  "brand_color": "#07866f",
+  "tile_color": "#07866f",
+  "greyscale": false,
+  "final": true,
+  "nav": [
+    "New review",
+    "History",
+    "Settings"
+  ],
+  "concepts": [
+    {
+      "name": "Source Pair / 双侧对照",
+      "symbol": "../svg/repoguardian-symbol-color.svg",
+      "avatar": "../svg/repoguardian-symbol-small-color.svg",
+      "lockup": "../svg/repoguardian-horizontal-color.svg",
+      "stacked": "../svg/repoguardian-stacked-color.svg",
+      "symbol_on_tile": "../svg/repoguardian-symbol-white.svg",
+      "symbol_on_dark": "../svg/repoguardian-symbol-white.svg",
+      "lockup_on_dark": "../svg/repoguardian-horizontal-white.svg",
+      "stacked_on_tile": "../svg/repoguardian-stacked-white.svg",
+      "idea": "Two source boundaries focus on one fact.",
+      "rationale": [
+        "Paired boundaries echo Base / Head comparison.",
+        "The central diamond gives the review a clear evidence focus.",
+        "Open geometry keeps the identity light and readable."
+      ]
+    }
+  ],
+  "recommendation": "Use the horizontal lockup for headers, the symbol for compact spaces, and the hinted small cut below 32px.",
+  "next_steps": [
+    "Brand files are supplied independently.",
+    "Application integration remains a separate change.",
+    "Trademark clearance and print proofing have not been performed."
+  ]
+}

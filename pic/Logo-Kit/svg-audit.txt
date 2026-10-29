@@ -1,0 +1,29 @@
+
+=== repoguardian-symbol-color.svg  (420 bytes)
+viewBox 0 0 256 256 · aspect 1.0 (square)
+colours 1: #07866f · gradients 0 · anchors 31
+margins L24.0 R24.0 T32.0 B32.0 · bbox fill 0.609
+✔ no issues found
+production-readiness score: 100/100 (heuristic)
+
+=== repoguardian-symbol-small-color.svg  (362 bytes)
+viewBox 0 0 16 16 · aspect 1.0 (square)
+colours 1: #07866f · gradients 0 · anchors 31
+margins L1.0 R1.0 T1.0 B1.0 · bbox fill 0.766
+✔ no issues found
+production-readiness score: 100/100 (heuristic)
+
+=== repoguardian-symbol-white.svg  (420 bytes)
+viewBox 0 0 256 256 · aspect 1.0 (square)
+colours 1: #ffffff · gradients 0 · anchors 31
+margins L24.0 R24.0 T32.0 B32.0 · bbox fill 0.609
+✔ no issues found
+production-readiness score: 100/100 (heuristic)
+
+=== repoguardian-horizontal-color.svg  (9540 bytes)
+viewBox 0 0 885 256 · aspect 3.457 (horizontal)
+colours 2: #07866f #142c2a · gradients 0 · anchors 320
+margins L24.0 R24.0 T32.0 B32.0 · bbox fill 0.709
+· INFO [precision] Coordinates with 4+ decimals: round to 0–2 decimals to reduce size and reveal misalignments.
+· INFO [complexity] 320 anchor points (library median 75.0, p75 155.0). Check every point earns its place.
+production-readiness score: 98/100 (heuristic)
