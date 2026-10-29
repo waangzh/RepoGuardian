@@ -43,7 +43,7 @@ class AgentUsage(AsyncCallbackHandler):
     async def on_chat_model_start(self, serialized, messages, *, run_id, **kwargs):
         self.started.add(run_id)
         logger.debug("模型调用 review_id=%s agent_id=%s reviewer=%s call=%s",
-                     self.review_id, self.identity, self.reviewer, len(self.started))
+                     self.review_id[:8], self.identity[:8], self.reviewer, len(self.started))
 
     async def on_llm_error(self, error, *, run_id, **kwargs):
         self.unknown = True
@@ -111,14 +111,14 @@ class AgentUsage(AsyncCallbackHandler):
                 code = code if isinstance(code, str) and code.isidentifier() and len(code) <= 80 else "tool_failed"
                 if not self.quiet:
                     logger.warning("工具拒绝 review_id=%s agent_id=%s reviewer=%s tool=%s code=%s",
-                        self.review_id, self.identity, self.reviewer, name, code)
+                        self.review_id[:8], self.identity[:8], self.reviewer, name, code)
             if body.get("ok"):
                 self.policy_exclusions += body.get("policy_exclusions", 0)
                 if body.get("scope_complete") is False or body.get("unreadable_files"):
                     self.incomplete_searches += 1
                     if not self.quiet:
                         logger.info("搜索范围诊断 review_id=%s agent_id=%s tool=%s has_more=%s unreadable=%s excluded=%s",
-                            self.review_id, self.identity, name, body.get("has_more", False),
+                            self.review_id[:8], self.identity[:8], name, body.get("has_more", False),
                             body.get("unreadable_files", 0), body.get("policy_exclusions", 0))
             if body.get("ok") and body.get("pagination_id"):
                 pagination = body["pagination_id"]
@@ -195,7 +195,7 @@ async def run_agent(context, identity, reviewer, payload, *, discovery_agent_ids
                        model_call_limit=model_call_limit, tool_call_limit=tool_call_limit)
     usage_observer = AgentUsage(sources.evidence.snapshot.review_id, identity, reviewer)
     logger.info("审查分支开始 review_id=%s agent_id=%s reviewer=%s model_limit=%s tool_limit=%s",
-        sources.evidence.snapshot.review_id, identity, reviewer, limits.model_calls, limits.tool_calls)
+        sources.evidence.snapshot.review_id[:8], identity[:8], reviewer, limits.model_calls, limits.tool_calls)
     output, error = {}, None
     material_ids = set()
     try:
@@ -227,7 +227,7 @@ async def run_agent(context, identity, reviewer, payload, *, discovery_agent_ids
         await context.active()
         error = type(exc).__name__
         logger.error("审查分支失败 review_id=%s agent_id=%s reviewer=%s code=%s model_calls=%s tool_calls=%s",
-            sources.evidence.snapshot.review_id, identity, reviewer, error,
+            sources.evidence.snapshot.review_id[:8], identity[:8], reviewer, error,
             len(usage_observer.started), len(usage_observer.tools_started))
     if context.budget is not None:
         await context.budget.finish(identity)
@@ -263,7 +263,7 @@ async def run_agent(context, identity, reviewer, payload, *, discovery_agent_ids
     elapsed = round(time.monotonic() - started, 3)
     logger.info("审查分支结束 review_id=%s agent_id=%s reviewer=%s status=%s elapsed=%s model_calls=%s "
         "tool_calls=%s tool_failures=%s input_tokens=%s output_tokens=%s",
-        sources.evidence.snapshot.review_id, identity, reviewer, envelope.status, elapsed,
+        sources.evidence.snapshot.review_id[:8], identity[:8], reviewer, envelope.status, elapsed,
         envelope.model_calls, envelope.tool_calls, envelope.tool_failures, envelope.input_tokens, envelope.output_tokens)
     await context.emit(phase=reviewer, agent_id=identity, status=envelope.status,
         error=envelope.error, model_calls=envelope.model_calls, tool_calls=envelope.tool_calls,

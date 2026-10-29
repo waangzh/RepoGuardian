@@ -63,7 +63,7 @@ def enforce_budget(summary, estimate, held, limits, stage, *, held_calls=0,
         "held_calls=%s review_id=%s agent_id=%s scope=%s", dimension, stage,
         summary["model_calls"], summary["model_call_limit"], summary["committed_input_tokens"],
         summary["outstanding_input_tokens"], estimate, held, summary["input_token_factor"],
-        summary["input_token_limit"], summary["held_model_calls"] + held_calls, review_id, agent_id, scope)
+        summary["input_token_limit"], summary["held_model_calls"] + held_calls, review_id[:8], agent_id[:8], scope)
     raise ReviewBudgetExceeded(dimension)
 
 

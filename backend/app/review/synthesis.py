@@ -128,7 +128,7 @@ def _safe_error(code):
 def _log(report, saved, event, *, level=logging.INFO, material_version=None, **metrics):
     review_id = getattr(getattr(report, "snapshot", None), "review_id", "unknown")
     logger.log(level, "总览%s review_id=%s material_version=%s %s",
-        event, review_id, material_version or (saved.material_version if saved else "unavailable"),
+        event, review_id[:8], (material_version or (saved.material_version if saved else "unavailable"))[:12],
         " ".join(f"{key}={value}" for key, value in metrics.items()))
 
 
@@ -136,7 +136,7 @@ def _log(report, saved, event, *, level=logging.INFO, material_version=None, **m
 def log_projection_fallback(review_id, material_version, current_version, error):
     """Polling the same rejected projection must not flood the console."""
     logger.warning("总览投影回退 review_id=%s material_version=%s current_version=%s "
-        "stage=projection error=%s", review_id, material_version, current_version, _safe_error(error))
+        "stage=projection error=%s", review_id[:8], material_version[:12], current_version[:12], _safe_error(error))
 
 
 def validate_synthesis(output, material):

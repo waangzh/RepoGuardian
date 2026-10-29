@@ -311,3 +311,202 @@ def test_matching_module_names_in_separate_packages_remain_cross_module():
         repository_graph={"edges": [edge(paths[0], path) for path in paths[1:]]})
     assert "cross_module" in plan.units[0].risk_reasons
     assert [assignment.reviewer for assignment in plan.assignments] == ["reviewer", "contract"]
+
+
+def test_risk_ignores_context_deleted_and_common_identifiers():
+    changes = [{"file_path": "pkg/block.py", "hunks": [{
+        "old_start": 1, "old_length": 3, "new_start": 1, "new_length": 3,
+        "lines": [
+            {"kind": "context", "content": "async def handler(session):  # author"},
+            {"kind": "deleted", "content": "lock = threading.Lock()"},
+            {"kind": "added", "content": "value = 1"}]}]}]
+    plan = plan_review(changes, depth="standard")
+    assert plan.units[0].risk_tier == "low"
+
+
+def test_risk_detects_sensitive_operations_in_added_lines():
+    cases = [
+        ("digest = hmac.compare_digest(a, b)", "sensitive_operation:crypto"),
+        ("payload = pickle.loads(blob)", "sensitive_operation:deserialization"),
+        ("subprocess.run(cmd)", "sensitive_operation:command_execution"),
+        ("price = Decimal(raw)", "sensitive_operation:money"),
+        ("target = os.path.join(root, name)", "sensitive_operation:path"),
+    ]
+    for content, reason in cases:
+        plan = plan_review([change("pkg/mod.py", content=content)], depth="standard")
+        assert plan.units[0].risk_tier == "high"
+        assert reason in plan.units[0].risk_reasons
+
+
+def test_risk_detects_sensitive_paths_and_public_api_changes():
+    plan = plan_review([change("app/payment/charge.py", content="value = 1")],
+                       depth="standard")
+    assert plan.units[0].risk_tier == "high"
+    assert "sensitive_path:money" in plan.units[0].risk_reasons
+    symbols = [{"file": "app/api/orders.py", "symbol_id": "orders",
+                "start_line": 1, "end_line": 1}]
+    plan = plan_review([change("app/api/orders.py", content="value = 1")],
+                       depth="standard", symbols=symbols)
+    assert plan.units[0].risk_tier == "high"
+    assert "public_api_change" in plan.units[0].risk_reasons
+
+
+@pytest.mark.parametrize(("path", "content"), [
+    ("pkg/mod.py", "# TODO: replace pickle with JSON"),
+    ("pkg/mod.py", '"""Use subprocess for this example."""'),
+    ("pkg/mod.py", 'r"""Use subprocess for this example."""'),
+    ("pkg/mod.py", 'message = "COMMIT after reading the guide"'),
+    ("pkg/mod.ts", "// TODO: replace eval(value)"),
+    ("pkg/mod.ts", "/* Avoid execute(query) here. */"),
+    ("pkg/mod.ts", 'const message = "wait() for a response";'),
+    ("pkg/mod.vue", "<!-- Avoid execute(query) here. -->"),
+    ("pkg/mod.sql", "-- BEGIN the example with COMMIT"),
+    ("docs/guide.md", "BEGIN by reading the guide; COMMIT your changes."),
+    ("docs/guide.md", "Example: subprocess.run(command)"),
+])
+def test_non_code_text_does_not_trigger_sensitive_operations(path, content):
+    plan = plan_review([change(path, content=content)], depth="standard")
+    assert plan.units[0].risk_tier == "low"
+    assert plan.units[0].risk_reasons == []
+    assert [assignment.reviewer for assignment in plan.assignments] == ["reviewer"]
+
+
+@pytest.mark.parametrize(("path", "opening", "closing"), [
+    ("pkg/mod.py", '    """Example:', '    """'),
+    ("pkg/mod.ts", "    /* Example:", "    */"),
+])
+def test_added_text_inside_context_comment_does_not_trigger_operations(path, opening, closing):
+    changes = [{"file_path": path, "hunks": [{
+        "old_start": 10, "old_length": 2, "new_start": 10, "new_length": 3,
+        "lines": [
+            {"kind": "context", "content": opening},
+            {"kind": "added", "content": "    subprocess.run(command)"},
+            {"kind": "context", "content": closing}]}]}]
+    plan = plan_review(changes, depth="standard")
+    assert plan.units[0].risk_tier == "low"
+    assert plan.units[0].risk_reasons == []
+
+
+def test_comment_filter_preserves_real_operations_and_ignores_deleted_quote_state():
+    changes = [{"file_path": "pkg/mod.py", "hunks": [{
+        "old_start": 1, "old_length": 2, "new_start": 1, "new_length": 1,
+        "lines": [
+            {"kind": "deleted", "content": '"""old subprocess example'},
+            {"kind": "added", "content": 'subprocess.run(["echo", "# value"])  # example'},
+            {"kind": "deleted", "content": '"""'}]}]}]
+    plan = plan_review(changes, depth="standard")
+    assert plan.units[0].risk_tier == "high"
+    assert "sensitive_operation:command_execution" in plan.units[0].risk_reasons
+
+
+@pytest.mark.parametrize(("path", "content", "reason"), [
+    ("pkg/mod.py", 'value = f"{eval(raw)}"', "sensitive_operation:command_execution"),
+    ("pkg/mod.ts", "const value = `${eval(raw)}`;", "sensitive_operation:command_execution"),
+    ("pkg/mod.sql", "BEGIN;", "sensitive_operation:sql"),
+    ("pkg/mod.py", 'cursor.execute("SELECT 1")  # query', "sensitive_operation:sql"),
+])
+def test_comment_filter_preserves_sensitive_code_and_interpolated_expressions(path, content, reason):
+    plan = plan_review([change(path, content=content)], depth="standard")
+    assert plan.units[0].risk_tier == "high"
+    assert reason in plan.units[0].risk_reasons
+
+
+@pytest.mark.parametrize("inside_symbol", [False, True])
+def test_public_api_requires_code_changes_instead_of_context_or_comments(inside_symbol):
+    lines = [
+        {"kind": "deleted", "content": "# old title"},
+        {"kind": "added", "content": "# new title"},
+        {"kind": "context", "content": ""},
+        {"kind": "context", "content": "def orders():"},
+        {"kind": "context", "content": "    return []"},
+    ]
+    if inside_symbol:
+        lines = [
+            {"kind": "context", "content": "def orders():"},
+            {"kind": "deleted", "content": "    # old title"},
+            {"kind": "added", "content": "    # new title"},
+            {"kind": "context", "content": "    return []"},
+        ]
+    changes = [{"file_path": "app/api/orders.py", "hunks": [{
+        "old_start": 1, "old_length": 3 if inside_symbol else 4,
+        "new_start": 1, "new_length": 3 if inside_symbol else 4, "lines": lines}]}]
+    symbols = [{"file": "app/api/orders.py", "symbol_id": "orders",
+                "start_line": 1 if inside_symbol else 3, "end_line": 3 if inside_symbol else 4}]
+    plan = plan_review(changes, depth="standard", symbols=symbols)
+    assert plan.units[0].risk_tier == "low"
+    assert plan.units[0].changed_symbols == []
+    assert "public_api_change" not in plan.units[0].risk_reasons
+    assert [assignment.reviewer for assignment in plan.assignments] == ["reviewer"]
+
+
+@pytest.mark.parametrize("kind", ["added", "deleted"])
+def test_public_api_still_detects_changed_code_inside_a_symbol(kind):
+    changes = [{"file_path": "app/api/orders.py", "hunks": [{
+        "old_start": 10, "old_length": 2 if kind == "added" else 3,
+        "new_start": 10, "new_length": 3 if kind == "added" else 2,
+        "lines": [
+            {"kind": "context", "content": "def orders():"},
+            {"kind": kind, "content": "    validate()"},
+            {"kind": "context", "content": "    return []"}]}]}]
+    symbols = [{"file": "app/api/orders.py", "symbol_id": "orders",
+                "start_line": 10, "end_line": 12 if kind == "added" else 11}]
+    plan = plan_review(changes, depth="standard", symbols=symbols)
+    assert plan.units[0].risk_tier == "high"
+    assert plan.units[0].changed_symbols == ["orders"]
+    assert "public_api_change" in plan.units[0].risk_reasons
+
+
+def test_deleted_code_before_public_symbol_does_not_mark_the_context_symbol_changed():
+    changes = [{"file_path": "app/api/orders.py", "hunks": [{
+        "old_start": 1, "old_length": 3, "new_start": 1, "new_length": 2,
+        "lines": [
+            {"kind": "deleted", "content": "module_flag = 1"},
+            {"kind": "context", "content": "def orders():"},
+            {"kind": "context", "content": "    return []"}]}]}]
+    symbols = [{"file": "app/api/orders.py", "symbol_id": "orders",
+                "start_line": 1, "end_line": 2}]
+    plan = plan_review(changes, depth="standard", symbols=symbols)
+    assert plan.units[0].risk_tier == "low"
+    assert plan.units[0].changed_symbols == []
+    assert "public_api_change" not in plan.units[0].risk_reasons
+
+
+def test_public_api_raw_docstring_changes_do_not_mark_the_symbol_changed():
+    changes = [{"file_path": "app/api/orders.py", "hunks": [{
+        "old_start": 1, "old_length": 3, "new_start": 1, "new_length": 3,
+        "lines": [
+            {"kind": "context", "content": "def orders():"},
+            {"kind": "deleted", "content": '    r"""Old documentation."""'},
+            {"kind": "added", "content": '    r"""Replace pickle with JSON."""'},
+            {"kind": "context", "content": "    return []"}]}]}]
+    symbols = [{"file": "app/api/orders.py", "symbol_id": "orders",
+                "start_line": 1, "end_line": 3}]
+    plan = plan_review(changes, depth="standard", symbols=symbols)
+    assert plan.units[0].risk_tier == "low"
+    assert plan.units[0].changed_symbols == []
+    assert plan.units[0].risk_reasons == []
+
+
+def test_pure_sensitive_rename_stays_medium_when_grouped_with_benign_text_changes():
+    changes = [
+        {"file_path": "pkg/auth.py", "old_file_path": "pkg/access.py",
+         "change_type": "renamed", "hunks": []},
+        change("pkg/util.py", content="value = 1"),
+    ]
+    plan = plan_review(changes, depth="standard")
+    assert len(plan.units) == 1
+    assert plan.units[0].changed_paths == ["pkg/auth.py", "pkg/util.py"]
+    assert plan.units[0].risk_tier == "medium"
+    assert plan.units[0].risk_reasons == ["structural_change"]
+    assert [assignment.reviewer for assignment in plan.assignments] == ["reviewer"]
+
+
+def test_comment_only_units_can_pack_within_the_discovery_budget():
+    changes = [change(f"pkg{index}/mod{index}.py", content="# Replace pickle with JSON")
+               for index in range(20)]
+    plan = plan_review(changes, depth="standard", limits=ReviewLimits(total_model_calls=16))
+    assert {path for unit in plan.units for path in unit.changed_paths} == {
+        item["file_path"] for item in changes}
+    assert all(unit.risk_tier == "low" for unit in plan.units)
+    assert all(assignment.reviewer == "reviewer" for assignment in plan.assignments)
+    assert not plan.uncovered

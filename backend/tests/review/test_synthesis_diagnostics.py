@@ -94,8 +94,9 @@ async def test_success_and_correction_are_correlated_without_body_logging(mode, 
     result = await run_diagnostic(mode)
     assert result["synthesis"]["status"] == "ready"
     text = caplog.text
-    assert "总览材料准备完成" in text and "material_version=fixture-version" in text
-    assert "review_id=diagnostics-review" in text
+    assert "总览材料准备完成" in text and "material_version=fixture-vers" in text
+    assert "fixture-version" not in text
+    assert "review_id=diagnost" in text and "diagnostics-review" not in text
     assert "总览请求开始" in text and "stage=grounding" in text and "status=ready" in text
     if mode in {"citation", "example"}:
         assert "error=synthesis_source_unknown" in text and "unknown_sources=1" in text
