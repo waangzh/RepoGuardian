@@ -3,7 +3,7 @@
 import re
 
 from app.models.publication import PresentationDelivery, ReviewPresentation
-from app.review.observations import fallback_observations, observation_text
+from app.review.observations import fallback_observations, observation_gaps, observation_text
 from app.review.synthesis import synthesis_materials, validate_grounding, validate_synthesis
 from app.services.publication.review_prose import author_goal_text
 from app.services.publication.review_text_format import (
@@ -141,7 +141,8 @@ def build_presentation(plan, *, report=None, observations=()):
     purpose = (author_goal_text(understanding.author_goal) if understanding else "") or None
     summary, summary_source = _fallback_summary(plan)
     fallback = fallback_observations(report, observations)
-    if fallback:
+    material_incomplete = bool(report and observation_gaps(report, observations))
+    if fallback and not material_incomplete:
         summary = "\n".join(observation_text(item) for item in fallback[:6])
         summary_source = "observations"
     review_summary = _review_summary(plan)
@@ -151,6 +152,8 @@ def build_presentation(plan, *, report=None, observations=()):
     if synthesis and synthesis.status == "ready":
         version, material = synthesis_materials(report, plan, observations)
         try:
+            if material_incomplete:
+                raise ValueError("synthesis_observations_incomplete")
             if synthesis.material_version != version:
                 raise ValueError("synthesis_material_changed")
             output = validate_synthesis(synthesis.output, material)
@@ -173,7 +176,7 @@ def build_presentation(plan, *, report=None, observations=()):
         # 问题概述只由确定性 finding 生成；编辑摘要不再改写问题结论。
         review_summary=review_summary, action_summary=action_summary,
         test_changes=([observation_text(item) for item in fallback if item.kind == "test_source"]
-                      if synthesis_status != "ready" else []),
+                      if not material_incomplete and synthesis_status != "ready" else []),
         verdict=plan.digest.merge_decision, findings=findings,
         delivery=PresentationDelivery(confirmed=plan.outcome.confirmed_count, eligible=len(findings),
             selected=len(findings), inline_ready=len(plan.inline_drafts),
@@ -213,7 +216,8 @@ def render_presentation(plan, *, copy=False, detail="compact", exclude_resolved=
     note = partial_review_note(plan)
     if note:
         lines += [note, ""]
-    lines += ["### 本次 PR 主要变更", "", _change_overview(presentation), ""]
+    title = "本次 PR 主要变更" if presentation.synthesis_status == "ready" else "本次 PR 变更范围（总览未完整生成）"
+    lines += [f"### {title}", "", _change_overview(presentation), ""]
     delivery = presentation.delivery
     count = len(findings)
     views = {item.id: item for item in plan.digest.findings}

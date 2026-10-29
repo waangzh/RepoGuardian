@@ -90,8 +90,23 @@ class ReviewCreateResponse(ReviewModel):
     confirmed_plan: ReviewPlanOptions
 
 
+class ReviewHistoryTask(ReviewModel):
+    id: str
+    status: Literal["queued", "planning", "reviewing", "verifying_issues", "completed",
+                    "completed_with_warnings", "failed", "cancelled"]
+    phase: str
+    pr_url: str
+    repository: str | None
+    pr_number: int | None
+    pr_title: str
+    head_sha: str | None
+    created_at: datetime
+    updated_at: datetime
+    snapshot_error: str | None = None
+
+
 class ReviewTaskListResponse(ReviewModel):
-    items: list[ReviewTask]
+    items: list[ReviewHistoryTask]
     total: int
     page: int
     page_size: int

@@ -80,6 +80,48 @@ async def test_preview_job_store_replay_cancel_and_consumption(pipeline):
     assert store.get(identity).status == "cancelled"
 
 
+async def test_history_summary_does_not_parse_reports_and_preserves_broken_snapshots(pipeline, monkeypatch):
+    from uuid import uuid4
+    from app.models.orm import ReviewTaskOrm
+
+    service, repository, _, _, _ = pipeline
+    monkeypatch.setattr(reviews, "get_review_service", lambda: service)
+    _, _, task = await preview_and_create(service)
+    assert await service._worker.run_once()
+    ids = []
+    for number in range(3):
+        copy = repository.get_task(task.id).model_copy(deep=True)
+        copy.id = uuid4().hex
+        copy.pr.title = f"History {number}"
+        repository.create_task(copy)
+        ids.append(copy.id)
+    with repository._session_factory.begin() as session:
+        row = session.get(ReviewTaskOrm, ids[0])
+        payload = repository.get_task(ids[0]).model_dump(mode="json")
+        payload["review_report"] = {"not_a_report": True}
+        row.task_snapshot, row.task_snapshot_artifact_uri = payload, None
+        row = session.get(ReviewTaskOrm, ids[1])
+        row.task_snapshot_artifact_uri = (repository._artifacts.root / "missing.txt").as_uri()
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/reviews?page=1&page_size=20")
+        assert response.status_code == 200, response.text
+        listing = response.json()
+        assert listing["total"] == 4
+        items = {item["id"]: item for item in listing["items"]}
+        assert items[ids[0]]["pr_title"] == "History 0"
+        assert items[ids[1]]["snapshot_error"] == "history_snapshot_unavailable"
+        assert not {"review_report", "report_markdown", "configuration", "changed_files"} & items[task.id].keys()
+        filtered = (await client.get("/api/reviews?q=History%202&page_size=1")).json()
+        assert filtered["total"] == 1 and filtered["items"][0]["id"] == ids[2]
+        page = (await client.get("/api/reviews?page=2&page_size=2")).json()
+        assert page["total"] == 4 and len(page["items"]) == 2
+        assert (await client.get(f"/api/reviews/{task.id}")).status_code == 200
+        # Deletion uses lifecycle metadata, not full report deserialization.
+        assert (await client.delete(f"/api/reviews/{ids[0]}")).status_code == 204
+        assert (await client.delete(f"/api/reviews/{ids[1]}")).status_code == 204
+        assert (await client.get("/api/reviews")).json()["total"] == 2
+
+
 def test_current_schema_has_no_internal_agent_sessions_or_historical_versions(pipeline):
     _, _, _, _, engine = pipeline
     tables = set(inspect(engine).get_table_names())

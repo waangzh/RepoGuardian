@@ -14,7 +14,7 @@ from app.models.orm import (
     ReviewPreviewOrm, ReviewTaskOrm, WorkerJobOrm, IncrementalWebhookDeliveryOrm, ReviewModelCallOrm,
     ReviewBranchBudgetOrm, utcnow,
 )
-from app.review.contracts import ReviewTask, ReviewTaskListResponse, TERMINAL_STATUSES
+from app.review.contracts import ReviewHistoryTask, ReviewTask, ReviewTaskListResponse, TERMINAL_STATUSES
 from app.services.review.artifact_store import LocalArtifactStore
 from app.services.review.review_task_access import lock_live_review
 
@@ -218,10 +218,23 @@ class ReviewRepository:
         with self._session_factory() as session:
             rows = session.scalars(select(ReviewTaskOrm).where(*filters)
                                    .order_by(ReviewTaskOrm.created_at.desc())).all()
-            tasks = [ReviewTask.model_validate(self._load(row)) for row in rows]
+            tasks = []
+            for row in rows:
+                title, error = "", None
+                try:
+                    payload = self._load(row)
+                    title = payload["pr"]["title"]
+                    if not isinstance(title, str):
+                        raise ValueError("invalid title")
+                except (ValueError, OSError, KeyError, TypeError):
+                    title, error = "审查快照不可读取", "history_snapshot_unavailable"
+                tasks.append(ReviewHistoryTask(id=row.id, status=row.status, phase=row.current_phase,
+                    pr_url=row.pr_url, repository=row.repository, pr_number=row.pr_number,
+                    pr_title=title, head_sha=row.head_sha, created_at=as_utc(row.created_at),
+                    updated_at=as_utc(row.updated_at), snapshot_error=error))
         if q:
             tasks = [task for task in tasks if q.casefold() in
-                     " ".join((task.id, task.pr_url, task.pr.title)).casefold()]
+                     " ".join((task.id, task.pr_url, task.pr_title, task.repository or "")).casefold()]
         start = (page - 1) * page_size
         return ReviewTaskListResponse(items=tasks[start:start + page_size], total=len(tasks),
                                       page=page, page_size=page_size)

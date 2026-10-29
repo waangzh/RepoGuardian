@@ -8,7 +8,7 @@ export interface AgentAttempt { status: 'completed' | 'failed'; evidence_ids: st
 export interface AgentResult extends AgentAttempt { id: string; output: Record<string, unknown>; previous_attempts: AgentAttempt[]; execution_id: string | null; comparison_candidate_ids: string[] }
 export interface AuthorComment { trigger: string; cause: string; impact: string; recommendation: string; body: string | null }
 export interface EvidenceRef { id: string; review_id: string; commit_sha: string; side: 'base' | 'head'; path: string; start_line: number; end_line: number; content_hash: string }
-export interface ChangeObservation { id: string; unit_id: string; assignment_id: string; kind: 'implementation' | 'test_source'; change: string; before: string | null; after: string | null; impact: string; evidence_ids: string[]; sources: EvidenceRef[] }
+export interface ChangeObservation { id: string; unit_id: string; assignment_id: string; basis: 'change' | 'head_state'; kind: 'implementation' | 'test_source'; change: string; before: string | null; after: string | null; impact: string; evidence_ids: string[]; sources: EvidenceRef[] }
 export interface SynthesisParagraph { source_ids: string[]; text: string }
 export interface SynthesisGrounding { supported: boolean; explanation: string }
 export interface SynthesisAttempt { stage: 'generation' | 'grounding'; number: 1 | 2; request_id: string; reservation_id: string | null; timeout_seconds: number; status: 'started' | 'completed' | 'timeout' | 'failed' | 'unknown'; retryable: boolean; feedback: string | null; error: string | null; result: Record<string, unknown> | null; input_tokens: number | null; output_tokens: number | null; cached_input_tokens: number | null }

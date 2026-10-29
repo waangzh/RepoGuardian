@@ -7,6 +7,7 @@ from langchain_core.messages import ToolMessage
 from app.review.findings import covered_goals
 from app.review.limitations import validate_assessments, validate_resolutions
 from app.review.models import BatchVerificationOutput, DiscoveryOutput, LimitationReviewOutput
+from app.review.observations import validate_observation
 
 EXECUTION_BOUNDARIES = (
     "未执行代码", "未运行代码", "未执行测试", "未运行测试", "未执行构建", "未运行构建",
@@ -51,6 +52,31 @@ def submission_feedback(output, goals, service, issued, identity, limitations=()
             issues["uncovered_goal_count"] = len(pending)
         if claimed - expected:
             issues["unknown_goal_ids"] = sorted(claimed - expected)[:12]
+        paths = {goal["path"] for goal in goals}
+        rejected = []
+        described = set()
+        for index, observation in enumerate(output.observations):
+            try:
+                refs = validate_observation(observation, service, issued, paths, goals)
+                if observation.basis == "change":
+                    described.update(ref.path for ref in refs)
+            except (ValueError, OSError) as exc:
+                rejected.append({"index": index, "code": str(exc) if isinstance(exc, ValueError)
+                                 else "observation_source_unavailable"})
+        missing = sorted({goal["path"] for goal in goals if goal.get("kind", "source") == "source"}
+                         - described) if output.observations else []
+        if rejected or missing:
+            available = []
+            for identity in sorted(issued):
+                try:
+                    ref = service.resolve(identity)
+                    if ref.path in paths:
+                        available.append(ref.model_dump())
+                except (ValueError, OSError):
+                    continue
+            issues["invalid_observations"] = rejected
+            issues["missing_observation_paths"] = missing
+            issues["available_observation_evidence"] = available[:32]
     outputs = output.decisions if isinstance(output, BatchVerificationOutput) else [output]
     invalid = []
     for index, item in enumerate(outputs):
@@ -85,5 +111,11 @@ def submission_feedback(output, goals, service, issued, identity, limitations=()
             "限制复核必须逐条返回提供的 ID，引用本分支已读源码和提供的 Goal。"
             "unresolved 必须说明具体 missing_fact、dependent_conclusion、change_relevance 和 next_check；"
             "不要将穷尽全部构造、全仓正确性或未执行测试自动视为必要前提。"
+            "invalid_observations 按 index/code 标记未通过的变更观察；优先复用本分支已读的"
+            "available_observation_evidence，补齐对应 BASE/HEAD 引用，不要丢掉主要实现变更。"
+            "before 要有同一变更范围的 BASE 源码，after 要有 HEAD；不能用其他文件的侧别凑数。"
+            "无法支持的比较必须撤回，不得仅删除 before 字段却继续宣称新增或前后不变。"
+            "missing_observation_paths 表示本次变更中尚无合法变化描述的文件，"
+            "应在现有证据和预算内补齐；不能用测试片段替代实现修改，也不能编造内容。"
         ),
     }, ensure_ascii=False)

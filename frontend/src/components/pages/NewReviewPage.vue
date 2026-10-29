@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { listReviews } from '../../api/client';
-import type { ReviewTask } from '../../types/review';
+import type { ReviewHistoryTask } from '../../types/operations';
 import type { ReviewCapabilities, ReviewPlanOptions } from '../../types/reviewPlan';
 import AppIcon from '../common/AppIcon.vue';
 import ReviewStepper from '../common/ReviewStepper.vue';
@@ -10,7 +10,7 @@ import ReviewPlanControls from '../review/ReviewPlanControls.vue';
 const props = defineProps<{ prUrl: string; model: string; models: string[]; options: ReviewPlanOptions; capabilities: ReviewCapabilities | null; busy: boolean }>();
 defineEmits<{ 'update:prUrl': [value: string]; 'update:model': [value: string]; 'update:options': [value: ReviewPlanOptions]; preview: []; open: [id: string]; history: [] }>();
 const valid = computed(() => /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9][0-9]*\/?$/.test(props.prUrl));
-const recent = ref<ReviewTask[]>([]), error = ref(''), loading = ref(true);
+const recent = ref<ReviewHistoryTask[]>([]), error = ref(''), loading = ref(true);
 const controller = new AbortController();
 onBeforeUnmount(() => controller.abort());
 onMounted(async () => {
@@ -37,7 +37,7 @@ onMounted(async () => {
       <label class="field-label space-top">执行模型<input class="input" :value="model" list="review-models" placeholder="使用服务端默认模型" :disabled="busy" @input="$emit('update:model', ($event.target as HTMLInputElement).value)" /><datalist id="review-models"><option v-for="id in models" :key="id" :value="id" /></datalist></label>
     </section>
     <section class="card card-pad"><div class="card-header"><h2>继续上次审查</h2><button class="link" @click="$emit('history')">全部记录 →</button></div><p v-if="loading || error" class="muted small" role="status">{{ error || '正在读取最近记录…' }}</p><p v-else-if="!recent.length" class="muted small">还没有审查记录。从一个 Pull Request 开始。</p>
-      <button v-for="item in recent" :key="item.id" class="recent-row" :disabled="busy" @click="$emit('open', item.id)"><AppIcon name="branch" /><span class="recent-identity"><strong>#{{ item.pr.number }} · {{ item.pr.title }}</strong><small>{{ item.pr.owner }}/{{ item.pr.repo }}</small></span><StatusBadge :status="item.status" /></button>
+      <button v-for="item in recent" :key="item.id" class="recent-row" :disabled="busy || !!item.snapshot_error" @click="$emit('open', item.id)"><AppIcon name="branch" /><span class="recent-identity"><strong>#{{ item.pr_number ?? '?' }} {{ item.pr_title }}</strong><small>{{ item.repository || '仓库未记录' }}</small><small v-if="item.snapshot_error">快照不可读取，请在历史中处理</small></span><StatusBadge :status="item.status" /></button>
     </section>
   </div>
 </template>

@@ -133,11 +133,17 @@ class ExaminedGoal(ReviewModel):
 
 
 class ChangeObservationProposal(ReviewModel):
+    basis: Literal["change", "head_state"] = Field(default="change",
+        description="change compares fixed BASE/HEAD and needs both source sides for modified files, "
+            "even when before is omitted. head_state describes only current HEAD behavior; "
+            "it cannot claim additions, removals, unchanged behavior or before/after differences.")
     change: str = Field(min_length=1, max_length=600,
         description="Neutral source-backed description of what changed. No suspected defects, "
             "test-quality criticism, unverified omissions or recommendations; submit those as candidates.")
-    before: str | None = Field(default=None, max_length=400)
-    after: str | None = Field(default=None, max_length=400)
+    before: str | None = Field(default=None, max_length=400,
+        description="Optional BASE behavior, requiring relevant BASE source evidence.")
+    after: str | None = Field(default=None, max_length=400,
+        description="Optional HEAD behavior, requiring relevant HEAD source evidence.")
     impact: str = Field(min_length=1, max_length=400,
         description="Direct affected behavior, not a defect verdict. This analysis is kept for audit, "
             "not admitted as a verified finding.")

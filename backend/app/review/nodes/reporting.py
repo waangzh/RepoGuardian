@@ -30,7 +30,8 @@ async def report(state: ReviewState, runtime: Runtime[ReviewContext]):
     if state["assignments"] and not any(item["status"] == "completed" for item in results):
         termination = "failed"
     observations, observation_errors = await asyncio.to_thread(
-        collect_observations, results, state["assignments"], state.get("review_units", []), sources.evidence)
+        collect_observations, results, state["assignments"], state.get("review_units", []),
+        sources.evidence, state["goals"])
     output = ReviewReport(snapshot=state["snapshot"],
         review_units=state.get("review_units", []), assignments=state["assignments"],
         goals=goals, discovery_results=results, verification_results=verification + investigations,

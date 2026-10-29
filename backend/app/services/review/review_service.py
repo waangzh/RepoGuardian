@@ -64,9 +64,21 @@ class ReviewService:
     def list_tasks(self, **kwargs):
         if self._repository:
             return self._repository.list_tasks(**kwargs)
-        from app.review.contracts import ReviewTaskListResponse
-        items = list(self._tasks.values())
-        return ReviewTaskListResponse(items=items, total=len(items), page=1, page_size=len(items) or 20)
+        from app.review.contracts import ReviewHistoryTask, ReviewTaskListResponse
+        items = [ReviewHistoryTask(id=task.id, status=task.status, phase=task.phase,
+            pr_url=task.pr_url, repository=f"{task.pr.owner}/{task.pr.repo}", pr_number=task.pr.number,
+            pr_title=task.pr.title, head_sha=task.snapshot.head_sha,
+            created_at=task.created_at, updated_at=task.updated_at) for task in self._tasks.values()]
+        for key in ("status", "repository", "pr_number", "head_sha"):
+            if kwargs.get(key) is not None:
+                items = [item for item in items if getattr(item, key) == kwargs[key]]
+        if kwargs.get("q"):
+            items = [item for item in items if kwargs["q"].casefold() in
+                     " ".join((item.id, item.pr_url, item.pr_title, item.repository or "")).casefold()]
+        items.sort(key=lambda item: item.created_at, reverse=True)
+        page, size = max(1, kwargs.get("page", 1)), min(100, max(1, kwargs.get("page_size", 20)))
+        start = (page - 1) * size
+        return ReviewTaskListResponse(items=items[start:start + size], total=len(items), page=page, page_size=size)
 
     def finding_dispositions(self, task_id):
         return (self._repository.finding_dispositions(task_id) if self._repository

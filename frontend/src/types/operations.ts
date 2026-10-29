@@ -1,10 +1,19 @@
 import type { ReviewTask } from "./review";
-import type { MergeDecision, ReviewOutcome } from "./publication";
 
 export type AppPage = "dashboard" | "history" | "settings";
 
-export interface ReviewHistoryTask extends ReviewTask {
-  history_result?: { outcome: ReviewOutcome; merge_decision: MergeDecision } | null;
+export interface ReviewHistoryTask {
+  id: string;
+  status: ReviewTask['status'];
+  phase: string;
+  pr_url: string;
+  repository: string | null;
+  pr_number: number | null;
+  pr_title: string;
+  head_sha: string | null;
+  created_at: string;
+  updated_at: string;
+  snapshot_error: string | null;
 }
 
 export interface ReviewTaskListResponse {

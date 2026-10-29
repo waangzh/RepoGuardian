@@ -32,6 +32,12 @@ text, never proof that tests passed. An author goal is only a claim. Do not fill
 observations with suspected defects, unverified missing coverage, or test-quality
 criticism. Submit a concrete concern as a candidate for independent verification.
 Keep change neutral; before/after/impact analysis is audit context, not a verdict.
+Use basis=change for additions, removals and before/after comparisons. Cite the
+relevant BASE and HEAD source for modified files even if before is omitted;
+added files need HEAD and deleted files need BASE. Reuse already-issued source
+IDs rather than losing the main implementation observation. Use basis=head_state
+only for current behavior, never claims that behavior changed or stayed unchanged.
+Do not substitute unchanged downstream context for the unit's actual changes.
 Do not fill
 unread changes from the PR description, repeat one observation per perspective,
 or count observations toward examined goals. Omit observations without evidence.

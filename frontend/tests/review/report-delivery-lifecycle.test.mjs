@@ -11,6 +11,47 @@ const text = node => [node.text ?? '', ...node.children.map(text)].join('');
 const find = (node, predicate) => predicate(node) ? node : node.children.map(child => find(child, predicate)).find(Boolean);
 const stub = Vue.defineComponent({ render: () => Vue.h('span') });
 
+test('历史和最近记录读取独立摘要，坏快照明确展示且不阻止正常记录打开', async () => {
+  const items = [
+    { id: 'good', status: 'completed', phase: 'completed', pr_url: 'https://example.test/pr/1',
+      repository: 'owner/repo', pr_number: 1, pr_title: '正常记录', head_sha: 'a'.repeat(40),
+      created_at: '2026-10-29T04:00:00Z', updated_at: '2026-10-29T04:00:00Z', snapshot_error: null },
+    { id: 'broken', status: 'completed', phase: 'completed', pr_url: 'https://example.test/pr/2',
+      repository: 'owner/repo', pr_number: 2, pr_title: '快照不可读取', head_sha: null,
+      created_at: '2026-10-28T04:00:00Z', updated_at: '2026-10-28T04:00:00Z',
+      snapshot_error: 'history_snapshot_unavailable' },
+  ];
+  const dependencies = {
+    '../../api/client': { listReviews: async () => ({ items, total: 2, page: 1, page_size: 20 }),
+      deleteReview: async () => {} },
+    '../../utils/nativeReview': { terminal: value => value === 'completed' },
+  };
+  for (const path of ['components/pages/ReviewHistoryPage.vue', 'components/pages/NewReviewPage.vue']) {
+    const component = await compile(path, dependencies);
+    const root = { children: [] }, opened = [];
+    const history = path.includes('ReviewHistory');
+    const app = hostRenderer().createApp(component, {
+      busy: false, onOpen: id => opened.push(id), ...(history ? {} : { prUrl: '', model: '', models: [],
+      options: { focus: ['correctness'], depth: 'standard', scope: { mode: 'all', primary_files: [] } },
+      capabilities: null }),
+    });
+    app.mount(root);
+    await flush();
+    assert.match(text(root), /正常记录/);
+    assert.match(text(root), /快照不可读取/);
+    const good = find(root, node => node.tag === 'button'
+      && (history ? text(node).includes('正常记录') : node.props.class === 'recent-row')
+      && !node.props.disabled);
+    assert.ok(good);
+    good.props.onClick();
+    assert.deepEqual(opened, ['good']);
+    const broken = find(root, node => node.tag === 'button'
+      && text(node).includes('快照不可读取') && node.props.disabled);
+    assert.ok(broken);
+    app.unmount();
+  }
+});
+
 function hostRenderer() {
   const make = tag => ({ tag, text: '', props: {}, children: [], parent: null, style: {}, value: '',
     tagName: tag.toUpperCase(), addEventListener() {}, removeEventListener() {},

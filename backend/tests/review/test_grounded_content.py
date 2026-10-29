@@ -45,11 +45,13 @@ class GroundedModel(ReviewModel):
     synthesis_calls: int = 0
     grounding_calls: int = 0
     synthesis_mode: str = "ready"
+    grounding_groups: dict = {}
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         payload = json.loads(next(item.content for item in messages if item.type == "human"))
         if "output" in payload and "facts" in payload:
             self.grounding_calls += 1
+            self.grounding_groups = payload.get("required_observation_groups", {})
             supported = "可以安全上线" not in json.dumps(payload["output"], ensure_ascii=False)
             return ChatResult(generations=[ChatGeneration(message=AIMessage(
                 content="", tool_calls=[{"name": "SynthesisGrounding", "id": "grounding",
@@ -125,6 +127,7 @@ async def test_saved_content_shared_by_overview_comments_report_and_reopen(pipel
     assert synthesis.status == "ready", synthesis
     assert synthesis.model_calls == 2 and synthesis.input_tokens == 54
     assert synthesis.cached_input_tokens == 11 and model.synthesis_calls == model.grounding_calls == 1
+    assert set(model.grounding_groups) == {"safe.py"}
     assert plan.presentation.synthesis_status == "ready"
     assert plan.presentation.summary_source == "model"
     assert "返回常量由 1 调整为 2" in plan.presentation.change_summary
@@ -149,6 +152,93 @@ async def test_saved_content_shared_by_overview_comments_report_and_reopen(pipel
     assert selected.delivery.selected == 0
     assert selected.delivery.confirmed == (not no_findings)
     assert model.synthesis_calls == 1
+
+
+async def test_rejected_implementation_observation_cannot_publish_test_only_overview(pipeline):
+    from app.review.observations import observation_gaps
+
+    task, plan, _ = await run_grounded(pipeline, no_findings=True)
+    report = task.review_report
+    observation = report.observations[0].model_copy(deep=True)
+    observation.kind = "test_source"
+    observation.sources = [ref.model_copy(update={"path": "tests/test_safe.py"})
+                           for ref in observation.sources]
+    report.observations = [observation]
+    report.observation_errors = ["assignment:0:observation_comparison_source_missing"]
+    version, material = synthesis_materials(report, plan, [observation])
+    assert observation_gaps(report, [observation]) == ["safe.py"]
+    calls = []
+
+    async def facts(_report):
+        return version, material
+
+    class NeverCalled:
+        def bind_tools(self, *args, **kwargs):
+            calls.append(True)
+            raise AssertionError("incomplete materials must not call model")
+
+    context = ReviewContext(load=None, model=NeverCalled(), synthesis_facts=facts)
+    context.budget = ReviewBudget(context.limits)
+    result = await synthesize({"report": report.model_dump()}, SimpleNamespace(context=context))
+    assert not calls
+    assert result["synthesis"]["error"] == "synthesis_observations_incomplete"
+    from app.services.publication.review_presentation import build_presentation, render_presentation
+    presentation = build_presentation(plan, report=report, observations=[observation])
+    assert presentation.synthesis_status == "fallback" and presentation.summary_source == "metadata"
+    plan.presentation = presentation
+    comment = render_presentation(plan)
+    assert "总览未完整生成" in comment and "测试源码变化" not in comment
+    assert report.complete and report.termination == "completed"
+
+
+def test_change_overview_must_cite_implementation_and_test_groups():
+    material = {"required_status_ids": [], "facts": {
+        "implementation": {"kind": "observation"}, "test": {"kind": "observation"},
+        "advice": {"kind": "status"}}, "required_observation_groups": {
+            "safe.py": ["implementation"], "tests/test_safe.py": ["test"]}}
+    def paragraph(identity):
+        return {"source_ids": [identity], "text": "已有事实。"}
+    output = {"change_overview": [paragraph("test")], "review_overview": [paragraph("advice")],
+              "actions": [paragraph("advice")]}
+    with pytest.raises(ValueError, match="synthesis_change_coverage_missing") as caught:
+        validate_synthesis(output, material)
+    assert "safe.py" in caught.value.feedback
+    output["change_overview"].append(paragraph("implementation"))
+    assert validate_synthesis(output, material)
+
+
+async def test_summary_file_omission_correction_shares_the_original_two_attempts():
+    from app.review.synthesis import _request
+    from app.review.models import ReviewSynthesis, SynthesisOutput
+    import time
+
+    class Model(GroundedModel):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            response = super()._generate(messages, stop, run_manager, **kwargs)
+            args = response.generations[0].message.tool_calls[0]["args"]
+            args["change_overview"] = [{"source_ids": ["test"], "text": "测试变化。"}]
+            if self.synthesis_calls > 1:
+                args["change_overview"].append({"source_ids": ["implementation"], "text": "实现变化。"})
+            return response
+
+    material = {"facts": {"test": {"kind": "observation", "text": "测试变化。"},
+                           "implementation": {"kind": "observation", "text": "实现变化。"},
+                           "status:conclusion": {"kind": "status", "text": "静态结论。"},
+                           "status:advice": {"kind": "status", "text": "结合 CI。"}},
+                "required_status_ids": [],
+                "required_observation_groups": {"safe.py": ["implementation"], "test.py": ["test"]}}
+    model = Model()
+    context = ReviewContext(load=None, model=model)
+    context.budget = ReviewBudget(context.limits)
+    report = SimpleNamespace(synthesis=None, budget={})
+    saved = ReviewSynthesis(material_version="fixture", started_at=time.time())
+    output = await _request(context, report, saved, "generation", SynthesisOutput, "fixture", material,
+                            validate=lambda value: validate_synthesis(value, material))
+    assert len(output.change_overview) == model.synthesis_calls == 2
+    assert saved.attempts[0].error == "synthesis_change_coverage_missing"
+    assert "safe.py" in saved.attempts[0].feedback
+    assert saved.attempts[1].status == "completed"
+    assert (await context.budget.summary())["model_calls"] == 2
 
 
 @pytest.mark.parametrize("mode,error", [

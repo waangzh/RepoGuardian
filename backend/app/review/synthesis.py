@@ -14,7 +14,7 @@ from app.review.evidence import digest
 from app.review.models import (
     ReviewReport, ReviewSynthesis, SynthesisAttempt, SynthesisGrounding, SynthesisOutput,
 )
-from app.review.observations import author_comment_text, observation_text
+from app.review.observations import author_comment_text, observation_gaps, observation_targets, observation_text
 
 MATERIAL_BYTES = 24_000
 ATTEMPT_TIMEOUTS = (60, 120)
@@ -35,6 +35,8 @@ PROMPT = (
     "refuted_claims 是已被独立核验排除的判断，不能借观察重新提出，即使观察的审计分析重复了这些判断。"
     "保留条件、否定和不确定性，不重新裁决、扩大影响或作正确性保证。"
     "测试源码观察不表示测试运行。缺少观察时不要用作者目标补齐变化。"
+    "change_overview 必须覆盖 required_observation_groups 的每个变更文件，"
+    "不能只描述测试而遗漏已提供的实现变化；head_state 不能用作前后变化。"
     "不要逐条复述全部问题，不改变问题数量、严重度、归因、状态或合并建议。"
     "disclosed_status_ids 必须完整列出 required_status_ids，关键状态仍由程序展示。"
     "只调用一次 SynthesisOutput 提交结果。"
@@ -46,6 +48,8 @@ GROUNDING_PROMPT = (
     "或把测试源码变化写成测试已运行通过。处理建议还须符合给定合并策略。"
     "凡存在任何不支持的主张，supported=false 并说明原因；全部支持时才为 true。"
     "引用 ID 有效本身不证明语义受到支持。只调用一次 SynthesisGrounding。"
+    "basis=head_state 仅支持 HEAD 当前行为，不能支持新增、移除或与 BASE 相同的主张。"
+    "核对 required_observation_groups：正文必须实际概括各变更文件，不能只补引用 ID 却遗漏主要实现。"
     "必须对照 refuted_claims：不能复活已排除的候选，也不能把观察变成未经核验的新缺陷或测试批评。"
 )
 
@@ -73,7 +77,8 @@ def synthesis_materials(report, plan, observations):
     findings = {item.id: item for item in report.findings}
     facts = {}
     for item in observations:
-        facts["observation:" + item.id] = {"kind": "observation", "text": observation_text(item)}
+        facts["observation:" + item.id] = {"kind": "observation", "text": observation_text(item),
+            "basis": item.basis, "paths": sorted({ref.path for ref in item.sources})}
     for item in _ordered_findings(plan):
         finding = findings[item.finding_key]
         def finding_fact(decision):
@@ -110,19 +115,24 @@ def synthesis_materials(report, plan, observations):
                for item in report.decisions
                if item.decision == "refuted" and item.candidate_id in candidates]
     full = {
-        "schema_version": 3, "snapshot": report.snapshot.model_dump(),
+        "schema_version": 4, "snapshot": report.snapshot.model_dump(),
         "author_claim": plan.digest.author_goal,
         "outcome": plan.outcome.model_dump(mode="json"),
         "merge_decision": plan.digest.merge_decision.model_dump(),
         "facts": facts,
         "source_policy": SOURCE_POLICY, "refuted_claims": refuted,
+        "observation_gaps": observation_gaps(report, observations),
+        "observation_targets": sorted(observation_targets(report)),
     }
     version = digest(_encoded(full))
     required = [key for key, item in facts.items() if item["kind"] == "status"]
     material = {"snapshot": full["snapshot"], "author_claim": (full["author_claim"] or "")[:1000],
                 "required_status_ids": required,
                 "facts": {key: facts[key] for key in required}, "omitted": {},
-                "source_policy": SOURCE_POLICY, "refuted_claims": refuted}
+                "source_policy": SOURCE_POLICY, "refuted_claims": refuted,
+                "observation_gaps": full["observation_gaps"],
+                "required_observation_groups": {
+                    path: [] for path in full["observation_targets"]}}
     omitted = {"observations": 0, "findings": 0, "actions": 0}
     rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
     optional = sorted(
@@ -132,8 +142,15 @@ def synthesis_materials(report, plan, observations):
                           rank.get(pair[1].get("severity"), 4), pair[0]))
     for key, item in optional:
         material["facts"][key] = item
+        groups = material["required_observation_groups"]
+        related = [path for path in item.get("paths", []) if path in groups
+                   and item.get("basis") == "change"]
+        for path in related:
+            groups[path].append(key)
         if len(_encoded(material).encode("utf-8")) > MATERIAL_BYTES - 256:
             del material["facts"][key]
+            for path in related:
+                groups[path].remove(key)
             category = {"observation": "observations", "finding": "findings", "action": "actions"}[item["kind"]]
             omitted[category] += 1
     material["omitted"] = omitted
@@ -161,6 +178,13 @@ def validate_synthesis(output, material):
             if disallowed:
                 raise SynthesisValidationError("synthesis_source_kind_invalid",
                                                {**details, "disallowed_ids": disallowed})
+    cited = {identity for paragraph in output.change_overview for identity in paragraph.source_ids}
+    missing = [path for path, ids in material.get("required_observation_groups", {}).items()
+               if not cited.intersection(ids)]
+    if missing:
+        raise SynthesisValidationError("synthesis_change_coverage_missing", {
+            "section": "change_overview", "missing_paths": missing,
+            "required_observation_groups": material["required_observation_groups"]})
     return output
 
 
@@ -351,6 +375,8 @@ async def synthesize(state, runtime):
             saved.started_at = saved.started_at or time.time()
             if len(_encoded(material).encode("utf-8")) > MATERIAL_BYTES:
                 raise ValueError("synthesis_required_material_too_large")
+            if material.get("observation_gaps"):
+                raise ValueError("synthesis_observations_incomplete")
             if not any(item["kind"] == "observation" for item in material["facts"].values()):
                 raise ValueError("synthesis_observations_missing")
             await context.emit(phase="synthesis", status="running")
@@ -360,6 +386,7 @@ async def synthesize(state, runtime):
             await _save(context, report, saved)
             check = {"output": saved.output.model_dump(), "facts": material["facts"],
                      "required_status_ids": material["required_status_ids"],
+                     "required_observation_groups": material.get("required_observation_groups", {}),
                      "source_policy": SOURCE_POLICY, "refuted_claims": material.get("refuted_claims", [])}
             saved.grounding = await _request(
                 context, report, saved, "grounding", SynthesisGrounding, GROUNDING_PROMPT, check)
