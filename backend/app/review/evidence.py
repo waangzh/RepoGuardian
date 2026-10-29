@@ -128,6 +128,7 @@ class EvidenceService(EvidenceArchive):
         if end > len(lines):
             raise SourceReadError("source_range_out_of_bounds", side=side,
                 requested_range=[start, end], available_range=[1, len(lines)] if lines else None,
+                suggested_range=[start, len(lines)] if start <= len(lines) else None,
                 retryable_with_corrected_arguments=bool(lines))
         content = "".join(lines[start - 1:end])
         if len(content) > self.max_output_chars:

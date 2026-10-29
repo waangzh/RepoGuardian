@@ -14,7 +14,7 @@ async def plan_limitations(state: ReviewState, runtime: Runtime[ReviewContext]):
         return {}
     sources = await runtime.context.sources()
     records = await asyncio.to_thread(review_limitations, state, sources.evidence)
-    return {"limitation_batches": limitation_batches(records, state["goals"])}
+    return {"limitation_batches": limitation_batches(records, state["goals"], state.get("limitation_batches", []))}
 
 
 async def review_limitation(state: ReviewState, runtime: Runtime[ReviewContext]):

@@ -39,6 +39,7 @@ async def test_out_of_bounds_is_actionable_and_does_not_silently_clip(source_ser
     result = await operation.coroutine(path="safe.py", start=1, end=2, runtime=tool_runtime(source_service))
     assert result == {"ok": False, "error": "source_range_out_of_bounds", "side": side,
         "requested_range": [1, 2], "available_range": [1, 1],
+        "suggested_range": [1, 1],
         "retryable_with_corrected_arguments": True, "truncated": False}
     corrected = await operation.coroutine(path="safe.py", start=1, end=1, runtime=tool_runtime(source_service))
     assert corrected["ok"] and corrected["evidence"]["end_line"] == 1
@@ -72,7 +73,7 @@ async def test_graph_step_guard_does_not_preempt_the_configured_model_budget(sou
             context=AgentContext(evidence=source_service),
             config={"recursion_limit": agent_recursion_limit(limits)})
     assert type(failure.value).__name__ == "FinalizationRequired"
-    assert model.calls == 23  # 图步数不再提前终止；最后两次只允许提交。
+    assert model.calls == limits.model_calls  # 包括原预算内的最终提交纠错。
 
 
 async def test_exception_retains_tool_failures_and_does_not_leak_error_body(source_service, caplog):
@@ -148,6 +149,11 @@ def failing_pipeline(pipeline, roles):
     return service, repository, model
 
 
+def review_requests(model):
+    return [item for item in model.observed
+            if any(key in item for key in ("assignment", "candidate", "candidates"))]
+
+
 async def test_all_failed_discoveries_have_failed_verdict_and_honest_report(pipeline, caplog):
     service, repository, model = failing_pipeline(pipeline, ["reviewer"])
     with caplog.at_level(logging.INFO, logger="RepoGuardian.Review"):
@@ -165,7 +171,7 @@ async def test_all_failed_discoveries_have_failed_verdict_and_honest_report(pipe
     assert "（HEAD）" in saved.report_markdown and "（BASE）" in saved.report_markdown
     assert "未保存可归纳" not in saved.report_markdown
     assert "未保存逐目标" not in saved.report_markdown
-    assert len(model.observed) == 1
+    assert len(review_requests(model)) == 1
 
 
 @pytest.mark.parametrize("roles", [["reviewer"], ["verifier"]])
@@ -178,7 +184,7 @@ async def test_single_retry_reuses_completed_branches_and_accumulates_usage(pipe
                  if item.status == "completed"}
     failed = [item for item in original.review_report.discovery_results + original.review_report.verification_results
               if item.status == "failed"]
-    before = len(model.observed)
+    before = len(review_requests(model))
     model.fail_roles = []
     resumed = await service.resume_review(task.id)
     assert resumed.status == "queued" and resumed.retry_count == 1
@@ -198,7 +204,7 @@ async def test_single_retry_reuses_completed_branches_and_accumulates_usage(pipe
         assert result.tool_calls == previous.tool_calls + 3  # 两次源码读取与一次结构化提交
         assert result.tool_failures == previous.tool_failures
     # A retried discovery also lets the pending verification run; a retried verifier is the last step.
-    assert len(model.observed) - before == (2 if roles == ["reviewer"] else 1)
+    assert len(review_requests(model)) - before == (2 if roles == ["reviewer"] else 1)
     with pytest.raises(ValueError, match="unavailable"):
         await service.resume_review(task.id)
 

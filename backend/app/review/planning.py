@@ -1,6 +1,7 @@
 """Deterministic review units, assignments and coverage goals."""
 
 import json
+import posixpath
 import re
 from dataclasses import dataclass
 
@@ -66,6 +67,9 @@ RISK_OPERATION_GROUPS = {
 PUBLIC_API_PARTS = frozenset({"api", "contracts", "openapi", "public", "sdk"})
 PUBLIC_API_NAMES = frozenset({"__init__.py", "index.ts", "index.js", "index.tsx", "index.jsx"})
 DOCUMENTATION_SUFFIXES = (".md", ".mdx", ".rst", ".adoc", ".txt")
+DOCUMENT_REFERENCES = re.compile(
+    r"@(?P<mention>[\w./-]+)|\[[^\]\n]*\]\((?P<link>[^\s)]+)\)|`(?P<code>[^`\s]+)`")
+SUPPORT_NAMES = frozenset({".gitignore", ".gitattributes"})
 QUOTED_TEXT = r"'(?:\\.|[^'\\\n])*'" r'|"(?:\\.|[^"\\\n])*"'
 PYTHON_QUOTED_TEXT = (
     r"'''[\s\S]*?(?:'''|\Z)" + r'|"""[\s\S]*?(?:"""|\Z)|' + QUOTED_TEXT)
@@ -231,6 +235,20 @@ def _links(changes, repository_graph, changed_symbols):
         else:
             continue
         links.append((priority, -edge.get("confidence", 0), *sorted((left, right))))
+    for path, change in changes.items():
+        if not path.casefold().endswith(DOCUMENTATION_SUFFIXES):
+            continue
+        for hunk in change.get("hunks", []):
+            for line in hunk.get("lines", []):
+                if line.get("kind") == "deleted":
+                    continue
+                for match in DOCUMENT_REFERENCES.finditer(line.get("content", "")):
+                    target = next(value for value in match.groups() if value).split("#", 1)[0]
+                    if not target or target.startswith(("/", "\\")) or ":" in target or "\\" in target:
+                        continue
+                    target = posixpath.normpath(posixpath.join(posixpath.dirname(path), target))
+                    if target in changes and target != path:
+                        links.append((2, -1, *sorted((path, target))))
     # Directory and shared feature tokens are weak hints, ranked below code edges.
     for paths in _index(changes, _tags).values():
         for left, right in zip(paths, paths[1:]):
@@ -292,6 +310,10 @@ def _source_or_config(path):
         path.rsplit("/", 1)[-1].casefold() in CONFIG_NAMES)
 
 
+def _documentation_support(path):
+    return path.casefold().endswith((".md", ".mdx", ".rst", ".adoc")) or path in SUPPORT_NAMES
+
+
 def _public_entry(path):
     parts = path.casefold().split("/")
     return parts[-1] in PUBLIC_API_NAMES or any(
@@ -313,7 +335,8 @@ def _risk(paths, changes, changed_symbols):
     operation_hits = sorted(group for group, pattern in RISK_OPERATION_GROUPS.items()
                             if pattern.search(added))
     public_api = any(_public_entry(path) and changed_symbols.get(path) for path in paths)
-    cross_module = len({_module(path) for path in paths}) > 1
+    cross_module = (len({_module(path) for path in paths}) > 1
+                    and not all(_documentation_support(path) for path in paths))
     file_event = any(changes[path].get("change_type") in {"added", "deleted"}
                      and _source_or_config(path) for path in paths)
     structural = any(changes[path].get("change_type") == "renamed" for path in paths)
@@ -436,7 +459,36 @@ def _pack(units, changes, depth):
     return units
 
 
+def _compact_documents(units, changes, depth):
+    def eligible(unit):
+        return (not unit.structural and unit.roles == ["reviewer"] and unit.risk != "high"
+                and all(_documentation_support(path) for path in unit.paths))
+
+    def small(paths):
+        hunks = [hunk for path in paths for hunk in changes[path].get("hunks", [])]
+        return (sum(hunk["old_length"] + hunk["new_length"] for hunk in hunks) <= 160
+                and sum(len(line.get("content", "")) for hunk in hunks
+                        for line in hunk.get("lines", [])) <= 8000)
+
+    packed = []
+    for unit in sorted(units, key=lambda item: item.paths):
+        if eligible(unit) and small(unit.paths):
+            for index, previous in enumerate(packed):
+                if not eligible(previous) or not small(previous.paths + unit.paths):
+                    continue
+                combined = _merge(previous, unit, changes, depth)
+                if combined is not None and len(combined.goals) <= 6:
+                    packed[index] = combined
+                    break
+            else:
+                packed.append(unit)
+        else:
+            packed.append(unit)
+    return sorted(packed, key=lambda item: item.paths)
+
+
 def _fit(units, changes, depth, limits):
+    units = _compact_documents(units, changes, depth)
     if limits is None or not units:
         return units, [], {}
     limitations, uncovered = [], {}

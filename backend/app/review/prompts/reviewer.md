@@ -89,3 +89,8 @@ absence from a partial search or mark an unexamined goal as examined.
 read_diff lists hunks by default; supply a
 zero-based hunk_index for lines. Reassemble continued line fragments by their
 line_index and content_offset. Neither search nor diff grants source evidence.
+search_code reports scanned_files separately from matched_files; a complete
+zero-match search does not mean files were unreadable. On source_range_out_of_bounds,
+use suggested_range for a bounded corrected read while exploration is allowed.
+Before declaring a limitation, use the smallest relevant source read; a missing
+optional config check or an unconsumed unrelated search page is not a blocker.

@@ -304,6 +304,7 @@ class BatchVerificationOutput(ReviewModel):
 
 class AgentAttempt(ReviewModel):
     status: Literal["completed", "failed"]
+    output: dict = Field(default_factory=dict)
     evidence_ids: list[str] = Field(default_factory=list)
     error: str | None = None
     model_calls: int | None = None
@@ -321,7 +322,6 @@ class AgentAttempt(ReviewModel):
 
 class AgentResult(AgentAttempt):
     id: str
-    output: dict = Field(default_factory=dict)
     previous_attempts: list[AgentAttempt] = Field(default_factory=list, max_length=1)
     execution_id: str | None = None
     comparison_candidate_ids: list[str] = Field(default_factory=list, max_length=8)

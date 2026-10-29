@@ -41,7 +41,8 @@ class ScopeModel(ReviewModel):
                 raise RuntimeError("fixture_scope_failure")
             evidence = [item["evidence"]["id"] for item in payload["source_materials"]]
             evidence += [json.loads(item.content)["evidence"]["id"] for item in messages
-                         if isinstance(item, ToolMessage) and item.name in {"read_file", "read_base_file"}]
+                         if isinstance(item, ToolMessage) and item.name in {"read_file", "read_base_file"}
+                         and json.loads(item.content).get("ok")]
             if not evidence:
                 calls = [{"name": "read_file" if goal["side"] == "head" else "read_base_file",
                           "args": {"path": goal["path"], "start": goal["start_line"], "end": goal["end_line"]},
@@ -114,6 +115,85 @@ async def test_no_declaration_requires_no_extra_model_call(source_service):
     _, report, outcome = await execute(source_service, model)
     assert model.scope_calls == 0 and not report.limitation_results
     assert outcome.kind == "clean"
+
+
+class MixedAssessmentModel(ScopeModel):
+    repeat_invalid: bool = True
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        result = super()._generate(messages, stop, run_manager, **kwargs)
+        corrected = any(isinstance(message, ToolMessage)
+                        and "invalid_limitation_assessments" in str(message.content) for message in messages)
+        for call in result.generations[0].message.tool_calls:
+            if call["name"] == "DiscoveryOutput":
+                call["args"]["limitations"] = ["配置读取前提 A 未确认", "配置读取前提 B 未确认"]
+            if call["name"] == "LimitationReviewOutput" and (self.repeat_invalid or not corrected):
+                call["args"]["assessments"][1]["evidence_ids"] = ["pagination-is-not-source"]
+        return result
+
+
+class RangeScopeModel(ScopeModel):
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        if messages[0].content.startswith("You independently review proposed evidence gaps"):
+            reads = [json.loads(message.content) for message in messages
+                     if isinstance(message, ToolMessage) and message.name == "read_file"]
+            bounds = [1, 47] if not reads else reads[-1].get("suggested_range")
+            if bounds:
+                return ChatResult(generations=[ChatGeneration(message=AIMessage(content="", tool_calls=[{
+                    "name": "read_file", "args": {"path": "other.py", "start": bounds[0], "end": bounds[1]},
+                    "id": f"bounded-read-{len(reads)}"}],
+                    usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}))])
+        return super()._generate(messages, stop, run_manager, **kwargs)
+
+
+async def test_scope_corrects_out_of_bounds_read_inside_original_budget(source_service):
+    _, report, outcome = await execute(source_service, RangeScopeModel())
+    result = report.limitation_results[0]
+    assert result.status == "completed" and result.model_calls == 3
+    assert result.tool_failures == 1 and outcome.pending_limitation_count == 0
+    assert result.model_calls <= 5
+
+
+@pytest.mark.parametrize("repeat_invalid", [False, True])
+async def test_framework_correction_and_partial_admission_keep_runtime_truth(source_service, repeat_invalid):
+    model = MixedAssessmentModel(repeat_invalid=repeat_invalid)
+    _, report, outcome = await execute(source_service, model)
+    assert model.scope_calls == 2
+    assert report.limitation_results[0].structured_output_retries == 1
+    assert outcome.pending_limitation_count == int(repeat_invalid)
+    if repeat_invalid:
+        assert report.termination == "partial" and outcome.runtime_reliability == "unreliable"
+        assert report.limitation_results[0].error == "limitation_assessment_evidence_not_read"
+        assert sorted(item.status for item in outcome.review_limitations) == ["boundary", "pending"]
+    else:
+        assert report.termination == "completed" and outcome.kind == "clean"
+
+
+async def test_partial_assessment_survives_sqlite_reopen_and_failed_retry(source_service, tmp_path):
+    database = tmp_path / "partial-assessment.db"
+    config = {"configurable": {"thread_id": "partial-assessment"}}
+    context = review_context(source_service, MixedAssessmentModel())
+    async with aiosqlite.connect(database) as connection:
+        graph = build_review_graph(AsyncSqliteSaver(connection, serde=_checkpoint_serializer()))
+        first = await graph.ainvoke({"review_id": "review"}, config, context=context)
+    original = first["limitation_results"][0]
+    update = retry_updates(first, context.limits)
+    resumed = review_context(source_service, ScopeModel(scope_failure=True))
+    resumed.budget = context.budget
+    resumed.retry_results = {(item["reviewer"], item["result"]["id"]): item["result"]
+                            for item in update["retry_results"]}
+    async with aiosqlite.connect(database) as connection:
+        graph = build_review_graph(AsyncSqliteSaver(connection, serde=_checkpoint_serializer()))
+        await graph.aupdate_state(config, update, as_node="plan")
+        state = await graph.ainvoke(None, config, context=resumed)
+    report = ReviewReport.model_validate_json(ReviewReport.model_validate(state["report"]).model_dump_json())
+    outcome = derive_review_outcome(task_for(report), evidence=source_service)
+    result = report.limitation_results[0]
+    assert result.id == original["id"]
+    assert result.previous_attempts[0].output == original["output"]
+    assert result.model_calls == original["model_calls"] + 1
+    assert outcome.pending_limitation_count == 1 and report.termination == "partial"
+    assert sorted(item.status for item in outcome.review_limitations) == ["boundary", "pending"]
 
 
 async def test_scope_failure_preserves_pending_and_usage_without_claiming_a_necessary_gap(source_service):

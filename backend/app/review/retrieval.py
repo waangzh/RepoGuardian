@@ -129,7 +129,7 @@ async def search(context, query, path="", glob="", side="head", cursor="", limit
         saved = json.loads(encoded)
         window = saved.get("search_window")
     stop = min(len(paths), first + SCAN_FILES)
-    matches, searched, unreadable = [], 0, 0
+    matches, matched, unreadable, scanned = [], 0, 0, 0
     # git grep only locates matching files; source reads still enforce blob and path policy.
     try:
         if window:
@@ -140,6 +140,7 @@ async def search(context, query, path="", glob="", side="head", cursor="", limit
         else:
             hits, rejected, excluded, processed = await asyncio.to_thread(
                 _matching_paths, context.evidence, paths[first:stop], side, query)
+            scanned = processed
             stop = first + processed
             window = {"stop": stop, "hits": sorted(hits)}
     except subprocess.TimeoutExpired as exc:
@@ -153,7 +154,7 @@ async def search(context, query, path="", glob="", side="head", cursor="", limit
             continue
         if context.check_active:
             await context.check_active()
-        searched += 1
+        matched += 1
         try:
             _, content = await asyncio.to_thread(context.evidence._source, selected, side)
         except (ValueError, OSError):
@@ -170,7 +171,7 @@ async def search(context, query, path="", glob="", side="head", cursor="", limit
             if len(matches) >= limit or _size(matches + [match]) > PAGE_CHARS:
                 return await asyncio.to_thread(
                     _page, context, scope, cursor, (index, line), True, source="search_hint",
-                    matches=matches, searched_files=searched, unreadable_files=unreadable,
+                    matches=matches, scanned_files=scanned, matched_files=matched, unreadable_files=unreadable,
                     policy_exclusions=len(excluded),
                     search_window=window,
                     unreadable_total=prior_unreadable + unreadable,
@@ -178,7 +179,7 @@ async def search(context, query, path="", glob="", side="head", cursor="", limit
             matches.append(match)
     return await asyncio.to_thread(
         _page, context, scope, cursor, (stop, 0), stop < len(paths), source="search_hint",
-        matches=matches, searched_files=searched, unreadable_files=unreadable,
+        matches=matches, scanned_files=scanned, matched_files=matched, unreadable_files=unreadable,
         policy_exclusions=len(excluded),
         unreadable_total=prior_unreadable + unreadable,
         scope_files=len(paths), scope_complete=stop == len(paths) and not (prior_unreadable + unreadable))

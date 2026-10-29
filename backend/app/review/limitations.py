@@ -9,6 +9,11 @@ from app.review.models import (
 )
 
 LIMITATION_CALL_LIMITS = {"quick": 3, "standard": 5, "deep": 7}
+ASSESSMENT_ERROR_CODES = frozenset({
+    "limitation_assessment_members_mismatch", "limitation_assessment_goal_outside_scope",
+    "limitation_assessment_evidence_not_read", "limitation_assessment_change_source_missing",
+    "limitation_assessment_structural_source_missing", "limitation_assessment_source_invalid",
+})
 
 
 def _limitations(texts, source, source_id, candidate_ids, goal_ids=()):
@@ -52,41 +57,71 @@ def validate_resolutions(resolutions, limitations, candidate_id, issued_ids, ser
             service.resolve(identity)
 
 
-def validate_assessments(output, limitations, goals, issued_ids, service):
+def assessment_errors(output, limitations, goals, issued_ids, service):
     expected = {item["id"]: item for item in limitations}
     supplied = [item.limitation_id for item in output.assessments]
     if len(supplied) != len(set(supplied)) or set(supplied) != set(expected):
         raise ValueError("limitation_assessment_members_mismatch")
     goal_map = {goal["id"]: goal for goal in goals}
-    for assessment in output.assessments:
+    errors = []
+    for index, assessment in enumerate(output.assessments):
         allowed = set(expected[assessment.limitation_id]["goal_ids"])
+        invalid = set(assessment.evidence_ids) - set(issued_ids)
+        code = None
         if not set(assessment.goal_ids) <= allowed or not set(assessment.goal_ids) <= set(goal_map):
-            raise ValueError("limitation_assessment_goal_outside_scope")
-        if not set(assessment.evidence_ids) <= set(issued_ids):
-            raise ValueError("limitation_assessment_evidence_not_read")
-        refs = [service.resolve(identity) for identity in assessment.evidence_ids]
-        source_goals = [identity for identity in assessment.goal_ids
-                        if goal_map[identity].get("kind") != "structural"]
-        if source_goals and not any(
-                ref.path == goal_map[identity]["path"] and ref.side == goal_map[identity]["side"]
-                for identity in source_goals for ref in refs):
-            raise ValueError("limitation_assessment_change_source_missing")
-        if any(goal_map[identity].get("kind") == "structural"
-               and not has_structural_source(goal_map[identity], refs)
-               for identity in assessment.goal_ids):
-            raise ValueError("limitation_assessment_structural_source_missing")
+            code = "limitation_assessment_goal_outside_scope"
+        elif invalid:
+            code = "limitation_assessment_evidence_not_read"
+        else:
+            try:
+                refs = [service.resolve(identity) for identity in assessment.evidence_ids]
+            except (ValueError, OSError):
+                code = "limitation_assessment_source_invalid"
+            else:
+                source_goals = [identity for identity in assessment.goal_ids
+                                if goal_map[identity].get("kind") != "structural"]
+                if source_goals and not any(
+                        ref.path == goal_map[identity]["path"] and ref.side == goal_map[identity]["side"]
+                        for identity in source_goals for ref in refs):
+                    code = "limitation_assessment_change_source_missing"
+                if any(goal_map[identity].get("kind") == "structural"
+                       and not has_structural_source(goal_map[identity], refs)
+                       for identity in assessment.goal_ids):
+                    code = "limitation_assessment_structural_source_missing"
+        if code:
+            errors.append({"index": index, "limitation_id": assessment.limitation_id, "code": code,
+                           "invalid_evidence_ids": sorted(invalid), "allowed_goal_ids": sorted(allowed)})
+    return errors
 
 
-def limitation_batches(records, goals):
+def validate_assessments(output, limitations, goals, issued_ids, service):
+    errors = assessment_errors(output, limitations, goals, issued_ids, service)
+    if errors:
+        raise ValueError(errors[0]["code"])
+
+
+def limitation_batches(records, goals, previous_batches=()):
+    by_id = {item.id: item for item in records}
+    batches, claimed = [], set()
+    for previous in previous_batches:
+        members = sorted(item["id"] for item in previous["review_limitations"])
+        if not set(members) <= set(by_id):
+            continue
+        if previous["id"] != "scope-" + digest(":".join(members)):
+            raise ValueError("limitation_batch_identity_invalid")
+        items = [by_id[identity] for identity in members]
+        identities = {identity for item in items for identity in item.goal_ids}
+        batches.append({"id": previous["id"], "review_limitations": [item.model_dump() for item in items],
+                        "goals": [goal for goal in goals if goal["id"] in identities]})
+        claimed.update(members)
     groups = {}
     for item in records:
-        if item.status == "pending" and item.goal_ids:
-            groups.setdefault((item.source, item.source_id), []).append(item)
-    batches = []
+        if item.id not in claimed and item.status == "pending" and item.goal_ids:
+            groups.setdefault(tuple(sorted(item.goal_ids)), []).append(item)
     for key in sorted(groups):
-        items = sorted(groups[key], key=lambda item: item.id)
+        items = sorted(groups[key], key=lambda item: (item.text, item.id))
         for offset in range(0, len(items), 3):
-            group = items[offset:offset + 3]
+            group = sorted(items[offset:offset + 3], key=lambda item: item.id)
             identities = set().union(*(set(item.goal_ids) for item in group))
             batches.append({"id": "scope-" + digest(":".join(item.id for item in group)),
                 "review_limitations": [item.model_dump() for item in group],
@@ -115,28 +150,8 @@ def review_limitations(report, service=None):
                                     decision["candidate_id"], [decision["candidate_id"]], goal_ids))
     by_id = {item.id: item for item in records}
     for result in data.get("limitation_results", []):
-        if service is None or result["status"] != "completed":
-            continue
-        try:
-            output = LimitationReviewOutput.model_validate(result["output"])
-            members = sorted({item.limitation_id for item in output.assessments})
-            selected = [by_id[identity] for identity in members]
-            if (result["id"] != "scope-" + digest(":".join(members))
-                    or len({(item.source, item.source_id) for item in selected}) != 1):
-                continue
-            validate_assessments(output, [item.model_dump() for item in selected], goals,
-                                 result["evidence_ids"], service)
-        except (KeyError, ValueError, OSError):
-            continue
-        for assessment in output.assessments:
-            record = by_id[assessment.limitation_id]
-            record.status, record.assessment = assessment.status, assessment
-            if assessment.status != "unresolved":
-                record.resolved_by = result["id"]
-                record.resolution = LimitationResolution.model_validate(
-                    assessment.model_dump(include=set(LimitationResolution.model_fields)))
-            new_candidates = {item["id"] for item in candidates if result["id"] in item["assignment_ids"]}
-            record.candidate_ids = sorted(set(record.candidate_ids) | new_candidates)
+        if service is not None:
+            _apply_assessments(result, by_id, goals, candidates, service)
     allowed = [item.model_dump() for item in records]
     results = {item["id"]: item for item in (
         data.get("verification_results", []) + data.get("investigation_results", []))
@@ -174,3 +189,31 @@ def review_limitations(report, service=None):
             # Both categories are explicitly nonblocking, for different reasons.
             record.status = "nonblocking"
     return records
+
+
+def _apply_assessments(result, by_id, goals, candidates, service):
+    # Each attempt retains its own issued IDs; a retry never inherits read permission.
+    for attempt in [*result.get("previous_attempts", []), result]:
+        if attempt.get("status") != "completed" and attempt.get("error") not in ASSESSMENT_ERROR_CODES:
+            continue
+        try:
+            output = LimitationReviewOutput.model_validate(attempt.get("output", {}))
+            members = sorted({item.limitation_id for item in output.assessments})
+            if result["id"] != "scope-" + digest(":".join(members)):
+                continue
+            selected = [by_id[identity].model_dump() for identity in members]
+            errors = assessment_errors(output, selected, goals, attempt["evidence_ids"], service)
+        except (KeyError, ValueError, OSError):
+            continue
+        invalid = {item["limitation_id"] for item in errors}
+        for assessment in output.assessments:
+            if assessment.limitation_id in invalid:
+                continue
+            record = by_id[assessment.limitation_id]
+            record.status, record.assessment = assessment.status, assessment
+            record.resolved_by = result["id"] if assessment.status != "unresolved" else None
+            record.resolution = (LimitationResolution.model_validate(
+                assessment.model_dump(include=set(LimitationResolution.model_fields)))
+                if assessment.status != "unresolved" else None)
+            new_candidates = {item["id"] for item in candidates if result["id"] in item["assignment_ids"]}
+            record.candidate_ids = sorted(set(record.candidate_ids) | new_candidates)

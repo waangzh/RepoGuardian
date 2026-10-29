@@ -101,6 +101,8 @@ async def search_code(query: str, runtime: ToolRuntime[AgentContext], path: str 
     unchanged filters when more context is needed.
     has_more means the scope is not exhausted, not a failure. An empty partial page
     cannot prove absence. Results are hints; read source for evidence.
+    scanned_files counts paths scanned on this call; matched_files counts matching
+    files visited for this page. A continuation may scan zero new paths.
     """
     return await search(runtime.context, query, path, glob, side, cursor, limit)
 

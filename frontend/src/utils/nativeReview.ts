@@ -16,6 +16,12 @@ export const executionErrorLabel = (code: string | null) => ({
   RateLimitError: '模型服务请求受限', AuthenticationError: '模型服务认证失败',
   APIConnectionError: '模型服务连接失败', review_deadline: '达到本轮审查总期限',
   review_agents_failed: '所有独立审查分支执行失败',
+  limitation_assessment_members_mismatch: '限制复核成员缺失、重复或超出本批范围',
+  limitation_assessment_goal_outside_scope: '限制复核引用了该声明范围外的审查目标',
+  limitation_assessment_evidence_not_read: '限制复核引用了本分支未读取的源码证据；搜索与分页标识不能作为证据',
+  limitation_assessment_change_source_missing: '限制复核缺少对应变更文件与侧别的源码证据',
+  limitation_assessment_structural_source_missing: '结构性限制复核缺少目标文件之外的 HEAD 引用方源码',
+  limitation_assessment_source_invalid: '限制复核的归档源码证据不可用或完整性校验失败',
 }[code || ''] || '执行异常，未取得有效结果');
 export function resumeLabel(task: ReviewTask): string | null {
   if (!['failed', 'completed_with_warnings'].includes(task.status)) return null;

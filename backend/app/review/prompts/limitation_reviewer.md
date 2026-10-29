@@ -31,6 +31,15 @@ cited. Reading only the changed target or BASE source cannot satisfy this
 check. Structural goals have no line range, so never fabricate one.
 Never reuse another agent's evidence. Source availability or budget failure is
 not evidence that a declaration is a boundary; preserve actual uncertainty.
+Only evidence.id from source_materials or successful source reads belongs in
+evidence_ids. search_code/find_files pagination_id values are never evidence.
+When a read fails with suggested_range, retry that exact bounded range while
+exploration is still allowed. Do not infer file contents from a path hint.
+Declarations from different reviewers may share a batch; assess each original
+ID against its own goal_ids, not the union of the batch's allowed goals.
+On correction, use invalid_limitation_assessments and available_limitation_evidence
+to fix specific entries. If necessary source cannot be read, cite your existing
+changed-source evidence and explain the specific unresolved premise honestly.
 Use the original call budget, parallelize independent necessary reads, stop once
 the missing fact or its irrelevance is established, and never expand the scope
 to exhaustive callers or global invariants without a concrete change dependency.

@@ -125,15 +125,18 @@ async def test_persistent_pipeline_confirmation_native_graph_report_and_revalida
     assert saved.review_report.complete
     assert len(saved.review_report.findings) == 1
     assert saved.report_markdown
-    assert len(model.observed) == 2
+    review_requests = [item for item in model.observed
+                       if any(key in item for key in ("assignment", "candidate", "candidates"))]
+    assert len(review_requests) == 2
     assert durability == ["sync"]
     plan = PublicationPlanner(repository._artifacts).build(saved)
     assert plan.content_eligible
     assert plan.outcome.confirmed_count == plan.outcome.publishable_count == 1
     assert len(plan.inline_drafts) == 1
     assert plan.snapshot.head_sha == saved.snapshot.head_sha
+    calls = len(model.observed)
     assert not await service._worker.run_once()
-    assert len(model.observed) == 2
+    assert len(model.observed) == calls
 
 
 async def test_planning_limitations_survive_summary_and_report_without_changing_goal_coverage(pipeline):

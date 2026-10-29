@@ -5,7 +5,7 @@ import json
 from langchain_core.messages import ToolMessage
 
 from app.review.findings import covered_goals
-from app.review.limitations import validate_assessments, validate_resolutions
+from app.review.limitations import assessment_errors, validate_resolutions
 from app.review.models import BatchVerificationOutput, DiscoveryOutput, LimitationReviewOutput
 from app.review.observations import validate_observation
 
@@ -35,9 +35,24 @@ def submission_feedback(output, goals, service, issued, identity, limitations=()
     issues = {}
     if isinstance(output, LimitationReviewOutput):
         try:
-            validate_assessments(output, limitations, goals, issued, service)
+            rejected = assessment_errors(output, limitations, goals, issued, service)
         except (ValueError, OSError) as exc:
             issues["invalid_limitation_assessment"] = str(exc)
+        else:
+            if rejected:
+                issues["invalid_limitation_assessments"] = rejected
+                available = []
+                for identity in sorted(issued):
+                    try:
+                        available.append(service.resolve(identity).model_dump())
+                    except (ValueError, OSError):
+                        continue
+                issues["available_limitation_evidence"] = available[:32]
+                issues["evidence_instruction"] = (
+                    "evidence_ids 只使用本分支 read_file/read_base_file/read_symbol 或 "
+                    "source_materials 的 evidence.id；pagination_id 和 search/path/diff hint 不是证据。"
+                    "先修正无效引用；若缺少必要源码，仅在探索仍允许时补读。无法补读时用已读的"
+                    "变更源码说明 unresolved 的具体缺失前提，不得把缺口改成 resolved 或 boundary。")
     if isinstance(output, DiscoveryOutput) and goals:
         expected = {goal["id"] for goal in goals}
         claimed = {item.goal_id for item in output.examined}

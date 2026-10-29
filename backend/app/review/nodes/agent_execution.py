@@ -12,7 +12,7 @@ from app.review.agents import agent_recursion_limit, build_agent
 from app.review.models import (
     AgentAttempt, AgentResult, BatchVerificationOutput, DiscoveryOutput, LimitationReviewOutput, VerificationOutput,
 )
-from app.review.limitations import LIMITATION_CALL_LIMITS, validate_assessments
+from app.review.limitations import ASSESSMENT_ERROR_CODES, LIMITATION_CALL_LIMITS, validate_assessments
 from app.review.tools import REVIEW_TOOLS
 from app.review.materials import prepare_materials
 
@@ -225,7 +225,7 @@ async def run_agent(context, identity, reviewer, payload, *, discovery_agent_ids
         raise
     except Exception as exc:
         await context.active()
-        error = type(exc).__name__
+        error = str(exc) if isinstance(exc, ValueError) and str(exc) in ASSESSMENT_ERROR_CODES else type(exc).__name__
         logger.error("审查分支失败 review_id=%s agent_id=%s reviewer=%s code=%s model_calls=%s tool_calls=%s",
             sources.evidence.snapshot.review_id[:8], identity[:8], reviewer, error,
             len(usage_observer.started), len(usage_observer.tools_started))

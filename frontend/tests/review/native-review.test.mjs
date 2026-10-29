@@ -4,6 +4,17 @@ import {createServer} from 'vite';
 import {createSSRApp, ref, toRaw} from 'vue';
 import {renderToString} from '@vue/server-renderer';
 
+test('限制复核显示具体安全原因，不把局部准入失败表示为无结果',async()=>{
+ const server=await createServer({server:{middlewareMode:true,hmr:false},optimizeDeps:{noDiscovery:true,entries:[],include:[]},appType:'custom'});
+ try{
+  const {executionErrorLabel}=await server.ssrLoadModule('/src/utils/nativeReview.ts');
+  assert.match(executionErrorLabel('limitation_assessment_evidence_not_read'),/本分支未读取.*分页/);
+  assert.match(executionErrorLabel('limitation_assessment_members_mismatch'),/缺失、重复/);
+  assert.match(executionErrorLabel('limitation_assessment_source_invalid'),/完整性校验/);
+  assert.equal(executionErrorLabel('unknown_private_body'),'执行异常，未取得有效结果');
+ }finally{await server.close();}
+});
+
 test('当前图投影分离候选、覆盖、确认和未知用量',async()=>{
  const server=await createServer({server:{middlewareMode:true,hmr:false},optimizeDeps: { noDiscovery: true, entries: [], include: [] }, appType:'custom'});
  try{
