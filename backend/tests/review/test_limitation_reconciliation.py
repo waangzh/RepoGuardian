@@ -223,7 +223,8 @@ async def test_verified_finding_with_explicit_resolution_still_passes_publicatio
     report = await run_review(source_service, assessment="resolved", verdict="confirmed")
     from app.services.publication.review_publication import validated_findings
     task = task_for(report)
-    task.configuration = SimpleNamespace(options=SimpleNamespace(scope=SimpleNamespace(mode="all")))
+    from app.models.review_plan import ReviewPlanOptions
+    task.configuration = SimpleNamespace(options=ReviewPlanOptions())
     from app.models.review.diff import ChangedFile
     from tests.review.test_native_graph import CHANGE
     task.changed_files = [ChangedFile.model_validate({**CHANGE, "additions": 1, "deletions": 1})]

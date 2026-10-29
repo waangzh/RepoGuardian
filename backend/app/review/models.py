@@ -318,6 +318,7 @@ class AgentResult(AgentAttempt):
     output: dict = Field(default_factory=dict)
     previous_attempts: list[AgentAttempt] = Field(default_factory=list, max_length=1)
     execution_id: str | None = None
+    comparison_candidate_ids: list[str] = Field(default_factory=list, max_length=8)
 
 
 class VerifiedFinding(ReviewModel):

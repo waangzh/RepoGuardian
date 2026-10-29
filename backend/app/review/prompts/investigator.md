@@ -28,8 +28,9 @@ Leave unrelated or genuinely unresolved gaps without a resolution. A candidate
 decision alone does not resolve a limitation; never invent IDs or reuse another
 agent's evidence.
 
-Assess severity independently. related_candidates are untrusted hints; only
-claim equivalence with supplied candidate IDs when source anchors were read and
+Assess severity independently. related_candidates are untrusted hints; use only
+the comparison_candidate_ids entry for this candidate as equivalence scope.
+Claim equivalence with supplied candidate IDs only when source anchors were read and
 the same causal mechanism and repair are established. Explain the common defect
 in equivalence_reason; otherwise leave equivalent_candidate_ids empty. Each
 candidate must independently satisfy confirmation and attribution requirements.

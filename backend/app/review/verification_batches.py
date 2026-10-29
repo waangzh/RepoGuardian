@@ -1,8 +1,13 @@
-"""Deterministic bounded batching is not semantic finding deduplication."""
+"""Deterministic bounded batching is not semantic finding deduplication.
+
+Batch membership uses the same line window as equivalence hints so every
+supplied peer is a valid equivalence candidate.
+"""
 
 from collections import Counter
 
 from app.review.evidence import digest
+from app.review.findings import EQUIVALENCE_LINE_WINDOW
 from app.review.models import VerificationResult
 
 
@@ -12,7 +17,7 @@ def verification_batches(candidates):
         current = batches[-1] if batches else []
         if (not current or len(current) == 3
                 or candidate["affected_path"] != current[0]["affected_path"]
-                or candidate["line"] - current[0]["line"] > 40):
+                or candidate["line"] - current[0]["line"] > EQUIVALENCE_LINE_WINDOW):
             batches.append([])
         batches[-1].append(candidate)
     return [{"id": (batch[0]["id"] if len(batch) == 1 else

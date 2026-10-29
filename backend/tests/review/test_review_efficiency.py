@@ -11,6 +11,10 @@ from sqlalchemy import inspect
 from app.review.agents import build_agent
 from app.review.budget import ReviewBudget, ReviewBudgetExceeded
 from app.review.context import AgentContext
+from app.review.findings import (
+    COMPARISON_LIMIT, EQUIVALENCE_LINE_WINDOW, batch_comparison_candidates,
+    comparison_candidates, comparison_scope,
+)
 from app.review.materials import prepare_materials
 from app.review.models import AgentResult, ReviewLimits, VerificationOutput
 from app.review.nodes.agent_execution import AgentUsage, run_agent
@@ -272,6 +276,75 @@ def test_batch_groups_are_bounded_and_never_remove_candidate_identity():
     assert max(len(item["candidates"]) for item in batches) == 3
     assert {item["id"] for batch in batches for item in batch["candidates"]} == {item["id"] for item in items}
     assert batches == verification_batches(list(reversed(items)))
+    assert all(abs(left["line"] - right["line"]) <= EQUIVALENCE_LINE_WINDOW
+               for batch in batches for left in batch["candidates"] for right in batch["candidates"])
+    split = verification_batches([candidate("a", 1), candidate("b", 21), candidate("c", 41)])
+    assert [[item["id"] for item in batch["candidates"]] for batch in split] == [["a", "b"], ["c"]]
+
+
+def test_batch_comparison_union_keeps_cross_batch_peers():
+    items = [candidate("a", 10), candidate("b", 20), candidate("c", 30), candidate("d", 40)]
+    assert {item["id"] for item in batch_comparison_candidates(items[:3], items)} == {"a", "b", "c", "d"}
+
+
+def test_comparison_scope_replays_recorded_peers_without_recomputing_cap():
+    items = [candidate("a", 10), candidate("b", 20), candidate("c", 40)]
+    result = AgentResult(id="b", status="completed", comparison_candidate_ids=["a", "c"])
+    restored = AgentResult.model_validate_json(result.model_dump_json())
+    expanded = items + [candidate(str(index), 20) for index in range(10)]
+    assert {item["id"] for item in comparison_scope(items[1], expanded, restored.model_dump())} == {"a", "c"}
+
+
+@pytest.mark.parametrize("lines", [[1] * 9, list(range(1, 36))])
+def test_batch_union_preserves_each_members_single_candidate_comparisons(lines):
+    items = [candidate(str(index), line) for index, line in enumerate(lines)]
+    for batch in verification_batches(items):
+        related = batch_comparison_candidates(batch["candidates"], items)
+        assert len(related) <= len(batch["candidates"]) * COMPARISON_LIMIT
+        for member in batch["candidates"]:
+            assert comparison_candidates(member, related) == comparison_candidates(member, items)
+
+
+async def test_partial_retry_passes_original_batch_peers(monkeypatch):
+    from app.review.nodes import verification as verification_node
+    from app.review.nodes.verification import verify
+
+    captured = {}
+
+    async def fake_run_agent(context, identity, reviewer, payload, **kwargs):
+        captured.update(payload)
+        return {"id": identity, "status": "failed", "output": {}, "evidence_ids": [], "error": None}
+
+    monkeypatch.setattr(verification_node, "run_agent", fake_run_agent)
+    items = [candidate("a", 10), candidate("b", 20)]
+    state = {"candidate": items[1], "batch_candidates": [items[1]], "batch_id": "batch",
+             "eligible_candidates": items,
+             "verification_batches": [{"id": "batch", "candidates": items}],
+             "review_limitations": []}
+    output = await verify(state, SimpleNamespace(context=None))
+    assert captured["candidates"] == [items[1]]
+    assert {item["id"] for item in captured["related_candidates"]} == {"a", "b"}
+    assert captured["comparison_candidate_ids"] == {"b": ["a"]}
+    assert output["verification_results"][0]["comparison_candidate_ids"] == ["a"]
+
+
+async def test_investigation_records_its_own_comparison_scope(monkeypatch):
+    from app.review.nodes import verification as verification_node
+
+    captured = {}
+
+    async def fake_run_agent(context, identity, reviewer, payload):
+        captured.update(payload)
+        assert reviewer == "investigator"
+        return AgentResult(id=identity, status="completed").model_dump()
+
+    monkeypatch.setattr(verification_node, "run_agent", fake_run_agent)
+    items = [candidate(str(index)) for index in range(10)]
+    output = await verification_node.investigate(
+        {"candidate": items[-1], "related_candidates": items[:-1]}, SimpleNamespace(context=None))
+    expected = [item["id"] for item in comparison_candidates(items[-1], items)]
+    assert captured["comparison_candidate_ids"] == {"9": expected}
+    assert output["investigation_results"][0]["comparison_candidate_ids"] == expected
 
 
 @pytest.mark.parametrize("mode", ["missing", "duplicate", "extra", "valid"])
@@ -601,3 +674,10 @@ async def test_partial_batch_retry_preserves_completed_member_and_shared_budget(
     assert next(item for item in final.review_report.verification_results if item.id == completed.id) == completed
     assert final.review_report.budget["model_calls"] > before
     assert final.retry_count == 1
+    assert len(final.review_report.findings) == 1
+    for result in final.review_report.verification_results:
+        assert result.comparison_candidate_ids == [
+            item.id for item in final.review_report.candidates if item.id != result.id]
+    from app.services.publication.review_publication import validated_findings
+    accepted, withheld = validated_findings(final, repository._artifacts)
+    assert accepted == final.review_report.findings and not withheld

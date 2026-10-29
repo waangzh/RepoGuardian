@@ -4,7 +4,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
 from app.review.context import ReviewContext
-from app.review.findings import comparison_candidates
+from app.review.findings import batch_comparison_candidates, comparison_candidates
 from app.review.limitations import candidate_limitations
 from app.review.nodes.preparation import prepare, plan
 from app.review.nodes.discovery import discover, collect
@@ -33,13 +33,18 @@ def route_verification(state):
     completed = {item["id"] for item in state.get("verification_results", [])
                  if item["status"] == "completed"}
     pending = []
-    for batch in state.get("verification_batches", verification_batches(state["eligible_candidates"])):
+    batches = state.get("verification_batches", verification_batches(state["eligible_candidates"]))
+    groups = {member["id"]: entry["candidates"]
+              for entry in batches for member in entry["candidates"]}
+    for batch in batches:
         candidates = [item for item in batch["candidates"] if item["id"] not in completed]
         if candidates:
+            related = batch_comparison_candidates(
+                groups.get(candidates[0]["id"], candidates), state["eligible_candidates"])
             pending.append(Send("verify", {"review_id": state["review_id"],
                 "candidate": candidates[0], "batch_id": batch["id"], "batch_candidates": candidates,
-                "review_limitations": candidate_limitations(state, candidates),
-                "related_candidates": comparison_candidates(candidates[0], state["eligible_candidates"])}))
+                "related_candidates": related,
+                "review_limitations": candidate_limitations(state, candidates)}))
     return pending or "arbitrate"
 
 

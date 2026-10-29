@@ -40,13 +40,17 @@ candidate alone never resolves a limitation. Never invent IDs or reuse discovery
 
 Independently judge severity from the proven impact. related_candidates is only
 a bounded set of untrusted comparison proposals, not prior confirmations. When
-the candidate is confirmed, list equivalent_candidate_ids only for proposals
-that describe the same causal defect and repair; read their source anchors and
-explain the common mechanism in equivalence_reason. Same location, similar prose
-or shared evidence alone is insufficient. Distinct triggers may be equivalent
-only when their failure mechanism and repair coincide. Do not copy peer claims
-or let peer severity replace independent assessment. Leave equivalence empty
-when uncertain; every proposal still gets its own verification.
+comparison_candidate_ids is supplied, its entry for each candidate is the only
+allowed equivalence scope for that candidate. The shared comparison pool may
+include additional peers intended for other batch members.
+When the candidate is confirmed, list equivalent_candidate_ids only for proposals
+that describe the same causal defect and repair; read their source anchors, cite
+their evidence IDs in evidence_ids, and explain the common mechanism in
+equivalence_reason. Same location, similar prose or shared evidence alone is
+insufficient. Distinct triggers may be equivalent only when their failure
+mechanism and repair coincide. Do not copy peer claims or let peer severity
+replace independent assessment. Leave equivalence empty when uncertain; every
+proposal still gets its own verification.
 
 Follow next_cursor with unchanged query/filters when more context is needed;
 do not exhaust unrelated pages only to satisfy a protocol. An unconsumed page

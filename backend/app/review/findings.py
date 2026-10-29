@@ -8,6 +8,9 @@ from app.review.models import (
     CandidateFinding, CandidateProposal, DiscoveryOutput, VerificationOutput, VerificationResult, VerifiedFinding,
 )
 
+EQUIVALENCE_LINE_WINDOW = 20
+COMPARISON_LIMIT = 8
+
 
 def candidate_identity(candidate):
     fields = set(CandidateProposal.model_fields) - {"evidence_ids"}
@@ -60,8 +63,27 @@ def comparison_candidates(candidate, candidates):
     """A bounded comparison set is a hint, never a deduplication decision."""
     return sorted((item for item in candidates if item["id"] != candidate["id"]
         and item["affected_path"] == candidate["affected_path"]
-        and abs(item["line"] - candidate["line"]) <= 20),
-        key=lambda item: (abs(item["line"] - candidate["line"]), item["id"]))[:8]
+        and abs(item["line"] - candidate["line"]) <= EQUIVALENCE_LINE_WINDOW),
+        key=lambda item: (abs(item["line"] - candidate["line"]), item["id"]))[:COMPARISON_LIMIT]
+
+
+def batch_comparison_candidates(candidates, eligible):
+    """Keep every member's bounded hints; at most three times COMPARISON_LIMIT."""
+    peers = {}
+    for candidate in candidates:
+        for peer in comparison_candidates(candidate, eligible):
+            distance = abs(peer["line"] - candidate["line"])
+            current = peers.get(peer["id"])
+            if current is None or distance < current[0]:
+                peers[peer["id"]] = (distance, peer)
+    return [peer for _, peer in sorted(
+        peers.values(), key=lambda item: (item[0], item[1]["id"]))]
+
+
+def comparison_scope(candidate, candidates, result):
+    """Replay the comparison IDs recorded for this decision, not today's pool."""
+    identities = set(result["comparison_candidate_ids"]) - {candidate["id"]}
+    return [item for item in candidates if item["id"] in identities]
 
 
 def finding_severity(finding):
@@ -86,7 +108,7 @@ def aggregate_findings(findings):
             and finding_severity(left) == finding_severity(right)
             and finding_attribution(left) == finding_attribution(right)
             and left.candidate.affected_path == right.candidate.affected_path
-            and abs(left.candidate.line - right.candidate.line) <= 20)
+            and abs(left.candidate.line - right.candidate.line) <= EQUIVALENCE_LINE_WINDOW)
 
     while remaining:
         representative = remaining.pop(min(remaining))
@@ -108,6 +130,9 @@ def verify_finding(candidate, result, service, changed_files, related_candidates
                          result["evidence_ids"], service)
     refs = (source_refs(service, output.evidence_ids, result["evidence_ids"])
             if output.evidence_ids else [])
+    # Equivalence hints are validated against everything this execution actually read.
+    read_refs = (source_refs(service, result["evidence_ids"], result["evidence_ids"])
+                 if result["evidence_ids"] else [])
     if output.counterevidence_ids:
         source_refs(service, output.counterevidence_ids, result["evidence_ids"])
     decision = output.decision
@@ -119,32 +144,40 @@ def verify_finding(candidate, result, service, changed_files, related_candidates
             raise ValueError("finding_attribution_unverified")
         if output.counterevidence_ids:
             raise ValueError("finding_counterevidence_unresolved")
-        if not any(ref.path == candidate.affected_path
-                   and ref.start_line <= candidate.line <= ref.end_line for ref in refs):
-            raise ValueError("verification_anchor_not_read")
         change = next(item for item in changed_files if item["file_path"] == candidate.affected_path)
         base_path = change.get("old_file_path") or candidate.affected_path
-        if change.get("change_type") != "deleted" and not any(
+        deleted = change.get("change_type") == "deleted"
+        anchor_side = "base" if deleted else "head"
+        anchor_path = base_path if deleted else candidate.affected_path
+        if not any(ref.path == anchor_path
+                   and ref.start_line <= candidate.line <= ref.end_line for ref in refs):
+            raise ValueError("verification_anchor_not_read")
+        if not deleted and not any(
                 ref.side == "head" and ref.path == candidate.affected_path
                 and ref.start_line <= candidate.line <= ref.end_line for ref in refs):
             raise ValueError("head_failure_source_missing")
         if change.get("change_type") != "added" and not any(
                 ref.side == "base" and ref.path == base_path for ref in refs):
             raise ValueError("base_comparison_missing")
-        peers = {item["id"]: item for item in related_candidates}
-        if len(peers) != len(related_candidates) or candidate.id in peers:
-            raise ValueError("invalid_equivalence_scope")
+        # 无效的等价声明只影响分组，不能否定已完成的独立裁决。
+        peers = {item["id"]: item for item in related_candidates if item["id"] != candidate.id}
+        accepted = []
         for identity in output.equivalent_candidate_ids:
             peer = peers.get(identity)
             if (peer is None or peer["affected_path"] != candidate.affected_path
-                    or abs(peer["line"] - candidate.line) > 20 or not any(
-                    ref.path == peer["affected_path"] and ref.side == "head"
-                    and ref.start_line <= peer["line"] <= ref.end_line for ref in refs)):
-                raise ValueError("equivalence_subject_not_read")
-        if output.equivalent_candidate_ids and not any(
-                ref.side == "head" and ref.path == candidate.affected_path
+                    or abs(peer["line"] - candidate.line) > EQUIVALENCE_LINE_WINDOW
+                    or not any(ref.path == anchor_path and ref.side == anchor_side
+                               and ref.start_line <= peer["line"] <= ref.end_line
+                               for ref in read_refs)):
+                continue
+            accepted.append(identity)
+        if accepted and not any(
+                ref.side == anchor_side and ref.path == anchor_path
                 and ref.start_line <= candidate.line <= ref.end_line for ref in refs):
-            raise ValueError("equivalence_anchor_not_read")
+            accepted = []
+        output = output.model_copy(update={
+            "equivalent_candidate_ids": accepted,
+            "equivalence_reason": output.equivalence_reason if accepted else None})
     verification = VerificationResult(candidate_id=candidate.id, **output.model_dump())
     inline = None
     if decision == "confirmed":

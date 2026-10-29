@@ -139,8 +139,9 @@ async def test_scope_discovery_enters_normal_independent_verification_once(sourc
     from app.models.review.diff import ChangedFile
     from tests.review.test_native_graph import CHANGE
     from types import SimpleNamespace
+    from app.models.review_plan import ReviewPlanOptions
     task = task_for(report)
-    task.configuration = SimpleNamespace(options=SimpleNamespace(scope=SimpleNamespace(mode="all")))
+    task.configuration = SimpleNamespace(options=ReviewPlanOptions())
     task.changed_files = [ChangedFile.model_validate({**CHANGE, "additions": 1, "deletions": 1})]
     findings, withheld = validated_findings(task, source_service.artifacts)
     assert findings == report.findings and not withheld

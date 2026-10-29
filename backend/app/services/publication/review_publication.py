@@ -1,7 +1,7 @@
 """Revalidate saved graph findings and immutable evidence before publication."""
 
 from app.review.evidence import EvidenceArchive
-from app.review.findings import aggregate_findings, candidate_gate, comparison_candidates, verify_finding
+from app.review.findings import aggregate_findings, candidate_gate, comparison_scope, verify_finding
 from app.review.limitations import candidate_limitations, limitation_discoveries
 from app.services.review.artifact_store import LocalArtifactStore
 
@@ -35,14 +35,17 @@ def validated_findings(task, artifacts=None):
         return [], [(identity, "duplicate_decision_conflict") for identity in sorted(confirmed or candidates)]
     if not confirmed <= set(candidates):
         return [], [(identity, "confirmed_candidate_missing") for identity in sorted(confirmed - set(candidates))]
-    raw_candidates = []
+    eligible_candidates = []
     for candidate in report.candidates:
         try:
             candidate_gate(candidate, archive, discovery, changed)
-            raw_candidates.append(candidate.model_dump())
+            if (task.configuration.options.depth != "quick"
+                    or candidate.severity in {"critical", "high"}):
+                eligible_candidates.append(candidate.model_dump())
         except (ValueError, OSError):
             if candidate.id in confirmed:
                 return [], [(candidate.id, "publication_evidence_invalid")]
+    all_candidates = [candidate.model_dump() for candidate in report.candidates]
     member_ids = [identity for finding in report.findings
                   for identity in (finding.id, *finding.related_candidate_ids)]
     if len(member_ids) != len(set(member_ids)) or set(member_ids) != confirmed:
@@ -67,8 +70,8 @@ def validated_findings(task, artifacts=None):
             for identity in members:
                 candidate = candidates[identity]
                 decision, rebuilt = verify_finding(candidate, results[identity], archive, changed,
-                    comparison_candidates(candidate.model_dump(), raw_candidates),
-                    candidate_limitations({"discovery_results": discovery, "candidates": raw_candidates},
+                    comparison_scope(candidate.model_dump(), eligible_candidates, results[identity]),
+                    candidate_limitations({"discovery_results": discovery, "candidates": all_candidates},
                                           [candidate.model_dump()]))
                 if rebuilt is None or decision != decisions[identity]:
                     raise ValueError("finding_subject_mismatch")
