@@ -67,36 +67,6 @@ def validated_observations(report, evidence):
     return [item for item in observations if stored.get(item.id) == item]
 
 
-def observation_text(item):
-    """Public prose uses neutral descriptions, not unverified impact analysis."""
-    label = "测试源码变化（不表示测试已运行）：" if item.kind == "test_source" else ""
-    return label + item.change
-
-
-def observation_targets(report):
-    owners = {item.id for item in report.assignments if item.reviewer == "reviewer"}
-    goals = {identity for item in report.assignments if item.id in owners for identity in item.goal_ids}
-    return {item.path for item in report.goals if item.id in goals and item.kind == "source"}
-
-
-def observation_gaps(report, observations):
-    expected = observation_targets(report)
-    described = {ref.path for item in observations if item.basis == "change" for ref in item.sources}
-    return sorted(expected - described)
-
-
-def fallback_observations(report, observations):
-    """Without synthesis, quarantine observations from disputed review units."""
-    if report is None:
-        return list(observations)
-    refuted = {item.candidate_id for item in report.decisions if item.decision == "refuted"}
-    disputed_sources = {identity for candidate in report.candidates if candidate.id in refuted
-                        for identity in candidate.assignment_ids}
-    disputed_units = {item.unit_id for item in report.assignments if item.id in disputed_sources}
-    return [item for item in observations
-            if item.assignment_id not in disputed_sources and item.unit_id not in disputed_units]
-
-
 def author_comment_text(verification):
     comment = verification.author_comment
     if comment:

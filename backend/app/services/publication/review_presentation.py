@@ -3,8 +3,10 @@
 import re
 
 from app.models.publication import PresentationDelivery, ReviewPresentation
-from app.review.observations import fallback_observations, observation_gaps, observation_text
-from app.review.synthesis import synthesis_materials, validate_grounding, validate_synthesis
+from app.review.synthesis import (
+    log_projection_fallback, synthesis_materials, validate_grounding, validate_synthesis,
+)
+from app.review.synthesis_materials import omitted_changes
 from app.services.publication.review_prose import author_goal_text
 from app.services.publication.review_text_format import (
     _comment_risks, _finding_location_text, _ordered_findings, _sentence, STATIC_BOUNDARY,
@@ -24,8 +26,9 @@ _MISSING_OBSERVATIONS = {
 
 
 def _observation_text(value):
-    text = " ".join((value or "").split())
-    return "" if text in _MISSING_OBSERVATIONS else text
+    # Normalize only for placeholder recognition; body paragraphs must survive.
+    text = (value or "").strip()
+    return "" if " ".join(text.split()) in _MISSING_OBSERVATIONS else text
 
 
 def _overview_sentences(text):
@@ -33,9 +36,21 @@ def _overview_sentences(text):
 
 
 def _editorial_markdown(presentation, text, limit=2000):
-    rendered = markdown_text(text, limit)
-    # Preserve literal URLs without letting GFM create model-supplied links.
-    return rendered.replace(":", "&#58;")
+    # Escape prose separately from single-backtick code; retain paragraph breaks.
+    blocks = []
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    for block in text[:limit].split("\n\n"):
+        parts = re.split(r"(`[^`\n]+`)", block)
+        rendered = []
+        for part in parts:
+            if part.startswith("`") and part.endswith("`"):
+                rendered.append(part)
+            elif part:
+                rendered.append((" " if part[0].isspace() else "")
+                    + markdown_text(part, limit).replace(":", "&#58;")
+                    + (" " if part[-1].isspace() else ""))
+        blocks.append("".join(rendered).strip())
+    return "\n\n".join(blocks)
 
 
 def _trim_summary(text, limit=600):
@@ -51,7 +66,7 @@ def _trim_summary(text, limit=600):
 
 
 def _change_overview(presentation):
-    """只从投影选取已有观察；缺少观察时不把作者目标改写成实现事实。"""
+    """Render the saved overview with paragraphs, or explicit metadata fallback."""
     summary = _observation_text(presentation.change_summary)
     if presentation.summary_source == "metadata":
         summary = _trim_summary(summary)
@@ -136,34 +151,30 @@ def _fallback_summary(plan):
     return "未保存足以概括主要变更的代码观察，请结合固定快照 Diff 人工核对。", "unavailable"
 
 
-def build_presentation(plan, *, report=None, observations=()):
+def build_presentation(plan, *, report=None, observations=(), changed_files=(), evidence=None):
     understanding = plan.digest.change_understanding
     purpose = (author_goal_text(understanding.author_goal) if understanding else "") or None
     summary, summary_source = _fallback_summary(plan)
-    fallback = fallback_observations(report, observations)
-    material_incomplete = bool(report and observation_gaps(report, observations))
-    if fallback and not material_incomplete:
-        summary = "\n".join(observation_text(item) for item in fallback[:6])
-        summary_source = "observations"
     review_summary = _review_summary(plan)
     action_summary = ""
     synthesis = report.synthesis.model_copy(deep=True) if report and report.synthesis else None
     synthesis_status = "fallback"
     if synthesis and synthesis.status == "ready":
-        version, material = synthesis_materials(report, plan, observations)
+        version = "unavailable"
         try:
-            if material_incomplete:
-                raise ValueError("synthesis_observations_incomplete")
+            version, material = synthesis_materials(report, plan, observations,
+                changed_files=changed_files, evidence=evidence)
             if synthesis.material_version != version:
                 raise ValueError("synthesis_material_changed")
             output = validate_synthesis(synthesis.output, material)
             validate_grounding(synthesis, output)
             summary = "\n\n".join(item.text for item in output.change_overview)
-            review_summary = "\n\n".join(item.text for item in output.review_overview)
-            action_summary = "\n\n".join(item.text for item in output.actions)
+            synthesis.omitted_changes = omitted_changes(output, material)
             summary_source, synthesis_status = "model", "ready"
-        except ValueError:
-            synthesis.status, synthesis.error = "fallback", "synthesis_material_changed"
+        except (ValueError, OSError) as exc:
+            synthesis.status = "fallback"
+            synthesis.error = str(exc) if str(exc).startswith("synthesis_") else "synthesis_material_changed"
+            log_projection_fallback(plan.review_id, synthesis.material_version, version, synthesis.error)
     findings = _ordered_findings(plan)
     limitations = list(dict.fromkeys(_comment_risks(plan)))
     return ReviewPresentation(
@@ -175,8 +186,7 @@ def build_presentation(plan, *, report=None, observations=()):
         change_summary=summary or "未保存足以概括主要变更的代码观察，请结合固定快照 Diff 人工核对。",
         # 问题概述只由确定性 finding 生成；编辑摘要不再改写问题结论。
         review_summary=review_summary, action_summary=action_summary,
-        test_changes=([observation_text(item) for item in fallback if item.kind == "test_source"]
-                      if not material_incomplete and synthesis_status != "ready" else []),
+        test_changes=[],
         verdict=plan.digest.merge_decision, findings=findings,
         delivery=PresentationDelivery(confirmed=plan.outcome.confirmed_count, eligible=len(findings),
             selected=len(findings), inline_ready=len(plan.inline_drafts),
@@ -212,12 +222,20 @@ def render_presentation(plan, *, copy=False, detail="compact", exclude_resolved=
     included, omitted, retained = comment_selection(plan, exclude_resolved=exclude_resolved)
     selected = {item.finding_key for item in included}
     findings = [item for item in presentation.findings if item.finding_key in selected]
-    lines = ["## RepoGuardian · PR Review", ""]
+    lines = ["## RepoGuardian PR Review", ""]
     note = partial_review_note(plan)
     if note:
         lines += [note, ""]
     title = "本次 PR 主要变更" if presentation.synthesis_status == "ready" else "本次 PR 变更范围（总览未完整生成）"
+    if presentation.synthesis_status == "ready" and presentation.synthesis.omitted_changes:
+        title += "（部分）"
     lines += [f"### {title}", "", _change_overview(presentation), ""]
+    if presentation.synthesis_status == "ready" and presentation.synthesis.omitted_changes:
+        paths = list(dict.fromkeys(item["path"] for item in presentation.synthesis.omitted_changes))
+        label = "、".join(markdown_text(path, 250) for path in paths[:4])
+        if len(paths) > 4:
+            label += f"等 {len(paths)} 个文件"
+        lines += [f"总览未涵盖 {label} 的部分变更，请结合固定快照 Diff 查看。", ""]
     delivery = presentation.delivery
     count = len(findings)
     views = {item.id: item for item in plan.digest.findings}
@@ -226,14 +244,10 @@ def render_presentation(plan, *, copy=False, detail="compact", exclude_resolved=
         verdict += (f"；本轮已确认 {delivery.confirmed} 项，本次{'包含' if copy else '选择'} {count} 项"
                     f"；未选择的问题仍属于审查结论，不能视为已修复或已投递")
     lines += ["### 审查结果", "", verdict + "。", ""]
-    if presentation.review_summary:
+    if presentation.review_summary and detail == "full":
         lines += [_editorial_markdown(presentation, presentation.review_summary, 6000), ""]
-    if presentation.action_summary:
-        lines += ["处理重点：" + _editorial_markdown(presentation, presentation.action_summary, 6000), ""]
     if presentation.synthesis_status != "ready":
-        lines += ["变更总览未生成，以上为已保存观察或变更范围；具体问题和检查限制见下方。", ""]
-    if presentation.synthesis and any(presentation.synthesis.omitted.values()):
-        lines += ["总览材料存在省略，完整问题与证据以下方记录为准。", ""]
+        lines += ["变更总览未生成，以上为固定 Diff 变更范围；具体问题和检查限制见下方。", ""]
     if detail == "full":
         lines += [f"本轮已确认 {delivery.confirmed} 项；具备发布资格 {delivery.eligible} 项；"
                   f"本次包含 {count} 项；未包含 {delivery.eligible - count} 项。", ""]

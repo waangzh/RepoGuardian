@@ -11,6 +11,35 @@ const text = node => [node.text ?? '', ...node.children.map(text)].join('');
 const find = (node, predicate) => predicate(node) ? node : node.children.map(child => find(child, predicate)).find(Boolean);
 const stub = Vue.defineComponent({ render: () => Vue.h('span') });
 
+test('总览仅在实际变更被省略时提示部分内容，不改变审查结论与覆盖', async () => {
+  const page = await compile('components/pages/ReviewOverviewPage.vue', {
+    '../../utils/nativeReview': { terminal: () => true, observedUsage: () => ({ calls: 2, tokens: 100 }),
+      phaseLabel: value => value },
+  });
+  const plan = Vue.reactive({
+    outcome: { kind: 'clean', unresolved_count: 0 },
+    digest: { merge_decision: { label: '未发现已确认问题', advice: '结合 CI 判断', limits: [] } },
+    presentation: { summary_source: 'model', synthesis_status: 'ready',
+      change_summary: '调整区间边界。\n\n补充边界断言。', review_summary: '', action_summary: '',
+      synthesis: { omitted: { sources: 3, observations: 2 }, omitted_changes: [] } },
+  });
+  const task = { status: 'completed', phase: 'completed', steps: [], warnings: [],
+    pr: { title: '区间修复', body: '' }, changed_files: [], configuration: { model: 'fixture' },
+    review_report: { complete: true, findings: [], goals: [], coverage_limitations: [] } };
+  const root = { children: [] };
+  const app = hostRenderer().createApp(page, { task, plan, loading: false });
+  app.mount(root);
+  await flush();
+  assert.match(text(root), /调整区间边界/);
+  assert.doesNotMatch(text(root), /总览涵盖部分变更/);
+  plan.presentation.synthesis.omitted_changes.push({ path: 'other.py', reason: 'material_limit', hunk_index: 0 });
+  await flush();
+  assert.match(text(root), /总览涵盖部分变更/);
+  assert.match(text(root), /未发现已确认问题/);
+  assert.equal(task.review_report.complete, true);
+  app.unmount();
+});
+
 test('历史和最近记录读取独立摘要，坏快照明确展示且不阻止正常记录打开', async () => {
   const items = [
     { id: 'good', status: 'completed', phase: 'completed', pr_url: 'https://example.test/pr/1',

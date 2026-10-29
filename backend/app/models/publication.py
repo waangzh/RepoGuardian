@@ -186,7 +186,7 @@ class ReviewPresentation(BaseModel):
     snapshot: PublicationSnapshot
     language: Literal["zh-CN"] = "zh-CN"
     synthesis_status: Literal["ready", "fallback", "unavailable"] = "fallback"
-    summary_source: Literal["model", "observations", "metadata", "unavailable"] = "metadata"
+    summary_source: Literal["model", "metadata", "unavailable"] = "metadata"
     purpose_text: str | None = None
     purpose_source: Literal["author_claim", "code_inferred", "unknown"] = "unknown"
     change_summary: str

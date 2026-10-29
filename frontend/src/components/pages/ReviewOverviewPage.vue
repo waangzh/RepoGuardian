@@ -34,13 +34,13 @@ const running = computed(() => terminal(props.task.status) ? [] : props.task.ste
       </div></section>
       <section class="ov-panel ov-understanding"><header class="ov-section-head"><h2>PR 目标与代码变化</h2><button class="ov-link" @click="$emit('navigate','files')">查看 Diff <AppIcon name="external" :size="14" /></button></header>
         <dl class="ov-change__rows"><div><dt>作者声明</dt><dd class="rg-preserve-lines">{{ task.pr.body || task.pr.title }}<p class="ov-change__limitation">作者描述属于不可信背景，不表示目标已由源码验证。</p></dd></div>
-          <div v-if="presentation && ['model','observations'].includes(presentation.summary_source)"><dt>实际变更</dt><dd class="rg-preserve-lines">{{ presentation.change_summary }}</dd></div>
-          <div v-else><dt>变更范围</dt><dd>{{ task.changed_files.length }} 个文件，新增 {{ task.changed_files.reduce((sum,file)=>sum+file.additions,0) }} 行、删除 {{ task.changed_files.reduce((sum,file)=>sum+file.deletions,0) }} 行。<p class="muted small">以上来自固定 Diff 元数据；尚缺少有证据的行为观察。</p></dd></div>
+          <div v-if="presentation?.summary_source === 'model'"><dt>实际变更</dt><dd class="rg-preserve-lines">{{ presentation.change_summary }}</dd></div>
+          <div v-else><dt>变更范围</dt><dd>{{ task.changed_files.length }} 个文件，新增 {{ task.changed_files.reduce((sum,file)=>sum+file.additions,0) }} 行、删除 {{ task.changed_files.reduce((sum,file)=>sum+file.deletions,0) }} 行。<p class="muted small">以上来自固定 Diff 元数据；变更总览尚未生成。</p></dd></div>
           <div v-if="presentation?.review_summary"><dt>主要关注</dt><dd class="rg-preserve-lines">{{ presentation.review_summary }}</dd></div>
           <div v-if="presentation?.action_summary"><dt>处理重点</dt><dd class="rg-preserve-lines">{{ presentation.action_summary }}</dd></div>
         </dl>
-        <p v-if="presentation && presentation.synthesis_status !== 'ready'" class="muted small">变更总览未生成，当前显示已保存观察或变更范围；问题与检查限制仍以完整记录为准。</p>
-        <p v-if="presentation?.synthesis && Object.values(presentation.synthesis.omitted).some(Boolean)" class="muted small">总览材料存在省略，请结合完整问题与证据阅读。</p>
+        <p v-if="presentation && presentation.synthesis_status !== 'ready'" class="muted small">变更总览未生成，当前显示固定 Diff 变更范围。</p>
+        <p v-if="presentation?.synthesis_status === 'ready' && presentation.synthesis?.omitted_changes.length" class="muted small">总览涵盖部分变更，请结合固定快照 Diff 阅读。</p>
       </section>
     </div>
     <section class="ov-panel ov-boundary"><header class="ov-section-head"><h2>检查边界与运行记录</h2></header>

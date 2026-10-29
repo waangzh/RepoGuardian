@@ -72,27 +72,29 @@ function finding(id, review_status, overrides = {}) {
   };
 }
 
-test('概览优先展示保存的行为观察、综述与行动，元数据明确称为范围', async () => {
+test('概览展示变更总览与问题概述，省略和元数据范围明确标记', async () => {
   const current = task('completed');
   const presentation = {
     summary_source: 'model', synthesis_status: 'ready',
     change_summary: '评论改为批次投递并保存恢复标识。',
     review_summary: '问题集中在响应丢失后的恢复路径。',
-    action_summary: '优先确认远端回执再重试。',
-    synthesis: { omitted: { observations: 1 } },
+    action_summary: '',
+    synthesis: { omitted: { sources: 1 }, omitted_changes: [
+      { path: 'other.py', reason: 'editorial_omission', hunk_index: null },
+    ] },
   };
   const html = await render('pages/ReviewOverviewPage', {
     task: current, plan: publicationPlan({ presentation }), loading: false,
   });
   assert.match(html, /评论改为批次投递并保存恢复标识/);
   assert.match(html, /响应丢失后的恢复路径/);
-  assert.match(html, /优先确认远端回执再重试/);
-  assert.match(html, /总览材料存在省略/);
+  assert.doesNotMatch(html, /处理重点/);
+  assert.match(html, /总览涵盖部分变更/);
   const fallback = await render('pages/ReviewOverviewPage', {
     task: current, plan: publicationPlan({ presentation: { ...presentation, summary_source: 'metadata', synthesis_status: 'fallback' } }), loading: false,
   });
   assert.match(fallback, /变更范围/);
-  assert.match(fallback, /尚缺少有证据的行为观察/);
+  assert.match(fallback, /变更总览尚未生成/);
   assert.doesNotMatch(fallback, /评论改为批次投递并保存恢复标识/);
 });
 

@@ -167,7 +167,7 @@ export interface ReviewPresentation {
   snapshot: PublicationSnapshot;
   language: "zh-CN";
   synthesis_status: "ready" | "fallback" | "unavailable";
-  summary_source: "model" | "observations" | "metadata" | "unavailable";
+  summary_source: "model" | "metadata" | "unavailable";
   purpose_text: string | null;
   purpose_source: "author_claim" | "code_inferred" | "unknown";
   change_summary: string;

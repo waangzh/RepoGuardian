@@ -347,18 +347,18 @@ class ReviewLimits(ReviewModel):
 
 
 class SynthesisParagraph(ReviewModel):
-    source_ids: list[str] = Field(min_length=1, max_length=8)
-    text: str = Field(min_length=1, max_length=3000,
-        description="Write a concise natural-language synthesis supported by the referenced facts. "
-        "Preserve conditions, negation and uncertainty; do not invent facts or policy conclusions. "
-        "Follow the input source_policy for this section. Observations describe changes, not defects.")
+    source_ids: list[str] = Field(min_length=1, max_length=32)
+    text: str = Field(min_length=1, max_length=600,
+        description="Briefly explain a logical behavior change in Simplified Chinese, supported by "
+        "the frozen diff and source. Inline code with single backticks is allowed. "
+        "Lead with the behavior change and direct effect, not a line-by-line code explanation. "
+        "Summarize test scenarios in a separate paragraph when useful. "
+        "Keep exact names or values only when essential; preserve necessary conditions and interface changes. "
+        "Omit unchanged background, long test names, exhaustive parameters, verdicts and generic advice.")
 
 
 class SynthesisOutput(ReviewModel):
     change_overview: list[SynthesisParagraph] = Field(min_length=1, max_length=3)
-    review_overview: list[SynthesisParagraph] = Field(min_length=1, max_length=2)
-    actions: list[SynthesisParagraph] = Field(min_length=1, max_length=2)
-    disclosed_status_ids: list[str] = Field(default_factory=list, max_length=200)
 
 
 class SynthesisGrounding(ReviewModel):
@@ -387,6 +387,7 @@ class ReviewSynthesis(ReviewModel):
     material_version: str
     error: str | None = None
     omitted: dict[str, int] = Field(default_factory=dict)
+    omitted_changes: list[dict[str, str | int | None]] = Field(default_factory=list)
     output: SynthesisOutput | None = None
     model_calls: int = Field(default=0, ge=0)
     input_tokens: int | None = None

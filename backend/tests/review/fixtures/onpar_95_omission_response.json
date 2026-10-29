@@ -1,0 +1,27 @@
+{
+  "change_overview": [
+    {
+      "source_ids": [
+        "change:1",
+        "source:6",
+        "source:1"
+      ],
+      "text": "`weighted_posterior` 在算出百分位边界后新增 `lo = min(lo, point)` 与 `hi = max(hi, point)`，使返回的 `Interval` 满足 `low <= point <= high`。`point` 仍是未收缩的加权均值，区间仍来自 Jeffreys 后验抽样百分位，因此全通过或全失败的簇不再出现点估计落在区间外；该钳制只会放宽区间，中点附近的区间不受影响。"
+    },
+    {
+      "source_ids": [
+        "change:2",
+        "source:4"
+      ],
+      "text": "测试新增参数化用例，对 45/45、100/100、1/1、0/40、0/3 等边界断言 `iv.low <= iv.point <= iv.high`；另加一个对照用例，对 30/40 断言 `low < point < high` 且边界未被推到 0 或 1。"
+    }
+  ],
+  "omitted_source_ids": [
+    "source:2",
+    "source:3",
+    "source:5",
+    "source:7",
+    "source:8",
+    "source:11"
+  ]
+}

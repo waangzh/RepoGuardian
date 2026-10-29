@@ -439,7 +439,8 @@ class ReviewService:
                     from app.review.evidence import EvidenceArchive
                     archive = EvidenceArchive(snapshot=report.snapshot, artifacts=self._artifacts)
                     observations = validated_observations(report, archive)
-                    return synthesis_materials(report, plan, observations)
+                    return synthesis_materials(report, plan, observations,
+                        changed_files=projected.changed_files, evidence=archive)
 
                 return await asyncio.to_thread(prepare_facts)
 

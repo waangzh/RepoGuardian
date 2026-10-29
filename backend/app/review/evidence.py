@@ -63,6 +63,10 @@ class EvidenceArchive:
     artifacts: LocalArtifactStore
 
     def resolve(self, identity: str) -> EvidenceRef:
+        return self.read_source(identity)[0]
+
+    def read_source(self, identity: str) -> tuple[EvidenceRef, str]:
+        """Return original text only after checking the archive's full identity."""
         if not re.fullmatch(r"[0-9a-f]{64}", identity):
             raise ValueError("invalid_evidence_id")
         path = self.artifacts.root / self.snapshot.review_id / f"evidence-{identity}.txt"
@@ -77,7 +81,7 @@ class EvidenceArchive:
                 or len(source_lines(payload["content"])) != ref.end_line - ref.start_line + 1
                 or is_sensitive_repository_path(ref.path)):
             raise ValueError("evidence_snapshot_mismatch")
-        return ref
+        return ref, payload["content"]
 
 
 @dataclass

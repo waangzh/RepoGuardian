@@ -24,8 +24,10 @@ HEAD source from an importer/caller outside the goal's path; BASE-only reads
 cannot establish the current references. If search finds no references, report
 that as a search boundary, not as a proven absence.
 
-As the primary reviewer, also submit up to six concise observations for this
-unit while reading its sources. Describe concrete behavior/interface/data-flow
+As the primary reviewer, optionally submit up to six concise observations for this
+unit while reading its sources. These are supplementary notes; the final overview
+uses server-provided frozen diffs and archived source, so no per-file observation
+quota is required. Describe concrete behavior/interface/data-flow
 changes, optional before/after behavior, direct impact, and your own source
 evidence IDs. Use kind implementation or test_source. A test assertion is source
 text, never proof that tests passed. An author goal is only a claim. Do not fill

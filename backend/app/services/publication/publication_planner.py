@@ -127,7 +127,8 @@ class PublicationPlanner:
             coverage_limitations=report.coverage_limitations if report else [],
         )
         observations = validated_observations(report, evidence) if report and snapshot_valid(task) else []
-        plan.presentation = build_presentation(plan, report=report, observations=observations)
+        plan.presentation = build_presentation(plan, report=report, observations=observations,
+            changed_files=task.changed_files, evidence=evidence)
         if include_markdown:
             plan.summary_markdown = render_summary(plan)
             plan.user_report_markdown = render_user_report(task, plan)

@@ -57,7 +57,7 @@ async def test_head_state_and_added_or_deleted_sources_have_explicit_requirement
     assert validate_observation(value, source_service, [base], {"safe.py"}, [goals()[1]])
 
 
-async def test_head_state_does_not_silently_replace_missing_change_observation(source_service):
+async def test_optional_head_state_does_not_force_per_file_observation_correction(source_service):
     head = (await source_service.read("safe.py", 1, 1))["evidence"]["id"]
     base = (await source_service.read("safe.py", 1, 1, "base"))["evidence"]["id"]
     value = proposal([head]).model_copy(update={"basis": "head_state", "before": None,
@@ -65,10 +65,8 @@ async def test_head_state_does_not_silently_replace_missing_change_observation(s
     output = DiscoveryOutput(observations=[value],
         examined=[{"goal_id": goal["id"], "evidence_ids": [head if goal["side"] == "head" else base]}
                   for goal in goals()])
-    feedback = submission_feedback(output, goals(), source_service, {head, base}, "assignment")
-    body = json.loads(feedback.split("\n", 1)[1])
-    assert body["invalid_observations"] == []
-    assert body["missing_observation_paths"] == ["safe.py"]
+    assert submission_feedback(output, goals(), source_service, {head, base}, "assignment") is None
+    assert output.observations[0].basis == "head_state"
 
 
 class ObservationSubmissionModel(SubmissionModel):
@@ -83,6 +81,22 @@ class ObservationSubmissionModel(SubmissionModel):
         ids = [refs["head"]] if self.calls == 1 or self.repeat else list(refs.values())
         args["observations"] = [proposal(ids).model_dump()]
         return result
+
+
+async def test_optional_notes_do_not_consume_native_final_correction(source_service):
+    class OptionalNotes(ObservationSubmissionModel):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            response = super()._generate(messages, stop, run_manager, **kwargs)
+            args = response.generations[0].message.tool_calls[0]["args"]
+            args["observations"][0].update(basis="head_state", before=None, change="HEAD 返回 2。")
+            return response
+
+    model = OptionalNotes()
+    context = review_context(source_service, model)
+    result = await run_agent(context, "assignment", "reviewer", {"goals": goals()})
+    assert result["status"] == "completed"
+    assert result["model_calls"] == model.calls == 1
+    assert result["structured_output_retries"] == 0 and not model.feedback_seen
 
 
 @pytest.mark.parametrize("repeat", [False, True])
