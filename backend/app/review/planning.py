@@ -372,6 +372,8 @@ def _roles(paths, risk, depth):
 
 
 def _estimate(paths, changes):
+    # UTF-8 byte proxy for relative unit size, not tokens. Token budgets are
+    # enforced at request time from actual payload bytes (see review/budget.py).
     encoded = sum(len(line.get("content", "").encode("utf-8"))
                   for path in paths for hunk in changes[path].get("hunks", [])
                   for line in hunk.get("lines", []))
@@ -522,17 +524,6 @@ def _fit(units, changes, depth, limits):
             else:
                 limitations.append("未覆盖（整轮模型调用预算不足）：" + _paths_text(unit.paths))
                 uncovered.update((path, "model_call_budget_insufficient") for path in unit.paths)
-        units = sorted(kept, key=lambda unit: unit.paths)
-    token_capacity = discovery.total_input_tokens
-    if sum(unit.estimated for unit in units) > token_capacity:
-        kept, remaining = [], token_capacity
-        for unit in sorted(units, key=_priority):
-            if unit.estimated <= remaining:
-                kept.append(unit)
-                remaining -= unit.estimated
-            else:
-                limitations.append("未覆盖（累计输入预算不足）：" + _paths_text(unit.paths))
-                uncovered.update((path, "input_budget_insufficient") for path in unit.paths)
         units = sorted(kept, key=lambda unit: unit.paths)
     return units, limitations, uncovered
 

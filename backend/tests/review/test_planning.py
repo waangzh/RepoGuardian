@@ -179,26 +179,47 @@ def test_quick_covers_more_small_units_than_standard_under_the_same_budget():
     assert all(unit.strategy == "fast_pass" for unit in quick.units)
 
 
-def test_input_budget_limits_units_and_is_reported():
+def test_rough_input_estimate_does_not_pre_drop_units():
     changes = [change("pkg/a.py"), change("other/b.py")]
     plan = plan_review(changes, depth="standard",
                        limits=ReviewLimits(total_model_calls=64, total_input_tokens=2500))
-    assert not plan.units and not plan.assignments
-    assert any("累计输入预算不足" in item for item in plan.limitations)
-    assert set(plan.uncovered.values()) == {"input_budget_insufficient"}
+    assert plan.units and plan.assignments
+    assert not plan.uncovered
+    assert not any("累计输入预算不足" in item for item in plan.limitations)
+    assert all(unit.estimated_input_tokens >= 1 for unit in plan.units)
+
+
+def test_selected_files_survive_tiny_input_budget():
+    changes = [change("pkg/a.py", content="x" * 500), change("other/b.py")]
+    plan = plan_review(changes, depth="standard", selected_paths={"pkg/a.py"},
+                       limits=ReviewLimits(total_model_calls=64, total_input_tokens=2500))
+    assert [unit.changed_paths for unit in plan.units] == [["pkg/a.py"]]
+    assert not plan.uncovered
+
+
+def test_large_diff_is_not_pre_dropped_by_rough_input_estimate():
+    lines = [{"kind": "added", "new_line_no": index + 1, "content": "x" * 100}
+             for index in range(900)]
+    changes = [{"file_path": "pkg/big.py", "hunks": [{
+        "old_start": 1, "old_length": 900, "new_start": 1, "new_length": 900,
+        "lines": lines}]}]
+    plan = plan_review(changes, depth="quick",
+                       limits=ReviewLimits(total_model_calls=64, total_input_tokens=100_000))
+    assert plan.units
+    assert not plan.uncovered
+    # The serialized field remains a byte proxy, not a token count.
+    assert plan.units[0].estimated_input_tokens > 80_000
 
 
 @pytest.mark.parametrize("depth", ["quick", "standard", "deep"])
 @pytest.mark.parametrize("selected", [None, frozenset({"one/alpha.py", "three/charlie.py"})])
-@pytest.mark.parametrize("input_tokens", [8000, 2500])
-async def test_execution_regrouping_preserves_preview_admission_and_uncovered_goals(
-        depth, selected, input_tokens):
+async def test_execution_regrouping_preserves_preview_admission(depth, selected):
     changes = [change("one/alpha.py", content="x" * 500),
                change("two/bravo.py", content="x"), change("three/charlie.py", content="x")]
-    limits = ReviewLimits(total_model_calls=100, total_input_tokens=input_tokens)
+    limits = ReviewLimits(total_model_calls=100, total_input_tokens=2500)
     preview = plan_review(changes, depth=depth, limits=limits, selected_paths=selected)
     admitted = {path for unit in preview.units for path in unit.changed_paths}
-    assert preview.uncovered or preview.excluded
+    assert not preview.uncovered
     events = []
 
     async def load():
@@ -216,9 +237,6 @@ async def test_execution_regrouping_preserves_preview_admission_and_uncovered_go
     assert {path for assignment in result["assignments"] for path in assignment["focus_paths"]} == admitted
     assert result["goals"] == [goal.model_dump() for goal in preview.goals]
     assert set(preview.limitations) <= set(result["coverage_limitations"])
-    assigned = {goal for assignment in result["assignments"] for goal in assignment["goal_ids"]}
-    assert all(goal["id"] not in assigned for goal in result["goals"]
-               if goal["path"] in preview.uncovered)
     assert events[0]["limitations"] == result["coverage_limitations"]
 
 
