@@ -2,7 +2,7 @@
 
 import json
 
-from app.review.evidence import digest
+from app.review.evidence import digest, has_structural_source
 from app.review.models import (
     CandidateLimitationResolution, LimitationResolution, LimitationReviewOutput,
     ReviewLimitation, VerificationOutput, VerificationResult,
@@ -65,9 +65,16 @@ def validate_assessments(output, limitations, goals, issued_ids, service):
         if not set(assessment.evidence_ids) <= set(issued_ids):
             raise ValueError("limitation_assessment_evidence_not_read")
         refs = [service.resolve(identity) for identity in assessment.evidence_ids]
-        if not any(ref.path == goal_map[identity]["path"] and ref.side == goal_map[identity]["side"]
-                   for identity in assessment.goal_ids for ref in refs):
+        source_goals = [identity for identity in assessment.goal_ids
+                        if goal_map[identity].get("kind") != "structural"]
+        if source_goals and not any(
+                ref.path == goal_map[identity]["path"] and ref.side == goal_map[identity]["side"]
+                for identity in source_goals for ref in refs):
             raise ValueError("limitation_assessment_change_source_missing")
+        if any(goal_map[identity].get("kind") == "structural"
+               and not has_structural_source(goal_map[identity], refs)
+               for identity in assessment.goal_ids):
+            raise ValueError("limitation_assessment_structural_source_missing")
 
 
 def limitation_batches(records, goals):

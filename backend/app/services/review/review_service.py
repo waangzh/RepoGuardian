@@ -438,11 +438,7 @@ class ReviewService:
                 save_report=persist_report, check_running=running, remaining_seconds=time_left,
                 previous_synthesis=(task.review_report.synthesis.model_copy(deep=True)
                     if task.review_report and task.review_report.synthesis else None),
-                selected_paths=selected_paths,
-                confirmed_plan=plan_review(
-                    [item.model_dump(mode="json") for item in task.changed_files],
-                    depth=task.configuration.options.depth, selected_paths=selected_paths,
-                    focus=task.configuration.options.focus, limits=task.configuration.limits))
+                selected_paths=selected_paths)
             context.budget = ReviewBudget(task.configuration.limits, repository=self._repository,
                 task_id=task.id, lease=lease, active=active, depth=task.configuration.options.depth)
             state = await graph.aget_state(config) if saver else None

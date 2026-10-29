@@ -13,7 +13,7 @@ from app.review.checkpointer import _checkpoint_serializer
 from app.review.budget import ReviewBudget
 from app.review.graph import build_review_graph
 from app.review.limitations import validate_assessments
-from app.review.models import LimitationAssessment, LimitationReviewOutput, ReviewLimits, ReviewReport
+from app.review.models import LimitationAssessment, LimitationReviewOutput, ReviewGoal, ReviewLimits, ReviewReport
 from app.review.recovery import retry_updates
 from app.services.review.review_outcome import derive_review_outcome
 from tests.review.test_limitation_reconciliation import task_for
@@ -163,6 +163,41 @@ async def test_assessment_members_scope_and_independent_source_are_enforced(sour
     limitations = [record, {"id": "omitted", "goal_ids": ["head"]}] if fault == "omitted" else [record]
     with pytest.raises((ValueError, OSError)):
         validate_assessments(output, limitations, [goal], [] if fault == "unread" else [identity], source_service)
+
+
+@pytest.mark.parametrize("status", ["resolved", "boundary"])
+@pytest.mark.parametrize("with_source_goal", [False, True])
+@pytest.mark.parametrize("goal_path,path,side", [
+    ("safe.py", "safe.py", "head"),
+    ("safe.py", "other.py", "base"),
+    ("removed.py", "removed.py", "base"),
+])
+async def test_structural_assessment_cannot_close_with_target_or_base_evidence(
+        source_service, status, with_source_goal, goal_path, path, side):
+    from tests.review.test_retrieval import commit_sources
+
+    commit_sources(source_service, {"other.py": f"import {goal_path.removesuffix('.py')}\n"})
+    structural = ReviewGoal(id="structural", kind="structural", path=goal_path,
+        side="base" if goal_path == "removed.py" else "head").model_dump()
+    goals = [structural]
+    packet = await source_service.read(path, 1, 1, side)
+    identity = packet["evidence"]["id"]
+    if with_source_goal:
+        goals.append(ReviewGoal(id="source", path=path, side=side,
+            start_line=1, end_line=1).model_dump())
+    goal_ids = [goal["id"] for goal in goals]
+    limitation = {"id": "gap", "goal_ids": goal_ids}
+    assessment = LimitationAssessment(limitation_id="gap", status=status, explanation="检查引用方",
+        goal_ids=goal_ids, evidence_ids=[identity])
+    output = LimitationReviewOutput(assessments=[assessment])
+
+    with pytest.raises(ValueError, match="limitation_assessment_structural_source_missing"):
+        validate_assessments(output, [limitation], goals, [identity], source_service)
+
+    caller = await source_service.read("other.py", 1, 1)
+    caller_id = caller["evidence"]["id"]
+    assessment.evidence_ids.append(caller_id)
+    validate_assessments(output, [limitation], goals, [identity, caller_id], source_service)
 
 
 def test_vague_unresolved_caveat_is_not_a_valid_necessary_gap():

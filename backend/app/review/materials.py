@@ -89,7 +89,7 @@ def _context_requests(context, payload):
     """Changed ranges per frozen side; a side without changed lines has no goal."""
     requests = {}
     for goal in payload.get("goals", []):
-        if goal.get("status") != "blocked":
+        if goal.get("status") != "blocked" and goal.get("kind") != "structural":
             requests.setdefault((goal["side"], goal["path"]), []).append(
                 (goal["start_line"], goal["end_line"]))
     candidates = payload.get("candidates") or ([payload["candidate"]] if "candidate" in payload else [])

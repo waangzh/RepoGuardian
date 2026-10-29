@@ -170,7 +170,7 @@ async def test_planning_limitations_survive_summary_and_report_without_changing_
         assert limitation in plan.review_comment_markdown
 
 
-async def test_execution_index_does_not_change_confirmed_diff_plan(pipeline, monkeypatch):
+async def test_execution_plan_uses_index_without_expanding_confirmed_scope(pipeline, monkeypatch):
     service, repository, _, pr, _ = pipeline
     prepare = service._prepare
 
@@ -180,11 +180,13 @@ async def test_execution_index_does_not_change_confirmed_diff_plan(pipeline, mon
             return repo, prepared
         prepared["index"]["symbol_index"].append(
             {"file": "safe.py", "symbol_id": "safe::value", "start_line": 1, "end_line": 1})
-        prepared["index"]["repository_graph"]["edges"].append({
+        prepared["index"]["repository_graph"]["edges"].extend([{
             "type": "calls", "source_kind": "symbol", "target_kind": "symbol",
             "source": "safe::value", "target": "removed::old",
             "source_file": "safe.py", "target_file": "removed.py",
-            "resolution_status": "resolved", "confidence": 0.99})
+            "resolution_status": "resolved", "confidence": 0.99}, {
+            "type": "imports", "source_kind": "file", "target_kind": "file",
+            "source": "safe.py", "target": "other.py", "confidence": 0.99}])
         return repo, prepared
 
     monkeypatch.setattr(service, "_prepare", related_prepare)
@@ -192,16 +194,24 @@ async def test_execution_index_does_not_change_confirmed_diff_plan(pipeline, mon
         pr_url=pr.html_url, plan={"include_pr_discussions": False,
             "scope": {"mode": "selected", "primary_files": ["safe.py", "removed.py"]}}))
     assert preview.review_units
-    assert all(not unit.changed_symbols for unit in preview.review_units)
+    assert all(not unit.changed_symbols and not unit.impacted_paths
+               for unit in preview.review_units)
+    preview_paths = sorted(path for unit in preview.review_units for path in unit.changed_paths)
+    assert preview_paths == ["removed.py", "safe.py"]
     task = await service.create_confirmed_task(ReviewCreateRequest(pr_url=pr.html_url,
         preview_id=preview.preview_id, expected_head_sha=preview.snapshot.head_sha,
         expected_effective_base_sha=preview.snapshot.effective_base_sha))
     assert await service._worker.run_once()
     report = repository.get_task(task.id).review_report
     assert report is not None
-    assert report.review_units == preview.review_units
-    assert report.assignments == preview.assignments
+    # 执行计划使用索引合并关联变更，但不扩大用户确认的文件范围。
+    assert sorted(path for unit in report.review_units for path in unit.changed_paths) == preview_paths
+    assert len(report.review_units) < len(preview.review_units)
+    assert any(unit.changed_symbols == ["safe::value"] for unit in report.review_units)
+    assert any("other.py" in unit.impacted_paths for unit in report.review_units)
     assert {item.id for item in report.goals} == {item.id for item in preview.goals}
+    assert all(not unit.changed_symbols and not unit.impacted_paths
+               for unit in preview.review_units)  # 预览估算与执行补充分开保留
 
 
 @pytest.mark.parametrize("depth", ["quick", "standard", "deep"])

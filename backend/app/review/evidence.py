@@ -28,6 +28,11 @@ def source_lines(content: str) -> list[str]:
     return [line + "\n" for line in lines[:-1]] + ([lines[-1]] if lines[-1] else [])
 
 
+def has_structural_source(goal, refs):
+    """A reference check needs HEAD source outside the changed target."""
+    return any(ref.side == "head" and ref.path != goal["path"] for ref in refs)
+
+
 def uncovered_ranges(start: int, end: int, intervals) -> list[tuple[int, int]]:
     missing, cursor = [], start
     for first, last in sorted(intervals):

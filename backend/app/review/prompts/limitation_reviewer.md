@@ -24,7 +24,11 @@ Return exactly one structured assessment per supplied limitation ID:
   insufficient. Do not merely repeat the original caveat.
 
 Every assessment must cite supplied goal_ids and source evidence IDs issued to
-this execution, including source from the corresponding changed path/side.
+this execution, including source from the corresponding changed path/side. For
+kind=structural goals, cite actual importer/caller source read in this
+execution from HEAD outside the goal's path, even when source goals are also
+cited. Reading only the changed target or BASE source cannot satisfy this
+check. Structural goals have no line range, so never fabricate one.
 Never reuse another agent's evidence. Source availability or budget failure is
 not evidence that a declaration is a boundary; preserve actual uncertainty.
 Use the original call budget, parallelize independent necessary reads, stop once

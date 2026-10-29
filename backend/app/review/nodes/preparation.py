@@ -1,3 +1,5 @@
+import asyncio
+
 from langgraph.runtime import Runtime
 
 from app.review.context import ReviewContext
@@ -17,15 +19,23 @@ async def prepare(state: ReviewState, runtime: Runtime[ReviewContext]):
 async def plan(state: ReviewState, runtime: Runtime[ReviewContext]):
     context = runtime.context
     sources = await context.sources()
-    review_plan = context.confirmed_plan or plan_review(
+    confirmed = await asyncio.to_thread(plan_review,
         sources.changed_files, depth=context.depth, selected_paths=context.selected_paths,
+        focus=context.focus, limits=context.limits)
+    # Index hints may regroup admitted files, but must not rerank excluded files into the budget.
+    admitted = frozenset(path for unit in confirmed.units for path in unit.changed_paths)
+    review_plan = await asyncio.to_thread(plan_review,
+        sources.changed_files, depth=context.depth, selected_paths=admitted,
         focus=context.focus, repository_graph=sources.repository_graph, symbols=sources.symbols,
         limits=context.limits)
+    if frozenset(path for unit in review_plan.units for path in unit.changed_paths) != admitted:
+        review_plan = confirmed
+    limitations = list(dict.fromkeys(confirmed.limitations + review_plan.limitations))
     await context.emit(phase="planning", units=[item.model_dump() for item in review_plan.units],
                        assignments=[item.model_dump() for item in review_plan.assignments],
-                       limitations=review_plan.limitations)
-    return {"goals": [item.model_dump() for item in review_plan.goals],
+                       limitations=limitations)
+    return {"goals": [item.model_dump() for item in confirmed.goals],
             "review_units": [item.model_dump() for item in review_plan.units],
             "assignments": [item.model_dump() for item in review_plan.assignments],
-            "coverage_limitations": review_plan.limitations, "review_depth": context.depth,
+            "coverage_limitations": limitations, "review_depth": context.depth,
             "status": "discovering"}

@@ -14,6 +14,16 @@ Keep missing evidence, failed reads and
 incomplete goals explicit. No finding does not imply full coverage. Write
 user-facing prose in Simplified Chinese.
 
+Goals with kind=structural have no line range. They name a changed file whose
+path, module entry or configuration moved or disappeared. Check HEAD imports,
+module references and configuration references to the old or deleted path by
+reading the actual importers/callers; cite their source evidence IDs. Do not
+invent line ranges for these goals, and do not treat reading only the renamed
+or deleted file as proof that importers were checked. Structural coverage needs
+HEAD source from an importer/caller outside the goal's path; BASE-only reads
+cannot establish the current references. If search finds no references, report
+that as a search boundary, not as a proven absence.
+
 As the primary reviewer, also submit up to six concise observations for this
 unit while reading its sources. Describe concrete behavior/interface/data-flow
 changes, optional before/after behavior, direct impact, and your own source

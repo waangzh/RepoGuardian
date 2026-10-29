@@ -61,12 +61,24 @@ class ReviewAssignment(ReviewModel):
 
 class ReviewGoal(ReviewModel):
     id: str
+    kind: Literal["source", "structural"] = "source"
     path: str
     side: Literal["head", "base"]
-    start_line: int = Field(ge=1)
-    end_line: int = Field(ge=1)
+    start_line: int | None = Field(default=None, ge=1)
+    end_line: int | None = Field(default=None, ge=1)
+    description: str | None = Field(default=None, max_length=500)
     status: Literal["not_examined", "examined", "blocked"] = "not_examined"
     reason: str | None = None
+
+    @model_validator(mode="after")
+    def valid_range(self):
+        if self.kind == "source":
+            if (self.start_line is None or self.end_line is None
+                    or self.end_line < self.start_line):
+                raise ValueError("invalid goal range")
+        elif self.start_line is not None or self.end_line is not None:
+            raise ValueError("structural goal has no line range")
+        return self
 
 
 class EvidenceRef(ReviewModel):

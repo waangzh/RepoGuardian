@@ -7,12 +7,22 @@ from dataclasses import dataclass
 from app.review.configuration import DEPTHS, discovery_limits
 from app.review.evidence import digest
 from app.review.models import ReviewAssignment, ReviewGoal, ReviewUnit
-from app.review.tool_scope import is_sensitive_repository_change
+from app.review.tool_scope import is_sensitive_repository_change, is_sensitive_repository_path
 
 MAX_UNIT_PATHS = 4
 MAX_UNIT_LINES = 800
 MAX_UNIT_CHARS = 48_000
 MAX_IMPACTED_PATHS = 20
+REFERENCEABLE_SUFFIXES = (
+    ".py", ".pyi", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+    ".java", ".go", ".rs", ".vue", ".svelte",
+)
+CONFIG_NAMES = frozenset({
+    "pyproject.toml", "setup.cfg", "setup.py", "tox.ini", "pytest.ini",
+    "requirements.txt", "package.json", "tsconfig.json", "vite.config.ts",
+    "vite.config.js", "go.mod", "cargo.toml", "pom.xml", "build.gradle",
+    "build.gradle.kts", "makefile", "pipfile",
+})
 RISK_PATTERN = re.compile(
     r"auth|permission|security|migrat|transact|lock|thread|async|pool|session", re.I)
 GENERIC_TAGS = frozenset({
@@ -57,6 +67,7 @@ class _Unit:
     roles: list[str]
     min_calls: int
     max_calls: int
+    structural: bool = False
 
     @property
     def id(self):
@@ -67,6 +78,21 @@ def _edge_files(edge):
     left = edge.get("source_file") or (edge.get("source") if edge.get("source_kind") == "file" else None)
     right = edge.get("target_file") or (edge.get("target") if edge.get("target_kind") == "file" else None)
     return left, right
+
+
+def _structural_goal(change):
+    """Structural checks have no source range; callers must be read as evidence."""
+    path, kind, old = change["file_path"], change.get("change_type"), change.get("old_file_path")
+    if kind == "renamed" and old:
+        return ReviewGoal(id=digest(f"structural:rename:{old}:{path}"), kind="structural",
+            path=path, side="head",
+            description=f"检查是否仍有导入、模块引用或配置引用指向旧路径 {old}；读取实际引用者源码确认")
+    if kind == "deleted" and (path.casefold().endswith(REFERENCEABLE_SUFFIXES)
+                              or path.rsplit("/", 1)[-1].casefold() in CONFIG_NAMES):
+        return ReviewGoal(id=digest(f"structural:delete:{path}"), kind="structural",
+            path=path, side="base",
+            description=f"检查是否仍有导入、模块引用或配置引用指向已删除的 {path}；读取实际引用者源码确认")
+    return None
 
 
 def _changed_symbols(changes, symbols):
@@ -163,9 +189,11 @@ def _impacted_paths(changes, repository_graph):
     for edge in repository_graph.get("edges", []):
         left, right = _edge_files(edge)
         if left in changes and right and right not in changes:
-            impacted.setdefault(left, set()).add(right)
+            if not is_sensitive_repository_path(right):
+                impacted.setdefault(left, set()).add(right)
         if right in changes and left and left not in changes:
-            impacted.setdefault(right, set()).add(left)
+            if not is_sensitive_repository_path(left):
+                impacted.setdefault(right, set()).add(left)
     return {path: sorted(paths)[:MAX_IMPACTED_PATHS] for path, paths in impacted.items()}
 
 
@@ -184,9 +212,12 @@ def _risk(paths, changes):
         reasons.append("large_change")
     if any(changes[path].get("change_type") in {"added", "deleted"} for path in paths):
         reasons.append("file_added_or_deleted")
+    if any(changes[path].get("change_type") == "renamed" for path in paths):
+        reasons.append("structural_change")
     if matches:
         return "high", reasons
-    if cross_module or volume >= 200 or "file_added_or_deleted" in reasons:
+    if (cross_module or volume >= 200 or "file_added_or_deleted" in reasons
+            or "structural_change" in reasons):
         return "medium", reasons
     return "low", reasons
 
@@ -222,13 +253,14 @@ def _unit(paths, changes, by_path, symbols, impacted, depth, limits):
     roles = _roles(paths, risk, depth)
     min_each = 1 if depth == "quick" else 2
     max_each = limits.model_calls if limits is not None else DEPTHS[depth]["model_calls"]
+    structural = any(goal.kind == "structural" for path in paths for goal in by_path[path])
     return _Unit(paths=paths, hunk_ids=sorted(hunk_ids),
         symbols=sorted({identity for path in paths for identity in symbols.get(path, set())}),
         impacted=impacted_paths, goals=sorted({goal.id for path in paths for goal in by_path[path]
                                          if goal.status != "blocked"}),
         risk=risk, reasons=reasons, strategy=DEPTHS[depth]["strategy"],
         estimated=_estimate(paths, changes), roles=roles,
-        min_calls=min_each * len(roles), max_calls=max_each * len(roles))
+        min_calls=min_each * len(roles), max_calls=max_each * len(roles), structural=structural)
 
 
 def _paths_text(paths):
@@ -259,7 +291,8 @@ def _merge(left, right, changes, depth):
         risk=max((left.risk, right.risk), key=lambda tier: {"low": 0, "medium": 1, "high": 2}[tier]),
         reasons=sorted(set(left.reasons) | set(right.reasons)), strategy=left.strategy,
         estimated=left.estimated + right.estimated, roles=["reviewer"],
-        min_calls=min_each, max_calls=max_each)
+        min_calls=min_each, max_calls=max_each,
+        structural=left.structural or right.structural)
 
 
 def _pack(units, changes, depth):
@@ -344,6 +377,14 @@ def _assignments(unit, depth, focus):
             objective += "；联合核对相关变更，不把静态关联当作源码证据"
         objective += (f"；审查深度：{depth}（{STRATEGY_LABELS[unit.strategy]}）"
                       f"；重点：{', '.join(focus)}")
+        if unit.symbols:
+            objective += "；变更符号：" + ", ".join(unit.symbols[:8])
+        if unit.impacted:
+            objective += ("；静态关联影响路径（需读取源码核验）："
+                          + "、".join(unit.impacted[:8]))
+        if unit.structural:
+            objective += ("；结构性变更：核对旧路径的导入与模块引用，引用实际调用者源码，"
+                          "不得伪造行级证据")
         output.append(ReviewAssignment(
             id=digest(json.dumps([unit.id, role, unit.goals, objective], ensure_ascii=False)),
             unit_id=unit.id, reviewer=role, goal_ids=unit.goals,
@@ -371,6 +412,9 @@ def plan_review(changed_files: list[dict], *, depth: str, selected_paths=None, f
                     identity = digest(f"{source_path}:{side}:{first}:{last}")
                     file_goals.append(ReviewGoal(id=identity, path=source_path, side=side,
                                                  start_line=first, end_line=last))
+        structural = _structural_goal(change)
+        if structural:
+            file_goals.append(structural)
         if not file_goals:
             # Metadata/binary changes cannot acquire fictional line evidence.
             file_goals.append(ReviewGoal(id=digest(path + ":metadata"), path=path, side="head",

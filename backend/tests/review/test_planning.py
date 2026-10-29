@@ -1,6 +1,10 @@
+from types import SimpleNamespace
+
 import pytest
 
+from app.review.context import AgentContext, ReviewContext
 from app.review.models import ReviewLimits
+from app.review.nodes.preparation import plan as execution_plan
 from app.review.planning import plan_review
 
 
@@ -173,6 +177,60 @@ def test_input_budget_limits_units_and_is_reported():
     assert set(plan.uncovered.values()) == {"input_budget_insufficient"}
 
 
+@pytest.mark.parametrize("depth", ["quick", "standard", "deep"])
+@pytest.mark.parametrize("selected", [None, frozenset({"one/alpha.py", "three/charlie.py"})])
+@pytest.mark.parametrize("input_tokens", [8000, 2500])
+async def test_execution_regrouping_preserves_preview_admission_and_uncovered_goals(
+        depth, selected, input_tokens):
+    changes = [change("one/alpha.py", content="x" * 500),
+               change("two/bravo.py", content="x"), change("three/charlie.py", content="x")]
+    limits = ReviewLimits(total_model_calls=100, total_input_tokens=input_tokens)
+    preview = plan_review(changes, depth=depth, limits=limits, selected_paths=selected)
+    admitted = {path for unit in preview.units for path in unit.changed_paths}
+    assert preview.uncovered or preview.excluded
+    events = []
+
+    async def load():
+        return AgentContext(evidence=None, changed_files=changes,
+            repository_graph={"edges": [edge("two/bravo.py", "three/charlie.py")]})
+
+    async def progress(event):
+        events.append(event)
+
+    context = ReviewContext(load=load, model=None, limits=limits, depth=depth,
+        selected_paths=selected, focus=(), progress=progress)
+    result = await execution_plan({}, SimpleNamespace(context=context))
+
+    assert {path for unit in result["review_units"] for path in unit["changed_paths"]} == admitted
+    assert {path for assignment in result["assignments"] for path in assignment["focus_paths"]} == admitted
+    assert result["goals"] == [goal.model_dump() for goal in preview.goals]
+    assert set(preview.limitations) <= set(result["coverage_limitations"])
+    assigned = {goal for assignment in result["assignments"] for goal in assignment["goal_ids"]}
+    assert all(goal["id"] not in assigned for goal in result["goals"]
+               if goal["path"] in preview.uncovered)
+    assert events[0]["limitations"] == result["coverage_limitations"]
+
+
+async def test_execution_keeps_confirmed_groups_if_index_regrouping_would_drop_files():
+    changes = [change(f"pkg/auth{index}.py") for index in range(8)]
+    limits = ReviewLimits(total_model_calls=6)
+    graph = {"edges": [edge(f"pkg/auth{left}.py", f"pkg/auth{right}.py")
+                        for left, right in [(0, 4), (4, 6), (1, 5), (5, 7), (2, 3)]]}
+    preview = plan_review(changes, depth="standard", limits=limits)
+    assert not preview.uncovered
+    indexed = plan_review(changes, depth="standard", limits=limits, repository_graph=graph)
+    assert indexed.uncovered
+
+    async def load():
+        return AgentContext(evidence=None, changed_files=changes, repository_graph=graph)
+
+    context = ReviewContext(load=load, model=None, limits=limits, focus=())
+    result = await execution_plan({}, SimpleNamespace(context=context))
+    assert result["review_units"] == [unit.model_dump() for unit in preview.units]
+    assert result["assignments"] == [assignment.model_dump() for assignment in preview.assignments]
+    assert result["coverage_limitations"] == preview.limitations
+
+
 def test_metadata_only_change_is_reported_not_dispatched():
     metadata = {"file_path": "README.md", "hunks": [{"old_start": 0, "old_length": 0,
         "new_start": 0, "new_length": 0, "lines": []}]}
@@ -181,6 +239,49 @@ def test_metadata_only_change_is_reported_not_dispatched():
     assert plan.goals[0].status == "blocked"
     assert plan.uncovered == {"README.md": "no_text_source_range"}
     assert any("无文本变更范围" in item for item in plan.limitations)
+
+
+def test_pure_rename_dispatches_structural_reference_check_without_line_evidence():
+    changes = [{"file_path": "pkg/billing.py", "old_file_path": "pkg/payment.py",
+                "change_type": "renamed", "hunks": []}]
+    plan = plan_review(changes, depth="standard")
+    assert len(plan.units) == len(plan.assignments) == 1
+    unit = plan.units[0]
+    assert unit.changed_paths == ["pkg/billing.py"]
+    assert unit.changed_hunk_ids == []
+    assert "structural_change" in unit.risk_reasons
+    structural = [goal for goal in plan.goals if goal.kind == "structural"]
+    assert len(structural) == 1
+    assert structural[0].side == "head" and structural[0].path == "pkg/billing.py"
+    assert structural[0].start_line is None and structural[0].end_line is None
+    assert "pkg/payment.py" in (structural[0].description or "")
+    assert structural[0].id in unit.goal_ids
+    assert structural[0].id in plan.assignments[0].goal_ids
+    assert "结构性变更" in plan.assignments[0].objective
+    assert not any(goal.status == "blocked" for goal in plan.goals)
+    assert plan.uncovered == {}
+
+
+def test_impacted_paths_exclude_sensitive_repository_paths():
+    changes = [change("app/config.py")]
+    graph = {"edges": [edge("app/config.py", ".env"),
+                       edge("app/config.py", "app/other.py")]}
+    plan = plan_review(changes, depth="standard", repository_graph=graph)
+    assert plan.units[0].impacted_paths == ["app/other.py"]
+
+
+def test_deleted_module_dispatches_structural_reference_check_without_fake_range():
+    deleted = {"file_path": "pkg/payment.py", "change_type": "deleted",
+               "hunks": [{"old_start": 1, "old_length": 1, "new_start": 0, "new_length": 0,
+                          "lines": [{"kind": "deleted", "old_line_no": 1,
+                                     "content": "def charge(): ..."}]}]}
+    plan = plan_review([deleted], depth="standard")
+    structural = [goal for goal in plan.goals if goal.kind == "structural"]
+    assert len(structural) == 1
+    assert structural[0].path == "pkg/payment.py" and structural[0].side == "base"
+    assert structural[0].start_line is None and structural[0].end_line is None
+    assert structural[0].id in plan.units[0].goal_ids
+    assert any(goal.kind == "source" for goal in plan.goals)
 
 
 @pytest.mark.parametrize("prefix", ["app/", "backend/app/", "backend/src/app/", "frontend/src/"])

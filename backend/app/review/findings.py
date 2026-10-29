@@ -2,7 +2,7 @@
 
 import json
 
-from app.review.evidence import digest, uncovered_ranges
+from app.review.evidence import digest, has_structural_source, uncovered_ranges
 from app.review.limitations import validate_resolutions
 from app.review.models import (
     CandidateFinding, CandidateProposal, DiscoveryOutput, VerificationOutput, VerificationResult, VerifiedFinding,
@@ -181,6 +181,17 @@ def covered_goals(goals, results, service, assignments):
     output = []
     for goal in goals:
         goal = dict(goal)
+        if goal.get("kind") == "structural":
+            refs = accepted.get(goal["id"], [])
+            examined = has_structural_source(goal, refs)
+            goal["status"] = "examined" if examined else "not_examined"
+            goal["reason"] = None if examined else (
+                "该目标没有派发审查任务" if goal["id"] not in assigned else
+                "未提交该结构性检查结果" if goal["id"] not in claimed else
+                "引用的证据未在当前分支读取或未通过校验" if goal["id"] in invalid else
+                "结构性检查需要目标文件之外的 HEAD 调用方源码证据")
+            output.append(goal)
+            continue
         if goal["status"] == "blocked":
             output.append(goal)
             continue

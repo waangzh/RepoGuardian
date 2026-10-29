@@ -53,6 +53,82 @@ async def test_rejected_goal_claim_has_an_actionable_reason(source_service, fail
     assert reason in result[0]["reason"]
 
 
+async def test_structural_goal_coverage_requires_agent_read_evidence(source_service):
+    goal = ReviewGoal(id="rename", kind="structural", path="safe.py", side="head",
+                      description="检查旧路径的导入引用").model_dump()
+    commit_sources(source_service, {"other.py": "from safe import VALUE\n"})
+    other = await source_service.read("other.py", 1, 1)
+    identity = other["evidence"]["id"]
+    examined = [{"goal_id": "rename", "evidence_ids": [identity]}]
+    result = coverage(source_service, [goal], {"examined": examined}, [identity])
+    assert result[0]["status"] == "examined"
+    assert result[0]["reason"] is None
+
+    unissued = coverage(source_service, [goal], {"examined": examined}, [])
+    assert unissued[0]["status"] == "not_examined"
+    assert "未在当前分支读取" in unissued[0]["reason"]
+
+    missing = coverage(source_service, [goal], {"examined": []}, [identity])
+    assert missing[0]["status"] == "not_examined"
+    assert "未提交该结构性检查结果" in missing[0]["reason"]
+
+
+@pytest.mark.parametrize("goal_path,path,side", [
+    ("safe.py", "safe.py", "head"),
+    ("safe.py", "safe.py", "base"),
+    ("safe.py", "other.py", "base"),
+    ("removed.py", "removed.py", "base"),
+    ("removed.py", "other.py", "base"),
+])
+async def test_structural_goal_rejects_target_and_base_only_evidence(
+        source_service, goal_path, path, side):
+    goal = ReviewGoal(id="structural", kind="structural", path=goal_path,
+        side="base" if goal_path == "removed.py" else "head").model_dump()
+    packet = await source_service.read(path, 1, 1, side)
+    identity = packet["evidence"]["id"]
+    output = DiscoveryOutput(examined=[{"goal_id": goal["id"], "evidence_ids": [identity]}])
+
+    result = coverage(source_service, [goal], output.model_dump(), [identity])
+    assert result[0]["status"] == "not_examined"
+    assert "目标文件之外的 HEAD 调用方" in result[0]["reason"]
+    feedback = submission_feedback(output, [goal], source_service, {identity}, "assignment")
+    assert "uncovered_goals" in feedback and goal["id"] in feedback
+
+
+async def test_deleted_source_coverage_does_not_complete_its_structural_check(source_service):
+    from app.review.planning import plan_review
+
+    plan = plan_review([{"file_path": "removed.py", "change_type": "deleted", "hunks": [{
+        "old_start": 1, "old_length": 1, "new_start": 0, "new_length": 0, "lines": [],
+    }]}], depth="standard")
+    packet = await source_service.read("removed.py", 1, 1, "base")
+    identity = packet["evidence"]["id"]
+    goals = [goal.model_dump() for goal in plan.goals]
+    output = {"examined": [{"goal_id": goal["id"], "evidence_ids": [identity]} for goal in goals]}
+    result = coverage(source_service, goals, output, [identity])
+    assert {goal["kind"]: goal["status"] for goal in result} == {
+        "source": "examined", "structural": "not_examined"}
+
+    commit_sources(source_service, {"other.py": "from removed import OLD\n"})
+    caller = await source_service.read("other.py", 1, 1)
+    caller_id = caller["evidence"]["id"]
+    output["examined"][1]["evidence_ids"] = [caller_id]
+    result = coverage(source_service, goals, output, [identity, caller_id])
+    assert all(goal["status"] == "examined" for goal in result)
+
+
+async def test_structural_goal_does_not_request_a_fabricated_source_range(source_service):
+    goal = ReviewGoal(id="rename", kind="structural", path="safe.py", side="head",
+                      description="检查旧路径的导入引用").model_dump()
+    context = AgentContext(evidence=source_service, changed_files=[{
+        "file_path": "safe.py", "old_file_path": "other.py",
+        "change_type": "renamed", "hunks": []}])
+    materials, issued = await prepare_materials(context, {"goals": [goal]})
+    assert materials["source_materials"] == [] and materials["files"] == []
+    assert issued == set()
+    assert materials["change_materials"]["files"][0]["old_file_path"] == "other.py"
+
+
 async def test_range_gaps_and_stale_coverage_cannot_be_hidden(source_service):
     commit_sources(source_service, {"safe.py": "line\n" * 6})
     reads = [await source_service.read("safe.py", first, last) for first, last in [(1, 2), (4, 6)]]

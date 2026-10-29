@@ -6,7 +6,6 @@ from typing import Any, Awaitable, Callable
 
 from app.review.evidence import EvidenceService
 from app.review.models import ReviewLimits
-from app.review.planning import ReviewPlan
 
 
 @dataclass
@@ -38,7 +37,6 @@ class ReviewContext:
     depth: str = "standard"
     focus: tuple[str, ...] = ("correctness", "security", "performance", "compatibility")
     selected_paths: frozenset[str] | None = None
-    confirmed_plan: ReviewPlan | None = None
     replaying_nodes: frozenset[str] = frozenset()
     retry_results: dict[tuple[str, str], dict] = field(default_factory=dict)
     budget: Any = None
