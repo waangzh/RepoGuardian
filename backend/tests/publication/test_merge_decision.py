@@ -5,7 +5,8 @@ import pytest
 from app.models.publication import (
     DigestGoal, PublicationPlan, PublicationSnapshot, ReviewDigest, ReviewOutcome,
 )
-from app.review.models import CandidateFinding, VerificationResult, VerifiedFinding
+from app.review.models import CandidateFinding, ReviewLimits, VerificationResult, VerifiedFinding
+from app.review.planning import plan_review
 from app.services.publication.publication_planner import summary_projection
 from app.services.publication.publication_renderer import (
     discussion_report_lines, render_review_comment, render_summary, render_user_report,
@@ -142,6 +143,21 @@ def test_planning_limitations_block_clean_advice_and_render_as_text():
         assert "<script>" not in text
     plan.presentation = build_presentation(plan)
     assert any("专项审查未启动" in item for item in plan.presentation.limitations)
+
+
+def test_budget_only_packing_does_not_add_an_unresolved_merge_reason():
+    changes = [{"file_path": f"pkg{index}/mod{index}.py", "hunks": [{
+        "old_start": 1, "old_length": 1, "new_start": 1, "new_length": 1, "lines": []}]}
+        for index in range(33)]
+    plan = plan_review(changes, depth="standard", limits=ReviewLimits(total_model_calls=64))
+    assert len(plan.units) < len(changes)
+    assert not plan.uncovered
+    assert all(item.reviewer == "reviewer" for item in plan.assignments)
+    facts = outcome(examined_goals=len(plan.goals), total_goals=len(plan.goals))
+    decision = merge_decision(facts, [], content_eligible=True, execution_complete=True,
+                              coverage_limitations=plan.limitations)
+    assert decision.status == "conditional_merge"
+    assert not decision.unresolved_reasons
 
 
 def test_preexisting_findings_use_current_identity_without_separate_history_counts():

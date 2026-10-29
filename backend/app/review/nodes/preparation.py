@@ -30,7 +30,8 @@ async def plan(state: ReviewState, runtime: Runtime[ReviewContext]):
         limits=context.limits)
     if frozenset(path for unit in review_plan.units for path in unit.changed_paths) != admitted:
         review_plan = confirmed
-    limitations = list(dict.fromkeys(confirmed.limitations + review_plan.limitations))
+    # Frozen omissions survive regrouping; role omissions describe the final plan.
+    limitations = list(dict.fromkeys(confirmed.scope_limitations + review_plan.limitations))
     await context.emit(phase="planning", units=[item.model_dump() for item in review_plan.units],
                        assignments=[item.model_dump() for item in review_plan.assignments],
                        limitations=limitations)

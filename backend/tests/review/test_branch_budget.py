@@ -17,12 +17,42 @@ from app.review.budget import ReviewBudget, ReviewBudgetExceeded
 from app.review.context import AgentContext
 from app.review.configuration import discovery_limits
 from app.review.models import ReviewLimits, VerificationOutput
+from app.review.planning import plan_review
 from app.review.tools import REVIEW_TOOLS
 from app.services.review.review_repository import ReviewRepository
 from tests.review.test_native_agents import ToolCallingModel
 from tests.review.test_native_lifecycle import preview_and_create
 
 pytest_plugins = ["tests.review.test_native_lifecycle"]
+
+
+async def test_high_risk_dispatch_gets_budget_before_packed_low_risk_units():
+    limits = ReviewLimits(total_model_calls=9, concurrency=1)
+    changes = [{"file_path": path, "hunks": [{
+        "old_start": 1, "old_length": 1, "new_start": 1, "new_length": 1,
+        "lines": [{"kind": "added", "new_line_no": 1, "content": content}]}]}
+        for path, content in [("zz/auth.py", "subprocess.run(cmd)")] + [
+            (f"pkg{index}/mod{index}.py", "value = 1") for index in range(3)]]
+    plan = plan_review(changes, depth="standard", limits=limits)
+    budget = ReviewBudget(limits)
+    scope = {"discovery_agent_ids": frozenset(item.id for item in plan.assignments)}
+    completed, rejected = [], []
+    for assignment in plan.assignments:
+        try:
+            for stage, hold in (("explore", 2), ("finalize", 1), ("finalize", 0)):
+                ticket = await budget.reserve(assignment.id, 10, stage=stage, hold=hold, **scope)
+                await budget.settle(ticket, {"input_tokens": 10, "output_tokens": 1})
+            completed.append(assignment)
+        except ReviewBudgetExceeded:
+            rejected.append(assignment)
+        finally:
+            await budget.finish(assignment.id)
+    assert completed[0].focus_paths == ["zz/auth.py"]
+    assert completed[0].reviewer == "reviewer"
+    assert rejected
+    assert all(item.focus_paths != ["zz/auth.py"] for item in rejected)
+    assert (await budget.summary())["model_calls"] == discovery_limits(
+        limits, "standard").total_model_calls
 
 
 async def test_branch_input_and_call_reservations_survive_settlement():

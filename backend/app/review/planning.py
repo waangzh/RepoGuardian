@@ -108,6 +108,10 @@ class ReviewPlan:
     limitations: list[str]
     uncovered: dict[str, str]
 
+    @property
+    def scope_limitations(self):
+        return _scope_limitations(self.uncovered)
+
 
 @dataclass
 class _Unit:
@@ -410,8 +414,16 @@ def _paths_text(paths):
     return shown + (f" 等 {len(paths)} 个文件" if len(paths) > 4 else "")
 
 
+def _scope_limitations(uncovered):
+    labels = {
+        "no_text_source_range": "无文本变更范围，未派发审查：",
+        "model_call_budget_insufficient": "未覆盖（整轮模型调用预算不足）：",
+    }
+    return [labels[reason] + path for path, reason in sorted(uncovered.items())]
+
+
 def _priority(unit):
-    # Drop order: keep high-risk and larger units first.
+    # Admission and dispatch both put high-risk and larger units first.
     return ({"high": 0, "medium": 1, "low": 2}[unit.risk], -unit.estimated, unit.paths)
 
 
@@ -423,9 +435,9 @@ def _merge_priority(unit):
             unit.estimated, unit.paths)
 
 
-def _role_value(unit, role):
-    # Incremental cost is identical for every optional role, so ordering by
-    # relevance x risk is equivalent to ordering by value / incremental cost.
+def _role_priority(unit, role):
+    # Lexical relevance is a heuristic for preserving independent perspectives,
+    # not a measure of input cost or demonstrated review quality.
     reasons = set(unit.reasons)
     if role == "contract":
         relevance = 2 if "cross_module" in reasons else 0
@@ -470,7 +482,6 @@ def _merge(left, right, changes, depth):
 def _pack(units, changes, depth, capacity):
     units = sorted(units, key=_merge_priority)
     cost = sum(unit.min_calls for unit in units)
-    limitations = []
     changed = True
     while changed and cost > capacity:
         changed = False
@@ -488,13 +499,11 @@ def _pack(units, changes, depth, capacity):
                          if position not in {index, offset}] + [merged]
                 units.sort(key=_merge_priority)
                 cost -= left.min_calls + right.min_calls - merged.min_calls
-                limitations.append("预算不足：已将以下变更合并为一个审查单元以控制调用量："
-                                   + _paths_text(merged.paths))
                 changed = True
                 break
             if changed:
                 break
-    return units, limitations
+    return units
 
 
 def _compact_documents(units, changes, depth):
@@ -528,19 +537,22 @@ def _compact_documents(units, changes, depth):
 def _fit(units, changes, depth, limits):
     units = _compact_documents(units, changes, depth)
     if limits is None or not units:
-        return units, [], {}
+        return sorted(units, key=_priority), [], {}
     limitations, uncovered = [], {}
     discovery = discovery_limits(limits, depth)
     capacity = discovery.total_model_calls
     min_each = 1 if depth == "quick" else 2
     cost = sum(unit.min_calls for unit in units)
     if cost > capacity:
+        # Preserve independent perspectives when bounded reviewer-only packing fits.
+        units = _pack(units, changes, depth, capacity)
+        cost = sum(unit.min_calls for unit in units)
+    if cost > capacity:
         candidates = [(unit, role) for unit in units for role in unit.roles
                       if role != "reviewer"]
-        # Remove the least valuable perspective first and stop as soon as the
-        # remaining units fit, so one unit's overflow cannot strip every role.
+        # Remove the least relevant perspective first and stop once the plan fits.
         candidates.sort(key=lambda item: (
-            _role_value(item[0], item[1]),
+            _role_priority(item[0], item[1]),
             {"low": 0, "medium": 1, "high": 2}[item[0].risk],
             item[0].estimated, item[0].paths, item[1]))
         for unit, role in candidates:
@@ -555,10 +567,9 @@ def _fit(units, changes, depth, limits):
             limitations.append("预算不足：" + _paths_text(unit.paths) + " 的"
                                + ROLE_LABELS[role]
                                + "视角未启动（按风险相关性排序移除）。")
-    if cost > capacity:
-        units, pack_limitations = _pack(units, changes, depth, capacity)
-        limitations.extend(pack_limitations)
-        cost = sum(unit.min_calls for unit in units)
+            if cost > capacity and unit.risk != "high" and unit.roles == ["reviewer"]:
+                units = _pack(units, changes, depth, capacity)
+                cost = sum(item.min_calls for item in units)
     if cost > capacity:
         kept, remaining = [], capacity
         for unit in sorted(units, key=_priority):
@@ -566,10 +577,9 @@ def _fit(units, changes, depth, limits):
                 kept.append(unit)
                 remaining -= unit.min_calls
             else:
-                limitations.append("未覆盖（整轮模型调用预算不足）：" + _paths_text(unit.paths))
                 uncovered.update((path, "model_call_budget_insufficient") for path in unit.paths)
-        units = sorted(kept, key=lambda unit: unit.paths)
-    return units, limitations, uncovered
+        units = kept
+    return sorted(units, key=_priority), limitations, uncovered
 
 
 def _assignments(unit, depth, focus):
@@ -629,17 +639,17 @@ def plan_review(changed_files: list[dict], *, depth: str, selected_paths=None, f
     graph = repository_graph or {}
     changed_symbols = _changed_symbols(included, symbols)
     impacted = _impacted_paths(included, graph)
-    units, limitations, uncovered = [], [], {}
+    units, uncovered = [], {}
     for paths in _groups(included, graph, changed_symbols):
         unit = _unit(paths, included, by_path, changed_symbols, impacted, depth, limits)
         if not unit.goals and not unit.hunk_ids:
-            limitations.append("无文本变更范围，未派发审查：" + "、".join(paths))
             uncovered.update((path, "no_text_source_range") for path in paths)
             continue
         units.append(unit)
     units, budget_limitations, budget_uncovered = _fit(units, included, depth, limits)
     assignments = [assignment for unit in units for assignment in _assignments(unit, depth, focus)]
     unique_goals = {goal.id: goal for goal in goals}
+    uncovered = {**uncovered, **budget_uncovered}
     return ReviewPlan(goals=list(unique_goals.values()),
         units=[ReviewUnit(id=unit.id, changed_paths=unit.paths, changed_hunk_ids=unit.hunk_ids,
             changed_symbols=unit.symbols, impacted_paths=unit.impacted, risk_tier=unit.risk,
@@ -647,5 +657,5 @@ def plan_review(changed_files: list[dict], *, depth: str, selected_paths=None, f
             estimated_input_tokens=unit.estimated, min_model_calls=unit.min_calls,
             max_model_calls=unit.max_calls, goal_ids=unit.goals) for unit in units],
         assignments=assignments, excluded=excluded,
-        limitations=limitations + budget_limitations,
-        uncovered={**uncovered, **budget_uncovered})
+        limitations=_scope_limitations(uncovered) + budget_limitations,
+        uncovered=uncovered)

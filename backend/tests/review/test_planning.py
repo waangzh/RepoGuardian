@@ -145,8 +145,7 @@ def test_large_pr_packs_into_budget_and_reports_uncovered_scope():
     assert sum(unit.min_model_calls for unit in plan.units) <= 64
     # Packing stops once the budget fits instead of merging every legal pair.
     assert len(plan.units) == 21
-    assert plan.limitations and all(
-        "合并" in item and "pkg" in item for item in plan.limitations)
+    assert not plan.limitations
     assert not plan.uncovered
     assert len(plan.assignments) == len(plan.units)
 
@@ -569,7 +568,7 @@ def test_budget_packing_merges_low_risk_units_first():
     merged = next(unit for unit in plan.units
                   if unit.changed_paths == ["low0/b0.py", "low1/b1.py"])
     assert merged.risk_tier == "low"
-    assert len(plan.limitations) == 1 and "合并" in plan.limitations[0]
+    assert not plan.limitations
 
 
 def test_merge_refuses_to_drop_independent_roles():
@@ -593,3 +592,84 @@ def test_assignment_objective_exposes_risk_reasons():
     assert [assignment.reviewer for assignment in plan.assignments] == ["reviewer", "specialist"]
     assert all("风险信号：sensitive_operation:command_execution" in assignment.objective
                for assignment in plan.assignments)
+
+
+@pytest.mark.parametrize("low_count,total_calls", [(1, 12), (3, 9), (5, 9), (5, 4)])
+def test_dispatch_prioritizes_risk_after_packing_or_scope_drops(low_count, total_calls):
+    changes = [change("zz/auth.py", content="subprocess.run(cmd)")] + [
+        change(f"pkg{index}/mod{index}.py") for index in range(low_count)]
+    plan = plan_review(changes, depth="standard",
+                       limits=ReviewLimits(total_model_calls=total_calls))
+    assert plan.units[0].changed_paths == ["zz/auth.py"]
+    assert plan.assignments[0].focus_paths == ["zz/auth.py"]
+    tiers = [{"high": 0, "medium": 1, "low": 2}[unit.risk_tier] for unit in plan.units]
+    assert tiers == sorted(tiers)
+
+
+def test_budget_packs_reviewers_before_removing_specialist():
+    changes = [change("auth/guard.py", content="subprocess.run(cmd)"),
+               change("left/a.py"), change("right/b.py")]
+    plan = plan_review(changes, depth="standard", limits=ReviewLimits(total_model_calls=9))
+    assert len(plan.units) == 2
+    assert [assignment.reviewer for assignment in plan.assignments
+            if assignment.focus_paths == ["auth/guard.py"]] == ["reviewer", "specialist"]
+    assert any(unit.changed_paths == ["left/a.py", "right/b.py"] for unit in plan.units)
+    assert sum(unit.min_model_calls for unit in plan.units) == 6
+    assert not plan.limitations and not plan.uncovered
+
+
+def test_budget_retries_packing_before_removing_another_contract_role():
+    groups = [[f"m{index}{part}/x.py" for part in "abc"] for index in range(2)]
+    changes = [{**change(path), "change_type": "added"} for group in groups for path in group]
+    changes.append(change("lonely/y.py"))
+    edges = [edge(group[0], group[1]) for group in groups]
+    edges += [edge(group[1], group[2]) for group in groups]
+    plan = plan_review(changes, depth="deep", limits=ReviewLimits(total_model_calls=12),
+                       repository_graph={"edges": edges})
+    assert len(plan.units) == 2
+    contracts = [assignment for assignment in plan.assignments if assignment.reviewer == "contract"]
+    assert len(contracts) == 1 and contracts[0].focus_paths == groups[1]
+    assert any(set(unit.changed_paths) == {*groups[0], "lonely/y.py"} for unit in plan.units)
+    assert len(plan.limitations) == 1 and "契约核验" in plan.limitations[0]
+    assert not plan.uncovered
+
+
+async def test_execution_regrouping_does_not_keep_obsolete_packing_limits():
+    changes = [change(f"pkg{index}/mod{index}.py") for index in range(4)]
+
+    async def load():
+        return AgentContext(evidence=None, changed_files=changes, repository_graph={"edges": [
+            edge("pkg0/mod0.py", "pkg2/mod2.py"), edge("pkg1/mod1.py", "pkg3/mod3.py")]})
+
+    result = await execution_plan({}, SimpleNamespace(context=ReviewContext(
+        load=load, model=None, limits=ReviewLimits(total_model_calls=9))))
+    assert {tuple(unit["changed_paths"]) for unit in result["review_units"]} == {
+        ("pkg0/mod0.py", "pkg2/mod2.py"), ("pkg1/mod1.py", "pkg3/mod3.py")}
+    assert not result["coverage_limitations"]
+
+
+@pytest.mark.parametrize("total_calls,count", [(64, 11), (8, 3)])
+async def test_execution_regrouping_reconciles_restored_roles_and_frozen_scope(total_calls, count):
+    changes = [change(f"pkg{index}/mod{index}.py", content="subprocess.run(cmd)")
+               for index in range(count)]
+    limits = ReviewLimits(total_model_calls=total_calls)
+    preview = plan_review(changes, depth="standard", limits=limits)
+    assert any("专项风险" in limitation for limitation in preview.limitations)
+
+    async def load():
+        return AgentContext(evidence=None, changed_files=changes,
+            repository_graph={"edges": [edge("pkg0/mod0.py", "pkg1/mod1.py")]})
+
+    result = await execution_plan({}, SimpleNamespace(context=ReviewContext(
+        load=load, model=None, limits=limits)))
+    assert any(item["reviewer"] == "specialist"
+               and "pkg0/mod0.py" in item["focus_paths"] for item in result["assignments"])
+    admitted = {path for unit in preview.units for path in unit.changed_paths}
+    assert {path for unit in result["review_units"] for path in unit["changed_paths"]} == admitted
+    assert result["goals"] == [goal.model_dump() for goal in preview.goals]
+    if preview.uncovered:
+        assert len(result["coverage_limitations"]) == 1
+        assert "整轮模型调用预算不足" in result["coverage_limitations"][0]
+        assert all(path in result["coverage_limitations"][0] for path in preview.uncovered)
+    else:
+        assert not result["coverage_limitations"]
