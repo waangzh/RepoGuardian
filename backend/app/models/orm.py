@@ -218,6 +218,52 @@ class ReviewBranchBudgetOrm(Base):
     final_requests: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class ReviewCreateIntentOrm(Base):
+    __tablename__ = "review_create_intents"
+    __table_args__ = (UniqueConstraint("caller_id", "key", name="uq_review_create_intent"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    caller_id: Mapped[str] = mapped_column(String(128))
+    key: Mapped[str] = mapped_column(String(200))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    run_id: Mapped[str] = mapped_column(ForeignKey("review_tasks.id"), index=True)
+
+
+class ReviewWorkItemOrm(Base):
+    __tablename__ = "review_work_items"
+    __table_args__ = (UniqueConstraint("run_id", "kind", "subject", name="uq_review_work_subject"),)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("review_tasks.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(24))
+    subject: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[dict] = mapped_column(JSON)
+
+
+class ReviewCandidateOrm(Base):
+    __tablename__ = "review_candidates"
+    __table_args__ = (UniqueConstraint("run_id", "attempt_id", "tool_call_id",
+                                     name="uq_review_candidate_tool_call"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("review_tasks.id", ondelete="CASCADE"), index=True)
+    attempt_id: Mapped[str] = mapped_column(String(32))
+    tool_call_id: Mapped[str] = mapped_column(String(200))
+    payload: Mapped[dict] = mapped_column(JSON)
+
+
+class ReviewRequestOrm(Base):
+    __tablename__ = "review_requests"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("review_tasks.id", ondelete="CASCADE"), index=True)
+    work_item_id: Mapped[str | None] = mapped_column(String(64))
+    attempt_id: Mapped[str | None] = mapped_column(String(32))
+    kind: Mapped[str] = mapped_column(String(24))
+    reserved_input_tokens: Mapped[int] = mapped_column(Integer)
+    reserved_output_tokens: Mapped[int] = mapped_column(Integer)
+    usage: Mapped[dict | None] = mapped_column(JSON)
+    state: Mapped[str] = mapped_column(String(16), default="reserved")
+    lease_fence: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class WorkerJobOrm(Base):
     __tablename__ = "worker_jobs"
     __table_args__ = (

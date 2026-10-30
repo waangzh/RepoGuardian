@@ -165,6 +165,7 @@ class WorkItem(Model):
     attempt: int = 0
     attempt_id: str | None = None
     delivered_hunk_ids: list[str] = Field(default_factory=list)
+    visible_source_ids: list[str] = Field(default_factory=list)
     missing_material_reasons: dict[str, str] = Field(default_factory=dict)
     material_delivery: Literal["complete", "incomplete", "not_started"] = "not_started"
     error_code: str | None = None
