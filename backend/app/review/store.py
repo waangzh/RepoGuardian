@@ -3,14 +3,15 @@
 from datetime import timedelta, timezone
 from uuid import uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.dialects.sqlite import insert
 
 from app.core.config import settings
 from app.core.database import sync_session
 from app.models.orm import (
-    ReviewCandidateOrm, ReviewCreateIntentOrm, ReviewRequestOrm, ReviewTaskOrm,
-    ReviewWorkItemOrm, WorkerJobOrm,
+    FindingDispositionOrm, GitHubSummarySlotOrm, IncrementalWebhookDeliveryOrm,
+    PublicationAttemptOrm, ReviewCandidateOrm, ReviewCreateIntentOrm, ReviewRequestOrm,
+    ReviewTaskOrm, ReviewWorkItemOrm, WorkerJobOrm,
 )
 from app.review.domain import Candidate, Run, TERMINAL, WorkItem, utcnow
 from app.services.review.review_task_access import lock_live_review
@@ -78,9 +79,9 @@ class ReviewStore:
             inserted = session.execute(insert(ReviewTaskOrm).values(
                 id=run.id, repository=run.snapshot.repository, repo_url=run.pr.clone_url,
                 pr_url=run.pr_url, pr_number=run.pr.number, base_sha=run.snapshot.declared_base_sha,
-                head_sha=run.snapshot.head_sha, mode="review", status="queued", current_phase="prepare",
+                head_sha=run.snapshot.head_sha, status="queued", current_phase="prepare",
                 model=run.configuration.model, provider=run.configuration.provider,
-                warnings=[], task_snapshot=run.model_dump(mode="json"), thread_id=run.id,
+                task_snapshot=run.model_dump(mode="json"),
                 created_at=run.created_at, updated_at=run.updated_at,
                 retention_until=utcnow() + timedelta(days=settings.repoguardian_retention_days)
             ).on_conflict_do_nothing(index_elements=["id"]))
@@ -360,3 +361,137 @@ class ReviewStore:
                 WorkerJobOrm.kind == "review", WorkerJobOrm.status.in_(["queued", "retry", "leased"]))
                 .values(status="cancelled", lease_owner=None, lease_until=None))
             return True
+
+    def list_runs(self, *, status=None, page=1, page_size=20, q=None, repository=None,
+                  pr_number=None, head_sha=None):
+        filters = [ReviewTaskOrm.deleted_at.is_(None)]
+        for column, value in ((ReviewTaskOrm.status, status), (ReviewTaskOrm.repository, repository),
+                              (ReviewTaskOrm.pr_number, pr_number), (ReviewTaskOrm.head_sha, head_sha)):
+            if value is not None:
+                filters.append(column == value)
+        with self.sessions() as session:
+            runs = [self._run(row) for row in session.scalars(select(ReviewTaskOrm).where(*filters)
+                    .order_by(ReviewTaskOrm.created_at.desc()))]
+        if q:
+            runs = [run for run in runs if q.casefold() in
+                    " ".join((run.id, run.pr.title, run.snapshot.repository, run.pr_url)).casefold()]
+        start = (page - 1) * page_size
+        return {"items": runs[start:start + page_size], "total": len(runs), "page": page, "page_size": page_size}
+
+    def dispositions(self, run_id):
+        with self.sessions() as session:
+            return {row.finding_id: row.payload for row in session.scalars(
+                select(FindingDispositionOrm).where(FindingDispositionOrm.task_id == run_id))}
+
+    def save_disposition(self, run_id, finding_id, value):
+        with self.sessions.begin() as session:
+            if not lock_live_review(session, run_id):
+                raise KeyError(run_id)
+            run = self._run(session.get(ReviewTaskOrm, run_id))
+            if run.status not in TERMINAL:
+                raise ValueError("review_not_terminal")
+            session.merge(FindingDispositionOrm(task_id=run_id, finding_id=finding_id,
+                                                payload=value, updated_at=utcnow()))
+
+    def _publication_pending(self, session, run_id):
+        return session.scalar(select(PublicationAttemptOrm.id).where(
+            PublicationAttemptOrm.review_id == run_id,
+            or_(PublicationAttemptOrm.state.in_(["queued", "preparing", "publishing", "uncertain"]),
+                PublicationAttemptOrm.id.in_(select(GitHubSummarySlotOrm.pending_publication_id)))))
+
+    def retry(self, run_id, *, overview=False):
+        with self.sessions.begin() as session:
+            if not lock_live_review(session, run_id):
+                raise KeyError(run_id)
+            row = session.get(ReviewTaskOrm, run_id)
+            run = self._run(row)
+            allowed = {"completed", "partial", "failed"} if overview else {"partial", "failed"}
+            if run.status not in allowed or utcnow() >= run.hard_deadline:
+                raise ValueError("review_retry_unavailable")
+            if session.scalar(select(WorkerJobOrm.id).where(WorkerJobOrm.task_id == run_id,
+                WorkerJobOrm.status.in_(["queued", "retry", "leased"]))):
+                raise ValueError("review_job_active")
+            if self._publication_pending(session, run_id):
+                raise ValueError("review_publication_pending")
+            limits, usage = run.configuration.options.limits, self._usage(session, run_id)[1]
+            if (usage["model_calls"] >= limits.total_model_calls
+                    or usage["committed_input_tokens"] + OVERVIEW_INPUT > limits.total_input_tokens):
+                raise ValueError("review_budget_exhausted")
+            if overview:
+                if run.report is None or not run.plan.units:
+                    raise ValueError("overview_facts_missing")
+                run.report.overview = type(run.report.overview)()
+            else:
+                for item in session.scalars(select(ReviewWorkItemOrm).where(ReviewWorkItemOrm.run_id == run_id)):
+                    work = WorkItem.model_validate(item.payload)
+                    if work.status != "completed":
+                        work.status, work.error_code = "queued", None
+                        item.payload = work.model_dump(mode="json")
+            run.status, run.phase, run.completed_at = "queued", "overview" if overview else "review", None
+            self._save(row, run)
+            from app.services.review.task_queue import DatabaseTaskQueue
+            DatabaseTaskQueue(self.sessions).enqueue(task_id=run_id, kind="overview" if overview else "review",
+                idempotency_key=f"retry:{run_id}:{uuid4().hex}", session=session)
+
+    def save_discussions(self, run_id, uri, lease):
+        with self.sessions.begin() as session:
+            row = self._guard(session, run_id, lease)
+            run = self._run(row)
+            run.discussion_uri = uri
+            self._save(row, run)
+
+    def fail_run(self, run_id, code, lease):
+        from app.review.report import build_report
+        run = self.get(run_id)
+        report = build_report(run, self.work_items(run_id), self.candidates(run_id), self.usage(run_id))
+        report.status = "partial" if report.candidates else "failed"
+        report.reasons.append(code)
+        report.overview.status, report.overview.error_code = "failed", code
+        self.save_report(run_id, report, lease, finished=True)
+
+    def delete_task(self, run_id, *, require_retention=False):
+        with self.sessions.begin() as session:
+            if not lock_live_review(session, run_id):
+                row = session.get(ReviewTaskOrm, run_id)
+                return bool(row and row.deleted_at)
+            row = session.get(ReviewTaskOrm, run_id)
+            if row.status not in TERMINAL:
+                raise ValueError("review_not_terminal")
+            if require_retention and as_utc(row.retention_until) > utcnow():
+                return False
+            if self._publication_pending(session, run_id):
+                if require_retention:
+                    return False
+                raise ValueError("review_publication_pending")
+            if session.scalar(select(WorkerJobOrm.id).where(WorkerJobOrm.task_id == run_id,
+                WorkerJobOrm.status.in_(["queued", "retry", "leased"]))):
+                if require_retention:
+                    return False
+                raise ValueError("review_job_active")
+            row.deleted_at, row.updated_at = utcnow(), utcnow()
+            return True
+
+    def list_expired_task_ids(self):
+        with self.sessions() as session:
+            return list(session.scalars(select(ReviewTaskOrm.id).where(
+                ReviewTaskOrm.deleted_at.is_(None), ReviewTaskOrm.status.in_(TERMINAL),
+                ReviewTaskOrm.retention_until <= utcnow()).limit(1000)))
+
+    def claim_webhook_delivery(self, *, delivery_id, repository, pr_number, head_sha):
+        with self.sessions.begin() as session:
+            result = session.execute(insert(IncrementalWebhookDeliveryOrm).values(
+                delivery_id=delivery_id, repository=repository, pr_number=pr_number,
+                head_sha=head_sha, status="accepted").on_conflict_do_nothing(index_elements=["delivery_id"]))
+            return result.rowcount == 1
+
+    def finish_webhook_delivery(self, delivery_id, *, status, task_id=None, reason=None):
+        with self.sessions.begin() as session:
+            row = session.get(IncrementalWebhookDeliveryOrm, delivery_id)
+            if row:
+                row.status, row.task_id, row.reason, row.updated_at = status, task_id, reason, utcnow()
+
+    def get_webhook_delivery(self, delivery_id):
+        with self.sessions() as session:
+            row = session.get(IncrementalWebhookDeliveryOrm, delivery_id)
+            return {key: getattr(row, key) for key in ("delivery_id", "repository", "pr_number",
+                    "head_sha", "status", "task_id", "reason")} if row else None

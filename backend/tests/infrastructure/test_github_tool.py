@@ -23,7 +23,7 @@ async def test_fetch_pr_preserves_body(monkeypatch: pytest.MonkeyPatch) -> None:
         "base": {
             "ref": "main",
             "sha": "a" * 40,
-            "repo": {"clone_url": "https://github.com/openai/codex.git"},
+            "repo": {"id": 123, "clone_url": "https://github.com/openai/codex.git"},
         },
         "head": {
             "ref": "fix",
@@ -59,6 +59,7 @@ async def test_fetch_pr_preserves_body(monkeypatch: pytest.MonkeyPatch) -> None:
     pr = await GitHubTool().fetch_pr("https://github.com/openai/codex/pull/12")
 
     assert pr.body == "This PR fixes interval handling."
+    assert pr.repository_id == 123
 
 
 def mocked_github(monkeypatch, handler):

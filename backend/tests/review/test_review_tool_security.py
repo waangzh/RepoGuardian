@@ -57,12 +57,9 @@ async def test_code_search_and_indexer_fail_closed_for_sensitive_files(tmp_path:
     index = await RepoIndexer().build_file_index(str(repo))
     assert {item["path"] for item in index} == {"safe.py"}
 
-    from app.review.context import AgentContext
-    from app.review.tools import search_code
-    from langchain.tools import ToolRuntime
+    from app.review.retrieval import search
     from types import SimpleNamespace
     evidence = SimpleNamespace(allowed_paths=frozenset({".env"}), _source=lambda *args: (_ for _ in ()).throw(ValueError("sensitive_path")))
-    runtime = ToolRuntime(state={}, context=AgentContext(evidence=evidence), config={},
-                          stream_writer=lambda *_: None, tool_call_id="test", store=None)
-    result = await search_code.coroutine(query="TOKEN", path=".env", runtime=runtime)
-    assert not result["ok"] and result["error"] == "read_rejected"
+    context = SimpleNamespace(evidence=evidence, denied_paths=frozenset(), cursors={}, check_active=None)
+    with pytest.raises(ValueError, match="path_not_authorized"):
+        await search(context, "TOKEN", path=".env")

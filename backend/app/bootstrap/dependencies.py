@@ -8,13 +8,10 @@ from fastapi import FastAPI
 
 from app.core.config import settings
 from app.llm.providers import build_provider
-from app.services.preview.preview_jobs import PreviewJobs
 from app.services.publication.publication_repository import PublicationRepository
 from app.services.publication.publication_service import PublicationService
-from app.services.review.review_repository import ReviewRepository
+from app.review.store import ReviewStore
 from app.services.review.review_service import ReviewService
-from app.services.review.task_queue import DatabaseTaskQueue
-from app.services.review.report_service import ReportService
 from app.services.workspaces.maintenance_service import MaintenanceService
 from app.tools.diff_parser import DiffParser
 from app.tools.git_tool import GitTool
@@ -25,6 +22,9 @@ from app.tools.github.github_tool import GitHubTool
 @lru_cache
 def get_review_service() -> ReviewService:
     """获取全局单例 ReviewService（惰性初始化，含所有依赖注入）。"""
+    from app.core.database import schema_is_current
+    if not schema_is_current():
+        raise RuntimeError("database_schema_outdated: initialize a fresh vNext database with Alembic")
     return ReviewService(
         github_tool=GitHubTool(settings.github_token),
         git_tool=GitTool(settings.repoguardian_workdir, settings.repoguardian_git_bin),
@@ -35,15 +35,8 @@ def get_review_service() -> ReviewService:
             settings.openai_base_url,
             settings.repoguardian_model,
         ),
-        report_service=ReportService(),
-        repository=ReviewRepository(),
-        task_queue=DatabaseTaskQueue(),
+        store=ReviewStore(),
     )
-
-
-@lru_cache
-def get_preview_jobs() -> PreviewJobs:
-    return PreviewJobs(get_review_service())
 
 
 @lru_cache
@@ -56,7 +49,6 @@ def get_publication_service() -> PublicationService:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    from app.review.checkpointer import close_checkpointer
     from app.languages.isolation import close_parser_workers
 
     service = get_review_service()
@@ -66,19 +58,15 @@ async def lifespan(_app: FastAPI):
     await maintenance.run_once()
     maintenance_task = asyncio.create_task(maintenance.run_forever())
     service.start_worker()
-    previews = get_preview_jobs()
-    previews.start()
     publication = get_publication_service() if settings.repoguardian_github_publish_enabled else None
     if publication:
         publication.start()
     try:
         yield
     finally:
-        await previews.close()
         if publication:
             await publication.close()
         maintenance.stop()
         await maintenance_task
         await service.close()
         await asyncio.to_thread(close_parser_workers)
-        await close_checkpointer()

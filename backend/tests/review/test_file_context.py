@@ -5,12 +5,13 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app.models.review_plan import PlanSnapshot
+from app.review.domain import Snapshot
 from app.services.review.evidence.file_context import FileContextError, load_file_context
 
 
 def task(path="src/new.py", old="src/old.py", change="renamed"):
-    return SimpleNamespace(snapshot=PlanSnapshot(head_sha="a" * 40, effective_base_sha="b" * 40,
+    return SimpleNamespace(snapshot=Snapshot(review_id="review", repository="base/repo",
+        repository_id=1, pr_number=1, head_sha="a" * 40, base_sha="b" * 40,
         declared_base_sha="c" * 40), pr=SimpleNamespace(
         base=SimpleNamespace(repo_clone_url="https://github.com/base/repo.git"),
         head=SimpleNamespace(repo_clone_url="https://github.com/fork/repo.git")),
@@ -115,7 +116,7 @@ async def test_upstream_failure_is_not_empty_success(status):
 async def test_context_route_serialization_and_failure_status(monkeypatch):
     from fastapi import FastAPI
     from app.api import reviews
-    from app.models.review_plan import FileContextResponse
+    from app.models.file_view import FileContextResponse
 
     value = task()
     monkeypatch.setattr(reviews, "get_review_service", lambda: SimpleNamespace(
@@ -132,7 +133,7 @@ async def test_context_route_serialization_and_failure_status(monkeypatch):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/reviews/saved/files/0/context")
         assert response.status_code == 200
-        assert response.json()["snapshot"]["effective_base_sha"] == "b" * 40
+        assert response.json()["snapshot"]["base_sha"] == "b" * 40
         assert response.json()["base_lines"] == ["old"]
         assert (await client.get("/api/reviews/saved/files/-1/context")).status_code == 404
         assert (await client.get("/api/reviews/missing/files/0/context")).status_code == 404

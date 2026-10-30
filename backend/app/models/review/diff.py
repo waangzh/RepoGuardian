@@ -31,6 +31,7 @@ class PullRequestInfo(BaseModel):
     body: str | None = Field(default=None, max_length=65_536)
     html_url: str
     clone_url: str
+    repository_id: int | None = Field(default=None, gt=0)
     base: PullRequestRef
     head: PullRequestRef
 

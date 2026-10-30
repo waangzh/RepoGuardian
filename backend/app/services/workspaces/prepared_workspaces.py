@@ -17,7 +17,7 @@ from app.core.config import settings
 from app.core.fingerprints import stable_hash
 from app.languages.isolation import parser_fingerprint
 from app.models.orm import PreparedWorkspaceOrm, utcnow
-from app.services.preview.preview_jobs import as_utc
+from app.review.store import as_utc
 from app.tools.git_tool import (
     DIFF_CONTEXT_LINES, DIFF_POLICY_VERSION, GitToolCancelled, GitToolError,
 )
@@ -45,7 +45,7 @@ def _is_link(path: Path) -> bool:
 
 class PreparedWorkspaces:
     def __init__(self, repository, workdir=None):
-        self.sessions = repository._session_factory
+        self.sessions = repository.sessions
         self.root = Path(workdir if workdir is not None else settings.repoguardian_workdir).resolve()
 
     @contextmanager

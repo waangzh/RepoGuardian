@@ -47,14 +47,14 @@ class PublicationRepository:
         selected = selection.model_dump(mode="json")
         selected["finding_keys"] = sorted(set(selected["finding_keys"]))
         plan_hash, selection_hash = stable_hash(plan.model_dump(mode="json")), stable_hash(selected)
-        logical = stable_hash([plan.review_id, context["publisher_identity"], plan_hash, selection_hash])
+        logical = stable_hash([plan.review_id, plan.report_version, context["publisher_identity"], plan_hash, selection_hash])
         request_key = stable_hash([context["publisher_identity"], key])
         identity = uuid4().hex
         with self.sessions.begin() as session:
             if not lock_live_review(session, plan.review_id):
                 raise PublicationConflict("review_unavailable")
             review = session.get(ReviewTaskOrm, plan.review_id)
-            if review.status not in {"completed", "completed_with_warnings"}:
+            if review.status not in {"completed", "partial"}:
                 raise PublicationConflict("review_not_publishable")
             # 先 INSERT，避免 SQLite read→write 升级竞争；唯一键处理并发重复请求。
             session.execute(insert(Attempt).values(id=identity, review_id=plan.review_id,
@@ -93,7 +93,7 @@ class PublicationRepository:
     def existing_request(self, review_id, selection, publisher_identity, key):
         selected = selection.model_dump(mode="json")
         selected["finding_keys"] = sorted(set(selected["finding_keys"]))
-        logical = stable_hash([review_id, publisher_identity, selection.expected_plan_hash, stable_hash(selected)])
+        logical = stable_hash([review_id, selection.expected_report_version, publisher_identity, selection.expected_plan_hash, stable_hash(selected)])
         with self.sessions() as session:
             request = session.get(RequestKey, stable_hash([publisher_identity, key]))
             if request is None:
@@ -120,7 +120,7 @@ class PublicationRepository:
         now = utcnow()
         with self.sessions.begin() as session:
             review = session.get(ReviewTaskOrm, attempt.review_id)
-            if review is None or review.status not in {"completed", "completed_with_warnings"}:
+            if review is None or review.status not in {"completed", "partial"}:
                 raise PublicationConflict("review_not_publishable")
             session.execute(insert(Slot).values(id=slot_id, repository_id=attempt.repository_id,
                 pr_number=attempt.pr_number, publisher_identity=attempt.publisher_identity).on_conflict_do_nothing())
@@ -148,7 +148,7 @@ class PublicationRepository:
                 raise PublicationLeaseLost("publication_lease_lost")
             if lease.review_id is not None:
                 review = session.get(ReviewTaskOrm, lease.review_id)
-                if review is None or review.status not in {"completed", "completed_with_warnings"}:
+                if review is None or review.status not in {"completed", "partial"}:
                     raise PublicationLeaseLost("review_not_publishable")
             yield session
 
@@ -226,7 +226,7 @@ class PublicationRepository:
                 raise PublicationConflict("publication_busy")
             row = session.get(Attempt, identity)
             review = session.get(ReviewTaskOrm, row.review_id)
-            if review.status not in {"completed", "completed_with_warnings"}:
+            if review.status not in {"completed", "partial"}:
                 raise PublicationConflict("review_not_publishable")
             if row.state not in {"failed", "partial", "uncertain"}:
                 raise PublicationConflict("publication_not_retryable")

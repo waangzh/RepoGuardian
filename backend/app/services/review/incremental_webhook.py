@@ -15,8 +15,7 @@ import re
 
 from app.core.config import settings
 from app.models.incremental import IncrementalWebhookReceipt
-from app.review.contracts import ReviewCreateRequest, ReviewPreviewRequest
-from app.models.review_plan import ReviewPlanOptions
+from app.review.contracts import ReviewRequest
 
 
 def verify_signature(body: bytes, signature: str | None) -> bool:
@@ -110,7 +109,7 @@ class IncrementalWebhookService:
                                              reason=existing.get("reason"),
                                              task_id=existing.get("task_id"))
         try:
-            task = await self._create(parsed)
+            task = await self._create(parsed, delivery_id)
         except ValueError as exc:
             reason = ("webhook_snapshot_changed" if str(exc) == "webhook_snapshot_changed"
                       else "review_creation_rejected")
@@ -144,20 +143,11 @@ class IncrementalWebhookService:
         await asyncio.to_thread(self.repository.finish_webhook_delivery, delivery_id,
                                 status=status, task_id=task_id, reason=reason)
 
-    async def _create(self, parsed: dict):
+    async def _create(self, parsed: dict, delivery_id: str):
         service = self.review_service
         pr_url = parsed["pr_url"]
         if not isinstance(pr_url, str) or not pr_url.startswith("https://github.com/"):
             raise ValueError("unsupported_pr_url")
-        # 复用同一套“预览 → 确认”流程，确保方案、快照与增量绑定一起冻结。
-        preview = await service.preview(ReviewPreviewRequest(
-            pr_url=pr_url,
-            plan=ReviewPlanOptions(depth="standard")))
-        if (preview.snapshot.head_sha != parsed["head_sha"]
-                or preview.snapshot.declared_base_sha != parsed["base_sha"]):
-            raise ValueError("webhook_snapshot_changed")
-        request = ReviewCreateRequest(
-            pr_url=pr_url, preview_id=preview.preview_id,
-            expected_head_sha=preview.snapshot.head_sha,
-            expected_effective_base_sha=preview.snapshot.effective_base_sha)
-        return await service.create_confirmed_task(request)
+        return await service.create(ReviewRequest(pr_url=pr_url),
+            f"webhook:{delivery_id}", caller_id="github-webhook",
+            expected_snapshot=(parsed["base_sha"], parsed["head_sha"]))

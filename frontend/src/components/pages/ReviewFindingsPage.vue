@@ -1,76 +1,165 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
-import { setFindingDisposition } from '../../api/client';
-import type { ReviewTask, ReviewLimitation } from '../../types/review';
-import type { FindingDisposition, FindingView } from '../../types/reviewPlan';
+import { updateFindingDisposition } from '../../api/client';
+import type { Candidate, Finding, FindingDisposition, FindingDispositions, Run } from '../../types/review';
 import { terminal } from '../../utils/nativeReview';
 import AppIcon from '../common/AppIcon.vue';
 import EmptyState from '../common/EmptyState.vue';
 import StatusBadge from '../common/StatusBadge.vue';
-import ReviewDiff from '../review/diff/ReviewDiff.vue';
-const props = defineProps<{ task: ReviewTask; findings: FindingView[]; limitations: ReviewLimitation[]; focusKey?: string; initialFilter?: string; loading?: boolean }>();
-const emit = defineEmits<{ updated: [items: FindingView[]]; file: [path: string] }>();
-const filter = ref(props.initialFilter || 'all'), severity = ref('all'), query = ref(''), selection = ref(props.focusKey || '');
-const reason = ref(''), status = ref<FindingDisposition['status']>('confirmed'), saving = ref(false), error = ref('');
+
+const props = defineProps<{
+  task: Run;
+  findings: Finding[];
+  candidates: Candidate[];
+  dispositions: FindingDispositions;
+  loading?: boolean;
+}>();
+const emit = defineEmits<{ 'update:dispositions': [value: FindingDispositions] }>();
+
+const query = ref('');
+const selected = ref('');
+const status = ref<FindingDisposition['status']>('open');
+const note = ref('');
+const saving = ref(false);
+const error = ref('');
 let generation = 0;
-onBeforeUnmount(() => { generation++; });
-watch(() => props.task.id, () => { generation++; selection.value = ''; reason.value = ''; error.value = ''; saving.value = false; });
-watch(() => props.focusKey, key => { if (key) { selection.value = key; filter.value = 'all'; severity.value = 'all'; query.value = ''; } });
-watch(() => props.initialFilter, value => { filter.value = value || 'all'; });
-const visible = computed(() => props.findings.filter(item => {
-  const state = filter.value === 'all' || (filter.value === 'unresolved'
-    ? ['candidate','unresolved','unknown'].includes(item.review_status) : item.review_status === filter.value);
-  return state && (severity.value === 'all' || item.severity === severity.value)
-    && `${item.title ?? ''} ${item.location?.path ?? ''}`.toLowerCase().includes(query.value.toLowerCase());
-}));
-const selected = computed(() => visible.value.find(item => item.id === selection.value) || visible.value[0]);
-const verification = computed(() => props.task.review_report?.decisions.find(item => item.candidate_id === selected.value?.id));
-const openLimitations = computed(() => props.limitations.filter(item => ['pending','reported','unresolved'].includes(item.status)));
-const fileIndex = computed(() => props.task.changed_files.findIndex(file => file.file_path === selected.value?.location?.path));
-const attribution = { introduced:'本次 PR 引入', exposed:'本次 PR 暴露或扩大影响', pre_existing:'既有问题（非本次新增）', uncertain:'归因尚未确定' };
-watch(() => selected.value?.id, () => { reason.value = ''; error.value = ''; });
-async function save() {
-  const item = selected.value;
-  if (!item || !reason.value.trim() || saving.value || !terminal(props.task.status)) return;
-  const owner = generation; saving.value = true; error.value = '';
+
+const visible = computed(() => props.findings.filter(item => (
+  item.claim + ' ' + (item.location?.path || '')
+).toLowerCase().includes(query.value.toLowerCase())));
+const current = computed(() => visible.value.find(item => item.id === selected.value) || visible.value[0]);
+const currentDisposition = computed(() => current.value ? props.dispositions[current.value.id] : undefined);
+const canSave = computed(() => Boolean(current.value) && terminal(props.task.status) && !saving.value);
+
+const attribution = {
+  introduced: '本次 PR 引入',
+  exposed: '本次 PR 暴露或扩大影响',
+  pre_existing: '既有问题（非本次新增）',
+  uncertain: '归因尚未确定',
+};
+
+function resetDispositionForm() {
+  const disposition = currentDisposition.value;
+  status.value = disposition?.status ?? 'open';
+  note.value = disposition?.note ?? '';
+  error.value = '';
+}
+
+watch(() => props.task.id, () => {
+  generation += 1;
+  selected.value = '';
+  saving.value = false;
+  resetDispositionForm();
+});
+watch(() => current.value?.id, resetDispositionForm);
+onBeforeUnmount(() => { generation += 1; });
+
+async function saveDisposition() {
+  const finding = current.value;
+  if (!finding || !canSave.value) return;
+
+  const owner = generation;
+  saving.value = true;
+  error.value = '';
   try {
-    const result = await setFindingDisposition(props.task.id,item.id,{status:status.value,reason:reason.value.trim()});
-    if (owner === generation) { emit('updated',result.items); if (selected.value?.id === item.id) reason.value = ''; }
-  } catch (cause) { if (owner === generation && selected.value?.id === item.id) error.value = cause instanceof Error ? cause.message : '保存注记失败'; }
-  finally { if (owner === generation) saving.value = false; }
+    const result = await updateFindingDisposition(props.task.id, finding.id, {
+      status: status.value,
+      note: note.value.trim() || null,
+    });
+    if (owner === generation && current.value?.id === finding.id) {
+      emit('update:dispositions', result.dispositions);
+    }
+  } catch (cause) {
+    if (owner === generation && current.value?.id === finding.id) {
+      error.value = cause instanceof Error ? cause.message : '保存人工注记失败';
+    }
+  } finally {
+    if (owner === generation) saving.value = false;
+  }
 }
 </script>
+
 <template>
-  <div class="page-head"><div><h2>问题与证据</h2><p class="title-sub">候选、核验结论与人工处理分别记录；人工注记不改变发布资格。</p></div><span class="badge neutral">{{ findings.length }} 条记录</span></div>
-  <section v-if="openLimitations.length" class="card card-pad space-bottom">
-    <h3>审查待核实事项</h3><p class="muted small">这些事项独立于代码缺陷计数；主审说明不代表已确认问题，请结合影响范围判断是否需要人工补查。</p>
-    <article v-for="item in openLimitations" :key="item.id" class="plan-file">
-      <span class="badge neutral">{{ item.status === 'reported' ? (item.source === 'verification' ? '候选核验证据缺口' : '主审局部证据缺口') : item.status === 'pending' ? '历史未评估声明' : '必要证据缺口' }}</span>
-      <p>{{ item.text }}</p>
-      <p v-if="item.gap?.goal_ids.some(id => !item.goal_ids.includes(id))" class="small">部分关联目标未通过范围校验。</p>
-      <p v-if="item.gap?.dependent_conclusion || item.assessment?.dependent_conclusion" class="small">影响的结论：{{ item.gap?.dependent_conclusion || item.assessment?.dependent_conclusion }}</p>
-      <p v-if="item.gap?.change_relevance || item.assessment?.change_relevance" class="small">与本次变更的关联：{{ item.gap?.change_relevance || item.assessment?.change_relevance }}</p>
-      <p v-if="item.gap?.next_check || item.assessment?.next_check" class="small">需要补查：{{ item.gap?.next_check || item.assessment?.next_check }}</p>
-    </article>
-  </section>
-  <div class="workspace-toolbar rg-finding-filters"><input v-model="query" class="input" placeholder="搜索问题或文件" aria-label="搜索问题" /><select v-model="filter" class="select" aria-label="核验状态"><option value="all">全部核验状态</option><option value="confirmed">已确认</option><option value="unresolved">待核实</option><option value="dismissed">已排除</option></select><select v-model="severity" class="select" aria-label="风险等级"><option value="all">全部风险等级</option><option value="critical">严重</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select></div>
+  <div class="page-head">
+    <div>
+      <h2>问题与证据</h2>
+      <p class="title-sub">仅展示通过准入的 Finding；候选和证据不足保持独立可见。</p>
+    </div>
+    <span class="badge neutral">{{ findings.length }} 条 Finding</span>
+  </div>
+
+  <div class="workspace-toolbar rg-finding-filters">
+    <input v-model="query" class="input" placeholder="搜索问题或文件" aria-label="搜索问题" />
+    <span class="muted small">候选 {{ candidates.length }} 条</span>
+  </div>
+
   <p v-if="loading" class="muted space-top" role="status">正在读取问题记录…</p>
-  <EmptyState v-else-if="!visible.length" icon="shield" title="没有匹配的问题记录" :description="openLimitations.length ? '尚无匹配的代码缺陷记录；仍需处理上方的审查待核实事项。' : '可以调整筛选条件；未发现问题不能证明源码范围已经完整检查。'" />
+  <EmptyState
+    v-else-if="!visible.length"
+    icon="shield"
+    title="没有匹配的已准入问题"
+    :description="candidates.length ? '仍有候选或证据不足项，不能据此推断不存在缺陷。' : '未发现问题不能证明审查范围完整。'"
+  />
+
   <div v-else class="rg-restored-findings space-top">
-    <aside class="card card-pad rg-findings-list"><button v-for="item in visible" :key="item.id" class="rg-finding-row" :class="{ active: selected?.id === item.id }" @click="selection = item.id"><span class="rg-inline-badges"><StatusBadge :status="item.severity || 'unknown'" /><StatusBadge :status="item.review_status" /></span><strong>{{ item.title || '未命名候选' }}</strong><code>{{ item.location?.path || '位置尚未确定' }}</code></button></aside>
-    <article v-if="selected" class="section-stack">
-      <section class="card card-pad"><div class="card-header"><h2>{{ selected.title || '候选问题' }}</h2><StatusBadge :status="selected.evidence_status" /></div><p v-if="selected.location" class="small"><button class="link" @click="$emit('file',selected.location.path)">{{ selected.location.path }}:{{ selected.location.start_line }}</button> · {{ selected.location.side === 'left' ? 'BASE' : 'HEAD' }}</p>
-        <p v-if="selected.author_body" class="rg-preserve-lines">{{ selected.author_body }}</p>
-        <dl v-else class="rg-finding-facts"><div><dt>问题与触发</dt><dd>{{ selected.message || '未记录' }}</dd></div><div><dt>影响</dt><dd>{{ selected.impact || '未记录' }}</dd></div><div><dt>建议</dt><dd>{{ selected.recommendation || '未记录' }}</dd></div></dl>
-        <p class="small">变更归因：{{ attribution[selected.attribution] }}</p>
-        <details class="space-top"><summary class="link">独立核验理由</summary><p class="rg-preserve-lines">{{ selected.verification_reason || verification?.explanation || '尚无完整核验说明' }}</p></details>
-        <ul v-if="selected.limitations.length" class="rg-limitations"><li v-for="limit in selected.limitations" :key="limit">{{ limit }}</li></ul>
-        <details v-if="verification?.boundary_notes?.length" class="space-top"><summary class="link">一般验证边界</summary><ul><li v-for="note in verification.boundary_notes" :key="note">{{ note }}</li></ul><p class="muted small">这些边界不等同于影响当前裁决的必要证据缺口。</p></details>
-        <details class="space-top"><summary class="link">证据与反证引用</summary><h3 class="space-top">支持证据</h3><code v-for="id in verification?.evidence_ids || []" :key="id" class="rg-evidence-id">{{ id }}</code><p v-if="!verification?.evidence_ids.length" class="muted small">未记录支持证据。</p><h3 class="space-top">反证</h3><code v-for="id in verification?.counterevidence_ids || []" :key="id" class="rg-evidence-id">{{ id }}</code><p v-if="!verification?.counterevidence_ids.length" class="muted small">未记录独立反证，不能据此推断不存在反证。</p></details>
+    <aside class="card card-pad rg-findings-list">
+      <button v-for="item in visible" :key="item.id" class="rg-finding-row" :class="{ active: current?.id === item.id }" @click="selected = item.id">
+        <span class="rg-inline-badges"><StatusBadge :status="item.severity" /></span>
+        <strong>{{ item.claim }}</strong>
+        <code>{{ item.location?.path || '位置尚未确定' }}</code>
+      </button>
+    </aside>
+
+    <article v-if="current" class="section-stack">
+      <section class="card card-pad">
+        <div class="card-header">
+          <h2>{{ current.claim }}</h2>
+          <StatusBadge :status="current.severity" />
+        </div>
+        <p v-if="current.location" class="small">
+          <code>{{ current.location.path }}:{{ current.location.line }}</code>
+          · {{ current.location.side === 'base' ? 'BASE' : 'HEAD' }}
+        </p>
+        <dl class="rg-finding-facts">
+          <div><dt>触发条件</dt><dd>{{ current.trigger }}</dd></div>
+          <div><dt>影响</dt><dd>{{ current.impact }}</dd></div>
+          <div><dt>审查意见</dt><dd class="rg-preserve-lines">{{ current.author_comment }}</dd></div>
+        </dl>
+        <p class="small">变更归因：{{ attribution[current.attribution] }}</p>
+        <details class="space-top">
+          <summary class="link">来源证据</summary>
+          <code v-for="source in current.sources" :key="source.id" class="rg-evidence-id">{{ source.side.toUpperCase() }} · {{ source.path }}:{{ source.start_line }}–{{ source.end_line }} · {{ source.id }}</code>
+        </details>
+        <p v-if="!current.publishable" class="notice small">该 Finding 不具备发布资格，发布面板会按服务端计划进一步校验。</p>
       </section>
-      <ReviewDiff v-if="fileIndex >= 0" :key="`${task.id}-${selected.id}`" :file="task.changed_files[fileIndex]!" :file-id="fileIndex" :task-id="task.id" :snapshot="task.snapshot" :highlight-line="selected.location?.start_line" :highlight-side="selected.location?.side" />
-      <section class="card card-pad"><div class="card-header"><h3>人工处理</h3><AppIcon name="shield" /></div><p v-if="selected.disposition" class="notice small">已保存：{{ {open:'重新打开',confirmed:'人工确认',ignored:'忽略',resolved:'已处理'}[selected.disposition.status] }} · {{ selected.disposition.reason }}</p>
-        <form class="section-stack" @submit.prevent="save"><label class="field-label">处理状态<select v-model="status" class="select" :disabled="saving"><option value="confirmed">人工确认</option><option value="ignored">忽略</option><option value="resolved">已处理</option><option value="open">重新打开</option></select></label><label class="field-label">处理原因<textarea v-model="reason" class="textarea" rows="3" required maxlength="2000" :disabled="saving" /></label><p v-if="error" class="input-error" role="alert">{{ error }}</p><div><button class="btn primary" :disabled="!reason.trim() || saving || !terminal(task.status)">{{ saving ? '保存中…' : '保存人工注记' }}</button></div></form>
+
+      <section class="card card-pad">
+        <div class="card-header">
+          <h3>人工注记</h3>
+          <AppIcon name="shield" />
+        </div>
+        <p class="muted small">人工状态与机器 Finding、证据判定及发布准入分离保存，不会隐藏或改写机器结论。</p>
+        <p v-if="currentDisposition" class="notice small">
+          当前状态：{{ { open: '打开', resolved: '已处理', dismissed: '已忽略' }[currentDisposition.status] }}
+          <template v-if="currentDisposition.note"> · {{ currentDisposition.note }}</template>
+        </p>
+        <form class="section-stack" @submit.prevent="saveDisposition">
+          <label class="field-label">
+            人工状态
+            <select v-model="status" class="select" :disabled="!terminal(task.status) || saving">
+              <option value="open">打开</option>
+              <option value="resolved">已处理</option>
+              <option value="dismissed">已忽略</option>
+            </select>
+          </label>
+          <label class="field-label">
+            处理注记
+            <textarea v-model="note" class="textarea" rows="3" maxlength="2000" :disabled="!terminal(task.status) || saving" />
+          </label>
+          <p v-if="!terminal(task.status)" class="muted small">仅终态审查允许保存人工注记。</p>
+          <p v-if="error" class="input-error" role="alert">{{ error }}</p>
+          <div><button class="btn primary" :disabled="!canSave">{{ saving ? '保存中…' : '保存人工注记' }}</button></div>
+        </form>
       </section>
     </article>
   </div>

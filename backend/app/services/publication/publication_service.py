@@ -47,10 +47,6 @@ class PublicationService:
             if item.finding_key in checked["finding_keys"]]
         checked["summary_markdown"] = compose_summary(checked["plan"], {"finding_keys": checked["finding_keys"]}, checked["fallback"],
             [SimpleNamespace(kind="inline", state="published") for _ in existing], "Prepared")
-        if checked["plan"].presentation is not None:
-            from app.services.publication.review_presentation import selected_presentation
-            checked["presentation"] = selected_presentation(checked["plan"], checked["finding_keys"],
-                checked["fallback"], already_published=len(existing))
         if len(checked["summary_markdown"].encode()) > 59_000:
             raise GitHubPublishError("publication_body_too_long")
         return checked
@@ -67,7 +63,9 @@ class PublicationService:
             self.authorize(existing)
             return existing
         checked = await self.checked(review_id, selection.finding_keys)
-        if checked["plan_hash"] != selection.expected_plan_hash or checked["head_sha"] != selection.expected_head_sha:
+        if (checked["plan_hash"] != selection.expected_plan_hash
+                or checked["report_version"] != selection.expected_report_version
+                or checked["head_sha"] != selection.expected_head_sha):
             raise PublicationConflict("publication_plan_changed")
         if checked["requires_partial_acknowledgement"] and not selection.acknowledge_partial_review:
             raise PublicationConflict("partial_acknowledgement_required")

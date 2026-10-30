@@ -1,18 +1,9 @@
-"""Freeze current user choices and bounded native agent limits."""
+"""Freeze user options within server resource policy, without role quotas."""
 
 from app.core.config import settings
-from app.models.review_plan import ReviewPlanOptions
-from app.review.contracts import ReviewConfiguration
-from app.review.models import ReviewLimits
+from app.review.domain import Configuration, Limits, Options
 
-DEPTHS = {
-    "quick": {"label": "快速初筛", "model_calls": 6, "strategy": "fast_pass",
-              "verification_share": 0.2},
-    "standard": {"label": "标准审查", "model_calls": 12, "strategy": "contextual_review",
-                 "verification_share": 0.35},
-    "deep": {"label": "深度核验", "model_calls": 20, "strategy": "deep_investigation",
-             "verification_share": 0.45},
-}
+DEPTHS = {"quick": ("快速初筛", 6), "standard": ("标准审查", 12), "deep": ("深度核验", 20)}
 
 
 def maxima():
@@ -24,58 +15,39 @@ def maxima():
         "output_tokens": settings.repoguardian_agent_output_tokens,
         "total_model_calls": settings.repoguardian_review_max_model_calls,
         "total_input_tokens": settings.repoguardian_review_max_input_tokens,
+        "total_output_tokens": settings.repoguardian_review_max_output_tokens,
+        "context_tokens": settings.repoguardian_model_context_tokens,
     }
 
 
 def default_limits(depth):
-    return {**maxima(), "model_calls": min(DEPTHS[depth]["model_calls"],
-                                           settings.repoguardian_agent_max_calls)}
+    return {**maxima(), "model_calls": min(DEPTHS[depth][1], settings.repoguardian_agent_max_calls)}
 
 
-def discovery_limits(limits, depth):
-    share = DEPTHS[depth]["verification_share"]
-    calls = min(max(2, round(limits.total_model_calls * share)),
-                max(0, limits.total_model_calls - 1))
-    tokens = min(max(2000, round(limits.total_input_tokens * share)),
-                 max(0, limits.total_input_tokens - 1000))
-    return limits.model_copy(update={
-        "total_model_calls": limits.total_model_calls - calls,
-        "total_input_tokens": limits.total_input_tokens - tokens,
-    })
+def freeze_configuration(request, provider):
+    if request.depth not in DEPTHS:
+        raise ValueError("unknown_review_depth")
+    if request.include_pr_discussions and not settings.repoguardian_pr_discussions_enabled:
+        raise ValueError("discussion_disabled")
+    maximum = maxima()
+    if any(key not in maximum or value > maximum[key] for key, value in request.limits.items()):
+        raise ValueError("review_limit_exceeds_server_policy")
+    limits = Limits.model_validate({**default_limits(request.depth), **request.limits})
+    options = Options(depth=request.depth, paths=request.paths, focus=request.focus, limits=limits,
+        include_pr_discussions=(settings.repoguardian_pr_discussions_enabled
+            if request.include_pr_discussions is None else request.include_pr_discussions))
+    return Configuration(provider=provider._provider_name, endpoint=provider._base_url,
+                         model=request.model or provider._default_model, options=options)
 
 
 def capabilities():
     return {
-        "depth_presets": [{"id": key, "label": value["label"], "strategy": value["strategy"],
-                           "limits": default_limits(key)} for key, value in DEPTHS.items()],
+        "depth_presets": [{"id": key, "label": value[0], "limits": default_limits(key)}
+                          for key, value in DEPTHS.items()],
         "focus_categories": ["correctness", "security", "performance", "compatibility"],
         "scope_selection_supported": True,
-        "context_boundary": "固定提交中的普通文件；拒绝敏感路径和符号链接逃逸",
+        "context_boundary": "固定提交的普通源码；不会执行目标仓库代码",
         "limits": {"defaults": default_limits("standard"), "maxima": maxima()},
         "pr_discussions_available": settings.repoguardian_pr_discussions_enabled,
         "pr_discussions_default": settings.repoguardian_pr_discussions_enabled,
     }
-
-
-def freeze_configuration(request, provider):
-    options = request.plan
-    include = options.include_pr_discussions
-    if include is True and not settings.repoguardian_pr_discussions_enabled:
-        raise ValueError("discussion_disabled")
-    if include is None:
-        include = settings.repoguardian_pr_discussions_enabled
-    limits = default_limits(options.depth)
-    for key, value in options.limits.model_dump().items():
-        if value is not None:
-            if value > maxima()[key]:
-                raise ValueError("review_limit_exceeds_server_policy")
-            limits[key] = value
-    limits = ReviewLimits.model_validate(limits)
-    options = ReviewPlanOptions.model_validate({
-        **options.model_dump(), "include_pr_discussions": include,
-        "limits": limits.model_dump(),
-    })
-    return ReviewConfiguration(
-        model=request.model or provider._default_model, provider=provider._provider_name,
-        endpoint=provider._base_url, options=options, limits=limits,
-    )

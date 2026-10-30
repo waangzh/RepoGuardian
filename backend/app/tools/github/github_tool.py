@@ -107,6 +107,7 @@ class GitHubTool:
             body=payload.get("body") or None,
             html_url=payload["html_url"],
             clone_url=base_repo["clone_url"],
+            repository_id=base_repo["id"],
             base=PullRequestRef(
                 ref=payload["base"]["ref"],
                 sha=payload["base"]["sha"],

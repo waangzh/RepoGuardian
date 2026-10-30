@@ -1,96 +1,246 @@
-import type { FileContext, ReviewCreateResponse, ReviewPreviewResponse, ReviewTask } from '../types/review';
-import type { ReviewCapabilities, ReviewPlanOptions, FindingView, FindingDisposition } from '../types/reviewPlan';
-import type { PreviewJob, PreviewRequest } from '../types/previewJob';
-import type { PublicationPlan, PublicationSelection, PublicationPreflightResult, PublicationAccepted, PublicationAttempt } from '../types/publication';
-import type { ModelCatalogResponse, ReviewTaskListResponse, SystemDiagnostics } from '../types/operations';
+import type {
+  Candidate,
+  FileContext,
+  Finding,
+  FindingDisposition,
+  FindingDispositions,
+  Report,
+  Run,
+  ReviewCreateRequest,
+  ReviewPreviewResponse,
+  WorkItem,
+} from '../types/review';
+import type { ReviewCapabilities } from '../types/reviewPlan';
+import type {
+  ModelCatalogResponse,
+  ReviewTaskListResponse,
+  SystemDiagnostics,
+} from '../types/operations';
+import type {
+  PublicationAccepted,
+  PublicationAttempt,
+  PublicationPlan,
+  PublicationPreflightResult,
+  PublicationSelection,
+} from '../types/publication';
 import { publicationErrorText } from '../utils/publicationPresentation';
+
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
+const retryableCreateStatuses = new Set([408, 429, 500, 502, 503, 504]);
+
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number | null) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+function apiPath(path: string) {
+  return API_BASE + path;
+}
+
+function reviewPath(id: string, suffix = '') {
+  return '/api/reviews/' + encodeURIComponent(id) + suffix;
+}
+
+function requestError(payload: unknown, status: number) {
+  const detail = (payload as { detail?: unknown } | null)?.detail;
+  const message = typeof detail === 'string'
+    ? detail
+    : typeof detail === 'object' && detail !== null
+      ? String((detail as { message?: string; code?: string }).message
+        ?? (detail as { code?: string }).code
+        ?? '请求失败 (' + status + ')')
+      : '请求失败 (' + status + ')';
+
+  return new ApiError(message, status);
+}
 
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(API_BASE + path, { ...init, headers: { 'Content-Type': 'application/json', ...init.headers } });
+  const response = await fetch(apiPath(path), {
+    ...init,
+    headers: { 'Content-Type': 'application/json', ...init.headers },
+  });
+
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
-    const detail = payload?.detail;
-    throw new Error(typeof detail === 'string' ? detail : detail?.message || detail?.code || `请求失败（${response.status}）`);
+    throw requestError(payload, response.status);
   }
+
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
-export const getReviewCapabilities = () => request<ReviewCapabilities>('/api/system/review-capabilities');
+
+export const getReviewCapabilities = () =>
+  request<ReviewCapabilities>('/api/system/review-capabilities');
 export const getAvailableModels = () => request<ModelCatalogResponse>('/api/system/models');
 export const getDiagnostics = () => request<SystemDiagnostics>('/api/system/diagnostics');
-export const updateSystemSettings = (value: {model_base_url: string; model_name: string; retention_days: number}) => request<SystemDiagnostics>('/api/system/settings', {method: 'PATCH', body: JSON.stringify(value)});
-export const getPublicationCapability = () => request<import('../types/operations').PublicationCapability>('/api/system/publication-capability');
-export const getReview = (id: string, signal?: AbortSignal) => request<ReviewTask>(`/api/reviews/${encodeURIComponent(id)}`, {signal});
+export const updateSystemSettings = (value: {
+  model_base_url: string;
+  model_name: string;
+  retention_days: number;
+}) => request<SystemDiagnostics>('/api/system/settings', {
+  method: 'PATCH',
+  body: JSON.stringify(value),
+});
+export const getPublicationCapability = () =>
+  request<import('../types/operations').PublicationCapability>('/api/system/publication-capability');
+export const getReview = (id: string, signal?: AbortSignal) =>
+  request<Run>(reviewPath(id), { signal });
+
 export function subscribeToReview(id: string, refresh: () => void) {
-  const stream = new EventSource(`${API_BASE}/api/reviews/${encodeURIComponent(id)}/stream`);
-  stream.addEventListener('step_progress', refresh);
-  stream.addEventListener('done', () => { refresh(); stream.close(); });
+  const stream = new EventSource(apiPath(reviewPath(id, '/events')));
+  for (const event of ['task', 'progress', 'done']) stream.addEventListener(event, refresh);
   stream.onerror = () => stream.close();
   return () => stream.close();
 }
-export const listReviews = (query: string, page: number, signal?: AbortSignal) => request<ReviewTaskListResponse>(`/api/reviews?q=${encodeURIComponent(query)}&page=${page}&page_size=20`, {signal});
-export const deleteReview = (id: string) => request<void>(`/api/reviews/${encodeURIComponent(id)}`, {method: 'DELETE'});
-export const cancelReview = (id: string) => request<{status: string}>(`/api/reviews/${encodeURIComponent(id)}/cancel`, {method: 'POST'});
-export const resumeReview = (id: string) => request<ReviewTask>(`/api/reviews/${encodeURIComponent(id)}/resume`, {method: 'POST'});
-export const createReview = (url: string, preview: ReviewPreviewResponse) => request<ReviewCreateResponse>('/api/reviews', {method: 'POST', body: JSON.stringify({pr_url:url, preview_id:preview.preview_id, expected_head_sha:preview.snapshot.head_sha, expected_effective_base_sha:preview.snapshot.effective_base_sha})});
-export const previewReview = (input: {pr_url: string; model?: string; plan: ReviewPlanOptions}) => request<ReviewPreviewResponse>('/api/reviews/preview', {method:'POST', body:JSON.stringify(input)});
-export const createPreviewJob = (id: string, input: PreviewRequest, signal?: AbortSignal) => request<PreviewJob>('/api/reviews/preview-jobs', {method:'POST', body:JSON.stringify({id,request:input}),signal});
-export const getPreviewJob = (id: string, signal?: AbortSignal) => request<PreviewJob>(`/api/reviews/preview-jobs/${encodeURIComponent(id)}`,{signal});
-export const cancelPreviewJob = (id: string) => request<PreviewJob>(`/api/reviews/preview-jobs/${encodeURIComponent(id)}/cancel`,{method:'POST'});
-export const getFindings = (id: string, signal?: AbortSignal) => request<{items: FindingView[]}>(`${publicationPath(id)}/findings`,{signal});
-export const setFindingDisposition = (id: string, finding: string, value: FindingDisposition) => request<{items: FindingView[]}>(`${publicationPath(id)}/findings/${encodeURIComponent(finding)}/disposition`,{method:'PATCH', body:JSON.stringify(value)});
-export const getPrDiscussions = (id: string, signal?: AbortSignal) => request<{items: Array<{id:string; source:string; path:string|null; resolved:boolean|null; outdated:boolean|null; comments:Array<{id:string;body:string;url:string|null}>}>;total:number;sources:Record<string,string>;limitations:string[]}>(`${publicationPath(id)}/discussions`,{signal});
-export const getFileContext = (id: string, file: number, signal?: AbortSignal) => request<FileContext>(`${publicationPath(id)}/files/${file}/context`,{signal});
-export async function getReport(id: string, signal?: AbortSignal): Promise<string> {
- const response = await fetch(`${API_BASE}/api/reviews/${encodeURIComponent(id)}/report`,{signal});
- if (!response.ok) throw new Error('报告尚未生成或读取失败');
- return response.text();
+
+export const listReviews = (query: string, page: number, signal?: AbortSignal) =>
+  request<ReviewTaskListResponse>(
+    '/api/reviews?q=' + encodeURIComponent(query) + '&page=' + page + '&page_size=20',
+    { signal },
+  );
+export const deleteReview = (id: string) => request<void>(reviewPath(id), { method: 'DELETE' });
+export const cancelReview = (id: string) =>
+  request<{ status: string }>(reviewPath(id, '/cancel'), { method: 'POST' });
+export const retryReview = (id: string) => request<Run>(reviewPath(id, '/retry'), { method: 'POST' });
+export const retryOverview = (id: string) =>
+  request<Run>(reviewPath(id, '/overview/retry'), { method: 'POST' });
+
+function reviewBody(input: ReviewCreateRequest) {
+  return {
+    pr_url: input.pr_url,
+    depth: input.depth,
+    paths: input.paths,
+    focus: input.focus,
+    limits: input.limits,
+    ...(input.model ? { model: input.model } : {}),
+    ...(input.include_pr_discussions === undefined
+      ? {}
+      : { include_pr_discussions: input.include_pr_discussions }),
+  };
 }
+
+function aborted(signal: AbortSignal | undefined, error: unknown) {
+  return signal?.aborted || (error instanceof DOMException && error.name === 'AbortError');
+}
+
+function retryableCreateError(error: unknown) {
+  return !(error instanceof ApiError) || retryableCreateStatuses.has(error.status ?? 0);
+}
+
+export async function createReview(
+  input: ReviewCreateRequest,
+  signal?: AbortSignal,
+  key = crypto.randomUUID(),
+): Promise<Run> {
+  const init: RequestInit = {
+    method: 'POST',
+    headers: { 'Idempotency-Key': key },
+    body: JSON.stringify(reviewBody(input)),
+    signal,
+  };
+
+  try {
+    return await request<Run>('/api/reviews', init);
+  } catch (error) {
+    if (aborted(signal, error) || !retryableCreateError(error)) throw error;
+    return request<Run>('/api/reviews', init);
+  }
+}
+
+export const previewReview = (input: ReviewCreateRequest, signal?: AbortSignal) =>
+  request<ReviewPreviewResponse>('/api/reviews/preview', {
+    method: 'POST',
+    body: JSON.stringify(reviewBody(input)),
+    signal,
+  });
+export const getUnits = (id: string, signal?: AbortSignal) =>
+  request<WorkItem[]>(reviewPath(id, '/units'), { signal });
+export const getFindings = (id: string, signal?: AbortSignal) =>
+  request<{
+    findings: Finding[];
+    candidates: Candidate[];
+    report_version: string | null;
+    dispositions: FindingDispositions;
+  }>(reviewPath(id, '/findings'), { signal });
+export const updateFindingDisposition = (
+  reviewId: string,
+  findingId: string,
+  value: FindingDisposition,
+  signal?: AbortSignal,
+) => request<{
+  findings: Finding[];
+  candidates: Candidate[];
+  report_version: string | null;
+  dispositions: FindingDispositions;
+}>(reviewPath(reviewId, '/findings/' + encodeURIComponent(findingId) + '/disposition'), {
+  method: 'PATCH',
+  body: JSON.stringify(value),
+  signal,
+});
+export const getReport = (id: string, signal?: AbortSignal) =>
+  request<{ report: Report | null; markdown: string }>(reviewPath(id, '/report'), { signal });
+export const getFileContext = (id: string, file: number, signal?: AbortSignal) =>
+  request<FileContext>(reviewPath(id, '/files/' + file + '/context'), { signal });
+
 async function publicationRequest<T>(path: string, token: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, { ...init, headers: {
-    "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...init.headers,
-  } });
+  const response = await fetch(apiPath(path), {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer ' + token,
+      ...init.headers,
+    },
+  });
+
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
-    const code = typeof payload?.detail?.code === "string" ? payload.detail.code : `HTTP ${response.status}`;
+    const code = typeof payload?.detail?.code === 'string'
+      ? payload.detail.code
+      : 'HTTP ' + response.status;
     throw new Error(publicationErrorText(code));
   }
+
   return response.json() as Promise<T>;
 }
 
-function publicationPath(reviewId: string) { return `/api/reviews/${encodeURIComponent(reviewId)}`; }
-export function preflightPublication(reviewId: string, keys: string[], token: string, signal?: AbortSignal) {
-  return publicationRequest<PublicationPreflightResult>(`${publicationPath(reviewId)}/publication-preflight`, token,
-    { method: "POST", body: JSON.stringify({ finding_keys: keys }), signal });
-}
-export function createPublication(reviewId: string, selection: PublicationSelection, key: string, token: string, signal?: AbortSignal) {
-  return publicationRequest<PublicationAccepted>(`${publicationPath(reviewId)}/publications`, token,
-    { method: "POST", headers: { "Idempotency-Key": key }, body: JSON.stringify(selection), signal });
-}
-export function getPublications(reviewId: string, token: string, signal?: AbortSignal) {
-  return publicationRequest<PublicationAttempt[]>(`${publicationPath(reviewId)}/publications`, token, { signal });
-}
-export function getPublication(reviewId: string, identity: string, token: string, signal?: AbortSignal) {
-  return publicationRequest<PublicationAttempt>(`${publicationPath(reviewId)}/publications/${encodeURIComponent(identity)}`, token, { signal });
-}
-export function retryPublication(reviewId: string, identity: string, token: string, signal?: AbortSignal) {
-  return publicationRequest<PublicationAttempt>(`${publicationPath(reviewId)}/publications/${encodeURIComponent(identity)}/retry`, token,
-    { method: "POST", signal });
-}
-
-export function getPublicationPlan(taskId: string, signal?: AbortSignal): Promise<PublicationPlan> {
-  return request<PublicationPlan>(`/api/reviews/${encodeURIComponent(taskId)}/publication-plan`, { signal });
-}
-
-export function getPublicationSummary(taskId: string, signal?: AbortSignal): Promise<import('../types/publication').ReviewSummary> {
-  return request<import('../types/publication').ReviewSummary>(`/api/reviews/${encodeURIComponent(taskId)}/publication-summary`, { signal });
-}
-
-export function checkReviewComment(taskId: string, signal?: AbortSignal, options?: import('../types/publication').ReviewCommentOptions) {
-  return request<import('../types/publication').ReviewCommentCheck>(`/api/reviews/${encodeURIComponent(taskId)}/review-comment-check`, { method: 'POST', signal, body: JSON.stringify(options) });
-}
-export function previewReviewComment(taskId: string, options: import('../types/publication').ReviewCommentOptions, signal?: AbortSignal) {
-  return request<import('../types/publication').ReviewCommentCheck>(`/api/reviews/${encodeURIComponent(taskId)}/review-comment-preview`, { method: 'POST', signal, body: JSON.stringify(options) });
-}
+export const preflightPublication = (reviewId: string, keys: string[], token: string, signal?: AbortSignal) =>
+  publicationRequest<PublicationPreflightResult>(reviewPath(reviewId, '/publication-preflight'), token, {
+    method: 'POST',
+    body: JSON.stringify({ finding_keys: keys }),
+    signal,
+  });
+export const createPublication = (reviewId: string, selection: PublicationSelection, key: string, token: string, signal?: AbortSignal) =>
+  publicationRequest<PublicationAccepted>(reviewPath(reviewId, '/publications'), token, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': key },
+    body: JSON.stringify(selection),
+    signal,
+  });
+export const getPublications = (reviewId: string, token: string, signal?: AbortSignal) =>
+  publicationRequest<PublicationAttempt[]>(reviewPath(reviewId, '/publications'), token, { signal });
+export const getPublication = (reviewId: string, identity: string, token: string, signal?: AbortSignal) =>
+  publicationRequest<PublicationAttempt>(
+    reviewPath(reviewId, '/publications/' + encodeURIComponent(identity)),
+    token,
+    { signal },
+  );
+export const retryPublication = (reviewId: string, identity: string, token: string, signal?: AbortSignal) =>
+  publicationRequest<PublicationAttempt>(
+    reviewPath(reviewId, '/publications/' + encodeURIComponent(identity) + '/retry'),
+    token,
+    { method: 'POST', signal },
+  );
+export const getPublicationPlan = (taskId: string, signal?: AbortSignal) =>
+  request<PublicationPlan>(reviewPath(taskId, '/publication-plan'), { signal });
+export const checkReviewComment = (
+  taskId: string,
+  signal?: AbortSignal,
+  options?: import('../types/publication').ReviewCommentOptions,
+) => request<import('../types/publication').ReviewCommentCheck>(reviewPath(taskId, '/review-comment-check'), {
+  method: 'POST',
+  signal,
+  body: JSON.stringify(options),
+});
 

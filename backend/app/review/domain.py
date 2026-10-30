@@ -193,6 +193,7 @@ class Overview(Model):
     output: OverviewOutput | None = None
     sources: list[SourceRef] = Field(default_factory=list)
     error_code: str | None = None
+    omitted: dict[str, int] = Field(default_factory=dict)
 
 
 class Report(Model):
@@ -225,3 +226,4 @@ class Run(Model):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     error_code: str | None = None
+    discussion_uri: str | None = None

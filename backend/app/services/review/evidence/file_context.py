@@ -10,9 +10,9 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
-from app.review.contracts import ReviewTask
+from app.review.domain import Run
 from app.core.paths import validate_repo_relative_path as _validate_repo_relative_path
-from app.models.review_plan import FileContextResponse
+from app.models.file_view import FileContextResponse
 from app.review.tool_scope import is_sensitive_repository_change
 
 MAX_FILE_BYTES = 512 * 1024
@@ -91,13 +91,13 @@ async def _lines(client: httpx.AsyncClient, repo: str, sha: str, path: str) -> l
     return lines
 
 
-async def load_file_context(task: ReviewTask, file_id: int, client: httpx.AsyncClient) -> FileContextResponse:
+async def load_file_context(task: Run, file_id: int, client: httpx.AsyncClient) -> FileContextResponse:
     if file_id < 0 or file_id >= len(task.changed_files):
         raise FileContextError("变更文件不存在")
     if task.snapshot is None or task.pr is None:
         raise FileContextError("历史任务缺少固定快照，无法展开额外上下文")
     if any(not re.fullmatch(r"[0-9a-fA-F]{40}", sha)
-           for sha in (task.snapshot.head_sha, task.snapshot.effective_base_sha)):
+           for sha in (task.snapshot.head_sha, task.snapshot.base_sha)):
         raise FileContextError("任务缺少有效的固定提交版本")
     file = task.changed_files[file_id]
     if file.is_binary or is_sensitive_repository_change(file.file_path, file.old_file_path):
@@ -109,7 +109,7 @@ async def load_file_context(task: ReviewTask, file_id: int, client: httpx.AsyncC
         raise FileContextError("任务文件路径无效") from exc
     async with asyncio.timeout(45):
         base = [] if file.change_type == "added" else await _lines(
-            client, _repository(task.pr.base.repo_clone_url), task.snapshot.effective_base_sha,
+            client, _repository(task.pr.base.repo_clone_url), task.snapshot.base_sha,
             file.old_file_path or file.file_path)
         head = [] if file.change_type == "deleted" else await _lines(
             client, _repository(task.pr.head.repo_clone_url), task.snapshot.head_sha, file.file_path)

@@ -31,9 +31,6 @@ def compose_summary(plan, selection, fallback, items, phase):
         else:
             inline.append(finding)
     preview = plan.model_copy(update={"inline_drafts": inline, "summary_findings": summary})
-    if plan.presentation is not None:
-        from app.services.publication.review_presentation import selected_presentation
-        preview.presentation = selected_presentation(plan, selected, fallback)
     # 仅接入已经通过远端身份对账并落库的成功回执，不猜测 URL。
     inline_keys = {finding.finding_key for finding in inline}
     receipts = {}
@@ -48,11 +45,6 @@ def compose_summary(plan, selection, fallback, items, phase):
     failed = sum(item.kind == "inline" and item.state == "failed" for item in items)
     uncertain = sum(item.kind == "inline" and item.state == "uncertain" for item in items)
     count = len(plan.inline_drafts) + len(plan.summary_findings)
-    if preview.presentation is not None:
-        summary_published = any(item.kind == "summary" and item.state == "published" for item in items)
-        preview.presentation.delivery.actual_published = (
-            delivered + (len(summary) if summary_published else 0)
-            if phase != "Prepared" and (summary_published or delivered) else None)
     return (render_summary(preview, discussion_urls=discussions) + f"\n\n### 投递状态：{phase}\n\n"
             f"- 用户选择：{len(selected)} / {count} 项；未选择：{count - len(selected)} 项\n"
             f"- 已确认投递的 Inline：{delivered}\n- Summary-only：{len(summary)}\n"
@@ -187,12 +179,13 @@ class PublicationDelivery:
             await self.sticky.reconcile(attempt, lease)
             await self.recover_batches(attempt, lease, context)
             task = await asyncio.to_thread(self.task_loader, attempt.review_id)
-            if task is None or task.status not in {"completed", "completed_with_warnings"}:
+            if task is None or task.status not in {"completed", "partial"}:
                 raise GitHubPublishError("review_not_found")
             if task.snapshot.head_sha != attempt.head_sha:
                 raise GitHubPublishError("publication_stale")
             checked = await self.preflight.check(task, selection["finding_keys"])
-            if checked["plan_hash"] != attempt.plan_hash or checked["context"] != context:
+            if (checked["plan_hash"] != attempt.plan_hash or checked["context"] != context
+                    or selection.get("expected_report_version") != checked["report_version"]):
                 raise GitHubPublishError("publication_plan_changed")
             if checked["requires_partial_acknowledgement"] and not selection["acknowledge_partial_review"]:
                 raise GitHubPublishError("partial_acknowledgement_required")

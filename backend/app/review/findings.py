@@ -28,23 +28,30 @@ def finding_digest(candidate, snapshot):
         "sources": [ref.model_dump() for ref in candidate.verification_sources]})
 
 
-def admit_verification(candidate, output, context):
-    refs = context.resolve(output.source_refs)
-    run = context.provider.run
+def verification_problem(output, refs, changed_files):
+    """Return the admission failure code for a verifier output, if any."""
     problem = None
     if output.verdict in {"confirmed", "refuted"} and not refs:
         problem = "missing_decision_sources"
     if output.verdict == "confirmed":
-        if output.severity is None or not output.author_comment:
+        if (output.severity is None or not output.reason.strip()
+                or not output.author_comment or not output.author_comment.strip()):
             problem = "missing_confirmed_fields"
         if output.attribution in {"introduced", "exposed"}:
-            changes = {item.file_path: item for item in run.changed_files}
+            changes = {item.file_path: item for item in changed_files}
             causal = [ref for ref in refs if ref.path in changes
-                      or any(item.old_file_path == ref.path for item in run.changed_files)]
+                      or any(item.old_file_path == ref.path for item in changed_files)]
             added = any(changes.get(ref.path) and changes[ref.path].change_type == "added"
                         and ref.side == "head" for ref in causal)
             if not added and not {"base", "head"} <= {ref.side for ref in causal}:
                 problem = "missing_change_attribution_sources"
+    return problem
+
+
+def admit_verification(candidate, output, context):
+    refs = context.resolve(output.source_refs)
+    run = context.provider.run
+    problem = verification_problem(output, refs, run.changed_files)
     candidate.verification = output.model_copy(update={
         "verdict": "insufficient", "severity": None, "author_comment": None,
         "reason": f"{problem}: {output.reason}"} if problem else {})

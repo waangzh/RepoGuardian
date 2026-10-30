@@ -9,7 +9,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.review.models import EvidenceRef, ReviewSnapshot
+from app.review.domain import SourceRef, Snapshot
 from app.review.tool_scope import (
     ReviewPathPolicyError,
     _validate_repository_relative_path,
@@ -35,28 +35,6 @@ def source_lines(content: str) -> list[str]:
     return [line + "\n" for line in lines[:-1]] + ([lines[-1]] if lines[-1] else [])
 
 
-def has_structural_source(goal, refs):
-    """A reference check needs HEAD source outside the changed target."""
-    return any(ref.side == "head" and ref.path != goal["path"] for ref in refs)
-
-
-def uncovered_ranges(start: int, end: int, intervals) -> list[tuple[int, int]]:
-    missing, cursor = [], start
-    for first, last in sorted(intervals):
-        if last < cursor:
-            continue
-        if first > end:
-            break
-        if first > cursor:
-            missing.append((cursor, first - 1))
-        cursor = max(cursor, last + 1)
-        if cursor > end:
-            break
-    if cursor <= end:
-        missing.append((cursor, end))
-    return missing
-
-
 class SourceReadError(ValueError):
     def __init__(self, code, **details):
         super().__init__(code)
@@ -66,13 +44,13 @@ class SourceReadError(ValueError):
 
 @dataclass
 class EvidenceArchive:
-    snapshot: ReviewSnapshot
+    snapshot: Snapshot
     artifacts: LocalArtifactStore
 
-    def resolve(self, identity: str) -> EvidenceRef:
+    def resolve(self, identity: str) -> SourceRef:
         return self.read_source(identity)[0]
 
-    def read_source(self, identity: str) -> tuple[EvidenceRef, str]:
+    def read_source(self, identity: str) -> tuple[SourceRef, str]:
         """Return original text only after checking the archive's full identity."""
         if not re.fullmatch(r"[0-9a-f]{64}", identity):
             raise ValueError("invalid_evidence_id")
@@ -81,7 +59,7 @@ class EvidenceArchive:
         if digest(encoded) != identity:
             raise ValueError("evidence_content_corrupted")
         payload = json.loads(encoded)
-        ref = EvidenceRef(id=identity, **{k: v for k, v in payload.items() if k != "content"})
+        ref = SourceRef(id=identity, **{k: v for k, v in payload.items() if k != "content"})
         expected = self.snapshot.head_sha if ref.side == "head" else self.snapshot.base_sha
         if (ref.review_id != self.snapshot.review_id or ref.commit_sha != expected
                 or digest(payload["content"]) != ref.content_hash
@@ -189,7 +167,7 @@ class EvidenceService(EvidenceArchive):
         encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         artifact = self.artifacts.put_text(
             task_id=self.snapshot.review_id, kind="evidence", content=encoded)
-        ref = EvidenceRef(id=artifact.sha256, **{k: v for k, v in payload.items() if k != "content"})
+        ref = SourceRef(id=artifact.sha256, **{k: v for k, v in payload.items() if k != "content"})
         return {"ok": True, "evidence": ref.model_dump(), "content": content, "truncated": False,
                 "total_lines": len(lines), "max_read_lines": self.max_lines}
 
@@ -197,7 +175,7 @@ class EvidenceService(EvidenceArchive):
         async with self._semaphore:
             return await asyncio.to_thread(self._read, path, start, end, side)
 
-    def resolve(self, identity: str) -> EvidenceRef:
+    def resolve(self, identity: str) -> SourceRef:
         ref = super().resolve(identity)
         sha, source = self._source(ref.path, ref.side)
         original = "".join(source_lines(source)[ref.start_line - 1:ref.end_line])

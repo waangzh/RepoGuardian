@@ -1,26 +1,91 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createServer} from 'vite';
+import { createServer } from 'vite';
 
-test('方案创建只提交预览 ID 与固定双侧 SHA，拒绝沿用旧模型参数', async () => {
- const server=await createServer({server:{middlewareMode:true,hmr:false},optimizeDeps: { noDiscovery: true, entries: [], include: [] }, appType:'custom'});
- const previous=globalThis.fetch;
- try{
-  const {createReview}=await server.ssrLoadModule('/src/api/client.ts');
-  const preview={preview_id:'a'.repeat(32),snapshot:{head_sha:'b'.repeat(40),effective_base_sha:'c'.repeat(40)}};
-  let payload;
-  globalThis.fetch=async (_url,init)=>{payload=JSON.parse(init.body);return new Response(JSON.stringify({task_id:'review',status:'queued'}),{status:202});};
-  await createReview('https://github.com/o/r/pull/1',preview);
-  assert.deepEqual(payload,{pr_url:'https://github.com/o/r/pull/1',preview_id:'a'.repeat(32),expected_head_sha:'b'.repeat(40),expected_effective_base_sha:'c'.repeat(40)});
- }finally{globalThis.fetch=previous;await server.close();}
+const input = {
+  pr_url: 'https://github.com/o/r/pull/1',
+  depth: 'standard',
+  paths: ['src/a.py'],
+  focus: ['correctness'],
+  limits: { model_calls: 4 },
+  model: 'fixture',
+  include_pr_discussions: false,
+};
+
+async function withClient(run) {
+  const server = await createServer({
+    server: { middlewareMode: true, hmr: false },
+    optimizeDeps: { noDiscovery: true, entries: [], include: [] },
+    appType: 'custom',
+  });
+  try { return await run(await server.ssrLoadModule('/src/api/client.ts')); }
+  finally { await server.close(); }
+}
+
+test('创建审查仅在网络失败时重试并复用幂等键', async () => {
+  const original = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (_url, init) => {
+    calls.push(init);
+    if (calls.length === 1) throw Error('offline');
+    return new Response(JSON.stringify({ id: 'review' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  try {
+    await withClient(async ({ createReview }) => {
+      const result = await createReview(input, undefined, 'stable-key');
+      assert.equal(result.id, 'review');
+    });
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].headers['Idempotency-Key'], 'stable-key');
+    assert.equal(calls[1].headers['Idempotency-Key'], 'stable-key');
+    assert.deepEqual(JSON.parse(calls[0].body), input);
+  } finally { globalThis.fetch = original; }
 });
 
-test('方案或 PR 变化保留服务端拒绝原因',async()=>{
- const server=await createServer({server:{middlewareMode:true,hmr:false},optimizeDeps: { noDiscovery: true, entries: [], include: [] }, appType:'custom'});
- const previous=globalThis.fetch;
- try{
-  const {createReview}=await server.ssrLoadModule('/src/api/client.ts');
-  globalThis.fetch=async()=>new Response(JSON.stringify({detail:{code:'review_plan_stale'}}),{status:409});
-  await assert.rejects(createReview('https://github.com/o/r/pull/1',{preview_id:'a',snapshot:{head_sha:'b',effective_base_sha:'c'}}),/review_plan_stale/);
- }finally{globalThis.fetch=previous;await server.close();}
+for (const status of [409, 422]) {
+  test('创建审查不重试 HTTP ' + status, async () => {
+    const original = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ detail: 'invalid request' }), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+    try {
+      await withClient(async ({ createReview, ApiError }) => {
+        await assert.rejects(createReview(input, undefined, 'stable-key'), ApiError);
+      });
+      assert.equal(calls, 1);
+    } finally { globalThis.fetch = original; }
+  });
+}
+
+test('创建审查重试可重试 HTTP 并复用幂等键', async () => {
+  const original = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (_url, init) => {
+    calls.push(init);
+    if (calls.length === 1) {
+      return new Response(JSON.stringify({ detail: 'busy' }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({ id: 'review' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  try {
+    await withClient(async ({ createReview }) => {
+      await createReview(input, undefined, 'stable-key');
+    });
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].headers['Idempotency-Key'], calls[1].headers['Idempotency-Key']);
+  } finally { globalThis.fetch = original; }
 });

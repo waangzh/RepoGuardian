@@ -1,13 +1,10 @@
 export const reviewPrimarySections = [
-  { id: 'overview', label: '结果概览', icon: 'dashboard' },
-  { id: 'findings', label: '问题与证据', icon: 'shield' },
-  { id: 'scope', label: '覆盖与限制', icon: 'units' },
-  { id: 'report', label: '审查意见', icon: 'report' },
+  { id: 'overview', label: '概览', icon: 'dashboard' },
+  { id: 'changes', label: '变更', icon: 'file-code' },
+  { id: 'findings', label: '问题', icon: 'shield' },
+  { id: 'activity', label: '活动', icon: 'activity' },
+  { id: 'publish', label: '发布', icon: 'report' },
 ] as const;
-export const reviewSecondarySections = [
-  { id: 'files', label: '变更文件', icon: 'file-code' },
-  { id: 'activity', label: 'Agent 活动', icon: 'activity' },
-  { id: 'discussions', label: 'PR 讨论', icon: 'context' },
-] as const;
-export type ReviewSection = typeof reviewPrimarySections[number]['id']
-  | typeof reviewSecondarySections[number]['id'];
+
+export const reviewSecondarySections = [] as const;
+export type ReviewSection = typeof reviewPrimarySections[number]['id'];

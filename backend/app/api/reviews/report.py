@@ -10,11 +10,11 @@
 import asyncio
 import httpx
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException
 
 from app.api import reviews as _reviews
 from app.core.config import settings
-from app.review.contracts import TERMINAL_STATUSES
+from app.review.domain import TERMINAL
 from app.models.publication import PublicationPlan, ReviewCommentCheck, ReviewCommentOptions, ReviewSummary
 from app.services.publication.publication_planner import PublicationPlanner, summary_projection
 
@@ -26,7 +26,7 @@ async def _build_plan(task_id: str) -> PublicationPlan:
     task = await asyncio.to_thread(service.get_task, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    if task.status not in TERMINAL_STATUSES:
+    if task.status not in TERMINAL:
         raise HTTPException(status_code=409, detail="Review is not finished")
     dispositions = await _report_dispositions(service, task_id)
     return await asyncio.to_thread(PublicationPlanner(service._artifacts).build,
@@ -119,11 +119,9 @@ async def preview_review_comment(task_id: str, options: ReviewCommentOptions):
 
 
 @router.get("/{task_id}/report")
-async def get_report(task_id: str) -> Response:
-    """获取 Markdown 格式的审查报告。"""
-    task = _reviews.get_review_service().get_task(task_id)
+async def get_report(task_id: str):
+    task = await asyncio.to_thread(_reviews.get_review_service().get_task, task_id)
     if task is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
-    if task.report_markdown is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report is not ready")
-    return Response(content=task.report_markdown, media_type="text/markdown; charset=utf-8")
+        raise HTTPException(status_code=404, detail="Task not found")
+    plan = await asyncio.to_thread(PublicationPlanner(_reviews.get_review_service()._artifacts).build, task)
+    return {"report": task.report, "markdown": plan.user_report_markdown}

@@ -1,86 +1,83 @@
-"""Revalidate saved graph findings and immutable evidence before publication."""
+"""Publisher-only validation for normalized, persisted Run findings."""
 
 from app.review.evidence import EvidenceArchive
-from app.review.findings import aggregate_findings, candidate_gate, comparison_scope, verify_finding
-from app.review.limitations import candidate_limitations, limitation_discoveries
+from app.review.findings import finding_digest, verification_problem
 from app.services.review.artifact_store import LocalArtifactStore
 
 
-def validated_findings(task, artifacts=None):
-    report = task.review_report
+def _same_refs(left, right):
+    return [item.model_dump() for item in left] == [item.model_dump() for item in right]
+
+
+def _valid_sources(archive, refs):
+    if not refs:
+        return False
+    for source in refs:
+        loaded, _ = archive.read_source(source.id)
+        if loaded.model_dump() != source.model_dump():
+            return False
+    return True
+
+
+def _valid_finding(run, candidate, finding, archive):
+    verification = candidate.verification
+    if candidate.admission_reason:
+        return "candidate_admission_invalid"
+    if verification is None or verification.verdict != "confirmed":
+        return "verification_not_confirmed"
+    if verification_problem(verification, candidate.verification_sources, run.changed_files):
+        return "verification_admission_invalid"
+    if verification.attribution not in {"introduced", "exposed"}:
+        return "finding_not_publishable"
+    if candidate.finding is None or candidate.finding.model_dump() != finding.model_dump():
+        return "candidate_finding_mismatch"
+    if (finding.candidate_id != candidate.id or finding.claim != candidate.proposal.claim
+            or finding.trigger != candidate.proposal.trigger or finding.impact != candidate.proposal.impact
+            or finding.severity != verification.severity or finding.attribution != verification.attribution
+            or finding.author_comment != verification.author_comment
+            or finding.location != candidate.proposal.location
+            or not finding.publishable):
+        return "finding_fact_mismatch"
+    if not _same_refs(finding.sources, candidate.verification_sources):
+        return "finding_source_mismatch"
+    if finding.admission_digest != finding_digest(candidate, run.snapshot):
+        return "finding_digest_mismatch"
+    if not (_valid_sources(archive, candidate.sources)
+            and _valid_sources(archive, candidate.verification_sources)
+            and _valid_sources(archive, finding.sources)):
+        return "publication_evidence_invalid"
+    return None
+
+
+def validated_findings(run, artifacts=None):
+    """Return only fully reconstructed publication facts; never replay old graphs."""
+    report = run.report
     if report is None:
         return [], []
-    expected = report.snapshot
-    if (expected.review_id != task.id or expected.head_sha != task.snapshot.head_sha
-            or expected.base_sha != task.snapshot.effective_base_sha
-            or expected.repository != f"{task.pr.owner}/{task.pr.repo}"
-            or expected.pr_number != task.pr.number):
-        return [], [(finding.id, "snapshot_mismatch") for finding in report.findings]
-    archive = EvidenceArchive(snapshot=expected, artifacts=artifacts or LocalArtifactStore())
+    snapshot = run.snapshot
+    if (snapshot.review_id != run.id or snapshot.repository != f"{run.pr.owner}/{run.pr.repo}"
+            or snapshot.repository_id <= 0 or snapshot.pr_number != run.pr.number
+            or snapshot.declared_base_sha != run.pr.base.sha or snapshot.head_sha != run.pr.head.sha):
+        return [], [(finding.candidate_id, "snapshot_mismatch") for finding in report.findings]
+    archive = EvidenceArchive(snapshot=snapshot, artifacts=artifacts or LocalArtifactStore())
     candidates = {candidate.id: candidate for candidate in report.candidates}
-    decisions = {decision.candidate_id: decision for decision in report.decisions}
-    results = {result.id: result.model_dump() for result in report.verification_results
-               if result.status == "completed"}
-    discovery = [result.model_dump() for result in report.discovery_results] + limitation_discoveries(
-        [result.model_dump() for result in report.limitation_results])
-    changed = [item.model_dump(mode="json") for item in task.changed_files]
-    if task.configuration.options.scope.mode == "selected":
-        selected_paths = set(task.configuration.options.scope.primary_files)
-        changed = [item for item in changed if item["file_path"] in selected_paths]
-    selected, withheld, seen = [], [], set()
-    confirmed = {item.candidate_id for item in report.decisions if item.decision == "confirmed"}
     if len(candidates) != len(report.candidates):
-        return [], [(identity, "duplicate_candidate_conflict") for identity in sorted(confirmed or candidates)]
-    if len(decisions) != len(report.decisions):
-        return [], [(identity, "duplicate_decision_conflict") for identity in sorted(confirmed or candidates)]
-    if not confirmed <= set(candidates):
-        return [], [(identity, "confirmed_candidate_missing") for identity in sorted(confirmed - set(candidates))]
-    eligible_candidates = []
-    for candidate in report.candidates:
-        try:
-            candidate_gate(candidate, archive, discovery, changed)
-            if (task.configuration.options.depth != "quick"
-                    or candidate.severity in {"critical", "high"}):
-                eligible_candidates.append(candidate.model_dump())
-        except (ValueError, OSError):
-            if candidate.id in confirmed:
-                return [], [(candidate.id, "publication_evidence_invalid")]
-    all_candidates = [candidate.model_dump() for candidate in report.candidates]
-    member_ids = [identity for finding in report.findings
-                  for identity in (finding.id, *finding.related_candidate_ids)]
-    if len(member_ids) != len(set(member_ids)) or set(member_ids) != confirmed:
-        missing = confirmed - set(member_ids)
-        extra = set(member_ids) - confirmed
-        for identity in sorted(missing):
-            withheld.append((identity, "confirmed_finding_missing"))
-        for identity in sorted(extra):
-            withheld.append((identity, "nonconfirmed_finding_member"))
-        if missing or extra:
-            return [], sorted(set(withheld))
+        return [], [(candidate.id, "duplicate_candidate_conflict") for candidate in report.candidates]
+    selected, withheld, seen = [], [], set()
     for finding in report.findings:
-        members = [finding.id, *finding.related_candidate_ids]
-        if len(set(members)) != len(members) or set(members) & seen:
-            withheld.append((finding.id, "duplicate_finding_conflict"))
-            selected = [item for item in selected
-                        if not {item.id, *item.related_candidate_ids} & set(members)]
+        if finding.id in seen or finding.candidate_id not in candidates:
+            withheld.append((finding.candidate_id, "finding_identity_conflict"))
             continue
-        seen.update(members)
+        seen.add(finding.id)
         try:
-            rebuilt_members = []
-            for identity in members:
-                candidate = candidates[identity]
-                decision, rebuilt = verify_finding(candidate, results[identity], archive, changed,
-                    comparison_scope(candidate.model_dump(), eligible_candidates, results[identity]),
-                    candidate_limitations({"discovery_results": discovery, "candidates": all_candidates,
-                                           "assignments": [item.model_dump() for item in report.assignments]},
-                                          [candidate.model_dump()]))
-                if rebuilt is None or decision != decisions[identity]:
-                    raise ValueError("finding_subject_mismatch")
-                rebuilt_members.append(rebuilt)
-            reconstructed = aggregate_findings(rebuilt_members)
-            if reconstructed != [finding]:
-                raise ValueError("finding_subject_mismatch")
+            reason = _valid_finding(run, candidates[finding.candidate_id], finding, archive)
+        except (OSError, ValueError, TypeError):
+            reason = "publication_evidence_invalid"
+        if reason:
+            withheld.append((finding.candidate_id, reason))
+        else:
             selected.append(finding)
-        except (KeyError, ValueError, OSError):
-            withheld.append((finding.id, "publication_evidence_invalid"))
+    for candidate in report.candidates:
+        if candidate.finding is not None and candidate.finding.id not in seen:
+            withheld.append((candidate.id, "finding_missing_from_report"))
     return selected, sorted(set(withheld))

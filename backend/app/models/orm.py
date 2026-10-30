@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import (
-    Boolean,
     BigInteger,
     JSON,
     DateTime,
@@ -108,30 +107,6 @@ class GitHubSummarySlotOrm(Base):
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class ReviewPreviewOrm(Base):
-    __tablename__ = "review_previews"
-    id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    payload: Mapped[dict] = mapped_column(JSON)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    consumed_task_id: Mapped[str | None] = mapped_column(String(32))
-
-
-class PreviewJobOrm(Base):
-    __tablename__ = "preview_jobs"
-    id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    request: Mapped[dict] = mapped_column(JSON)
-    status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
-    stages: Mapped[list] = mapped_column(JSON, default=list)
-    preview_id: Mapped[str | None] = mapped_column(String(32))
-    error: Mapped[str | None] = mapped_column(String(512))
-    cache_hit: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    lease_owner: Mapped[str | None] = mapped_column(String(32))
-    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-
 class PreparedWorkspaceOrm(Base):
     __tablename__ = "prepared_workspaces"
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
@@ -158,7 +133,6 @@ class FindingDispositionOrm(Base):
 class ReviewTaskOrm(Base):
     __tablename__ = "review_tasks"
     __table_args__ = (
-        UniqueConstraint("thread_id", name="uq_review_tasks_thread_id"),
         Index("ix_review_tasks_status_updated", "status", "updated_at"),
     )
 
@@ -169,17 +143,12 @@ class ReviewTaskOrm(Base):
     pr_number: Mapped[int | None] = mapped_column(Integer)
     base_sha: Mapped[str | None] = mapped_column(String(64), index=True)
     head_sha: Mapped[str | None] = mapped_column(String(64), index=True)
-    mode: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     current_phase: Mapped[str] = mapped_column(String(64), nullable=False)
     model: Mapped[str | None] = mapped_column(String(128))
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
-    warnings: Mapped[list[Any]] = mapped_column(JSON, default=list, nullable=False)
     error_summary: Mapped[str | None] = mapped_column(Text)
     task_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
-    task_snapshot_artifact_uri: Mapped[str | None] = mapped_column(String(1024))
-    report_markdown: Mapped[str | None] = mapped_column(Text)
-    thread_id: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -193,29 +162,6 @@ class ReviewTaskOrm(Base):
 
 
 
-
-
-class ReviewModelCallOrm(Base):
-    __tablename__ = "review_model_calls"
-    id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    task_id: Mapped[str] = mapped_column(ForeignKey("review_tasks.id", ondelete="CASCADE"), index=True)
-    agent_id: Mapped[str] = mapped_column(String(160))
-    reserved_input_bytes: Mapped[int] = mapped_column(Integer)
-    input_tokens: Mapped[int | None] = mapped_column(Integer)
-    output_tokens: Mapped[int | None] = mapped_column(Integer)
-    cached_input_tokens: Mapped[int | None] = mapped_column(Integer)
-    settled: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
-class ReviewBranchBudgetOrm(Base):
-    __tablename__ = "review_branch_budgets"
-    task_id: Mapped[str] = mapped_column(ForeignKey("review_tasks.id", ondelete="CASCADE"), primary_key=True)
-    agent_id: Mapped[str] = mapped_column(String(160), primary_key=True)
-    held_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
-    held_model_calls: Mapped[int] = mapped_column(Integer, default=0)
-    finalizing: Mapped[bool] = mapped_column(Boolean, default=False)
-    final_requests: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class ReviewCreateIntentOrm(Base):

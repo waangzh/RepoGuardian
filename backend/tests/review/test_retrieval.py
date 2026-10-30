@@ -1,38 +1,15 @@
-"""Pagination never changes snapshot authority or creates source evidence."""
-
 import asyncio
 import hashlib
 import json
 import subprocess
-
+from types import SimpleNamespace
 import pytest
-from langchain.tools import ToolRuntime
+from app.review.retrieval import find_paths, search
+from tests.support.source_fixtures import commit_sources
 
-from app.review.context import AgentContext
-from app.review.retrieval import diff_page, find_paths, search
-from app.review.tools import read_diff, search_code
+def context_for(service):
+    return SimpleNamespace(evidence=service, denied_paths=frozenset(), check_active=None, cursors={})
 
-pytest_plugins = ["tests.review.test_native_agents"]
-
-
-def runtime(context):
-    return ToolRuntime(state={}, context=context, config={}, stream_writer=lambda *_: None,
-                       tool_call_id="test", store=None)
-
-
-def commit_sources(service, texts):
-    for path, content in texts.items():
-        target = service.repo_path / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
-    for args in (("add", "."), ("-c", "user.name=Test", "-c", "user.email=test@example.test",
-                                 "commit", "-m", "search fixtures")):
-        subprocess.run(["git", "-C", str(service.repo_path), *args],
-                       check=True, capture_output=True)
-    head = subprocess.run(["git", "-C", str(service.repo_path), "rev-parse", "HEAD"],
-                          check=True, capture_output=True).stdout.decode().strip()
-    service.snapshot = service.snapshot.model_copy(update={"head_sha": head})
-    service.allowed_paths = frozenset(set(service.allowed_paths) | set(texts))
 
 
 async def test_late_file_and_in_file_hits_are_reachable_at_fixed_snapshot(source_service, monkeypatch):
@@ -40,7 +17,7 @@ async def test_late_file_and_in_file_hits_are_reachable_at_fixed_snapshot(source
     texts["pkg/f129.py"] = "NEEDLE\n" * 27
     commit_sources(source_service, texts)
     (source_service.repo_path / "pkg/f129.py").write_text("dirty tree\n", encoding="utf-8")
-    context = AgentContext(evidence=source_service)
+    context = context_for(source_service)
     searches = []
     original = source_service.git.find_matching_paths
 
@@ -73,7 +50,7 @@ async def test_late_file_and_in_file_hits_are_reachable_at_fixed_snapshot(source
 
 async def test_path_pagination_query_and_snapshot_binding(source_service):
     source_service.allowed_paths = frozenset(f"pkg/f{i:03d}.py" for i in range(170))
-    context = AgentContext(evidence=source_service)
+    context = context_for(source_service)
     pages, cursor = [], ""
     while True:
         page = find_paths(context, path="pkg", glob="*.py", cursor=cursor)
@@ -97,19 +74,22 @@ async def test_unreadable_earlier_page_and_cursor_restart_preserve_scope(source_
     texts["pkg/f124.py"] = "NEEDLE\nNEEDLE\n"
     commit_sources(source_service, texts)
     source_service.max_file_bytes = 50
-    context = AgentContext(evidence=source_service)
+    context = context_for(source_service)
     first = await search(context, "NEEDLE", path="pkg", limit=1)
     assert first["has_more"] and first["unreadable_files"] == 1
     # A recreated invocation shares only the immutable archive, not in-memory cursor state.
-    restarted = AgentContext(evidence=source_service)
-    last = await search(restarted, "NEEDLE", path="pkg", cursor=first["next_cursor"], limit=1)
+    restarted = context_for(source_service)
+    with pytest.raises(ValueError, match="invalid_cursor"):
+        await search(restarted, "NEEDLE", path="pkg", cursor=first["next_cursor"], limit=1)
+    last = await search(context, "NEEDLE", path="pkg", cursor=first["next_cursor"], limit=1)
     assert not last["has_more"] and last["matches"][0]["path"] == "pkg/f124.py"
     assert last["unreadable_files"] == 0 and not last["scope_complete"]
 
 
 async def test_search_cursor_filters_ranges_and_authorization(source_service):
     commit_sources(source_service, {"many.py": "VALUE\n" * 20})
-    context = AgentContext(evidence=source_service, denied_paths=frozenset({"safe.py"}))
+    context = context_for(source_service)
+    context.denied_paths = frozenset({"safe.py"})
     first = await search(context, "VALUE", path="many.py")
     for kwargs in ({"query": "OTHER", "path": "many.py"},
                    {"query": "VALUE", "path": "many.py", "side": "base"},
@@ -121,8 +101,8 @@ async def test_search_cursor_filters_ranges_and_authorization(source_service):
         with pytest.raises(ValueError, match="invalid_cursor"):
             await search(context, "VALUE", path="many.py", cursor=cursor)
     for path in ("../safe.py", ".env", "safe.py", "/absolute", "C:/file"):
-        result = await search_code.coroutine(query="VALUE", path=path, runtime=runtime(context))
-        assert not result["ok"], path
+        with pytest.raises(ValueError):
+            await search(context, "VALUE", path=path)
     with pytest.raises(ValueError):
         await search(context, "VALUE", limit=0)
     with pytest.raises(ValueError):
@@ -134,7 +114,7 @@ async def test_search_cursor_filters_ranges_and_authorization(source_service):
 async def test_large_binary_unreadable_and_empty_scopes_fail_closed(source_service, monkeypatch):
     commit_sources(source_service, {"large.py": "SECRET\n" * 50, "blob.dat": "binary\x00SECRET"})
     source_service.max_file_bytes = 100
-    context = AgentContext(evidence=source_service)
+    context = context_for(source_service)
     result = await search(context, "SECRET", path="large.py")
     assert result["matches"] == [] and result["unreadable_files"] == 1
     assert not result["scope_complete"]
@@ -175,54 +155,15 @@ async def test_large_binary_unreadable_and_empty_scopes_fail_closed(source_servi
         raise subprocess.TimeoutExpired("git", 1)
 
     monkeypatch.setattr(source_service.git, "find_matching_paths", timeout)
-    result = await search_code.coroutine(query="VALUE", runtime=runtime(context))
-    assert not result["ok"]
+    with pytest.raises(ValueError, match="snapshot_search_timeout"):
+        await search(context, "VALUE")
 
 
 async def test_search_cancellation_is_propagated(source_service):
     async def cancelled():
         raise asyncio.CancelledError()
 
-    context = AgentContext(evidence=source_service, check_active=cancelled)
+    context = context_for(source_service)
+    context.check_active = cancelled
     with pytest.raises(asyncio.CancelledError):
-        await search_code.coroutine(query="VALUE", runtime=runtime(context))
-
-
-def test_diff_hunk_pages_and_long_line_fragments_reconstruct_fixed_input(source_service):
-    lines = [{"kind": "added", "new_line_no": i + 1, "old_line_no": None,
-              "content": "长行" * 14000 if i == 3 else f"line {i}"} for i in range(145)]
-    hunks = [{"old_start": 1, "old_length": 0, "new_start": 1, "new_length": len(lines),
-              "hunk_id": str(i), "lines": lines if i == 0 else []} for i in range(95)]
-    context = AgentContext(evidence=source_service,
-                           changed_files=[{"file_path": "safe.py", "hunks": hunks}])
-    first = diff_page(context, "safe.py")
-    second = diff_page(context, "safe.py", cursor=first["next_cursor"])
-    assert [item["hunk_index"] for page in (first, second) for item in page["hunks"]] == list(range(95))
-    cursor, fragments = "", {}
-    while True:
-        page = diff_page(context, "safe.py", hunk_index=0, cursor=cursor)
-        assert len(json.dumps(page)) < 24000
-        for item in page["lines"]:
-            text = fragments.get(item["line_index"], "")
-            assert item["content_offset"] == len(text)
-            fragments[item["line_index"]] = text + item["content"]
-        if not page["has_more"]:
-            break
-        cursor = page["next_cursor"]
-    assert [fragments[i] for i in range(len(lines))] == [item["content"] for item in lines]
-    assert diff_page(context, "safe.py", hunk_index=0, start=140)["lines"][0]["line_index"] == 140
-    for kwargs in ({"hunk_index": -1}, {"hunk_index": 95}, {"hunk_index": 0, "start": 999},
-                   {"start": 1}, {"limit": 0}, {"hunk_index": 0, "cursor": first["next_cursor"]}):
-        with pytest.raises(ValueError):
-            diff_page(context, "safe.py", **kwargs)
-    empty = AgentContext(evidence=source_service,
-                         changed_files=[{"file_path": "safe.py", "hunks": []}])
-    assert diff_page(empty, "safe.py")["has_more"] is False
-
-
-async def test_diff_sensitive_rename_and_unknown_path_rejected(source_service):
-    context = AgentContext(evidence=source_service, changed_files=[
-        {"file_path": "safe.py", "old_file_path": ".env", "hunks": []}])
-    for path in ("safe.py", "other.py", ".env", "../safe.py"):
-        result = await read_diff.coroutine(path=path, runtime=runtime(context))
-        assert not result["ok"]
+        await search(context, "VALUE")

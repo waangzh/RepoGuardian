@@ -19,7 +19,7 @@ class PublicationPreflight:
         config = self.config
         if not config.repoguardian_github_publish_enabled:
             raise GitHubPublishError("publication_disabled")
-        if task.status not in {"completed", "completed_with_warnings"}:
+        if task.status not in {"completed", "partial"}:
             raise GitHubPublishError("review_not_publishable")
         plan = await asyncio.to_thread(PublicationPlanner(self.artifacts).build, task)
         if not plan.content_eligible:
@@ -31,6 +31,8 @@ class PublicationPreflight:
             raise GitHubPublishError("publisher_identity_mismatch")
         repository = await self.github.get(path)
         repository_id = repository.get("id")
+        if repository_id != task.snapshot.repository_id:
+            raise GitHubPublishError("repository_identity_mismatch")
         allowlist = {int(value.strip()) for value in config.repoguardian_github_publish_allowed_repositories.split(",") if value.strip().isdigit()}
         if type(repository_id) is not int or repository_id not in allowlist or repository.get("full_name", "").casefold() != f"{owner}/{repo}".casefold():
             raise GitHubPublishError("repository_not_authorized")
@@ -70,9 +72,11 @@ class PublicationPreflight:
                 locations[finding.finding_key] = mapped
         context = {"owner": owner, "repo": repo, "pr_number": number, "repository_id": repository_id,
                    "publisher_identity": f"user:{user['id']}", "publisher_id": user["id"], "base_sha": snapshot.declared_base_sha,
-                   "order": (task.completed_at or task.updated_at).astimezone(timezone.utc).isoformat() + ":" + task.id}
+                   "order": (task.completed_at or task.updated_at).astimezone(timezone.utc).isoformat() + ":" + task.id,
+                   "report_version": plan.report_version}
         partial = plan.outcome.kind == "inconclusive" or plan.outcome.coverage != "complete" or bool(fallback) or bool(plan.withheld_findings) or len(keys) != len(available)
-        return {"ready": True, "review_id": task.id, "plan_hash": stable_hash(plan.model_dump(mode="json")),
+        return {"ready": True, "review_id": task.id, "report_version": plan.report_version,
+                "plan_hash": stable_hash(plan.model_dump(mode="json")),
             "head_sha": plan.snapshot.head_sha, "head_sha_matches": True, "pr_open": True, "permissions_ok": True,
             "summary_action": "inspect", "summary_comment_id": None, "finding_keys": keys,
             "inline": {"selected": len(inline), "ready": len(locations), "already_published": 0,

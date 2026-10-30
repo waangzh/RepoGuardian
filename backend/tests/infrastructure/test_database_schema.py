@@ -1,49 +1,49 @@
-import logging
 from pathlib import Path
 
+import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, inspect, select
+from alembic.util import CommandError
+from sqlalchemy import create_engine, inspect, text
 
 from app.core import database
-from app.models.orm import PreviewJobOrm
 
 
-def test_cache_cleanup_migrates_new_and_existing_schema_without_losing_jobs(
-    tmp_path, monkeypatch, caplog,
-):
-    logger = logging.getLogger(__name__)
-    engine = create_engine(f"sqlite:///{(tmp_path / 'business.db').as_posix()}")
-    monkeypatch.setattr(database, "sync_engine", engine)
+def config_for(connection):
     config = Config()
     config.set_main_option("script_location", str(Path(__file__).resolve().parents[2] / "alembic"))
-    try:
-        with engine.connect() as connection:
-            config.attributes["connection"] = connection
+    config.attributes["connection"] = connection
+    return config
+
+
+def test_fresh_schema_has_work_and_tickets_without_retired_graph_tables(tmp_path, monkeypatch):
+    engine = create_engine(f"sqlite:///{tmp_path / 'new.db'}")
+    monkeypatch.setattr(database, "sync_engine", engine)
+    with engine.connect() as connection:
+        command.upgrade(config_for(connection), "head")
+        connection.commit()
+        tables = set(inspect(connection).get_table_names())
+        assert {"review_work_items", "review_candidates", "review_requests", "review_create_intents"} <= tables
+        assert not {"review_branch_budgets", "review_model_calls", "preview_jobs", "review_previews"} & tables
+        assert not {"thread_id", "mode", "report_markdown"} & {
+            column["name"] for column in inspect(connection).get_columns("review_tasks")}
+        assert database.schema_is_current()
+    engine.dispose()
+
+
+def test_existing_review_database_is_not_destructively_switched(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'old.db'}")
+    with engine.connect() as connection:
+        config = config_for(connection)
+        connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) PRIMARY KEY)"))
+        connection.execute(text("INSERT INTO alembic_version VALUES ('20261028_0005')"))
+        connection.execute(text("CREATE TABLE review_tasks (id TEXT PRIMARY KEY)"))
+        connection.execute(text("INSERT INTO review_tasks VALUES ('old')"))
+        connection.execute(text("CREATE TABLE github_publication_attempts (id TEXT PRIMARY KEY)"))
+        connection.execute(text("INSERT INTO github_publication_attempts VALUES ('uncertain')"))
+        connection.commit()
+        with pytest.raises(CommandError, match="Can't locate revision"):
             command.upgrade(config, "head")
-            connection.execute(PreviewJobOrm.__table__.insert().values(
-                id="retained-job", request={"pr_url": "https://github.com/local/repo/pull/1"},
-                status="completed",
-            ))
-            connection.commit()
-            assert database.schema_is_current()
-            assert "preview_input_cache" not in inspect(connection).get_table_names()
-
-            command.downgrade(config, "20261027_0001")
-            connection.commit()
-            assert not database.schema_is_current()
-            assert "preview_input_cache" in inspect(connection).get_table_names()
-
-            command.upgrade(config, "head")
-            connection.commit()
-            assert database.schema_is_current()
-            assert "preview_input_cache" not in inspect(connection).get_table_names()
-            assert connection.scalar(select(PreviewJobOrm.id)) == "retained-job"
-
-            command.downgrade(config, "base")
-            connection.commit()
-            assert inspect(connection).get_table_names() == ["alembic_version"]
-    finally:
-        engine.dispose()
-    logger.warning("migration_logging_preserved")
-    assert "migration_logging_preserved" in caplog.text
+        assert connection.scalar(text("SELECT COUNT(*) FROM review_tasks WHERE id='old'")) == 1
+        assert "github_publication_attempts" in inspect(connection).get_table_names()
+    engine.dispose()

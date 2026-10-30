@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.api import reviews as _reviews
 from app.core.config import settings
-from app.models.review_plan import FileDiffResponse, FileContextResponse
+from app.models.file_view import FileDiffResponse, FileContextResponse
 
 router = APIRouter(prefix="/reviews", tags=["reviews"])
 

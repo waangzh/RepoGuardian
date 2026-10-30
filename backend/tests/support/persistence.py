@@ -4,8 +4,7 @@ import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from app.core.database import Base
-from app.services.review.artifact_store import LocalArtifactStore
-from app.services.review.review_repository import ReviewRepository
+from app.review.store import ReviewStore
 from app.services.review.task_queue import DatabaseTaskQueue
 
 
@@ -18,6 +17,6 @@ def persistence(tmp_path: Path):
         connection.execute("PRAGMA foreign_keys=ON")
     Base.metadata.create_all(engine)
     sessions = sessionmaker(engine, expire_on_commit=False)
-    repo = ReviewRepository(sessions, LocalArtifactStore(tmp_path / "artifacts"), require_migration=False)
+    repo = ReviewStore(sessions)
     yield repo, DatabaseTaskQueue(sessions), sessions
     engine.dispose()

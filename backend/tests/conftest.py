@@ -4,7 +4,7 @@ from app.languages import isolation, parser_cache
 
 collect_ignore = ["fixtures"]
 
-pytest_plugins = ["tests.support.persistence"]
+pytest_plugins = ["tests.support.persistence", "tests.support.source_fixtures"]
 
 
 @pytest.fixture(autouse=True)

@@ -70,10 +70,11 @@ class Settings(BaseSettings):
     repoguardian_agent_output_tokens: int = Field(default=4096, ge=256, le=32768)
     repoguardian_review_max_model_calls: int = Field(default=64, ge=1, le=1000)
     repoguardian_review_max_input_tokens: int = Field(default=500_000, ge=1000, le=10_000_000)
+    repoguardian_review_max_output_tokens: int = Field(default=262144, ge=1024, le=10_000_000)
+    repoguardian_model_context_tokens: int = Field(default=64000, ge=8192, le=1_000_000)
 
     # ---- 数据库 ----
-    repoguardian_db_path: Path = Path(".repoguardian/native-review.db")
-    repoguardian_checkpoint_db: Path = Path(".repoguardian/review-checkpoints.db")
+    repoguardian_db_path: Path = Path(".repoguardian/reviews.db")
     repoguardian_worker_poll_seconds: float = Field(default=0.25, ge=0.05, le=60)
     repoguardian_worker_lease_seconds: int = Field(default=300, ge=5, le=86_400)
     repoguardian_worker_max_attempts: int = Field(default=3, ge=1, le=20)
@@ -91,12 +92,6 @@ class Settings(BaseSettings):
     repoguardian_prepared_workspace_ttl_seconds: int = Field(default=3_600, ge=900, le=86_400)
     repoguardian_prepared_workspace_max_entries: int = Field(default=4, ge=0, le=100)
     repoguardian_prepared_workspace_max_bytes: int = Field(default=4 * 1024**3, ge=0)
-    repoguardian_checkpoint_vacuum_min_bytes: int = Field(
-        default=64 * 1024 * 1024, ge=0
-    )
-    repoguardian_checkpoint_vacuum_min_ratio: float = Field(
-        default=0.2, ge=0.0, le=1.0
-    )
 
 
     # Windows 编辑器常会给 UTF-8 .env 写入 BOM；utf-8-sig 会安全移除 BOM，

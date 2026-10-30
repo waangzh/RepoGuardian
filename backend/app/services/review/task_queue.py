@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.core.database import sync_session
 from app.models.orm import ReviewTaskOrm, WorkerJobOrm, utcnow
 from app.services.review.review_task_access import lock_live_review
+from app.review.store import as_utc
 
 
 class NonRetryableJobError(ValueError):
@@ -148,7 +149,8 @@ class DatabaseTaskQueue:
                 )
         return None
 
-    def heartbeat(self, job_id: str, worker_id: str, *, lease_seconds: int | None = None) -> bool:
+    def heartbeat(self, job_id: str, worker_id: str, *, attempt: int,
+                  lease_seconds: int | None = None) -> bool:
         now = utcnow()
         result = None
         with self._session_factory.begin() as session:
@@ -158,6 +160,8 @@ class DatabaseTaskQueue:
                     WorkerJobOrm.id == job_id,
                     WorkerJobOrm.status == "leased",
                     WorkerJobOrm.lease_owner == worker_id,
+                    WorkerJobOrm.attempts == attempt,
+                    WorkerJobOrm.lease_until > now,
                 )
                 .values(
                     heartbeat_at=now,
@@ -169,7 +173,7 @@ class DatabaseTaskQueue:
             )
         return result.rowcount == 1
 
-    def complete(self, job_id: str, worker_id: str) -> bool:
+    def complete(self, job_id: str, worker_id: str, *, attempt: int) -> bool:
         now = utcnow()
         with self._session_factory.begin() as session:
             result = session.execute(
@@ -178,6 +182,8 @@ class DatabaseTaskQueue:
                     WorkerJobOrm.id == job_id,
                     WorkerJobOrm.status == "leased",
                     WorkerJobOrm.lease_owner == worker_id,
+                    WorkerJobOrm.attempts == attempt,
+                    WorkerJobOrm.lease_until > now,
                 )
                 .values(
                     status="completed",
@@ -189,11 +195,13 @@ class DatabaseTaskQueue:
             )
             return result.rowcount == 1
 
-    def fail(self, job_id: str, worker_id: str, error: str, *, retry: bool = True, retry_after: int | None = None) -> str:
+    def fail(self, job_id: str, worker_id: str, error: str, *, attempt: int,
+             retry: bool = True, retry_after: int | None = None) -> str:
         now = utcnow()
         with self._session_factory.begin() as session:
             row = session.get(WorkerJobOrm, job_id)
-            if row is None or row.status != "leased" or row.lease_owner != worker_id:
+            if (row is None or row.status != "leased" or row.lease_owner != worker_id
+                    or row.attempts != attempt or row.lease_until is None or as_utc(row.lease_until) <= now):
                 raise ValueError("worker does not own the job lease")
             can_retry = retry and row.attempts < row.max_attempts
             row.status = "retry" if can_retry else "dead_letter"
@@ -226,7 +234,7 @@ class ReviewWorker:
         if job is None:
             return False
         handler_task = asyncio.create_task(self.handler(job))
-        heartbeat = asyncio.create_task(self._heartbeat(job.id, handler_task))
+        heartbeat = asyncio.create_task(self._heartbeat(job, handler_task))
         self._active[job.id] = handler_task
         self._active_task_ids[job.id] = job.task_id
         try:
@@ -234,7 +242,8 @@ class ReviewWorker:
         except asyncio.CancelledError:
             try:
                 await asyncio.to_thread(
-                    self.queue.fail, job.id, self.worker_id, "task cancelled", retry=True
+                    self.queue.fail, job.id, self.worker_id, "task cancelled",
+                    attempt=job.attempts, retry=True
                 )
             except ValueError:
                 # 任务取消或租约失效后，不再更新该作业。
@@ -242,13 +251,16 @@ class ReviewWorker:
             if asyncio.current_task() and asyncio.current_task().cancelling():
                 raise
         except Exception as exc:
-            await asyncio.to_thread(
-                self.queue.fail, job.id, self.worker_id, str(exc).strip() or type(exc).__name__,
-                retry=not isinstance(exc, NonRetryableJobError),
-                retry_after=exc.retry_after if isinstance(exc, RetryAfterJobError) else None,
-            )
+            try:
+                await asyncio.to_thread(
+                    self.queue.fail, job.id, self.worker_id, str(exc).strip() or type(exc).__name__,
+                    attempt=job.attempts, retry=not isinstance(exc, NonRetryableJobError),
+                    retry_after=exc.retry_after if isinstance(exc, RetryAfterJobError) else None,
+                )
+            except ValueError:
+                pass  # A replacement lease owns all subsequent job transitions.
         else:
-            await asyncio.to_thread(self.queue.complete, job.id, self.worker_id)
+            await asyncio.to_thread(self.queue.complete, job.id, self.worker_id, attempt=job.attempts)
         finally:
             self._active.pop(job.id, None)
             self._active_task_ids.pop(job.id, None)
@@ -279,11 +291,11 @@ class ReviewWorker:
                 cancelled = True
         return cancelled
 
-    async def _heartbeat(self, job_id: str, handler_task: asyncio.Task | None = None) -> None:
+    async def _heartbeat(self, job: ClaimedJob, handler_task: asyncio.Task | None = None) -> None:
         interval = max(1.0, settings.repoguardian_worker_lease_seconds / 3)
         while True:
             await asyncio.sleep(interval)
-            renewed = await asyncio.to_thread(self.queue.heartbeat, job_id, self.worker_id)
+            renewed = await asyncio.to_thread(self.queue.heartbeat, job.id, self.worker_id, attempt=job.attempts)
             if not renewed:
                 if handler_task is not None:
                     handler_task.cancel()

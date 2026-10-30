@@ -38,6 +38,33 @@ def build_report(run, work_items, candidates, usage):
 def overview_material(report, provider):
     """Archive bytes are source, not reviewer narrative. Keep the input bounded."""
     evidence, visible = [], {}
+    payload = {
+        "snapshot": provider.run.snapshot.model_dump(), "changes": [], "source_materials": evidence,
+        "findings": [], "decision_boundaries": [], "scope_reasons": report.reasons[:30],
+        "omitted": {"changes": 0, "findings": 0, "decision_boundaries": 0, "sources": 0},
+    }
+    for change in provider.run.changed_files:
+        item = {"path": change.file_path, "change_type": change.change_type,
+                "additions": change.additions, "deletions": change.deletions}
+        if tokens(payload) + tokens(item) > 1700:
+            payload["omitted"]["changes"] += 1
+        else:
+            payload["changes"].append(item)
+    for finding in report.findings:
+        item = {"id": finding.id, "author_comment": finding.author_comment[:800]}
+        if tokens(payload) + tokens(item) > 2300:
+            payload["omitted"]["findings"] += 1
+        else:
+            payload["findings"].append(item)
+    for candidate in report.candidates:
+        if candidate.finding is not None:
+            continue
+        item = {"claim": candidate.proposal.claim[:300],
+                "verdict": candidate.verification.verdict if candidate.verification else "unverified"}
+        if tokens(payload) + tokens(item) > 2800:
+            payload["omitted"]["decision_boundaries"] += 1
+        else:
+            payload["decision_boundaries"].append(item)
     for item in report.units:
         for source_id in item.visible_source_ids:
             if source_id in visible:
@@ -47,22 +74,11 @@ def overview_material(report, provider):
             except (ValueError, OSError):
                 continue
             packet = {"source_ref": f"S{len(visible) + 1}", "source": ref.model_dump(), "content": content}
-            if tokens(evidence + [packet]) > 3500:
+            if tokens(payload) + tokens(packet) > 4500:
+                payload["omitted"]["sources"] += 1
                 continue
             evidence.append(packet)
             visible[source_id] = packet
-    payload = {
-        "snapshot": provider.run.snapshot.model_dump(),
-        "changes": [{"path": change.file_path, "change_type": change.change_type,
-                     "additions": change.additions, "deletions": change.deletions}
-                    for change in provider.run.changed_files][:100],
-        "source_materials": evidence,
-        "findings": [{"id": item.id, "author_comment": item.author_comment} for item in report.findings][:100],
-        "decision_boundaries": [
-            {"claim": item.proposal.claim, "verdict": item.verification.verdict if item.verification else "unverified"}
-            for item in report.candidates if item.finding is None][:100],
-        "scope_reasons": report.reasons[:100],
-    }
     return payload, {packet["source_ref"]: packet["source"] for packet in evidence}
 
 
@@ -76,7 +92,7 @@ async def generate_overview(report, provider, budget, model):
     if (previous and previous.overview.input_hash == identity(packet)
             and previous.overview.status in {"ready", "failed"}):
         return previous.overview
-    overview = Overview(status="running", input_hash=identity(packet))
+    overview = Overview(status="running", input_hash=identity(packet), omitted=packet["omitted"])
     report.overview = overview
     await asyncio.to_thread(provider.store.save_report, provider.run.id, report, provider.lease)
     ticket = None
@@ -85,15 +101,14 @@ async def generate_overview(report, provider, budget, model):
         messages = [SystemMessage(content=prompt), HumanMessage(content=json.dumps(packet, ensure_ascii=False))]
         estimate = tokens([prompt, packet, OverviewOutput.model_json_schema()]) + 512
         ticket = await budget.reserve(None, estimate, overview=True)
-        structured = model.with_structured_output(OverviewOutput, include_raw=True)
+        structured = model.bind_tools([OverviewOutput], tool_choice="OverviewOutput")
         seconds = max(0, (provider.run.hard_deadline - utcnow()).total_seconds())
         async with asyncio.timeout(seconds):
-            response = await structured.ainvoke(messages)
-        raw = response.get("raw")
+            raw = await structured.ainvoke(messages)
         await budget.settle(ticket, getattr(raw, "usage_metadata", None))
-        output = response["parsed"]
-        if not isinstance(output, OverviewOutput):
+        if len(raw.tool_calls) != 1 or raw.tool_calls[0]["name"] != "OverviewOutput":
             raise ValueError("overview_schema")
+        output = OverviewOutput.model_validate(raw.tool_calls[0]["args"])
         if any(handle not in refs for paragraph in output.change_overview for handle in paragraph.source_refs):
             raise ValueError("overview_unknown_source")
         if any(key not in {finding.id for finding in report.findings} for key in output.finding_order):

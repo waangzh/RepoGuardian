@@ -7,8 +7,7 @@ import type { PublicationCapability } from "../../../types/operations";
 import { preflightPublication, createPublication, getPublications, getPublication, retryPublication } from "../../../api/client";
 import { publicationFindingTitle } from "../../../utils/reportPresentation";
 import { publicationErrorText, publicationItemKindLabel, publicationItemStateLabel,
-  publicationStateLabel, publicationWarningText, inlineActionLabel,
-  summarySourceLabel } from "../../../utils/publicationPresentation";
+  publicationStateLabel, publicationWarningText, inlineActionLabel } from "../../../utils/publicationPresentation";
 import StatusBadge from "../../common/StatusBadge.vue";
 
 const props = defineProps<{ reviewId: string; plan: PublicationPlan; capability: PublicationCapability | null; capabilityError: boolean }>();
@@ -30,8 +29,7 @@ const expandAll = ref(false);
 let controller: AbortController | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let generation = 0;
-const findings = computed(() => props.plan.presentation?.findings
-  ?? [...props.plan.inline_drafts, ...props.plan.summary_findings].sort((left, right) =>
+const findings = computed(() => [...props.plan.inline_drafts, ...props.plan.summary_findings].sort((left, right) =>
     ["critical", "high", "medium", "low"].indexOf(left.severity) - ["critical", "high", "medium", "low"].indexOf(right.severity)
     || (left.anchor?.file_path ?? "").localeCompare(right.anchor?.file_path ?? "")
     || (left.anchor?.start_line ?? 0) - (right.anchor?.start_line ?? 0)));
@@ -51,12 +49,14 @@ function invalidate() { preview.value = null; acknowledge.value = false; confirm
 watch(() => props.plan, (value, previous) => {
   generation += 1; controller?.abort(); clearTimer(); current.value = null; history.value = []; busy.value = false;
   selected.value = findings.value.map(item => item.finding_key); token.value = ""; error.value = ""; expandAll.value = false;
-  invalidate(); if (previous !== undefined) emit("result", null);
+  invalidate();
+if (previous !== undefined) emit("result", null);
 }, { immediate: true });
 watch(selected, invalidate, { deep: true });
 watch(token, () => { generation += 1; controller?.abort(); clearTimer(); busy.value = false; invalidate(); });
 watch(current, value => {
-  if (!value) { emit("result", null); return; }
+  if (!value) { emit("result", null);
+return; }
   if (value.state === "succeeded") {
     const inline = value.items.filter(item => item.kind === "inline" && item.state === "published").length;
     emit("result", { tone: "success", text: inline ? `已发布总结及 ${inline} 条代码意见` : "已发布总结评论" });
@@ -97,7 +97,7 @@ async function submit() {
   dialog.value?.close();
   current.value = null;
   await action(async signal => {
-    const accepted = await createPublication(props.reviewId, { expected_plan_hash: prepared.plan_hash, expected_head_sha: prepared.head_sha,
+    const accepted = await createPublication(props.reviewId, { expected_plan_hash: prepared.plan_hash, expected_report_version: prepared.report_version, expected_head_sha: prepared.head_sha,
       publish_summary: true, finding_keys: [...selected.value], acknowledge_partial_review: acknowledge.value }, confirmationKey.value, token.value, signal);
     if (signal.aborted) return;
     const result = await getPublication(props.reviewId, accepted.publication_id, token.value, signal);
@@ -105,15 +105,18 @@ async function submit() {
   });
 }
 async function loadHistory() {
-  await action(async signal => { const result = await getPublications(props.reviewId, token.value, signal); if (!signal.aborted) history.value = result; });
+  await action(async signal => { const result = await getPublications(props.reviewId, token.value, signal);
+if (!signal.aborted) history.value = result; });
 }
 async function recover() {
   if (!current.value) return;
   const identity = current.value.id;
-  await action(async signal => { const result = await retryPublication(props.reviewId, identity, token.value, signal); if (!signal.aborted) schedulePoll(result); });
+  await action(async signal => { const result = await retryPublication(props.reviewId, identity, token.value, signal);
+if (!signal.aborted) schedulePoll(result); });
 }
 function safeLink(value: string | null) {
-  try { const url = new URL(value || ""); return url.protocol === "https:" && url.hostname === "github.com" ? url.href : undefined; }
+  try { const url = new URL(value || "");
+return url.protocol === "https:" && url.hostname === "github.com" ? url.href : undefined; }
   catch { return undefined; }
 }
 const placementLabel = (placement: string) => placement === "inline" ? "代码行评论" : "总结评论";
@@ -121,25 +124,45 @@ const highPriority = (key: string) => ["critical", "high"].includes(severityOf(k
 </script>
 
 <template>
-  <section class="github-publication" aria-label="发布到 GitHub">
-    <header class="github-publication__head"><h3>发布到 GitHub</h3><p>由服务端使用独立发布身份写入 PR：更新总结评论并创建所选代码行评论。复制评论不受此限制。</p></header>
-    <template v-if="publishEnabled">
-      <fieldset :disabled="busy"><legend>1. 选择要发布的已核验问题（PR 总结评论始终发布）</legend>
-        <p v-if="!findings.length">没有合格问题草稿；预检将校验能否发布当前审查结论。</p>
-        <label v-for="finding in findings" :key="finding.finding_key"><input v-model="selected" type="checkbox" :value="finding.finding_key" /><span>{{ publicationFindingTitle(finding) }}</span><StatusBadge :status="finding.severity" /><span class="github-publication__placement">{{ placementLabel(finding.placement) }}</span></label>
-      </fieldset>
-      <div class="github-publication__authorize"><label class="github-publication__credential">2. 发布授权<input v-model="token" type="password" autocomplete="off" placeholder="独立操作口令，不是 GitHub Token" :disabled="busy" /></label><button type="button" class="button button--secondary button--compact" :disabled="busy || !token" @click="preflight">检查发布条件并预览</button></div>
-      <p v-if="busy" role="status">正在处理发布请求…</p><p v-if="error" role="alert">{{ error }}</p>
-      <section v-if="preview" aria-label="实际发布预览">
-        <h3>3. 实际发布预览</h3>
-        <p>PR 总结评论{{ preview.summary_action === 'update' ? '将更新已有评论' : '将新建评论' }} · 审查版本 <code>{{ preview.head_sha.slice(0, 8) }}</code></p>
-        <p>将新建 {{ preview.inline.ready }} 条代码行评论 · 已存在相同评论 {{ preview.inline.already_published }} 条 · 无法定位、将写入总结评论 {{ preview.inline.summary_fallback }} 条</p>
-        <p v-if="preview.presentation">已确认 {{ preview.presentation.delivery.confirmed }} 项 / 可交付 {{ preview.presentation.delivery.eligible }} 项 / 选择 {{ preview.presentation.delivery.selected }} 项 / 仅在总结中反馈 {{ preview.presentation.delivery.summary_only }} 项 / 未选择 {{ preview.presentation.delivery.not_selected }} 项。</p>
-        <p v-if="preview.presentation">{{ summarySourceLabel(preview.presentation.summary_source) }}；当前是发布预览，实际成功状态与讨论链接以 GitHub 回执为准。</p>
-        <article class="markdown-body github-publication__summary" v-html="summaryHtml" />
-        <div class="github-publication__inline-head"><h4>逐条代码意见</h4><button v-if="preview.inline_previews.length" type="button" class="text-button" @click="expandAll = !expandAll">{{ expandAll ? '收起全部' : '展开全部' }}</button></div>
-        <details v-for="item in preview.inline_previews" :key="item.finding_key" class="github-publication__inline" :open="expandAll || highPriority(item.finding_key)">
-          <summary><span class="github-publication__inline-location"><code>{{ item.location?.path || '总结评论' }}</code><template v-if="item.location">:{{ item.location.line }} · {{ item.location.side === 'LEFT' ? 'Base' : 'Head' }}</template></span><StatusBadge :status="severityOf(item.finding_key)" /><span class="github-publication__inline-action">{{ inlineActionLabel[item.action] }}</span></summary>
+<section class="github-publication" aria-label="发布到 GitHub">
+<header class="github-publication__head">
+<h3>发布到 GitHub</h3>
+<p>由服务端使用独立发布身份写入 PR：更新总结评论并创建所选代码行评论。复制评论不受此限制。</p>
+</header>
+<template v-if="publishEnabled">
+<fieldset :disabled="busy">
+<legend>1. 选择要发布的已核验问题（PR 总结评论始终发布）</legend>
+<p v-if="!findings.length">没有合格问题草稿；预检将校验能否发布当前审查结论。</p>
+<label v-for="finding in findings" :key="finding.finding_key">
+<input v-model="selected" type="checkbox" :value="finding.finding_key" />
+<span>{{ publicationFindingTitle(finding) }}</span>
+<StatusBadge :status="finding.severity" />
+<span class="github-publication__placement">{{ placementLabel(finding.placement) }}</span>
+</label>
+</fieldset>
+<div class="github-publication__authorize">
+<label class="github-publication__credential">2. 发布授权<input v-model="token" type="password" autocomplete="off" placeholder="独立操作口令，不是 GitHub Token" :disabled="busy" />
+</label>
+<button type="button" class="button button--secondary button--compact" :disabled="busy || !token" @click="preflight">检查发布条件并预览</button>
+</div>
+<p v-if="busy" role="status">正在处理发布请求…</p>
+<p v-if="error" role="alert">{{ error }}</p>
+<section v-if="preview" aria-label="实际发布预览">
+<h3>3. 实际发布预览</h3>
+<p>PR 总结评论{{ preview.summary_action === 'update' ? '将更新已有评论' : '将新建评论' }} · 审查版本 <code>{{ preview.head_sha.slice(0, 8) }}</code>
+</p>
+<p>将新建 {{ preview.inline.ready }} 条代码行评论 · 已存在相同评论 {{ preview.inline.already_published }} 条 · 无法定位、将写入总结评论 {{ preview.inline.summary_fallback }} 条</p>
+<article class="markdown-body github-publication__summary" v-html="summaryHtml" />
+<div class="github-publication__inline-head">
+<h4>逐条代码意见</h4>
+<button v-if="preview.inline_previews.length" type="button" class="text-button" @click="expandAll = !expandAll">{{ expandAll ? '收起全部' : '展开全部' }}</button>
+</div>
+<details v-for="item in preview.inline_previews" :key="item.finding_key" class="github-publication__inline" :open="expandAll || highPriority(item.finding_key)">
+<summary>
+<span class="github-publication__inline-location">
+<code>{{ item.location?.path || '总结评论' }}</code>
+<template v-if="item.location">:{{ item.location.line }} · {{ item.location.side === 'LEFT' ? 'Base' : 'Head' }}
+</template></span><StatusBadge :status="severityOf(item.finding_key)" /><span class="github-publication__inline-action">{{ inlineActionLabel[item.action] }}</span></summary>
           <article class="markdown-body" v-html="renderMarkdown(item.body_markdown)" />
         </details>
         <p v-for="warning in preview.warnings" :key="warning">{{ publicationWarningText(warning) }}</p>
@@ -204,5 +227,6 @@ const highPriority = (key: string) => ["critical", "high"].includes(severityOf(k
 .github-publication__record ul { margin: 0; padding-left: 18px; color: var(--text-secondary); display: grid; gap: 6px; }
 .github-publication__dialog { width: min(520px, calc(100vw - 32px)); padding: 24px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); color: var(--text-primary); }
 .github-publication__dialog::backdrop { background: #17232980; }
-@media (max-width: 600px) { .github-publication { padding: 16px; } }
+@media (max-width: 600px) { .github-publication { padding: 16px; }
+}
 </style>
