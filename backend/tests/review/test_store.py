@@ -90,3 +90,35 @@ def test_hard_deadline_blocks_overview_even_with_reserved_budget(tmp_path):
         row.task_snapshot = payload
     with pytest.raises(BudgetExceeded, match="hard_deadline"):
         store.reserve(run.id, None, 1000, lease, overview=True)
+
+
+def test_retried_verification_gets_a_new_minimum_before_discovery(tmp_path):
+    store, run, lease, _ = setup_run(tmp_path, calls=3)
+    reviewer = store.claim(run.id, store.work_items(run.id)[0].id, lease)
+    submit_candidate(store, run, lease, reviewer)
+    check = next(work for work in store.work_items(run.id) if work.kind == "verification")
+    check = store.claim(run.id, check.id, lease)
+    ticket = store.reserve(run.id, check, 1000, lease)
+    store.settle(run.id, ticket, None, lease)
+    store.begin(run.id, lease)
+    reviewer = store.claim(run.id, reviewer.id, lease)
+    with pytest.raises(BudgetExceeded, match="model_call_limit"):
+        store.reserve(run.id, reviewer, 1000, lease)
+    check = store.claim(run.id, check.id, lease)
+    store.reserve(run.id, check, 1000, lease)
+
+
+def test_late_completion_cannot_turn_hard_timeout_into_completed(tmp_path):
+    store, run, lease, sessions = setup_run(tmp_path)
+    work = store.claim(run.id, store.work_items(run.id)[0].id, lease)
+    with sessions.begin() as session:
+        row = session.get(ReviewTaskOrm, run.id)
+        payload = dict(row.task_snapshot)
+        payload["hard_deadline"] = (utcnow() - timedelta(seconds=1)).isoformat()
+        row.task_snapshot = payload
+    with pytest.raises(BudgetExceeded, match="hard_deadline"):
+        store.deliver(run.id, work, ["h1"], {}, lease)
+    store.finish_work(run.id, work, "completed", {}, None, lease)
+    saved = store.work_items(run.id)[0]
+    assert saved.status == "interrupted"
+    assert saved.error_code == "hard_deadline"

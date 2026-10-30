@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 import threading
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -74,3 +75,15 @@ class LocalArtifactStore:
             raise ValueError("artifact path escapes configured root")
         with path.open(encoding="utf-8", newline="") as handle:
             return handle.read()
+
+    def remove_owner(self, task_id):
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", task_id):
+            raise ValueError("invalid artifact owner")
+        path = self.root / task_id
+        if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
+            raise ValueError("artifact owner is a link")
+        resolved = path.resolve()
+        if resolved.parent != self.root or resolved.name != task_id:
+            raise ValueError("artifact owner escapes root")
+        if resolved.exists():
+            shutil.rmtree(resolved)

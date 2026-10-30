@@ -56,7 +56,7 @@ class PublicationPlanner:
                          for candidate in (report.candidates if report else []))
         outcome = ReviewOutcome(
             kind=("failed" if run.status == "failed" else "cancelled" if run.status == "cancelled"
-                  else "findings" if selected else "inconclusive" if unresolved
+                  else "findings" if selected else "inconclusive" if unresolved or withheld
                     or run.status != "completed" or (report and "scope_empty" in report.reasons) else "clean"),
             coverage="complete" if run.status == "completed" else "partial",
             confirmed_count=len([candidate for candidate in (report.candidates if report else [])
@@ -73,6 +73,10 @@ class PublicationPlanner:
             content_eligible=not blockers, blocking_reasons=blockers,
             overview_status=report.overview.status if report else "pending",
             scope_reasons=report.reasons if report else [],
+            historical_findings=[{"claim": item["claim"], "head_sha": item["head_sha"],
+                "rechecked": bool(report and any(candidate.previous_candidate_id == item["candidate_id"]
+                    and candidate.verification is not None for candidate in report.candidates)),
+                "url": (item.get("receipt") or {}).get("url")} for item in run.plan.history],
             withheld_findings=[WithheldFinding(candidate_id=identity, reason_code=reason)
                                for identity, reason in sorted(set(withheld))])
         for finding in selected:

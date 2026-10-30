@@ -16,6 +16,12 @@ import re
 from app.core.config import settings
 from app.models.incremental import IncrementalWebhookReceipt
 from app.review.contracts import ReviewRequest
+from app.review.planner import identity
+
+
+def review_event_key(parsed):
+    return "webhook:" + identity([parsed["repository"], parsed["pr_number"],
+                                  parsed["base_sha"], parsed["head_sha"]])
 
 
 def verify_signature(body: bytes, signature: str | None) -> bool:
@@ -104,14 +110,24 @@ class IncrementalWebhookService:
             if any(existing.get(key) != parsed[key] for key in ("repository", "pr_number", "head_sha")):
                 return IncrementalWebhookReceipt(delivery_id=delivery_id, status="failed",
                                                  reason="delivery_identity_conflict")
-            status = existing["status"] if existing["status"] in {"accepted", "completed", "failed"} else "skipped"
-            return IncrementalWebhookReceipt(delivery_id=delivery_id, status=status,
-                                             reason=existing.get("reason"),
-                                             task_id=existing.get("task_id"))
+            if existing["status"] != "accepted":
+                status = existing["status"] if existing["status"] in {"completed", "failed"} else "skipped"
+                return IncrementalWebhookReceipt(delivery_id=delivery_id, status=status,
+                                                 reason=existing.get("reason"), task_id=existing.get("task_id"))
+        import asyncio
+        request_hash = identity(ReviewRequest(pr_url=parsed["pr_url"]).model_dump(mode="json"))
+        previous_id = await asyncio.to_thread(self.repository.find_intent,
+            "github-webhook", review_event_key(parsed), request_hash)
+        count = await asyncio.to_thread(self.repository.webhook_count, parsed["repository"], parsed["pr_number"])
+        if previous_id is None and count >= settings.repoguardian_incremental_review_max_runs_per_hour:
+            await self.review_service.stop_obsolete(parsed)
+            await self._finish(delivery_id, status="skipped", reason="review_frequency_limited")
+            return IncrementalWebhookReceipt(delivery_id=delivery_id, status="skipped",
+                                             reason="review_frequency_limited")
         try:
             task = await self._create(parsed, delivery_id)
         except ValueError as exc:
-            reason = ("webhook_snapshot_changed" if str(exc) == "webhook_snapshot_changed"
+            reason = (str(exc) if str(exc) in {"webhook_snapshot_changed", "review_frequency_limited"}
                       else "review_creation_rejected")
             await self._finish(delivery_id, status="failed", reason=reason)
             return IncrementalWebhookReceipt(delivery_id=delivery_id, status="failed", reason=reason)
@@ -149,5 +165,5 @@ class IncrementalWebhookService:
         if not isinstance(pr_url, str) or not pr_url.startswith("https://github.com/"):
             raise ValueError("unsupported_pr_url")
         return await service.create(ReviewRequest(pr_url=pr_url),
-            f"webhook:{delivery_id}", caller_id="github-webhook",
+            review_event_key(parsed), caller_id="github-webhook",
             expected_snapshot=(parsed["base_sha"], parsed["head_sha"]))

@@ -32,9 +32,11 @@ def service_pipeline(tmp_path, monkeypatch):
 
     class GitHub:
         calls = 0
+        pr = source_run.pr
+        source_repo = source_provider.evidence.repo_path
         async def fetch_pr(self, url):
             self.calls += 1
-            return source_run.pr.model_copy(deep=True)
+            return self.pr.model_copy(deep=True)
 
     github = GitHub()
     model = ReviewModel()
@@ -121,3 +123,19 @@ async def test_cancel_preserves_candidate_facts_and_rejects_retry(service_pipeli
         assert current["status"] == "cancelled"
         assert current["report"]["overview"]["status"] == "skipped_cancelled"
         assert (await client.post(f"/api/reviews/{run.id}/retry")).status_code == 409
+
+
+async def test_delete_removes_source_artifacts_but_keeps_creation_tombstone(service_pipeline):
+    service, github, _ = service_pipeline
+    request = ReviewRequest(pr_url=github.pr.html_url)
+    run = await service.create(request, "delete")
+    assert await service._worker.run_once()
+    directory = service._artifacts.root / run.id
+    assert directory.is_dir()
+    assert service.delete_task(run.id)
+    assert not directory.exists()
+    assert service.get_task(run.id) is None
+    assert service.store.candidates(run.id) == []
+    assert service.store.work_items(run.id) == []
+    with pytest.raises(ValueError, match="review_deleted"):
+        await service.create(request, "delete")

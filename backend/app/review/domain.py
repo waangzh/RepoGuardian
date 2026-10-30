@@ -99,6 +99,7 @@ class Unit(Model):
     risk: Literal["low", "medium", "high"]
     focus: list[str]
     estimated_input_tokens: int = Field(ge=1)
+    reused_from: str | None = None
 
 
 class Plan(Model):
@@ -107,6 +108,7 @@ class Plan(Model):
     excluded: dict[str, str] = Field(default_factory=dict)
     incremental_from: str | None = None
     history: list[dict] = Field(default_factory=list)
+    incremental_reason: str | None = None
 
 
 class CandidateInput(Model):
@@ -156,6 +158,7 @@ class Candidate(Model):
     verification_sources: list[SourceRef] = Field(default_factory=list)
     admission_reason: str | None = None
     finding: Finding | None = None
+    previous_candidate_id: str | None = None
 
 
 class WorkItem(Model):
@@ -174,6 +177,7 @@ class WorkItem(Model):
     error_code: str | None = None
     result: dict | None = None
     tool_calls: int = 0
+    reused_from: str | None = None
 
 
 class OverviewParagraph(Model):

@@ -145,6 +145,15 @@ class GitTool:
         """列出仓库索引中的文件，供 RepoIndexer 和只读工具共享。"""
         return list_git_tracked_files(repo_path, self._git)
 
+    def changed_paths_between(self, repo_path, older, newer):
+        older = _normalized_commit_sha(older, "previous head")
+        newer = _normalized_commit_sha(newer, "current head")
+        root = self._validate_worktree(repo_path)
+        self._run([self._git, "-C", str(root), "merge-base", "--is-ancestor", older, newer])
+        raw = self._run([self._git, "--literal-pathspecs", "-C", str(root), "diff",
+                         "--name-only", "-z", older, newer, "--"])
+        return set(filter(None, raw.split("\0")))
+
     def get_tree_entries(self, repo_path: str | Path, revision: str, paths: list[str]) -> dict:
         """只读固定 tree：literal pathspec、NUL 分隔、完整 object ID，不访问工作树文件。"""
         from app.models.review import FileChangeSide

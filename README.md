@@ -1,48 +1,34 @@
 # RepoGuardian
 
-> 基于证据、理解仓库上下文、严格只读的 AI Pull Request 代码审查 Agent。
+> 基于固定源码证据、理解仓库上下文、严格只读的 AI Pull Request 审查 Agent。
 
-输入 GitHub PR URL，先了解变更并确认审查方案，再由 Agent 探索关联代码、核验候选问题，输出可追溯的审查结论、覆盖与限制，以及可复制到 PR 的交付摘要。
+输入 GitHub PR URL，选择范围和资源上限，即可启动审查。Reviewer 按需调查并即时保存候选，独立 Verifier 寻找反证、判断归因，最终提供问题、证据、运行范围和默认 LLM 变更总览。
 
-**RepoGuardian Server 永远不执行目标仓库代码。** 只进行只读静态审查；测试与构建请使用项目自身的 CI。
-
-[快速开始](#快速开始) · [如何使用](#如何使用) · [开发与验证](#开发与验证) · [反馈问题](https://github.com/waangzh/RepoGuardian/issues)
+**RepoGuardian Server 不执行目标仓库代码。** 不安装目标依赖，不运行目标测试、构建或脚本，不触发目标 CI，也不自动修复或写回补丁。
 
 ## 项目特点
 
-- **先确认方案，再调用模型**：选择深度、重点、文件范围和运行上限；预览只进行固定快照准备和静态索引，确认后才启动审查。
-- **声明与证据分离**：PR 描述作为不可信背景，实际判断来自工具读取的固定源码；摘要不推断未经核验的作者目标已经实现。
-- **原生多 Agent 编排**：LangGraph 按变更单元派发综合主审，按风险与深度增加专项或契约审查；LangChain 管理工具循环，独立核验候选与反证，并复核未决限制的必要性。
-- **证据与人工处理分别记录**：候选问题经过证据解析、策略检查和独立核验；可查看代码位置、依据与限制，并填写原因进行人工确认、忽略或标记已处理。
-- **结论、限制与交付可追溯**：分别呈现执行状态、问题证据与风险，提供评论、详细报告和技术记录；LangGraph 恢复已完成分支，不共享 Agent 消息历史。
+- **确定性外层编排**：`ReviewOrchestrator` 管理有限工作项、并发、截止时间和恢复；LangChain `create_agent` 管理 Reviewer / Verifier 内部工具循环。
+- **即时保留成果**：`submit_candidate` 在同一事务中保存候选和待核验工作项。后续 Reviewer 失败不会删除已经提交的候选。
+- **来源与判断分离**：完整 Diff 行核对固定 Git blob 后可直接引用；搜索、关系索引、作者声明与讨论只是调查线索。`confirmed` 仍须经过服务端条件准入。
+- **一个请求预算门禁**：模型调用前持久化预留，返回后幂等结算。并发 Reviewer 不能侵占已排队候选的最低核验机会；未知用量保守占用，默认总览单独保护一笔资源。
+- **事实与表达分离**：先保存事实报告，再进行一次默认 LLM 总览。总览失败独立显示，不丢失问题、不改变事实终态，也不额外运行一致性 Agent。
 
-可识别 Python、TypeScript/JavaScript、Java、Go 和 Rust，均支持 Tree-sitter L2 声明、导入与调用语法索引。解析器不可用或源码存在语法错误时显式降级到 L1 启发式索引，文件索引保留诊断；L2 不代表编译器级类型绑定或调用关系已核验。
+支持 Python、TypeScript/JavaScript、Java、Go 和 Rust 的静态解析。Parser 按查询启动并复用已有隔离、缓存与降级能力；索引关系不等于编译器绑定，也不证明运行时路径。
 
 ## 快速开始
 
-准备 Git、[uv](https://docs.astral.sh/uv/getting-started/installation/)、Python 3.12+、Node.js（推荐 22+）和 npm，以及一个 OpenAI 或 OpenAI 兼容服务的 API Key。
-
-### 1. 启动后端
+需要 Git、uv、Python 3.12+、Node.js 21+、npm，以及支持原生工具调用的模型服务。
 
 ```sh
 git clone https://github.com/waangzh/RepoGuardian.git
 cd RepoGuardian
-```
-
-复制配置文件：
-
-```bash
 cp .env.example backend/.env
-```
-
-安装后端依赖：
-
-```sh
 cd backend
 uv sync --extra test
 ```
 
-编辑 `backend/.env`：
+在 `backend/.env` 配置模型：
 
 ```env
 REPOGUARDIAN_PROVIDER=openai
@@ -51,20 +37,18 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 REPOGUARDIAN_MODEL=gpt-4.1-mini
 ```
 
-然后在 `backend/` 目录下执行迁移并启动服务。
-
-本次为破坏性结构替换：默认业务库为 `.repoguardian/native-review.db`，Checkpointer 为 `.repoguardian/review-checkpoints.db`。旧数据库和运行产物不会自动读取、迁移或删除；已有自定义数据库路径时，应改用新的空数据库路径后执行迁移，不要对旧库执行 stamp。
+在 `backend/` 初始化**新的空数据库**并启动：
 
 ```sh
 uv run alembic upgrade head
 uv run uvicorn app.main:app --reload
 ```
 
-API 默认运行在 `http://127.0.0.1:8000`。访问 [健康检查](http://127.0.0.1:8000/health)，应返回 `{"status":"ok"}`；接口文档见 [Swagger UI](http://127.0.0.1:8000/docs)。
+默认数据库为 `backend/.repoguardian/reviews.db`，Schema 基线为 `20261031_0001`，不再使用独立 Checkpointer。若曾运行旧架构，先停止旧 Worker 与 Publisher，保存旧数据库、Checkpoint 和 Artifact，并核对所有 `uncertain` 发布；自定义数据库路径必须改到新的空库。旧数据库不会自动转换或删除，旧 Alembic 版本会被拒绝。不要用 `stamp` 伪装完成切换。
 
-### 2. 启动前端
+API 默认位于 `http://127.0.0.1:8000`；[健康检查](http://127.0.0.1:8000/health) 返回 `{"status":"ok"}`，[接口文档](http://127.0.0.1:8000/docs) 列出当前契约。
 
-在另一个终端中，从克隆后的 `RepoGuardian` 仓库根目录执行：
+另开终端，在仓库根目录执行：
 
 ```sh
 cd frontend
@@ -72,100 +56,86 @@ npm install
 npm run dev
 ```
 
-打开 Vite 输出的地址（默认 `http://localhost:5173`），应看到 **新建审查** 页面。前端开发服务器会将 `/api` 和 `/health` 请求代理到本机的 `8000` 端口，后端需保持运行。
+打开 Vite 输出的地址，默认是 `http://localhost:5173`。开发服务器将 `/api` 和 `/health` 代理到后端 `8000` 端口。
 
 ## 如何使用
 
-1. 输入 GitHub PR 地址，选择深度、审查重点和文件范围，点击“生成审查方案”。服务端准备固定 Base/Head、Diff 和静态索引；预览不调用审查模型。
-2. 核对方案中的 Reviewer 派发、源码检查范围、固定 SHA 和运行保护上限，然后确认启动。创建时再次读取 PR 元数据；过期、变更或未经确认的方案会被拒绝。
-3. 综合主审联合检查行为与契约，按风险和深度增加审查角色；候选进入源码证据门禁与独立核验，关键未决项最多进行一次定向调查。没有候选时直接汇总覆盖与执行记录，不追加独立限制复核。
-4. 结果页分别显示范围覆盖、已确认问题、未决与运行限制。变更 Diff 与固定双侧文件上下文可查看；历史 PR 讨论仅作不可信上下文，不代替源码证据。
-5. 问题意见只基于保存的核验结果；变更总览依据冻结 Diff 和归档源码生成，引用须指向材料中的实际变更。存在已排除候选时，总览还需通过一次有界冲突校验，避免重新提出已排除的缺陷；校验结果绑定正文，失败或无预算时回退到变更元数据。总览省略的变更会明确标记，生成失败不清除已完成的审查报告；结论、检查范围和执行边界由程序统一展示。可人工注记但不会改变机器判定。执行中断且检查点可续时可恢复；终态含失败分支时，在原总期限和剩余调用预算内可主动补查一次，已完成分支不重跑。预算未知或耗尽时拒绝补查，需重新确认方案。取消后不会产生新的结果或发布请求。
+1. 输入 PR 地址，选择 Quick / Standard / Deep、调查重点、文件范围及资源上限，直接创建审查。`POST /api/reviews/preview` 可选，不再强制预览确认。
+2. 服务端固定数字仓库身份、声明 Base、唯一 merge base、Head 和计划成员；Reviewer 先处理高风险基础范围，并按需读取调用者、测试源码和相关 BASE 行为。
+3. 候选保存后即可独立核验，不必等待所有 Reviewer 结束。核验结果为 `confirmed`、`refuted` 或 `insufficient`；缺失来源、必要字段或归因证据的确认不能成为可发布 Finding。
+4. 在 **Overview / Changes / Findings / Activity / Publish** 查看总览、固定 Diff、来源、未决问题、工作项、材料缺口、用量和发布预览。人工注记与机器结论分开保存。
+5. 完成工作项在恢复时复用，中断项从头重跑。重试沿用原预算和硬截止时间；总览可单独重试。中断的外部请求可能再次计费，不承诺模型执行 exactly-once。
 
-变更总览以简短说明行为调整、直接效果和必要边界为写作目标，测试按覆盖场景另段归纳；精确公式、参数和源码位置可在固定 Diff 与详细记录中核对。篇幅是写作提示，不作为新的审查失败条件。
+创建请求必须带客户端生成的 `Idempotency-Key`。当前是本地单用户应用，键作用域为同一安装实例；相同键和规范化请求返回同一 Run，不重复创建收费任务。相同键但不同请求会冲突。主动重审必须使用新键。
 
-### 交付到 GitHub（可选：复制评论 / 直接发布）
+执行状态为 `queued / running / completed / partial / failed / cancelled`。`completed` 表示计划所需材料已交付、调查正常结束且已准入候选都取得核验终态，**不表示穷尽所有缺陷**。`insufficient` 仍是未决问题；部分范围、失败、取消和未知用量不会显示成完整成功或零成本。
 
-默认关闭。仅支持可信的本地单用户部署，发布接口要求本机连接及独立 Bearer 操作口令，不支持直接公开到公网。操作口令仅在页面内存中临时使用，不是 GitHub PAT。
+## 架构与运行边界
 
-1. 在 `backend/.env` 中配置独立的 `REPOGUARDIAN_GITHUB_PUBLISH_TOKEN`（Fine-grained PAT，仅授权目标仓库的 **Pull requests: write**）、数字仓库 ID allowlist、PAT 用户数字 ID，以及至少 32 字符的 `REPOGUARDIAN_PUBLICATION_API_TOKEN`。不会回退使用只读 `GITHUB_TOKEN`。
-2. 在 GitHub 核对该 PAT 的权限后设置 `REPOGUARDIAN_GITHUB_PUBLISH_PULL_REQUESTS_WRITE_CONFIRMED=true`，再启用 `REPOGUARDIAN_GITHUB_PUBLISH_ENABLED=true`。预检还会读取 GitHub 身份与仓库写角色；仓库角色不等于 Token grant，实际写入的 401/403 仍会被明确拒绝。完整配置见 [环境变量示例](.env.example)。
-3. 在 `backend/` 执行 `uv run alembic upgrade head`，再重启后端。在终态审查页进入 **交付到 GitHub**。未启用发布时页面只提供 **复制评论**（写入剪贴板，不写入 GitHub）。启用后输入操作口令、选择问题并预检；确认总结评论创建/更新、审查版本、代码行定位和已有评论后，二次确认写入。
-4. 发布状态与 Review Outcome 独立。可通过发布历史重新查看状态及 GitHub 返回的链接。`uncertain` 使用 **检查远端发布状态**：先核对已发送批次，无法确认时保留未知并要求人工处理，不盲目重发 POST。
+```text
+固定快照 → Planner 冻结 Unit / Hunk 成员
+         → ReviewOrchestrator 有界派发
+         → Reviewer + 按需 Context → 即时 Candidate
+         → 独立 Verifier → 条件准入 Finding
+         → 保存事实 → 默认一次 LLM 总览
+         → 人工选择 / 预检 / 确认 → 独立 Publisher / Outbox / 对账
+```
 
-PR 总结评论复用同一 PR、同一发布身份的主评论；代码行评论按同一 Head 的严格内容和定位去重。过期 Base/Head、关闭 PR、未知作者或手工修改的摘要会阻止写入。无法精确映射到代码行的已核验问题会写入总结评论，并需要明确确认部分发布。跨系统写入并非原子事务，不承诺 exactly-once；API 版本复查后仍存在短暂远端竞态窗口。
+`app/review/` 中的 `domain.py`、`planner.py`、`context.py`、`agent.py`、`budget.py`、`store.py`、`findings.py`、`report.py` 和 `orchestrator.py` 是核心。现有 Git、DiffParser、Parser、源码安全读取、准备仓库、WorkerJob Lease、GitHub API 和 Publisher 继续复用。主 LangGraph 工作流、Goal / Assignment、固定角色份额、最终大提交和历史 Checkpoint 协议已经移除；LangChain 内部依赖的 LangGraph 仍由其依赖树提供。
 
-### 结果解读与报告交付
+材料交付与工作项执行分别记录。只收到部分 Hunk、读取失败或未启动的范围保持不完整。结构性变更使用固定树条目作为变更材料，不把元数据当成缺陷源码证据；必要消费者仍由 Agent 调查。
 
-审查完整性只说明源码范围是否已检查，不能从“0 个问题”推导为无缺陷。候选必须有真实工具读取产生的证据 ID、固定提交身份及可定位 HEAD 差异，独立核验不足时维持未决。未经确认的候选不得出现在发布草稿中；删除行和不可行内定位问题只能进入总结评论。未知 Token 用量不会显示为零。技术报告记录 Graph 分支、核验依据和限制，不包含共享的 Agent 消息历史。
+总览只组织已经提供的固定来源与最终 Findings，不能新增裁决、改写严重程度或宣称执行过目标测试。引用有效不保证自然语言完全忠实；材料省略、失败和降级独立展示，发布预览保留人工检查。
 
-主审局部证据缺口须说明受影响目标、缺失事实、依赖的结论、与本次变更的关联及具体补查步骤，并在原预算内优先进行最小必要读取。这些说明不经额外 Agent 复核，也不单独使整轮结论降级；必要源码未覆盖、核心执行失败及证据不足的候选仍如实影响结论。未执行测试等一般边界单独记录。“问题与证据”页分别展示代码候选和局部待核实事项。
+## 增量审查
 
-## 配置
+可启用签名校验的 `POST /api/webhooks/github`，仅处理 allowlist 中仓库自身分支的 `pull_request.synchronize`。Delivery 与同一 PR Base/Head 事件分别幂等，每个 PR 默认每小时最多自动创建 4 个 Run，限制原因会返回给调用方。新 Head 会停止旧运行，已提交事实继续保留，旧结果不能对新 Head 发布。
 
-配置写入 `backend/.env`；[环境变量示例](.env.example) 包含只读 GitHub 凭据、模型端点、Agent 调用上限、超时、预览工作区和可选的发布权限。模型须支持原生工具调用与结构化输出。设置页可修改服务 URL、默认模型和记录保留天数；API Key 不在前端展示。
+历史问题只是线索，进入本轮后要重新取得当前来源和独立核验。旧行号的内容不匹配时不把它重新包装为当前证据，不凭位置消失宣称已修复。
 
-`REPOGUARDIAN_AGENT_MAX_CALLS` 和 `REPOGUARDIAN_AGENT_MAX_TOOL_CALLS` 分别限制每个 Agent 的模型与工具调用；`REPOGUARDIAN_REVIEW_TIMEOUT_SECONDS` 限制审查总时长；并发上限由 `REPOGUARDIAN_REVIEW_CONCURRENCY` 控制。供应商未返回用量时保持未知。更换模型/端点只影响新审查，已有任务保留冻结身份。
+范围复用采用保守策略：相同基线与配置、可比较的 Head 历史、仅文档更新、完整 Hunk 成员一致且相关源码 blob 相同，才复用已完成范围，并显示来源 Run。源码、配置或测试变化优先调查变化单元并回退全量；基线变化、不可比较的历史和显式同快照重审也不复用。没有建设跨 Commit 语义依赖缓存。重新核验的历史主张进入总结，不猜测新的 Inline 行号。
 
-`REPOGUARDIAN_REVIEW_MAX_MODEL_CALLS` 与 `REPOGUARDIAN_REVIEW_MAX_INPUT_TOKENS` 限制整轮模型请求和累计输入，确认方案时冻结，跨并发、恢复和补查累计。模型请求前持久化预留；输入使用包含工具 schema 的序列化 UTF-8 大小加开销保守预估，响应后按服务商用量结算。未结算或用量未知的请求继续占预留，不当作零；服务商实际用量超过预估时如实记录并阻止后续超预算请求，不承诺不同 tokenizer 下的绝对精确预测。缓存命中输入仍占预算，计量与未缓存输入分别展示，不按同一价格推算账单。
+## 交付到 GitHub
 
-每个分支先独立读取固定源码材料和双侧文件范围；相关候选最多三个一起核验，仍逐项保留裁决与证据身份，不按相似措辞提前去重。调用额度足够时，末尾两次只用于最终提交及纠错。必要证据缺口保持未决；“未执行测试”等一般边界单独展示。关闭 PR 讨论时不向模型提供讨论工具。
+发布默认关闭，仅支持可信的本地单用户部署。Review Agent 没有 GitHub 写工具，Publisher 使用独立 PAT，绝不回退使用只读 `GITHUB_TOKEN`。
 
-已有报告保留原有结论规则及历史限制评估。恢复旧检查点时，已移除的限制复核阶段转入现有候选证据门禁，复用已完成结果；历史候选仍须独立核验，失败记录、未知用量和预算账本继续保留，不重置费用或重放已移除角色的请求。
+1. 配置独立 `REPOGUARDIAN_GITHUB_PUBLISH_TOKEN`、数字仓库 ID allowlist、PAT 用户数字 ID 和至少 32 字符的 `REPOGUARDIAN_PUBLICATION_API_TOKEN`。
+2. 在 GitHub 核对 PAT 的 **Pull requests: write** grant 后，设置 `REPOGUARDIAN_GITHUB_PUBLISH_PULL_REQUESTS_WRITE_CONFIRMED=true`，再启用发布。完整字段见 [环境变量示例](.env.example)。
+3. 在 Publish 页输入操作口令、选择 Finding 并预检，再查看实际 Summary / Inline、报告版本和部分发布提示，最后明确确认。操作口令只保留在页面内存，不是 GitHub PAT。
+4. `uncertain` 必须先对账，不盲目重发 POST。Sticky Summary 不覆盖更新审查或人工编辑；精确 LEFT / RIGHT 映射失败时转入 Summary。
 
-控制台记录任务与分支的开始、结束、安全错误类别、调用数和用量；可用 `review_id`、`agent_id` 关联排查。活动页区分工具失败、策略排除、搜索范围未穷尽和输出纠错。正常分页和符号链接策略排除不记作工具执行失败，搜索仍保留范围边界。日志不输出源码、凭据或模型服务的异常正文。
+Publisher 独立复验规范化 Finding、核验准入、固定快照、来源内容和报告版本，不重跑审查。显式重生成总览会形成新的报告版本，已有预检与确认失效。发布状态与审查结论独立；远端短暂竞态和跨系统故障仍可能发生，不承诺 exactly-once。
 
-变更总览另有材料准备、`generation` 请求、纠错重试、超时与回退日志，使用同一 `review_id` 关联材料版本、尝试编号、耗时、用量和错误码；投影拒绝已生成正文时会单独记录并去重。日志不打印模型正文，详细尝试保存在审查记录的 `review_report.synthesis`。
+## 配置与数据边界
 
-整轮预算账本需要 Alembic 迁移 `20261028_0005`（在 `backend/` 执行 `uv run alembic upgrade head`）。分支独立保留最终提交及一次纠错的输入与调用额度，探索结算不会释放；提交时原子消费，分支结束后释放未用额度。收束状态随账本和检查点保存，恢复不会重新开放探索。输入预估按实际用量校准，不保证未来请求的 tokenizer 计数或纠错消息长度完全精确；超出预留仍受总预算限制。旧方案缺少整轮预算确认时需重新生成；已有调用却缺失账本的记录不能继续执行，不能据此把历史消耗归零。升级不会清空原审查记录。
+[环境变量示例](.env.example) 是配置清单。模型端点、默认模型和记录保留天数可在设置页修改；已有 Run 的配置保持冻结。源码会发送到所配置的模型服务，使用前确认数据边界；LangSmith 默认关闭。
 
-## 工作流程
+- `REPOGUARDIAN_REVIEW_MAX_MODEL_CALLS`、`REPOGUARDIAN_REVIEW_MAX_INPUT_TOKENS`、`REPOGUARDIAN_REVIEW_MAX_OUTPUT_TOKENS` 限制整轮资源。
+- `REPOGUARDIAN_MODEL_CONTEXT_TOKENS` 限制请求上下文容量；预估包括消息、工具和结构化 Schema。使用分词估算，不能当成所有模型的精确计费上界。
+- `REPOGUARDIAN_AGENT_MAX_CALLS`、`REPOGUARDIAN_AGENT_MAX_TOOL_CALLS` 限制单次 Agent；并发由 `REPOGUARDIAN_REVIEW_CONCURRENCY` 控制。
+- 总时长由 `REPOGUARDIAN_REVIEW_TIMEOUT_SECONDS` 冻结。软截止停止新发现请求；硬截止阻止所有新模型请求，停止在途工作，只做合法的本地事实收尾。
+- 请求前原子预留，未知用量保持未知并占用预留；恢复不清零。实际用量超过估算后如实记录，停止后续超预算请求。
 
-GitHub PR 与用户方案 → 唯一比较基准与 HEAD 固定快照 → Diff/静态索引 → LangGraph `StateGraph` 的 `Send` 动态派发 → 综合主审及按需角色自主只读取证 → 候选并集与源码证据门禁 → 独立核验 / 有界调查 → 保存确定性报告 → 有界变更总览与引用校验 → 显式 GitHub 发布预检与 Outbox。
-
-Graph Checkpointer 负责执行节点恢复；业务数据库保存方案、生命周期、结果及 Lease；固定仓库快照与证据归档保存事实，发布 Outbox 保存投递和对账状态。外部模型与 GitHub 写入不承诺 exactly-once。再次审查会重新获取当前 PR 快照并进行独立核验，不复用旧结论。
-
-## 安全边界
-
-- 模型只能使用受限的只读工具，文件读取经过路径、符号链接、敏感文件与预算校验；补查不能绕过这些边界。
-- RepoGuardian 不执行目标仓库的安装、测试或构建，不自动 commit、push、创建 PR。GitHub 评论写入只由独立 Publisher 在用户预检和确认后执行，Review Agent 没有写权限。
-- 不提供任何动态执行入口：不发起 Project CI、不接收外部 Runner 结果，也不接受模型生成的命令。
-- 审查所需的代码内容会发送给配置的模型服务。使用前确认模型服务与凭据的数据边界。
-- 本地 SQLite 与运行产物用于持久化和恢复，不构成多租户或生产级安全隔离。
-
-## 当前限制
-
-- 只支持 GitHub PR 输入；可显式配置本地单用户手动 Summary / Inline 发布，不自动 Approve / Request Changes，不创建 Check Run 或修复 PR。
-- 不提供本地 Sandbox、通用命令执行或外部验证集成能力。
-- 超大变更可能因时间或模型调用限制而部分完成，需要结合覆盖范围复核。
-- 尚未完成真实样本上的协作效果对照与人工核验，不承诺召回、误报或成本收益。
+SQLite 与本地 Artifact 是单用户持久化，不是多租户安全隔离。源码读取保留 tracked blob、路径、敏感文件、realpath / symlink、大小和调用预算约束；不向模型暴露 Shell、任意网络或发布权限。日志不输出源码、凭据和供应商异常正文。
 
 ## 开发与验证
 
-后端使用 Python、FastAPI 与 LangGraph，前端使用 Vue 3、TypeScript 与 Vite。先按快速开始安装依赖；本地开发分别运行后端与前端，代码修改后会自动重载。
-
-检查命令如下，从仓库根目录开始执行；按改动范围选择适用项：
+后端使用 Python / FastAPI，前端使用 Vue 3 / TypeScript / Vite。开发测试可执行 RepoGuardian 自身代码，不能因此为产品增加目标代码执行权限。
 
 ```sh
 cd backend
 uv run pytest
 uv run ruff check .
-
 cd ../frontend
 npm test
 npm run build
-
 cd ..
 git diff --check
 ```
 
-- 后端逻辑变更运行相关 pytest 测试与 Ruff，可在 `uv run pytest` 后指定测试文件；前端变更运行相关测试与 `npm run build`（包含类型检查）。
-- 默认选择与改动直接相关的测试；文档变更核对命令、字段、链接和最终差异，无需运行业务测试。上面的 `uv run pytest` 不带路径时会执行完整后端测试集。
-- 修改配置时同步 `.env.example`；修改 API 响应时同步前端类型与调用方，覆盖输入校验与拒绝路径。本项目为个人项目，不为旧接口或旧数据保留兼容。
-- 开发测试可执行本项目代码，RepoGuardian Server 仍不得执行被审查的目标仓库代码。
-- 不提交 `.env`、API Key、Token、数据库或任务运行产物。
+单元与集成测试覆盖固定源码、工具循环、预算、Lease、取消、恢复和 HTTP 模拟发布对账。模拟模型验证执行契约，不证明真实模型的误报、召回、成本收益或总览质量。本次未建设离线 Eval 平台；真实模型内容验收、浏览器验收、真实 GitHub 写入和具体数据库切换须单独进行。
 
-欢迎通过 Issue 或 Pull Request 反馈问题、改进文档与代码。提交 [GitHub Issue](https://github.com/waangzh/RepoGuardian/issues) 时附上复现步骤、预期与实际结果，以及脱敏后的错误信息。
+阶段实施与调整记录见 [重构进度](docs/refactor-progress.md)。反馈问题时，通过 [GitHub Issue](https://github.com/waangzh/RepoGuardian/issues) 提供复现步骤、预期、实际结果和脱敏错误信息；不要提交 `.env`、Token、数据库或运行产物。
 
 ## 许可证
 

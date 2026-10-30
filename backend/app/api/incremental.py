@@ -1,7 +1,7 @@
 """GitHub pull_request webhook：synchronize 后自动创建增量审查。
 
 只做签名校验、allowlist 与幂等投递；审查本身仍走与手工创建相同的
-只读预览与冻结流程。
+固定快照创建流程。
 """
 
 import json
@@ -15,10 +15,10 @@ from app.services.review.incremental_webhook import (
     IncrementalWebhookService, allowed_repositories, parse_synchronize, verify_signature,
 )
 
-router = APIRouter(prefix="/incremental", tags=["incremental"])
+router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 
-@router.post("/webhook", response_model=IncrementalWebhookReceipt)
+@router.post("/github", response_model=IncrementalWebhookReceipt)
 async def incremental_webhook(
     request: Request,
     signature: str | None = Header(default=None, alias="X-Hub-Signature-256"),

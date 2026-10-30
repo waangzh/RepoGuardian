@@ -3,14 +3,14 @@
 from datetime import timedelta, timezone
 from uuid import uuid4
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.dialects.sqlite import insert
 
 from app.core.config import settings
 from app.core.database import sync_session
 from app.models.orm import (
     FindingDispositionOrm, GitHubSummarySlotOrm, IncrementalWebhookDeliveryOrm,
-    PublicationAttemptOrm, ReviewCandidateOrm, ReviewCreateIntentOrm, ReviewRequestOrm,
+    PublicationAttemptOrm, PublicationItemOrm, ReviewCandidateOrm, ReviewCreateIntentOrm, ReviewRequestOrm,
     ReviewTaskOrm, ReviewWorkItemOrm, WorkerJobOrm,
 )
 from app.review.domain import Candidate, Run, TERMINAL, WorkItem, utcnow
@@ -93,12 +93,34 @@ class ReviewStore:
                 if inserted.rowcount:
                     session.delete(session.get(ReviewTaskOrm, run.id))
                 return existing.run_id
+            if caller_id == "github-webhook":
+                recent = list(session.scalars(select(ReviewTaskOrm.id).join(ReviewCreateIntentOrm,
+                    ReviewCreateIntentOrm.run_id == ReviewTaskOrm.id).where(
+                    ReviewTaskOrm.repository == run.snapshot.repository, ReviewTaskOrm.pr_number == run.pr.number,
+                    ReviewCreateIntentOrm.caller_id == caller_id,
+                    ReviewTaskOrm.created_at > utcnow() - timedelta(hours=1))))
+                if len(recent) >= settings.repoguardian_incremental_review_max_runs_per_hour:
+                    raise ValueError("review_frequency_limited")
             session.add(ReviewCreateIntentOrm(id=uuid4().hex, caller_id=caller_id, key=key,
                                              request_hash=request_hash, run_id=run.id))
             for unit in run.plan.units:
                 work = WorkItem(id=uuid4().hex, kind="review", unit_id=unit.id)
+                if unit.reused_from:
+                    previous_id, work_id = unit.reused_from.split(":")
+                    previous = session.get(ReviewWorkItemOrm, work_id)
+                    if previous is None or previous.run_id != previous_id:
+                        raise ValueError("reuse_origin_missing")
+                    before = WorkItem.model_validate(previous.payload)
+                    if before.status != "completed" or before.material_delivery != "complete":
+                        raise ValueError("reuse_origin_incomplete")
+                    work.status, work.material_delivery = "completed", "complete"
+                    work.delivered_hunk_ids = list(unit.required_hunk_ids)
+                    work.delivered_materials = dict(before.delivered_materials)
+                    work.reused_from, work.result = unit.reused_from, before.result
                 session.add(ReviewWorkItemOrm(id=work.id, run_id=run.id, kind="review",
                                              subject=unit.id, payload=work.model_dump(mode="json")))
+            self._supersede(session, run.snapshot.repository, run.snapshot.repository_id,
+                            run.pr.number, run.snapshot.head_sha, run.created_at)
             session.flush()
             from app.services.review.task_queue import DatabaseTaskQueue
             DatabaseTaskQueue(self.sessions).enqueue(task_id=run.id, session=session)
@@ -113,7 +135,8 @@ class ReviewStore:
 
     def _run(self, row):
         payload = {**row.task_snapshot, "status": row.status, "phase": row.current_phase,
-                   "updated_at": as_utc(row.updated_at)}
+                   "updated_at": as_utc(row.updated_at), "error_code": row.error_summary,
+                   "completed_at": as_utc(row.completed_at) if row.completed_at else None}
         return Run.model_validate(payload)
 
     def _save(self, row, run):
@@ -152,7 +175,7 @@ class ReviewStore:
 
     def claim(self, run_id, work_id, lease):
         with self.sessions.begin() as session:
-            self._guard(session, run_id, lease)
+            run_row = self._guard(session, run_id, lease)
             row = session.get(ReviewWorkItemOrm, work_id)
             work = WorkItem.model_validate(row.payload)
             if row.run_id != run_id or work.status != "queued":
@@ -164,6 +187,7 @@ class ReviewStore:
             work.visible_source_ids = []
             work.material_delivery, work.error_code = "not_started", None
             row.payload = work.model_dump(mode="json")
+            run_row.current_phase, run_row.updated_at = work.kind, utcnow()
             return work
 
     def submit(self, run_id, work, candidate, lease):
@@ -205,6 +229,8 @@ class ReviewStore:
     def deliver(self, run_id, work, hunk_ids, failures, lease, *, source_ids=(), digests=None):
         with self.sessions.begin() as session:
             run_row = self._guard(session, run_id, lease)
+            if utcnow() >= self._run(run_row).hard_deadline:
+                raise BudgetExceeded("hard_deadline")
             row = self._attempt(session, run_id, work.id, work.attempt_id)
             saved = WorkItem.model_validate(row.payload)
             required = set(next(unit for unit in self._run(run_row).plan.units
@@ -223,7 +249,9 @@ class ReviewStore:
 
     def finish_work(self, run_id, work, status, result, error, lease, *, candidate=None, tool_calls=0):
         with self.sessions.begin() as session:
-            self._guard(session, run_id, lease)
+            run_row = self._guard(session, run_id, lease)
+            if status == "completed" and utcnow() >= self._run(run_row).hard_deadline:
+                status, result, error, candidate = "interrupted", None, "hard_deadline", None
             row = self._attempt(session, run_id, work.id, work.attempt_id)
             saved = WorkItem.model_validate(row.payload)
             saved.status, saved.result, saved.error_code = status, result, error
@@ -286,9 +314,10 @@ class ReviewStore:
         if kind == "review":
             checks = session.scalars(select(ReviewWorkItemOrm).where(
                 ReviewWorkItemOrm.run_id == run.id, ReviewWorkItemOrm.kind == "verification"))
-            requested = {call.work_item_id for call in calls if call.kind == "verification"}
-            pending = sum(item.id not in requested and item.payload["status"] in {"queued", "running"}
-                          for item in checks)
+            requested = {(call.work_item_id, call.attempt_id) for call in calls if call.kind == "verification"}
+            pending = sum(item.payload["status"] == "queued" or (
+                item.payload["status"] == "running"
+                and (item.id, item.payload["attempt_id"]) not in requested) for item in checks)
             protected_calls += pending
             protected_tokens += pending * VERIFICATION_INPUT
         if work is not None and sum(call.attempt_id == work.attempt_id for call in calls) >= limits.model_calls:
@@ -358,9 +387,123 @@ class ReviewStore:
             run.status, run.phase, run.completed_at = "cancelled", "cancelled", utcnow()
             self._save(row, run)
             session.execute(update(WorkerJobOrm).where(WorkerJobOrm.task_id == run_id,
-                WorkerJobOrm.kind == "review", WorkerJobOrm.status.in_(["queued", "retry", "leased"]))
+                WorkerJobOrm.kind.in_(["review", "overview"]), WorkerJobOrm.status.in_(["queued", "retry", "leased"]))
                 .values(status="cancelled", lease_owner=None, lease_until=None))
             return True
+
+    def previous(self, snapshot):
+        with self.sessions() as session:
+            rows = session.scalars(select(ReviewTaskOrm).where(
+                ReviewTaskOrm.repository == snapshot.repository, ReviewTaskOrm.pr_number == snapshot.pr_number,
+                ReviewTaskOrm.status.in_(["completed", "partial"]), ReviewTaskOrm.deleted_at.is_(None))
+                .order_by(ReviewTaskOrm.created_at.desc()).limit(20))
+            for row in rows:
+                run = self._run(row)
+                if run.snapshot.repository_id == snapshot.repository_id and run.report:
+                    return run
+        return None
+
+    def _supersede(self, session, repository, repository_id, pr_number, head_sha, observed_at):
+        stopped = []
+        for row in session.scalars(select(ReviewTaskOrm).where(
+            ReviewTaskOrm.repository == repository, ReviewTaskOrm.pr_number == pr_number,
+            ReviewTaskOrm.head_sha != head_sha, ReviewTaskOrm.status.in_(["queued", "running"]),
+            ReviewTaskOrm.created_at <= observed_at, ReviewTaskOrm.deleted_at.is_(None))):
+            old = self._run(row)
+            if old.snapshot.repository_id != repository_id:
+                continue
+            old.status, old.phase, old.error_code = "cancelled", "cancelled", "review_superseded"
+            old.completed_at = utcnow()
+            self._save(row, old)
+            session.execute(update(WorkerJobOrm).where(WorkerJobOrm.task_id == row.id,
+                WorkerJobOrm.kind.in_(["review", "overview"]),
+                WorkerJobOrm.status.in_(["queued", "retry", "leased"])).values(
+                    status="cancelled", lease_owner=None, lease_until=None))
+            stopped.append(row.id)
+        return stopped
+
+    def supersede(self, repository, repository_id, pr_number, head_sha, observed_at):
+        with self.sessions.begin() as session:
+            session.execute(update(ReviewTaskOrm).where(ReviewTaskOrm.repository == repository,
+                ReviewTaskOrm.pr_number == pr_number).values(updated_at=ReviewTaskOrm.updated_at))
+            return self._supersede(session, repository, repository_id, pr_number, head_sha, observed_at)
+
+    def history(self, previous):
+        if previous is None or previous.report is None:
+            return []
+        with self.sessions() as session:
+            receipts = {}
+            for item in session.scalars(select(PublicationItemOrm).join(PublicationAttemptOrm,
+                PublicationAttemptOrm.id == PublicationItemOrm.publication_id).where(
+                PublicationAttemptOrm.review_id == previous.id,
+                PublicationItemOrm.kind == "inline", PublicationItemOrm.state == "published")):
+                receipts[item.finding_key] = {
+                    "comment_id": item.github_comment_id, "url": item.github_url,
+                    "publication_id": item.publication_id, "payload": item.payload}
+            return [{"candidate_id": finding.candidate_id, "finding_id": finding.id,
+                "claim": finding.claim, "trigger": finding.trigger, "impact": finding.impact,
+                "head_sha": previous.snapshot.head_sha, "run_id": previous.id,
+                "sources": [source.model_dump() for source in finding.sources],
+                "needs_verification": True, "receipt": receipts.get(finding.id)}
+                for finding in previous.report.findings[:MAX_CANDIDATES]]
+
+    def seed_history(self, run_id, candidate, lease):
+        with self.sessions.begin() as session:
+            row = self._guard(session, run_id, lease)
+            run = self._run(row)
+            if utcnow() >= run.hard_deadline:
+                raise BudgetExceeded("hard_deadline")
+            if not any(item["candidate_id"] == candidate.previous_candidate_id for item in run.plan.history):
+                raise ValueError("history_candidate_not_in_plan")
+            if not candidate.sources or any(source.review_id != run_id or source.commit_sha != (
+                run.snapshot.head_sha if source.side == "head" else run.snapshot.base_sha)
+                for source in candidate.sources):
+                raise ValueError("history_source_mismatch")
+            if session.get(ReviewCandidateOrm, candidate.id):
+                return
+            if len(list(session.scalars(select(ReviewCandidateOrm.id).where(
+                ReviewCandidateOrm.run_id == run_id)))) >= MAX_CANDIDATES:
+                raise BudgetExceeded("candidate_limit")
+            session.add(ReviewCandidateOrm(id=candidate.id, run_id=run_id, attempt_id=candidate.attempt_id,
+                tool_call_id=candidate.tool_call_id, payload=candidate.model_dump(mode="json")))
+            check = WorkItem(id=uuid4().hex, kind="verification", unit_id=candidate.unit_id,
+                             candidate_id=candidate.id)
+            session.add(ReviewWorkItemOrm(id=check.id, run_id=run_id, kind="verification",
+                subject=candidate.id, payload=check.model_dump(mode="json")))
+
+    def webhook_count(self, repository, pr_number):
+        with self.sessions() as session:
+            return len(list(session.scalars(select(ReviewTaskOrm.id).join(
+                ReviewCreateIntentOrm, ReviewCreateIntentOrm.run_id == ReviewTaskOrm.id).where(
+                ReviewTaskOrm.repository == repository, ReviewTaskOrm.pr_number == pr_number,
+                ReviewCreateIntentOrm.caller_id == "github-webhook",
+                ReviewTaskOrm.created_at > utcnow() - timedelta(hours=1)))))
+
+    def reap_exhausted(self, session, run_ids):
+        from app.review.report import build_report
+        for run_id in set(run_ids):
+            row = session.get(ReviewTaskOrm, run_id)
+            if row is None or row.deleted_at or row.status not in {"queued", "running"}:
+                continue
+            run, works = self._run(row), []
+            for item in session.scalars(select(ReviewWorkItemOrm).where(ReviewWorkItemOrm.run_id == run_id)):
+                work = WorkItem.model_validate(item.payload)
+                if work.status in {"queued", "running"}:
+                    work.status, work.error_code = "interrupted", "worker_attempts_exhausted"
+                    item.payload = work.model_dump(mode="json")
+                works.append(work)
+            candidates = [Candidate.model_validate(item.payload) for item in session.scalars(
+                select(ReviewCandidateOrm).where(ReviewCandidateOrm.run_id == run_id))]
+            report = build_report(run, works, candidates, self._usage(session, run_id)[1])
+            if not candidates and not any(work.status == "completed" for work in works):
+                report.status = "failed"
+            report.reasons.append("worker_attempts_exhausted")
+            report.overview.status, report.overview.error_code = "failed", "interrupted_unknown"
+            from app.review.planner import identity
+            report.version = identity(report.model_dump())
+            run.report, run.status, run.phase = report, report.status, "finished"
+            run.completed_at, run.error_code = utcnow(), "worker_attempts_exhausted"
+            self._save(row, run)
 
     def list_runs(self, *, status=None, page=1, page_size=20, q=None, repository=None,
                   pr_number=None, head_sha=None):
@@ -469,6 +612,9 @@ class ReviewStore:
                     return False
                 raise ValueError("review_job_active")
             row.deleted_at, row.updated_at = utcnow(), utcnow()
+            row.task_snapshot = {}
+            session.execute(delete(ReviewCandidateOrm).where(ReviewCandidateOrm.run_id == run_id))
+            session.execute(delete(ReviewWorkItemOrm).where(ReviewWorkItemOrm.run_id == run_id))
             return True
 
     def list_expired_task_ids(self):
@@ -476,6 +622,10 @@ class ReviewStore:
             return list(session.scalars(select(ReviewTaskOrm.id).where(
                 ReviewTaskOrm.deleted_at.is_(None), ReviewTaskOrm.status.in_(TERMINAL),
                 ReviewTaskOrm.retention_until <= utcnow()).limit(1000)))
+
+    def deleted_ids(self):
+        with self.sessions() as session:
+            return list(session.scalars(select(ReviewTaskOrm.id).where(ReviewTaskOrm.deleted_at.is_not(None))))
 
     def claim_webhook_delivery(self, *, delivery_id, repository, pr_number, head_sha):
         with self.sessions.begin() as session:

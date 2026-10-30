@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     repoguardian_review_concurrency: int = Field(default=4, ge=1, le=16)
     repoguardian_incremental_review_webhook_enabled: bool = False
     repoguardian_incremental_review_webhook_repositories: str = ""
+    repoguardian_incremental_review_max_runs_per_hour: int = Field(default=4, ge=1, le=100)
     repoguardian_review_timeout_seconds: float = Field(default=1800, ge=1, le=86_400)
     repoguardian_agent_max_calls: int = Field(default=48, ge=1, le=100)
     repoguardian_agent_max_tool_calls: int = Field(default=80, ge=1, le=500)
@@ -78,7 +79,6 @@ class Settings(BaseSettings):
     repoguardian_worker_poll_seconds: float = Field(default=0.25, ge=0.05, le=60)
     repoguardian_worker_lease_seconds: int = Field(default=300, ge=5, le=86_400)
     repoguardian_worker_max_attempts: int = Field(default=3, ge=1, le=20)
-    repoguardian_artifact_inline_max_bytes: int = Field(default=64_000, ge=1_024, le=1_000_000)
     repoguardian_artifact_dir: Path = (
         Path(__file__).resolve().parent.parent.parent / ".repoguardian" / "artifacts"
     )

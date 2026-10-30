@@ -48,11 +48,13 @@
 .ov-verdict[data-tone="success"]::before { background: var(--ov-teal); }
 .ov-verdict[data-tone="danger"]::before { background: var(--ov-red); }
 .ov-verdict[data-tone="info"]::before { background: var(--ov-blue); }
+.ov-verdict[data-tone="warning"]::before { background: var(--ov-amber); }
 .ov-verdict__inner { padding: 22px 24px 18px 26px; }
 .ov-verdict__kicker { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: var(--ov-amber); font-size: 13px; font-weight: 600; }
 .ov-verdict[data-tone="success"] .ov-verdict__kicker { color: var(--ov-teal); }
 .ov-verdict[data-tone="danger"] .ov-verdict__kicker { color: var(--ov-red); }
 .ov-verdict[data-tone="info"] .ov-verdict__kicker { color: var(--ov-blue); }
+.ov-verdict[data-tone="warning"] .ov-verdict__kicker { color: var(--ov-amber); }
 .rg-overview .ov-verdict h2 { margin-bottom: 8px; color: var(--ov-ink); font-size: 21px; letter-spacing: -.02em; line-height: 1.4; }
 .rg-overview .ov-verdict__description { max-width: 720px; color: var(--ov-muted); font-size: 14px; line-height: 1.75; }
 /* 事实与下一步分两层：说明结论覆盖范围，再给出用户现在该做什么。 */

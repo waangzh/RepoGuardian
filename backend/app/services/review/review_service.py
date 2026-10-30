@@ -12,6 +12,7 @@ from app.review.context import ContextProvider
 from app.review.domain import Overview, Run, Snapshot, TERMINAL, utcnow
 from app.review.evidence import EvidenceService
 from app.review.index import OnDemandIndex
+from app.review.incremental import refine_plan
 from app.review.orchestrator import ReviewOrchestrator
 from app.review.planner import identity, plan_review
 from app.review.report import build_report, generate_overview
@@ -101,6 +102,7 @@ class ReviewService:
 
     async def _inputs(self, request):
         config = freeze_configuration(request, self._provider)
+        observed_at = utcnow()
         pr = await self._github_tool.fetch_pr(str(request.pr_url))
         cancel = threading.Event()
         run_id, repo = uuid4().hex, None
@@ -111,8 +113,13 @@ class ReviewService:
             seconds = config.options.limits.timeout_seconds
             run = Run(id=run_id, pr_url=str(request.pr_url), pr=pr, snapshot=snapshot,
                 configuration=config, changed_files=changed, plan=plan,
+                created_at=observed_at,
                 review_cutoff=now + timedelta(seconds=seconds * 0.8),
                 hard_deadline=now + timedelta(seconds=seconds))
+            previous = await asyncio.to_thread(self.store.previous, snapshot)
+            history = await asyncio.to_thread(self.store.history, previous)
+            old_work = await asyncio.to_thread(self.store.work_items, previous.id) if previous else []
+            await asyncio.to_thread(refine_plan, run, previous, old_work, self._git_tool, repo, history)
             # Publish only the disposable prepared repository, never target changes.
             await asyncio.to_thread(PreparedWorkspaces(self.store, self._git_tool._workdir).publish,
                 prepared_workspace_key(pr), repo, pr, {"effective_base_sha": snapshot.base_sha},
@@ -131,10 +138,16 @@ class ReviewService:
         return {"snapshot": run.snapshot, "plan": run.plan, "changed_files": run.changed_files}
 
     async def create(self, request, key, *, caller_id="installation", expected_snapshot=None):
-        request_hash = identity(request.model_dump(mode="json"))
+        normalized = request.model_dump(mode="json")
+        if normalized["paths"] is not None:
+            normalized["paths"] = sorted(set(normalized["paths"]))
+        request_hash = identity(normalized)
         existing = await asyncio.to_thread(self.store.find_intent, caller_id, key, request_hash)
         if existing:
-            return await asyncio.to_thread(self.get_task, existing)
+            saved = await asyncio.to_thread(self.get_task, existing)
+            if saved is None:
+                raise ValueError("review_deleted")
+            return saved
         run = await self._inputs(request)
         if expected_snapshot and expected_snapshot != (run.snapshot.declared_base_sha, run.snapshot.head_sha):
             raise ValueError("webhook_snapshot_changed")
@@ -166,6 +179,8 @@ class ReviewService:
                                        allowed_paths=paths, git=self._git_tool)
             index = OnDemandIndex(evidence)
             provider = ContextProvider(run, evidence, self.store, lease, frozenset(denied), index=index)
+            if job.kind == "review":
+                await self._seed_history(provider)
             if run.configuration.options.include_pr_discussions:
                 provider.discussions = await self._discussions(run, lease)
             model = self._provider.agent_model(run.configuration.model,
@@ -213,6 +228,32 @@ class ReviewService:
             raise ValueError("discussion_snapshot_mismatch")
         return frozen["threads"]
 
+    async def _seed_history(self, provider):
+        from app.review.domain import Candidate, CandidateInput, SourceRef
+        for old in provider.run.plan.history:
+            unit = next((unit for unit in provider.run.plan.units if any(
+                source["path"] in unit.paths for source in old["sources"])), None)
+            if unit is None:
+                continue
+            sources = []
+            for source in old["sources"]:
+                try:
+                    result = await provider.evidence.read(source["path"], source["start_line"],
+                                                          source["end_line"], source["side"])
+                except (ValueError, OSError):
+                    continue
+                if result["evidence"]["content_hash"] != source["content_hash"]:
+                    continue  # Old line numbers are hints until content can be located again.
+                sources.append(SourceRef.model_validate(result["evidence"]))
+            if not sources:
+                continue
+            candidate = Candidate(id=identity([provider.run.id, old["candidate_id"]])[:32],
+                unit_id=unit.id, attempt_id=provider.run.id, tool_call_id=f"history:{old['candidate_id']}",
+                previous_candidate_id=old["candidate_id"],
+                proposal=CandidateInput(claim=old["claim"], trigger=old["trigger"], impact=old["impact"],
+                    source_refs=[ref.id for ref in sources]), sources=sources)
+            await asyncio.to_thread(self.store.seed_history, provider.run.id, candidate, provider.lease)
+
     async def cancel_task(self, run_id):
         cancelled = await asyncio.to_thread(self.store.cancel, run_id)
         if cancelled:
@@ -225,4 +266,17 @@ class ReviewService:
         return await asyncio.to_thread(self.get_task, run_id)
 
     def delete_task(self, run_id):
-        return self.store.delete_task(run_id)
+        deleted = self.store.delete_task(run_id)
+        if deleted:
+            self._artifacts.remove_owner(run_id)
+        return deleted
+
+    async def stop_obsolete(self, parsed):
+        observed_at = utcnow()
+        live = await self._github_tool.fetch_pr(parsed["pr_url"])
+        if (live.base.sha, live.head.sha) != (parsed["base_sha"], parsed["head_sha"]):
+            return
+        stopped = await asyncio.to_thread(self.store.supersede, parsed["repository"],
+            live.repository_id, live.number, live.head.sha, observed_at)
+        for run_id in stopped:
+            self._worker.cancel_task(run_id)

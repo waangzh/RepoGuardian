@@ -55,6 +55,7 @@ export interface Unit {
   risk: 'low' | 'medium' | 'high';
   focus: string[];
   estimated_input_tokens: number;
+  reused_from: string | null;
 }
 
 export interface Plan {
@@ -63,6 +64,7 @@ export interface Plan {
   excluded: Record<string, string>;
   incremental_from: string | null;
   history: Record<string, unknown>[];
+  incremental_reason: string | null;
 }
 
 export interface CandidateInput {
@@ -108,6 +110,7 @@ export interface Candidate {
   verification_sources: SourceRef[];
   admission_reason: string | null;
   finding: Finding | null;
+  previous_candidate_id: string | null;
 }
 
 export interface FindingDisposition {
@@ -133,6 +136,7 @@ export interface WorkItem {
   error_code: string | null;
   result: Record<string, unknown> | null;
   tool_calls: number;
+  reused_from: string | null;
 }
 
 export interface OverviewParagraph {

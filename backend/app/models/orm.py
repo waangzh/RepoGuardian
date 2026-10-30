@@ -250,19 +250,3 @@ class IncrementalWebhookDeliveryOrm(Base):
     reason: Mapped[str | None] = mapped_column(String(120))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
-
-
-class ArtifactOrm(Base):
-    __tablename__ = "artifacts"
-
-    id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    task_id: Mapped[str] = mapped_column(ForeignKey("review_tasks.id", ondelete="CASCADE"), index=True)
-    kind: Mapped[str] = mapped_column(String(64), nullable=False)
-    uri: Mapped[str] = mapped_column(String(1024), nullable=False, unique=True)
-    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    retention_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

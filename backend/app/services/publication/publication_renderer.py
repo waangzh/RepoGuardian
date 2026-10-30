@@ -40,11 +40,27 @@ def render_summary(plan, *, discussion_urls=None):
                         if finding.anchor.start_line else "")
             lines += [f"- **{finding.severity.title()}** {markdown_text(finding.title, 300)} "
                       f"{markdown_text(location, 600)}"]
+            if finding.placement == "summary":
+                lines += ["", finding.body_markdown, ""]
+            url = (discussion_urls or {}).get(finding.finding_key)
+            if isinstance(url, str) and re.fullmatch(
+                r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*#discussion_r[0-9]+", url):
+                lines.append(f"  [查看代码讨论]({url})")
     else:
         lines.append("本轮没有可发布的已验证问题。")
     if plan.withheld_findings:
         lines += ["", "### 未发布记录", ""]
         lines += [f"- `{item.candidate_id}`：{item.reason_code}" for item in plan.withheld_findings]
+    if plan.historical_findings:
+        lines += ["", "### 历史意见", ""]
+        for item in plan.historical_findings:
+            state = "已在本轮重新核验，结论见本轮结果" if item["rechecked"] else "本轮尚未完成核验"
+            lines += [f"- {markdown_text(item['claim'], 300)}：{state}；历史 Head "
+                      f"`{markdown_text(item['head_sha'], 64)}`"]
+            url = item.get("url")
+            if isinstance(url, str) and re.fullmatch(
+                r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*#discussion_r[0-9]+", url):
+                lines.append(f"  [查看历史讨论]({url})")
     lines += ["", "未执行目标仓库代码、测试或构建；投递状态独立于审查结论。"]
     return "\n".join(lines)
 

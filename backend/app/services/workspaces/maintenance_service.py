@@ -6,6 +6,7 @@ import logging
 from app.core.config import settings
 from app.services.workspaces.prepared_workspaces import PreparedWorkspaces
 from app.tools.workspace_cleanup import reap_orphaned_workspaces
+from app.services.review.artifact_store import LocalArtifactStore
 
 logger = logging.getLogger("RepoGuardian.Maintenance")
 workspace_cleanup_lock = asyncio.Lock()
@@ -25,6 +26,8 @@ class MaintenanceService:
         try:
             for run_id in await asyncio.to_thread(self.store.list_expired_task_ids):
                 await asyncio.to_thread(self.store.delete_task, run_id, require_retention=True)
+            for run_id in await asyncio.to_thread(self.store.deleted_ids):
+                await asyncio.to_thread(LocalArtifactStore().remove_owner, run_id)
             await asyncio.to_thread(PreparedWorkspaces(self.store).maintain)
             async with workspace_cleanup_lock:
                 await asyncio.to_thread(reap_orphaned_workspaces,

@@ -146,7 +146,8 @@ class ContextProvider:
         saved = await asyncio.to_thread(self.store.candidates, self.run.id)
         return {"snapshot": self.run.snapshot.model_dump(), "focus": unit.focus,
             "change_map": [{"paths": item.paths, "risk": item.risk} for item in self.run.plan.units][:100],
-            "history": self.run.plan.history[:20],
+            "history_untrusted": [{"claim": item["claim"], "head_sha": item["head_sha"],
+                "status": "historical_not_current_evidence"} for item in self.run.plan.history[:20]],
             "author_statement_untrusted": {"title": self.run.pr.title, "body": (self.run.pr.body or "")[:4000]},
             "unit": unit.model_dump(), "materials": material,
             "missing_material": context.material_failures,

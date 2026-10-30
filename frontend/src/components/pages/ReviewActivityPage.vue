@@ -37,6 +37,7 @@ const ordered = computed(() => [...props.units].sort((a,b) => a.id.localeCompare
 <div class="min0">
 <strong>{{ item.kind === 'review' ? '审查' : '核验' }} · {{ item.unit_id }}</strong>
 <p class="muted small">尝试 {{ item.attempt }} · 物料 {{ item.material_delivery }} · 工具调用 {{ item.tool_calls }}</p>
+<p v-if="item.reused_from" class="notice small">复用此前已交付且完成的范围：<code>{{ item.reused_from }}</code>。源码字节已重新核对，历史问题由本轮独立核验。</p>
 <p v-if="item.error_code" class="notice warn small">{{ executionErrorLabel(item.error_code) }}（{{ item.error_code }}）</p>
 <details v-if="Object.keys(item.missing_material_reasons).length">
 <summary class="link">缺失材料</summary>

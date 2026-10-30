@@ -18,7 +18,7 @@ from app.core.config import settings
 from app.core.database import sync_session
 from app.models.orm import ReviewTaskOrm, WorkerJobOrm, utcnow
 from app.services.review.review_task_access import lock_live_review
-from app.review.store import as_utc
+from app.review.store import ReviewStore, as_utc
 
 
 class NonRetryableJobError(ValueError):
@@ -99,6 +99,14 @@ class DatabaseTaskQueue:
         )
         for _ in range(8):
             with self._session_factory.begin() as session:
+                expired = session.execute(update(WorkerJobOrm).where(
+                    WorkerJobOrm.status == "leased", WorkerJobOrm.lease_until <= now,
+                    WorkerJobOrm.attempts >= WorkerJobOrm.max_attempts,
+                    WorkerJobOrm.kind.in_(["review", "overview"])).values(
+                        status="dead_letter", lease_owner=None, lease_until=None,
+                        last_error="worker_attempts_exhausted", updated_at=now)
+                    .returning(WorkerJobOrm.task_id)).scalars().all()
+                ReviewStore(self._session_factory).reap_exhausted(session, expired)
                 eligibility = or_(
                     WorkerJobOrm.status.in_(["queued", "retry"]),
                     (WorkerJobOrm.status == "leased") & (WorkerJobOrm.lease_until < now),

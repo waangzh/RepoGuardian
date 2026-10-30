@@ -74,6 +74,7 @@ export interface PublicationPlan {
   overview_markdown: string;
   overview_status: string;
   scope_reasons: string[];
+  historical_findings: { claim: string; head_sha: string; rechecked: boolean; url: string | null }[];
 }
 
 export interface ReviewSummary {

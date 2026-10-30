@@ -44,6 +44,7 @@ class RequestGate(AgentMiddleware):
             raise
         message = next((item for item in reversed(response.result) if isinstance(item, AIMessage)), None)
         await context.budget.settle(ticket, getattr(message, "usage_metadata", None))
+        await context.check_active()
         # A successful response proves the model received the full request packet.
         await context.acknowledge(pending, hunks)
         return response
@@ -79,6 +80,7 @@ class AgentRunner:
             output = result.get("structured_response")
             if not isinstance(output, schema):
                 raise ValueError("missing_structured_result")
+            await budget.active()
             if candidate:
                 candidate = admit_verification(candidate, output, context)
             # ainvoke only returns after all tool tasks and their DB receipts finish.

@@ -76,6 +76,7 @@ class PublicationPlan(BaseModel):
     overview_markdown: str = ""
     overview_status: str = "pending"
     scope_reasons: list[str] = Field(default_factory=list)
+    historical_findings: list[dict] = Field(default_factory=list)
 
 
 class ReviewSummary(BaseModel):

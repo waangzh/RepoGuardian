@@ -1,7 +1,7 @@
 """Publisher-only validation for normalized, persisted Run findings."""
 
 from app.review.evidence import EvidenceArchive
-from app.review.findings import finding_digest, verification_problem
+from app.review.findings import aggregate, finding_digest, verification_problem
 from app.services.review.artifact_store import LocalArtifactStore
 
 
@@ -77,7 +77,8 @@ def validated_findings(run, artifacts=None):
             withheld.append((finding.candidate_id, reason))
         else:
             selected.append(finding)
+    canonical_ids = {finding.id for finding in aggregate(report.candidates)}
     for candidate in report.candidates:
-        if candidate.finding is not None and candidate.finding.id not in seen:
+        if candidate.finding is not None and candidate.finding.id in canonical_ids and candidate.finding.id not in seen:
             withheld.append((candidate.id, "finding_missing_from_report"))
     return selected, sorted(set(withheld))

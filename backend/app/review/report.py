@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from app.review.domain import Overview, OverviewOutput, Report, utcnow
 from app.review.findings import aggregate
 from app.review.planner import identity, tokens
+from app.review.planner import members
 from app.review.store import BudgetExceeded, LeaseLost, ReviewStopped
 
 
@@ -24,6 +25,10 @@ def build_report(run, work_items, candidates, usage):
             reasons.append(f"{item.unit_id}:unresolved_investigation")
     if any(candidate.verification is None for candidate in candidates):
         reasons.append("unverified_candidates")
+    checked_history = {candidate.previous_candidate_id for candidate in candidates
+                       if candidate.verification is not None}
+    if any(item["candidate_id"] not in checked_history for item in run.plan.history):
+        reasons.append("unverified_historical_candidates")
     status = "partial" if reasons else "completed"
     if reviews and all(item.status == "failed" for item in reviews) and not candidates:
         status = "failed"
@@ -79,6 +84,32 @@ def overview_material(report, provider):
                 continue
             evidence.append(packet)
             visible[source_id] = packet
+    # Incremental reuse and cutoff may leave no new reviewer request. The overview
+    # can still receive bounded current source directly, without claiming review.
+    if not evidence:
+        included_members = {key for unit in provider.run.plan.units for key in unit.required_hunk_ids}
+        for member in members(provider.run.changed_files).values():
+            if member["id"] not in included_members:
+                continue
+            for side, key, path in (("head", "new_line_no", member["path"]),
+                                    ("base", "old_line_no", member["old_path"])):
+                lines = [line[key] for line in member["lines"] if line[key] is not None]
+                if not lines or path not in provider.evidence.allowed_paths:
+                    continue
+                try:
+                    result = provider.evidence._read(path, lines[0], lines[-1], side)
+                except (ValueError, OSError):
+                    continue
+                source_id = result["evidence"]["id"]
+                if source_id in visible:
+                    continue
+                packet = {"source_ref": f"S{len(visible) + 1}", "source": result["evidence"],
+                          "content": result["content"]}
+                if tokens(payload) + tokens(packet) > 4500:
+                    payload["omitted"]["sources"] += 1
+                    continue
+                evidence.append(packet)
+                visible[source_id] = packet
     return payload, {packet["source_ref"]: packet["source"] for packet in evidence}
 
 

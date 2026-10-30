@@ -19,8 +19,8 @@ async def create_review(request: ReviewRequest,
     except _reviews.GitHubToolError as exc:
         raise HTTPException(exc.api_status, exc.public_detail()) from None
     except ValueError as exc:
-        raise HTTPException(409, {"code": str(exc) if str(exc) == "idempotency_key_conflict"
-                                 else "review_request_invalid"}) from None
+        code = str(exc) if str(exc) in {"idempotency_key_conflict", "review_deleted"} else "review_request_invalid"
+        raise HTTPException(410 if code == "review_deleted" else 409, {"code": code}) from None
 
 
 @router.get("")
