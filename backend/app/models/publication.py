@@ -55,7 +55,7 @@ class ReviewOutcome(BaseModel):
     examined_goals: int = Field(default=0, ge=0)
     total_goals: int = Field(default=0, ge=0)
     incomplete_investigations: int = Field(default=0, ge=0,
-        description="Number of independently assessed necessary evidence gaps still unresolved.")
+        description="Number of unresolved blocking evidence gaps under the report's recorded review policy.")
     pending_limitation_count: int = Field(default=0, ge=0)
     review_limitations: list[ReviewLimitation] = Field(default_factory=list)
     reason_codes: list[OutcomeReason] = Field(default_factory=list)

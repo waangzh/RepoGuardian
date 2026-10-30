@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
 from app.core.paths import validate_repo_relative_path
 
@@ -158,11 +158,23 @@ class ChangeObservation(ChangeObservationProposal):
     sources: list[EvidenceRef]
 
 
+class DiscoveryGap(ReviewModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    goal_ids: list[str] = Field(min_length=1, max_length=20)
+    missing_fact: str = Field(min_length=1, max_length=1000)
+    dependent_conclusion: str = Field(min_length=1, max_length=1000)
+    change_relevance: str = Field(min_length=1, max_length=1000)
+    next_check: str = Field(min_length=1, max_length=1000)
+
+
 class DiscoveryOutput(ReviewModel):
+    """Archive reader for current structured gaps and historical declarations."""
+
     findings: list[CandidateProposal] = Field(default_factory=list, max_length=30)
     observations: list[ChangeObservationProposal] = Field(default_factory=list, max_length=6)
     examined: list[ExaminedGoal] = Field(default_factory=list)
-    limitations: list[str] = Field(default_factory=list, max_length=20,
+    limitations: list[str | DiscoveryGap] = Field(default_factory=list, max_length=20,
         description="Proposed missing premises, not accepted blockers. Name the specific missing fact, "
             "which conclusion about this change depends on it, and the smallest source check needed. "
             "Not running code/tests/builds is a general boundary, even for numerical changes: put that in "
@@ -170,6 +182,13 @@ class DiscoveryOutput(ReviewModel):
     boundary_notes: list[str] = Field(default_factory=list, max_length=10,
         description="General static-review boundaries, including not running code/tests/builds. "
             "Static source reasoning is allowed and does not itself imply missing evidence.")
+
+
+class DiscoverySubmission(DiscoveryOutput):
+    limitations: list[DiscoveryGap] = Field(default_factory=list, max_length=20,
+        description="Local unverified evidence gaps, never accepted global blockers. Name affected goal_ids, "
+            "missing_fact, dependent_conclusion, change_relevance and the smallest next_check. "
+            "Use boundary_notes for general static-review boundaries. First attempt the necessary bounded read.")
 
 
 class LimitationResolution(ReviewModel):
@@ -219,11 +238,19 @@ class ReviewLimitation(ReviewModel):
     text: str
     candidate_ids: list[str] = Field(default_factory=list)
     goal_ids: list[str] = Field(default_factory=list)
-    status: Literal["pending", "unresolved", "resolved", "boundary", "nonblocking"] = "pending"
+    status: Literal["pending", "reported", "unresolved", "resolved", "boundary", "nonblocking"] = "pending"
+    gap: DiscoveryGap | None = None
     resolution: LimitationResolution | None = None
     assessment: LimitationAssessment | None = None
     resolved_by: str | None = None
     resolution_claims: list[CandidateLimitationResolution] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def serialize_gap(self, handler):
+        value = handler(self)
+        if self.gap is None:
+            value.pop("gap", None)
+        return value
 
 
 class AuthorComment(ReviewModel):
@@ -400,6 +427,7 @@ class ReviewSynthesis(ReviewModel):
 
 
 class ReviewReport(ReviewModel):
+    policy_version: Literal[1, 2] = 1
     snapshot: ReviewSnapshot
     review_units: list[ReviewUnit] = Field(default_factory=list)
     assignments: list[ReviewAssignment]
@@ -417,3 +445,10 @@ class ReviewReport(ReviewModel):
     termination: Literal["completed", "partial", "cancelled", "deadline", "failed"]
     coverage_limitations: list[str] = Field(default_factory=list)
     budget: dict = Field(default_factory=dict)
+
+    @model_serializer(mode="wrap")
+    def serialize_policy(self, handler):
+        value = handler(self)
+        if self.policy_version == 1:
+            value.pop("policy_version", None)
+        return value

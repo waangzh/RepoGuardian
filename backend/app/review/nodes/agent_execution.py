@@ -8,11 +8,10 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.callbacks import AsyncCallbackHandler
 from langsmith import Client, tracing_context
 
-from app.review.agents import agent_recursion_limit, build_agent
+from app.review.agents import FINAL_SCHEMAS, agent_recursion_limit, build_agent
 from app.review.models import (
-    AgentAttempt, AgentResult, BatchVerificationOutput, DiscoveryOutput, LimitationReviewOutput, VerificationOutput,
+    AgentAttempt, AgentResult, BatchVerificationOutput, DiscoveryGap, DiscoverySubmission, VerificationOutput,
 )
-from app.review.limitations import ASSESSMENT_ERROR_CODES, LIMITATION_CALL_LIMITS, validate_assessments
 from app.review.tools import REVIEW_TOOLS
 from app.review.materials import prepare_materials
 
@@ -52,8 +51,7 @@ class AgentUsage(AsyncCallbackHandler):
         if isinstance(outputs, dict):
             for message in outputs.get("messages", []):
                 if (isinstance(message, ToolMessage) and (
-                        message.name in {"DiscoveryOutput", "VerificationOutput", "BatchVerificationOutput",
-                                         "LimitationReviewOutput"}
+                        message.name in FINAL_SCHEMAS
                         and str(message.content).startswith("Error:")
                         or str(message.content).startswith("Error: review_final_submission_required"))):
                     self.structured_errors.add(message.tool_call_id)
@@ -67,7 +65,7 @@ class AgentUsage(AsyncCallbackHandler):
         message = getattr(generation, "message", None)
         self.tool_calls += len(getattr(message, "tool_calls", []))
         final_schemas = {schema.__name__: schema for schema in (
-            DiscoveryOutput, VerificationOutput, BatchVerificationOutput, LimitationReviewOutput)}
+            DiscoverySubmission, VerificationOutput, BatchVerificationOutput)}
         finals = [call for call in getattr(message, "tool_calls", []) if call["name"] in final_schemas]
         for call in finals:
             try:
@@ -158,8 +156,7 @@ class AgentUsage(AsyncCallbackHandler):
             final_feedback = (isinstance(message, ToolMessage)
                               and str(message.content).startswith("Error: review_final_submission_required"))
             if (isinstance(message, ToolMessage) and (
-                    message.name in {"DiscoveryOutput", "VerificationOutput", "BatchVerificationOutput",
-                                     "LimitationReviewOutput"}
+                    message.name in FINAL_SCHEMAS
                     and str(message.content).startswith("Error:") or final_feedback)):
                 self.structured_errors.add(message.tool_call_id)
             if isinstance(message, ToolMessage) and message.name in SOURCE_TOOLS and not final_feedback:
@@ -184,9 +181,6 @@ async def run_agent(context, identity, reviewer, payload, *, discovery_agent_ids
         previous = next((item for (role, _), item in context.retry_results.items()
                          if role == reviewer and item.get("execution_id") == identity), None)
     limits = context.limits.model_copy(deep=True)
-    if reviewer == "limitation_reviewer":
-        limits.model_calls = min(limits.model_calls, LIMITATION_CALL_LIMITS[context.depth])
-        limits.tool_calls = min(limits.tool_calls, 24)
     model_call_limit, tool_call_limit = limits.model_calls, limits.tool_calls
     if previous:
         limits.model_calls -= previous["model_calls"]
@@ -218,29 +212,27 @@ async def run_agent(context, identity, reviewer, payload, *, discovery_agent_ids
         await context.active()
         await usage_observer.reconcile(result["messages"])
         output = result["structured_response"].model_dump()
-        if reviewer == "limitation_reviewer":
-            await asyncio.to_thread(validate_assessments, LimitationReviewOutput.model_validate(output),
-                sources.review_limitations, sources.goals, usage_observer.evidence | material_ids, sources.evidence)
     except (asyncio.CancelledError, KeyboardInterrupt):
         raise
     except Exception as exc:
         await context.active()
-        error = str(exc) if isinstance(exc, ValueError) and str(exc) in ASSESSMENT_ERROR_CODES else type(exc).__name__
+        error = type(exc).__name__
         logger.error("审查分支失败 review_id=%s agent_id=%s reviewer=%s code=%s model_calls=%s tool_calls=%s",
             sources.evidence.snapshot.review_id[:8], identity[:8], reviewer, error,
             len(usage_observer.started), len(usage_observer.tools_started))
     if context.budget is not None:
         await context.budget.finish(identity)
+    declarations = [DiscoveryGap.model_validate(item).missing_fact if isinstance(item, dict) else item
+                    for item in output.get("limitations", [])]
     envelope = AgentResult(id=identity, status="failed" if error else "completed", error=error,
-        output=output, investigation_limitations=output.get("limitations", []), **usage_observer.values())
+        output=output, investigation_limitations=declarations, **usage_observer.values())
     envelope.evidence_ids = sorted(set(envelope.evidence_ids) | material_ids)
     envelope.policy_exclusions = usage_observer.policy_exclusions
     envelope.incomplete_searches = usage_observer.incomplete_searches
     envelope.structured_output_retries = usage_observer.structured_output_retries
     envelope.cached_input_tokens = (usage_observer.cached_input_tokens
         if not usage_observer.unknown and usage_observer.cache_known else None)
-    node = ("review_limitation" if reviewer == "limitation_reviewer" else
-            "verify" if reviewer == "verifier" else "investigate" if reviewer == "investigator" else "discover")
+    node = "verify" if reviewer == "verifier" else "investigate" if reviewer == "investigator" else "discover"
     if node in context.replaying_nodes:
         # A wrapper node may restart read-only work after interruption. Prior
         # transport completion is unknown; do not label only new calls as total.

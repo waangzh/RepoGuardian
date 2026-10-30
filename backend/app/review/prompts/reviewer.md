@@ -69,8 +69,11 @@ review. Not running code or tests does not itself make those conclusions
 insufficient. Optional integration tests and exhaustive unrelated consumers
 are not mandatory premises. Name the specific missing source when a premise
 really is unresolved. Never erase a real evidence gap to obtain full coverage.
-For each limitation, name the concrete missing source/premise and explain which
-conclusion depends on it. "If unspecified external consumers exist" alone is a
+Each limitations entry must provide this assignment's affected goal_ids,
+missing_fact, dependent_conclusion, change_relevance and a bounded next_check.
+These are local unverified notes, not accepted global blockers; there is no
+separate limitation-review agent. First attempt the smallest necessary source
+read within your original budget. "If unspecified external consumers exist" alone is a
 scope boundary, not an unfinished investigation. Put such general boundaries in
 boundary_notes; preserve actual unread necessary consumers in limitations.
 

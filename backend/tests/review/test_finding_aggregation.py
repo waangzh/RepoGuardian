@@ -151,7 +151,7 @@ class EquivalentReviewModel(ReviewModel):
         payload = json.loads(next(message.content for message in messages if message.type == "human"))
         message = result.generations[0].message
         for call in message.tool_calls:
-            if call["name"] == "DiscoveryOutput":
+            if call["name"] == "DiscoverySubmission":
                 proposal = call["args"]["findings"][0]
                 proposal["title"] = "view one"
                 proposal["trigger"] = "event one"
@@ -209,7 +209,7 @@ class BoundedComparisonModel(ReviewModel):
         result = super()._generate(messages, stop, run_manager, **kwargs)
         payload = json.loads(next(message.content for message in messages if message.type == "human"))
         for call in result.generations[0].message.tool_calls:
-            if call["name"] == "DiscoveryOutput":
+            if call["name"] == "DiscoverySubmission":
                 proposal = call["args"]["findings"][0]
                 proposals = [{**proposal, "title": f"claim {index}", "severity": "high"}
                              for index in range(self.candidate_count)]
@@ -270,7 +270,7 @@ class PaginatedModel(ReviewModel):
                          for name in ("read_file", "read_base_file")]
             else:
                 evidence = [body["evidence"] for body in bodies if "evidence" in body]
-                calls = [{"name": "DiscoveryOutput", "id": "done", "args": {"findings": [], "examined": [
+                calls = [{"name": "DiscoverySubmission", "id": "done", "args": {"findings": [], "examined": [
                     {"goal_id": goal["id"], "evidence_ids": [item["id"] for item in evidence
                         if item["side"] == goal["side"]]} for goal in payload["goals"]]}}]
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content="", tool_calls=calls,
@@ -297,8 +297,11 @@ class ToolFailureModel(ReviewModel):
             body = json.loads(responses[-1].content)
             assert body == {"ok": False, "error": "read_rejected", "error_type": "ReviewPathPolicyError",
                             "truncated": False}
-            calls = [{"name": "DiscoveryOutput", "args": {"findings": [], "examined": [],
-                      "limitations": ["拒绝了不安全路径"]}, "id": "done"}]
+            payload = json.loads(next(message.content for message in messages if message.type == "human"))
+            calls = [{"name": "DiscoverySubmission", "args": {"findings": [], "examined": [],
+                      "limitations": [{"goal_ids": [goal["id"] for goal in payload["goals"]],
+                          "missing_fact": "拒绝了不安全路径", "dependent_conclusion": "变更行为尚未核对",
+                          "change_relevance": "目标源码未读取", "next_check": "读取已授权的目标文件"}]}, "id": "done"}]
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content="", tool_calls=calls,
             usage_metadata={"input_tokens": 10, "output_tokens": 10, "total_tokens": 20}))])
 

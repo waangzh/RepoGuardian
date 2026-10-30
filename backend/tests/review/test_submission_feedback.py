@@ -229,12 +229,17 @@ class SubmissionModel(ToolCallingModel):
         if self.mistake == "boundary":
             note = "未执行代码：数值效果由源码推断"
             if wrong or self.preserve_gap:
-                limitations = [note + "；必要调用方仍未读取" if self.preserve_gap else note]
+                limitations = [{
+                    "goal_ids": [goal["id"] for goal in payload["goals"]],
+                    "missing_fact": note + "；必要调用方仍未读取" if self.preserve_gap else note,
+                    "dependent_conclusion": "返回值是否符合调用方契约",
+                    "change_relevance": "本次返回值变化", "next_check": "读取必要调用方",
+                }]
             else:
                 boundaries = [note]
         args = {"findings": [], "examined": examined, "limitations": limitations, "boundary_notes": boundaries}
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content="", tool_calls=[
-            {"name": "DiscoveryOutput", "args": args, "id": f"submission-{self.calls}"}],
+            {"name": "DiscoverySubmission", "args": args, "id": f"submission-{self.calls}"}],
             usage_metadata={"input_tokens": 20, "output_tokens": 10, "total_tokens": 30}))])
 
 
@@ -291,9 +296,14 @@ class ReadingSubmissionModel(ToolCallingModel):
             examined = [{"goal_id": goal["id"], "evidence_ids": [
                 refs.get(goal["side"], refs["head"])]} for goal in payload["goals"]
                 if not feedback or goal["side"] in refs]
-            calls = [{"name": "DiscoveryOutput", "id": f"submission-{self.calls}", "args": {
+            calls = [{"name": "DiscoverySubmission", "id": f"submission-{self.calls}", "args": {
                 "findings": [], "examined": examined,
-                "limitations": ["缺少 BASE 源码，对照尚未完成"] if feedback and "base" not in refs else [],
+                "limitations": [{
+                    "goal_ids": [goal["id"] for goal in payload["goals"] if goal["side"] == "base"],
+                    "missing_fact": "缺少 BASE 源码，对照尚未完成",
+                    "dependent_conclusion": "前后行为是否变化", "change_relevance": "修改返回值",
+                    "next_check": "读取 BASE safe.py",
+                }] if feedback and "base" not in refs else [],
             }}]
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content="", tool_calls=calls,
             usage_metadata={"input_tokens": 20, "output_tokens": 10, "total_tokens": 30}))])
@@ -344,7 +354,9 @@ async def test_feedback_marker_and_call_count_survive_sqlite_reopen(source_servi
     database = str(tmp_path / "feedback.sqlite")
 
     def build(saver, interrupt):
-        return create_agent(model, tools=REVIEW_TOOLS, response_format=ToolStrategy(DiscoveryOutput),
+        from app.review.models import DiscoverySubmission
+
+        return create_agent(model, tools=REVIEW_TOOLS, response_format=ToolStrategy(DiscoverySubmission),
             middleware=[ReviewGuardMiddleware(limits), ModelCallLimitMiddleware(
                 run_limit=4, thread_limit=4, exit_behavior="error"), ToolCallLimitMiddleware(
                     run_limit=80, thread_limit=80, exit_behavior="error")],

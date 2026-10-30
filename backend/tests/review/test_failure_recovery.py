@@ -109,6 +109,46 @@ async def test_retry_cannot_reset_remaining_model_budget(source_service):
     assert result["previous_attempts"][0]["model_calls"] == 22
 
 
+async def test_service_resumes_legacy_limitation_checkpoint_without_replaying_core(pipeline, monkeypatch):
+    from langgraph.checkpoint.memory import InMemorySaver
+    from tests.review.test_limitation_lifecycle import legacy_graph
+
+    service, repository, model, _, _ = pipeline
+    _, _, task = await preview_and_create(service)
+    assert await service._worker.run_once()
+    saved = repository.get_task(task.id)
+    original_report = saved.review_report
+    previous_saver = await review_service.get_checkpointer()
+    config = review_thread_config(task.id)
+    original_state = await build_review_graph(previous_saver).aget_state(config)
+    values = dict(original_state.values)
+    values.update(report={}, limitation_batches=[{"id": "legacy-batch"}])
+    saver = InMemorySaver()
+    await legacy_graph(saver, "review_limitation", values).ainvoke(values, config)
+
+    async def current_saver():
+        return saver
+
+    monkeypatch.setattr(review_service, "get_checkpointer", current_saver)
+    saved.status, saved.phase, saved.error = "failed", "failed", "interrupted"
+    saved.review_report = None
+    saved.completed_at = None
+    saved.updated_at = utcnow()
+    repository.save_task(saved)
+    before_requests = len(review_requests(model))
+    before_budget = repository.model_budget_summary(task.id, task.configuration.limits)
+    await service.resume_review(task.id)
+    assert await service._worker.run_once()
+    restored = repository.get_task(task.id)
+    assert restored.status == "completed", restored.error
+    assert restored.review_report.policy_version == 2
+    assert restored.review_report.findings == original_report.findings
+    assert restored.review_report.discovery_results == original_report.discovery_results
+    assert len(review_requests(model)) == before_requests
+    after_budget = repository.model_budget_summary(task.id, task.configuration.limits)
+    assert after_budget["model_calls"] >= before_budget["model_calls"]
+
+
 async def test_new_attempt_cannot_cite_previous_attempts_without_reading_again(source_service):
     model = ReviewModel()
     context = review_context(source_service, model)

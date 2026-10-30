@@ -18,7 +18,7 @@ from langgraph.types import Command
 from app.review.budget import ReviewBudgetExceeded
 from app.review.context import AgentContext
 from app.review.models import (
-    BatchVerificationOutput, DiscoveryOutput, LimitationReviewOutput, ReviewLimits, VerificationOutput,
+    BatchVerificationOutput, DiscoveryOutput, DiscoverySubmission, ReviewLimits, VerificationOutput,
 )
 from app.review.submission import issued_source_ids, submission_feedback
 from app.review.tools import REVIEW_TOOLS
@@ -71,7 +71,7 @@ class ReviewGuardMiddleware(AgentMiddleware):
     @hook_config(can_jump_to=["model"])
     async def aafter_model(self, state, runtime):
         output = state.get("structured_response")
-        if (not isinstance(output, (DiscoveryOutput, VerificationOutput, BatchVerificationOutput, LimitationReviewOutput))
+        if (not isinstance(output, (DiscoveryOutput, VerificationOutput, BatchVerificationOutput))
                 or state.get("review_feedback_sent")
                 or state.get("thread_model_call_count", 0) >= self.limits.model_calls):
             return None
@@ -208,7 +208,7 @@ class FinalizationRequired(RuntimeError):
     pass
 
 
-FINAL_SCHEMAS = {"DiscoveryOutput", "VerificationOutput", "BatchVerificationOutput", "LimitationReviewOutput"}
+FINAL_SCHEMAS = {"DiscoverySubmission", "VerificationOutput", "BatchVerificationOutput"}
 
 
 def agent_recursion_limit(limits: ReviewLimits):
@@ -217,12 +217,11 @@ def agent_recursion_limit(limits: ReviewLimits):
 
 
 def build_agent(model, reviewer: str, limits: ReviewLimits, *, batch=False):
-    if reviewer not in {"reviewer", "contract", "specialist", "verifier", "investigator", "limitation_reviewer"}:
+    if reviewer not in {"reviewer", "contract", "specialist", "verifier", "investigator"}:
         raise ValueError("unknown_reviewer")
     prompt = (Path(__file__).parent / "prompts" / f"{reviewer}.md").read_text(encoding="utf-8")
-    schema = (LimitationReviewOutput if reviewer == "limitation_reviewer" else
-              BatchVerificationOutput if batch else VerificationOutput
-              if reviewer in {"verifier", "investigator"} else DiscoveryOutput)
+    schema = (BatchVerificationOutput if batch else VerificationOutput
+              if reviewer in {"verifier", "investigator"} else DiscoverySubmission)
     return create_agent(
         model=model, tools=REVIEW_TOOLS, system_prompt=prompt,
         response_format=ToolStrategy(schema),

@@ -14,3 +14,7 @@ You may stop once the necessary source context is established. Unread unrelated
 pages are not failures or limitations. Empty partial pages cannot prove absence;
 if a conclusion depends on an unfinished search or missing source, identify the
 unresolved premise and affected goal in limitations. Do not claim unexamined goals.
+Each limitations entry must include this assignment's affected goal_ids,
+missing_fact, dependent_conclusion, change_relevance and a bounded next_check.
+Attempt the smallest necessary source read first, within the original budget.
+Local gaps are unverified notes; there is no separate limitation-review agent.

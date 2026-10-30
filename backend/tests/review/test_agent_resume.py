@@ -48,7 +48,7 @@ class ResumeModel(ToolCallingModel):
                       "id": "base"}]
         else:
             evidence = [json.loads(message.content)["evidence"] for message in responses]
-            calls = [{"name": "DiscoveryOutput", "id": "result", "args": {
+            calls = [{"name": "DiscoverySubmission", "id": "result", "args": {
                 "findings": [], "examined": [
                     {"goal_id": goal["id"], "evidence_ids": [
                         item["id"] for item in evidence if item["path"] == goal["path"]

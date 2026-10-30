@@ -121,7 +121,7 @@ test('整轮预算优先使用账本，共享批量结果不重复计量',async(
  }finally{await server.close();}
 });
 
-test('限制复核失败只在原深度分支预算有余额时允许补查',async()=>{
+test('历史限制复核失败可直接完成汇总，不再受已删除角色的分支上限限制',async()=>{
  const server=await createServer({server:{middlewareMode:true,hmr:false},optimizeDeps:{noDiscovery:true,entries:[],include:[]},appType:'custom'});
  try{
   const {resumeLabel,phaseLabel}=await server.ssrLoadModule('/src/utils/nativeReview.ts');
@@ -129,9 +129,11 @@ test('限制复核失败只在原深度分支预算有余额时允许补查',asy
    configuration:{options:{depth:'standard'},limits:{model_calls:12,tool_calls:80,timeout_seconds:1800}},
    review_report:{termination:'partial',discovery_results:[],verification_results:[],
     limitation_results:[{status:'failed',model_calls:4,tool_calls:5}]}};
-  assert.equal(resumeLabel(task),'补查失败分支');
+   assert.equal(resumeLabel(task),'按当前流程完成汇总');
   task.review_report.limitation_results[0].model_calls=5;
-  assert.equal(resumeLabel(task),null);
+   assert.equal(resumeLabel(task),'按当前流程完成汇总');
+   task.review_report.limitation_results[0].model_calls=null;
+   assert.equal(resumeLabel(task),'按当前流程完成汇总');
   assert.equal(phaseLabel('limitation_reviewer'),'限制必要性复核');
  }finally{await server.close();}
 });

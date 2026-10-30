@@ -38,19 +38,25 @@ def derive_review_outcome(task, *, publishable_count=None, evidence=None):
         reasons.append(Reason.REVIEW_PLAN_LIMITED)
     if unresolved:
         reasons.append(Reason.VERIFICATION_UNRESOLVED)
-    results = [*report.discovery_results, *report.verification_results, *report.limitation_results]
-    if any(result.input_tokens is None or result.output_tokens is None for result in results):
+    results = [*report.discovery_results, *report.verification_results]
+    usage_results = results + report.limitation_results
+    if report.policy_version == 1:
+        results = usage_results
+    if any(result.input_tokens is None or result.output_tokens is None for result in usage_results):
         reasons.append(Reason.USAGE_INTEGRITY_UNKNOWN)
     if any(result.status != "completed" for result in results):
         reasons.append(Reason.TERMINATION_INCOMPLETE)
     elif report.termination != "completed":
         reasons.append(Reason.TERMINATION_INCOMPLETE)
     limitations = review_limitations(report, evidence)
-    incomplete_investigations = sum(item.status == "unresolved" for item in limitations)
-    pending_limitations = sum(item.status == "pending" for item in limitations)
+    blocking_limitations = [item for item in limitations
+                            if report.policy_version == 1 or item.source == "verification"]
+    incomplete_investigations = sum(item.status == "unresolved" for item in blocking_limitations)
+    pending_limitations = (sum(item.status == "pending" for item in blocking_limitations)
+                           if report.policy_version == 1 else 0)
     if incomplete_investigations:
         reasons.append(Reason.INVESTIGATION_INCOMPLETE)
-    if pending_limitations:
+    if pending_limitations and report.policy_version == 1:
         reasons.append(Reason.LIMITATION_ASSESSMENT_INCOMPLETE)
     if task.error == "review_deadline":
         reasons.append(Reason.DEADLINE_EXCEEDED)

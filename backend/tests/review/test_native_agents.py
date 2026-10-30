@@ -72,8 +72,8 @@ class ToolCallingModel(BaseChatModel):
             calls = [{"name": "read_file", "args": {"path": "../secret", "start": 1, "end": 1},
                       "id": "denied"}]
         else:
-            calls = [{"name": "DiscoveryOutput",
-                      "args": {"findings": [], "examined": [], "limitations": ["无法读取越权文件"]},
+            calls = [{"name": "DiscoverySubmission",
+                      "args": {"findings": [], "examined": [], "boundary_notes": ["越权文件读取被拒绝"]},
                       "id": "final"}]
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content="", tool_calls=calls))])
 
@@ -183,7 +183,7 @@ async def test_chatopenai_http_native_tools_and_structured_response(source_servi
         else:
             assert json.loads(seen[0]["content"])["ok"]
             tool_calls = [{"id": "final", "type": "function", "function": {
-                "name": "DiscoveryOutput", "arguments": json.dumps({"findings": [], "examined": []})}}]
+                "name": "DiscoverySubmission", "arguments": json.dumps({"findings": [], "examined": []})}}]
         return httpx.Response(200, json={"id": "chat", "object": "chat.completion", "created": 1,
             "model": "fixture", "choices": [{"index": 0, "finish_reason": "tool_calls",
                 "message": {"role": "assistant", "content": None, "tool_calls": tool_calls}}],

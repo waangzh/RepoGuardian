@@ -25,7 +25,7 @@ const visible = computed(() => props.findings.filter(item => {
 }));
 const selected = computed(() => visible.value.find(item => item.id === selection.value) || visible.value[0]);
 const verification = computed(() => props.task.review_report?.decisions.find(item => item.candidate_id === selected.value?.id));
-const openLimitations = computed(() => props.limitations.filter(item => ['pending','unresolved'].includes(item.status)));
+const openLimitations = computed(() => props.limitations.filter(item => ['pending','reported','unresolved'].includes(item.status)));
 const fileIndex = computed(() => props.task.changed_files.findIndex(file => file.file_path === selected.value?.location?.path));
 const attribution = { introduced:'本次 PR 引入', exposed:'本次 PR 暴露或扩大影响', pre_existing:'既有问题（非本次新增）', uncertain:'归因尚未确定' };
 watch(() => selected.value?.id, () => { reason.value = ''; error.value = ''; });
@@ -43,13 +43,14 @@ async function save() {
 <template>
   <div class="page-head"><div><h2>问题与证据</h2><p class="title-sub">候选、核验结论与人工处理分别记录；人工注记不改变发布资格。</p></div><span class="badge neutral">{{ findings.length }} 条记录</span></div>
   <section v-if="openLimitations.length" class="card card-pad space-bottom">
-    <h3>审查待核实事项</h3><p class="muted small">这些事项独立于代码缺陷计数；必要性复核未完成，不代表已确认存在代码问题。</p>
+    <h3>审查待核实事项</h3><p class="muted small">这些事项独立于代码缺陷计数；主审说明不代表已确认问题，请结合影响范围判断是否需要人工补查。</p>
     <article v-for="item in openLimitations" :key="item.id" class="plan-file">
-      <span class="badge neutral">{{ item.status === 'pending' ? '限制声明尚待复核' : '必要证据缺口' }}</span>
+      <span class="badge neutral">{{ item.status === 'reported' ? (item.source === 'verification' ? '候选核验证据缺口' : '主审局部证据缺口') : item.status === 'pending' ? '历史未评估声明' : '必要证据缺口' }}</span>
       <p>{{ item.text }}</p>
-      <p v-if="item.assessment?.dependent_conclusion" class="small">影响的结论：{{ item.assessment.dependent_conclusion }}</p>
-      <p v-if="item.assessment?.change_relevance" class="small">与本次变更的关联：{{ item.assessment.change_relevance }}</p>
-      <p v-if="item.assessment?.next_check" class="small">需要补查：{{ item.assessment.next_check }}</p>
+      <p v-if="item.gap?.goal_ids.some(id => !item.goal_ids.includes(id))" class="small">部分关联目标未通过范围校验。</p>
+      <p v-if="item.gap?.dependent_conclusion || item.assessment?.dependent_conclusion" class="small">影响的结论：{{ item.gap?.dependent_conclusion || item.assessment?.dependent_conclusion }}</p>
+      <p v-if="item.gap?.change_relevance || item.assessment?.change_relevance" class="small">与本次变更的关联：{{ item.gap?.change_relevance || item.assessment?.change_relevance }}</p>
+      <p v-if="item.gap?.next_check || item.assessment?.next_check" class="small">需要补查：{{ item.gap?.next_check || item.assessment?.next_check }}</p>
     </article>
   </section>
   <div class="workspace-toolbar rg-finding-filters"><input v-model="query" class="input" placeholder="搜索问题或文件" aria-label="搜索问题" /><select v-model="filter" class="select" aria-label="核验状态"><option value="all">全部核验状态</option><option value="confirmed">已确认</option><option value="unresolved">待核实</option><option value="dismissed">已排除</option></select><select v-model="severity" class="select" aria-label="风险等级"><option value="all">全部风险等级</option><option value="critical">严重</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select></div>

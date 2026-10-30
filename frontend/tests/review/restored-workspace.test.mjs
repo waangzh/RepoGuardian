@@ -161,16 +161,23 @@ test('概览在摘要未就绪时仍显示规划限制，并与摘要中的相�
   }
 });
 
-test('零缺陷记录仍展示独立的待复核声明和必要证据缺口', async () => {
+test('零缺陷记录仍展示局部缺口及历史声明，不承诺追加独立复核', async () => {
   const limitations = [
     {id:'pending',status:'pending',text:'未证明全局正确 <script>unsafe()</script>',assessment:null},
     {id:'gap',status:'unresolved',text:'必要调用方源码缺失',assessment:{
       dependent_conclusion:'新返回值是否破坏调用方契约',change_relevance:'本次修改改变返回值',next_check:'读取具体校验函数'}},
     {id:'boundary',status:'boundary',text:'已归类的边界，不再是待办',assessment:null},
+    {id:'local',status:'reported',text:'局部输入前提未核实',goal_ids:['head'],gap:{
+      goal_ids:['head','outside'],dependent_conclusion:'输入是否满足约束',change_relevance:'修改输入条件',next_check:'查看入参校验源码'}},
+    {id:'candidate-gap',source:'verification',status:'reported',text:'候选缺少调用方证据',assessment:null},
   ];
   const html = await render('pages/ReviewFindingsPage',{task:task('completed'),findings:[],limitations});
   assert.match(html,/审查待核实事项/);
-  assert.match(html,/限制声明尚待复核/);
+   assert.match(html,/历史未评估声明/);
+   assert.match(html,/主审局部证据缺口/);
+   assert.match(html,/候选核验证据缺口/);
+   assert.match(html,/查看入参校验源码/);
+   assert.match(html,/部分关联目标未通过范围校验/);
   assert.match(html,/必要证据缺口/);
   assert.match(html,/读取具体校验函数/);
   assert.match(html,/尚无匹配的代码缺陷记录/);
@@ -241,7 +248,7 @@ test('审查意见默认展示完整评论正文，重要状态提示不折叠',
   assert.match(failed.replace(/<details[\s\S]*?<\/details>/g, ''), /审查未正常结束/);
   const outcome = { ...publicationPlan().outcome, review_completeness: 'partial', coverage: 'partial', incomplete_investigations: 2, pending_limitation_count: 1 };
   const partial = await render('pages/ReviewReportPage', { task: task('completed'), plan: publicationPlan({ outcome }), report: '', loading: false });
-  assert.match(partial.replace(/<details[\s\S]*?<\/details>/g, ''), /覆盖不完整：2 项调查未完成，1 项限制待复核/);
+  assert.match(partial.replace(/<details[\s\S]*?<\/details>/g, ''), /覆盖不完整：已检查 1 \/ 1 项约定目标，具体缺口见覆盖页/);
 });
 
 test('恢复的侧栏与设置可在无 document 和 localStorage 的环境渲染', async () => {

@@ -18,6 +18,10 @@ test additions and wording preferences without an observable failure are not
 defect candidates.
 Use boundary_notes for general static-review boundaries, limitations only for
 missing necessary decision evidence.
+Each limitations entry must include affected goal_ids from this assignment,
+missing_fact, dependent_conclusion, change_relevance and a bounded next_check.
+Attempt the smallest necessary read first. These are local unverified notes;
+no separate limitation-review agent will run after your submission.
 
 Follow next_cursor with unchanged filters in search_code/find_files/read_diff
 when more context is needed; do not exhaust unrelated pages only to satisfy a

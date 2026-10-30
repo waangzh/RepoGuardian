@@ -16,6 +16,7 @@ export const executionErrorLabel = (code: string | null) => ({
   RateLimitError: '模型服务请求受限', AuthenticationError: '模型服务认证失败',
   APIConnectionError: '模型服务连接失败', review_deadline: '达到本轮审查总期限',
   review_agents_failed: '所有独立审查分支执行失败',
+  review_checkpoint_stage_changed: '旧检查点包含无法安全转换的混合阶段，原记录已保留，请新建审查',
   limitation_assessment_members_mismatch: '限制复核成员缺失、重复或超出本批范围',
   limitation_assessment_goal_outside_scope: '限制复核引用了该声明范围外的审查目标',
   limitation_assessment_evidence_not_read: '限制复核引用了本分支未读取的源码证据；搜索与分页标识不能作为证据',
@@ -27,20 +28,17 @@ export function resumeLabel(task: ReviewTask): string | null {
   if (!['failed', 'completed_with_warnings'].includes(task.status)) return null;
   const report = task.review_report;
   if (!report || report.termination === 'completed') return task.status === 'failed' ? '从检查点继续' : null;
-  const failed = [...report.discovery_results, ...report.verification_results, ...report.limitation_results].filter(item => item.status === 'failed');
+  const failed = [...report.discovery_results, ...report.verification_results].filter(item => item.status === 'failed');
+  const retiredFailure = report.limitation_results.some(item => item.status === 'failed');
   const limits = task.configuration.limits;
-  if (task.retry_count || !failed.length || !limits) return null;
+  if (task.retry_count || (!failed.length && !retiredFailure) || !limits) return null;
   if (!failed.every(item => item.model_calls != null && item.tool_calls != null
     && item.model_calls < limits.model_calls && item.tool_calls < limits.tool_calls)) return null;
-  const assessmentLimit = Math.min(limits.model_calls, { quick:3, standard:5, deep:7 }[task.configuration.options.depth]);
-  if (report.limitation_results.some(item => item.status === 'failed'
-    && (item.model_calls == null || item.model_calls >= assessmentLimit
-      || item.tool_calls == null || item.tool_calls >= Math.min(limits.tool_calls,24)))) return null;
   if (Date.now() - Date.parse(task.created_at) >= limits.timeout_seconds * 1000) return null;
   const budget = report.budget;
-  if (budget && ((budget.model_calls ?? 0) >= limits.total_model_calls
+  if (failed.length && budget && ((budget.model_calls ?? 0) >= limits.total_model_calls
     || (budget.committed_input_tokens ?? 0) >= limits.total_input_tokens)) return null;
-  return '补查失败分支';
+  return failed.length ? '补查失败分支' : '按当前流程完成汇总';
 }
 export function orderedProgress(task: ReviewTask) {
   return [...task.steps].sort((left, right) => Date.parse(left.started_at || left.updated_at)

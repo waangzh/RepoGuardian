@@ -4,11 +4,10 @@ import json
 
 from app.review.evidence import digest, has_structural_source
 from app.review.models import (
-    CandidateLimitationResolution, LimitationResolution, LimitationReviewOutput,
+    CandidateLimitationResolution, DiscoveryGap, LimitationResolution, LimitationReviewOutput,
     ReviewLimitation, VerificationOutput, VerificationResult,
 )
 
-LIMITATION_CALL_LIMITS = {"quick": 3, "standard": 5, "deep": 7}
 ASSESSMENT_ERROR_CODES = frozenset({
     "limitation_assessment_members_mismatch", "limitation_assessment_goal_outside_scope",
     "limitation_assessment_evidence_not_read", "limitation_assessment_change_source_missing",
@@ -30,15 +29,27 @@ def discovery_limitations(results, candidates, assignments=()):
     goals = {item["id"]: item["goal_ids"] for item in assignments}
     for result in results:
         related = [item["id"] for item in candidates if result["id"] in item["assignment_ids"]]
-        records.extend(_limitations(result.get("investigation_limitations", []),
-                                    "discovery", result["id"], related, goals.get(result["id"], [])))
+        allowed = goals.get(result["id"], [])
+        submitted = result.get("output", {}).get("limitations", [])
+        declarations = (submitted if any(isinstance(item, dict) for item in submitted)
+                        else result.get("investigation_limitations", []))
+        for declaration in declarations:
+            if isinstance(declaration, dict):
+                gap = DiscoveryGap.model_validate(declaration)
+                identity = digest(json.dumps(["discovery", result["id"], gap.model_dump()],
+                                             sort_keys=True, ensure_ascii=False))
+                records.append(ReviewLimitation(id=identity, source="discovery", source_id=result["id"],
+                    text=gap.missing_fact, candidate_ids=sorted(related),
+                    goal_ids=sorted(set(gap.goal_ids) & set(allowed)), status="reported", gap=gap))
+            else:
+                records.extend(_limitations([declaration], "discovery", result["id"], related, allowed))
     return records
 
 
 def candidate_limitations(state, candidates):
     identities = {item["id"] for item in candidates}
     return [record.model_dump() for record in discovery_limitations(
-        state.get("discovery_results", []), state.get("candidates", []))
+        state.get("discovery_results", []), state.get("candidates", []), state.get("assignments", []))
         if identities.intersection(record.candidate_ids)]
 
 
@@ -100,35 +111,6 @@ def validate_assessments(output, limitations, goals, issued_ids, service):
         raise ValueError(errors[0]["code"])
 
 
-def limitation_batches(records, goals, previous_batches=()):
-    by_id = {item.id: item for item in records}
-    batches, claimed = [], set()
-    for previous in previous_batches:
-        members = sorted(item["id"] for item in previous["review_limitations"])
-        if not set(members) <= set(by_id):
-            continue
-        if previous["id"] != "scope-" + digest(":".join(members)):
-            raise ValueError("limitation_batch_identity_invalid")
-        items = [by_id[identity] for identity in members]
-        identities = {identity for item in items for identity in item.goal_ids}
-        batches.append({"id": previous["id"], "review_limitations": [item.model_dump() for item in items],
-                        "goals": [goal for goal in goals if goal["id"] in identities]})
-        claimed.update(members)
-    groups = {}
-    for item in records:
-        if item.id not in claimed and item.status == "pending" and item.goal_ids:
-            groups.setdefault(tuple(sorted(item.goal_ids)), []).append(item)
-    for key in sorted(groups):
-        items = sorted(groups[key], key=lambda item: (item.text, item.id))
-        for offset in range(0, len(items), 3):
-            group = sorted(items[offset:offset + 3], key=lambda item: item.id)
-            identities = set().union(*(set(item.goal_ids) for item in group))
-            batches.append({"id": "scope-" + digest(":".join(item.id for item in group)),
-                "review_limitations": [item.model_dump() for item in group],
-                "goals": [goal for goal in goals if goal["id"] in identities]})
-    return batches
-
-
 def limitation_discoveries(results):
     return [{**item, "output": {"findings": item["output"].get("findings", [])}}
             for item in results if item["status"] == "completed"]
@@ -146,8 +128,12 @@ def review_limitations(report, service=None):
         candidate = next((item for item in candidates if item["id"] == decision["candidate_id"]), {})
         goal_ids = {goal for identity in candidate.get("assignment_ids", [])
                     for goal in by_assignment.get(identity, [])}
-        records.extend(_limitations(decision.get("limitations", []), "verification",
-                                    decision["candidate_id"], [decision["candidate_id"]], goal_ids))
+        verification_gaps = _limitations(decision.get("limitations", []), "verification",
+                                         decision["candidate_id"], [decision["candidate_id"]], goal_ids)
+        if data.get("policy_version") == 2:
+            for record in verification_gaps:
+                record.status = "reported"
+        records.extend(verification_gaps)
     by_id = {item.id: item for item in records}
     for result in data.get("limitation_results", []):
         if service is not None:

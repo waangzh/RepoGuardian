@@ -126,8 +126,12 @@ def verify_finding(candidate, result, service, changed_files, related_candidates
     if result.get("status") != "completed":
         raise ValueError("verification_not_completed")
     output = VerificationOutput.model_validate(result["output"])
-    validate_resolutions(output.limitation_resolutions, limitations, candidate.id,
-                         result["evidence_ids"], service)
+    try:
+        validate_resolutions(output.limitation_resolutions, limitations, candidate.id,
+                             result["evidence_ids"], service)
+    except (ValueError, OSError):
+        # An invalid ancillary resolution cannot erase a separately evidenced verdict.
+        output = output.model_copy(update={"limitation_resolutions": []})
     refs = (source_refs(service, output.evidence_ids, result["evidence_ids"])
             if output.evidence_ids else [])
     # Equivalence hints are validated against everything this execution actually read.

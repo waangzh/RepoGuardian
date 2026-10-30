@@ -22,7 +22,7 @@ from app.review.evidence import EvidenceService, digest
 from app.review.graph import build_review_graph
 from app.review.models import ReviewReport, ReviewSnapshot, ReviewSynthesis
 from app.review.planning import plan_review
-from app.review.recovery import retry_updates
+from app.review.recovery import RETIRED_LIMITATION_NODES, advance_retired_limitation_checkpoint, retry_updates
 from app.review.budget import ReviewBudget
 from app.review.tool_scope import is_sensitive_repository_change
 from app.services.review.artifact_store import LocalArtifactStore
@@ -330,7 +330,7 @@ class ReviewService:
                     task.steps[existing] = item
                 task.phase = event["phase"]
                 task.status = "verifying_issues" if event["phase"] in {
-                    "verifier", "investigator", "arbitrate", "limitation_reviewer"} else "reviewing"
+                    "verifier", "investigator", "arbitrate"} else "reviewing"
                 task.updated_at = utcnow()
                 if self._repository:
                     await asyncio.to_thread(self._repository.save_task, task.model_copy(deep=True), lease=lease)
@@ -454,7 +454,7 @@ class ReviewService:
                 selected_paths=selected_paths)
             context.budget = ReviewBudget(task.configuration.limits, repository=self._repository,
                 task_id=task.id, lease=lease, active=active, depth=task.configuration.options.depth)
-            state = await graph.aget_state(config) if saver else None
+            state = await build_review_graph(saver, checkpoint_inspection=True).aget_state(config) if saver else None
             if state and state.values and self._repository:
                 observed = (state.values.get("discovery_results", []) + state.values.get("verification_results", [])
                             + state.values.get("investigation_results", []) + state.values.get("limitation_results", []))
@@ -474,6 +474,8 @@ class ReviewService:
                 for item in (state.values.get("retry_results", []) if state and state.values else [])}
             context.replaying_nodes = (frozenset(state.next)
                 if state and state.values and not retry_started else frozenset())
+            if state and state.values:
+                state = await advance_retired_limitation_checkpoint(graph, config, state, context)
             async with asyncio.timeout(max(0, remaining)):
                 result = await graph.ainvoke(None if state and state.values else {"review_id": task_id},
                                             config, context=context, durability="sync")
@@ -501,7 +503,9 @@ class ReviewService:
                 await finalize_report()
             else:
                 task.status, task.phase = "failed", "failed"
-                task.error = "review_deadline" if isinstance(exc, TimeoutError) else type(exc).__name__
+                task.error = ("review_deadline" if isinstance(exc, TimeoutError) else
+                    "review_checkpoint_stage_changed" if isinstance(exc, ValueError)
+                    and str(exc) == "review_checkpoint_stage_changed" else type(exc).__name__)
                 logger.error("审查任务失败 review_id=%s code=%s", task.id, task.error)
         finally:
             cancel.set()
@@ -550,18 +554,20 @@ class ReviewService:
             raise ValueError("review_budget_history_missing")
         if (utcnow() - task.created_at).total_seconds() >= task.configuration.limits.timeout_seconds:
             raise ValueError("review_deadline")
-        state = await build_review_graph(await get_checkpointer()).aget_state(review_thread_config(task_id))
-        if not state.next and not state.values.get("report"):
+        state = await build_review_graph(await get_checkpointer(), checkpoint_inspection=True).aget_state(
+            review_thread_config(task_id))
+        retired = any(item.name in RETIRED_LIMITATION_NODES for item in state.tasks)
+        if not state.next and not retired and not state.values.get("report"):
             raise ValueError("review_checkpoint_not_resumable")
-        retry_failed = bool(not state.next and state.values.get("report")
+        retry_failed = bool(not state.next and not retired and state.values.get("report")
                             and state.values["report"]["termination"] in {"partial", "failed"})
         if retry_failed:
             if task.retry_count:
                 raise ValueError("review_retry_limit")
-            retry_updates(state.values, task.configuration.limits)
+            update = retry_updates(state.values, task.configuration.limits)
             budget = await asyncio.to_thread(self._repository.model_budget_summary,
                                              task.id, task.configuration.limits)
-            if (budget["model_calls"] >= task.configuration.limits.total_model_calls
+            if update["retry_results"] and (budget["model_calls"] >= task.configuration.limits.total_model_calls
                     or budget["committed_input_tokens"] >= task.configuration.limits.total_input_tokens):
                 raise ValueError("review_retry_budget_exhausted")
         elif task.status != "failed":

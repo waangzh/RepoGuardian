@@ -103,8 +103,8 @@ async def test_persistent_pipeline_confirmation_native_graph_report_and_revalida
     build_graph = review_service.build_review_graph
     durability = []
 
-    def synchronous_graph(saver):
-        graph = build_graph(saver)
+    def synchronous_graph(saver, **kwargs):
+        graph = build_graph(saver, **kwargs)
         invoke = graph.ainvoke
 
         async def checked_invoke(*args, **kwargs):
@@ -280,8 +280,8 @@ async def test_symbol_reads_and_relations_expand_shared_index_once(
     monkeypatch.setattr(RepoIndexer, "execute", indexed)
     build_graph = review_service.build_review_graph
 
-    def graph(saver):
-        result = build_graph(saver)
+    def graph(saver, **kwargs):
+        result = build_graph(saver, **kwargs)
         invoke = result.ainvoke
 
         async def checked(*args, context, **kwargs):
@@ -408,8 +408,8 @@ async def test_cancelled_review_refuses_lazy_index_expansion(pipeline, monkeypat
     monkeypatch.setattr(RepoIndexer, "execute", indexed)
     build_graph = review_service.build_review_graph
 
-    def graph(saver):
-        result = build_graph(saver)
+    def graph(saver, **kwargs):
+        result = build_graph(saver, **kwargs)
 
         async def cancelled(*args, context, **kwargs):
             sources = await context.sources()
@@ -486,11 +486,11 @@ async def test_native_investigation_limits_survive_report_projection_without_leg
     assert saved.review_report.termination == "completed"
     saved.review_report.discovery_results[0].investigation_limitations = ["调用方搜索还有未核实范围"]
     plan = PublicationPlanner(repository._artifacts).build(saved)
-    assert plan.outcome.incomplete_investigations == 0 and plan.outcome.pending_limitation_count == 1
-    assert "limitation_assessment_incomplete" in plan.outcome.reason_codes
+    assert plan.outcome.incomplete_investigations == 0 and plan.outcome.pending_limitation_count == 0
+    assert "limitation_assessment_incomplete" not in plan.outcome.reason_codes
     assert plan.outcome.runtime_reliability == "reliable"
-    assert plan.presentation.verdict.status in {"fix_blockers", "resolve_unknowns"}
-    label = "仍有审查限制声明尚未完成必要性复核"
+    assert plan.presentation.verdict.status in {"fix_blockers", "conditional_merge"}
+    label = "调用方搜索还有未核实范围"
     assert any(label in item for item in plan.presentation.limitations)
     for text in (plan.summary_markdown, plan.review_comment_markdown, plan.user_report_markdown):
         assert label in text

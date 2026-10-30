@@ -1,401 +1,328 @@
-import json
 import asyncio
+import json
+from types import SimpleNamespace
 
 import aiosqlite
 import pytest
-from langchain_core.messages import AIMessage, ToolMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.errors import NodeCancelledError
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import Send, interrupt
 
-from app.review.checkpointer import _checkpoint_serializer
+from app.review.agents import build_agent
 from app.review.budget import ReviewBudget
+from app.review.checkpointer import _checkpoint_serializer
 from app.review.graph import build_review_graph
-from app.review.limitations import validate_assessments
-from app.review.models import LimitationAssessment, LimitationReviewOutput, ReviewGoal, ReviewLimits, ReviewReport
-from app.review.recovery import retry_updates
+from app.review.models import DiscoveryGap, DiscoveryOutput, DiscoverySubmission, ReviewLimits, ReviewReport
+from app.review.recovery import advance_retired_limitation_checkpoint, retry_updates
+from app.review.state import ReviewState
+from app.review.submission import submission_feedback
 from app.services.review.review_outcome import derive_review_outcome
-from tests.review.test_limitation_reconciliation import task_for
+from app.services.review.review_repository import ReviewLeaseLost
+from tests.review.test_limitation_reconciliation import gap, task_for
 from tests.review.test_native_graph import ReviewModel, review_context
 
 pytest_plugins = ["tests.review.test_native_agents"]
 
-DECLARATION = "未穷尽所有构造路径，尚不能证明两个聚合结果在所有输入下始终一致"
+DECLARATION = "必要调用方的输入约束尚未确认"
 
 
-class ScopeModel(ReviewModel):
-    assessment_status: str = "boundary"
-    scope_failure: bool = False
-    scope_finding: bool = False
-    verifier_failure: bool = False
-    scope_calls: int = 0
-    introduce_limitation: bool = True
+class GapModel(ReviewModel):
+    requests: int = 0
+    emit_gap: bool = True
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        self.requests += 1
+        assert not messages[0].content.startswith("You independently review proposed evidence gaps")
         payload = json.loads(next(message.content for message in messages if message.type == "human"))
-        if messages[0].content.startswith("You independently review proposed evidence gaps"):
-            self.scope_calls += 1
-            self.observed.append({"scope_review": payload})
-            if self.scope_failure:
-                raise RuntimeError("fixture_scope_failure")
-            evidence = [item["evidence"]["id"] for item in payload["source_materials"]]
-            evidence += [json.loads(item.content)["evidence"]["id"] for item in messages
-                         if isinstance(item, ToolMessage) and item.name in {"read_file", "read_base_file"}
-                         and json.loads(item.content).get("ok")]
-            if not evidence:
-                calls = [{"name": "read_file" if goal["side"] == "head" else "read_base_file",
-                          "args": {"path": goal["path"], "start": goal["start_line"], "end": goal["end_line"]},
-                          "id": f"scope-read-{index}"}
-                         for index, goal in enumerate(payload["goals"])]
-                return ChatResult(generations=[ChatGeneration(message=AIMessage(content="", tool_calls=calls,
-                    usage_metadata={"input_tokens": 30, "output_tokens": 20, "total_tokens": 50}))])
-            goal_ids = [item["id"] for item in payload["goals"]]
-            assessments = [{
-                "limitation_id": item["id"], "status": self.assessment_status,
-                "explanation": "只检查固定变更的必要前提，不能把全局正确性证明当作完成条件",
-                "goal_ids": goal_ids, "evidence_ids": evidence,
-                **({"missing_fact": "必要调用方的输入校验条件",
-                    "dependent_conclusion": "该变更是否会让调用方接受无效输入",
-                    "change_relevance": "修改直接改变 safe.py 的返回值，调用方契约依赖该值",
-                    "next_check": "读取该调用方的输入校验函数"}
-                   if self.assessment_status == "unresolved" else {}),
-            } for item in payload["review_limitations"]]
-            findings = [{
-                "title": "复核发现的行为回归", "trigger": "读取 VALUE", "expected_behavior": "返回 1",
-                "actual_behavior": "返回 2", "impact": "调用方收到错误值", "recommendation": "恢复契约",
-                "severity": "medium", "affected_path": "safe.py", "line": 1,
-                "evidence_ids": evidence, "attribution": "introduced",
-            }] if self.scope_finding else []
-            return ChatResult(generations=[ChatGeneration(message=AIMessage(content="",
-                tool_calls=[{"name": "LimitationReviewOutput", "id": f"scope-{self.scope_calls}",
-                             "args": {"assessments": assessments, "findings": findings}}],
-                usage_metadata={"input_tokens": 30, "output_tokens": 20, "total_tokens": 50}))])
-        if self.verifier_failure and ("candidate" in payload or "candidates" in payload):
-            raise RuntimeError("fixture_verification_failure")
-        response = super()._generate(messages, stop, run_manager, **kwargs)
-        for call in response.generations[0].message.tool_calls:
-            if call["name"] == "DiscoveryOutput":
+        result = super()._generate(messages, stop, run_manager, **kwargs)
+        for call in result.generations[0].message.tool_calls:
+            if call["name"] == "DiscoverySubmission":
                 call["args"]["findings"] = []
-                call["args"]["limitations"] = [DECLARATION] if self.introduce_limitation else []
-        return response
+                call["args"]["limitations"] = (
+                    [gap(DECLARATION, [goal["id"] for goal in payload["goals"]])] if self.emit_gap else [])
+        return result
 
 
-async def execute(service, model, checkpointer=None, config=None):
-    state = await build_review_graph(checkpointer).ainvoke(
-        {"review_id": "review"}, config, context=review_context(service, model))
+async def execute(service, model=None):
+    model = model or GapModel()
+    state = await build_review_graph().ainvoke(
+        {"review_id": "review"}, context=review_context(service, model))
     report = ReviewReport.model_validate(state["report"])
     return state, report, derive_review_outcome(task_for(report), evidence=service)
 
 
-@pytest.mark.parametrize("status,kind,gaps", [
-    ("boundary", "clean", 0), ("resolved", "clean", 0), ("unresolved", "inconclusive", 1),
-])
-async def test_zero_candidates_receive_independent_bounded_necessity_review(source_service, status, kind, gaps):
-    model = ScopeModel(assessment_status=status)
+async def test_local_gap_preserves_scope_and_no_findings_without_extra_model_phase(source_service):
+    model = GapModel()
     _, report, outcome = await execute(source_service, model)
-    assert not report.candidates and not report.verification_results
-    assert report.complete and report.termination == "completed"
-    assert len(report.limitation_results) == model.scope_calls == 1
-    assert outcome.kind == kind and outcome.incomplete_investigations == gaps
-    assert outcome.pending_limitation_count == 0
+    assert report.policy_version == 2 and report.complete and report.termination == "completed"
+    assert not report.candidates and not report.verification_results and not report.limitation_results
+    assert model.requests == report.discovery_results[0].model_calls == 2
+    assert outcome.kind == "clean" and outcome.runtime_reliability == "reliable"
+    assert not outcome.reason_codes and outcome.pending_limitation_count == 0
     record = outcome.review_limitations[0]
-    assert record.status == status and record.assessment.goal_ids
+    assert record.status == "reported" and record.text == DECLARATION
+    assert record.gap.dependent_conclusion and record.gap.next_check
     assert record.goal_ids == sorted(goal.id for goal in report.goals)
-    if gaps:
-        assert record.assessment.missing_fact and record.assessment.next_check
-        assert record.assessment.change_relevance and record.assessment.dependent_conclusion
-    # Scope review reads are independent and never grant additional Goal coverage.
-    assert {item.id for item in report.goals} == {item["id"] for item in model.observed[0]["goals"]}
-    assert report.discovery_results[0].investigation_limitations == [DECLARATION]
 
 
-async def test_no_declaration_requires_no_extra_model_call(source_service):
-    model = ScopeModel(introduce_limitation=False)
-    _, report, outcome = await execute(source_service, model)
-    assert model.scope_calls == 0 and not report.limitation_results
-    assert outcome.kind == "clean"
+@pytest.mark.parametrize("field", ["goal_ids", "missing_fact", "dependent_conclusion",
+                                  "change_relevance", "next_check"])
+def test_current_submission_requires_concrete_gap_fields(field):
+    declaration = gap(DECLARATION, ["head"])
+    declaration.pop(field)
+    with pytest.raises(ValueError):
+        DiscoverySubmission(limitations=[declaration])
+    with pytest.raises(ValueError):
+        DiscoverySubmission(limitations=["未穷尽所有路径"])
+    assert DiscoveryOutput(limitations=["旧声明"]).limitations == ["旧声明"]
 
 
-class MixedAssessmentModel(ScopeModel):
-    repeat_invalid: bool = True
-
-    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-        result = super()._generate(messages, stop, run_manager, **kwargs)
-        corrected = any(isinstance(message, ToolMessage)
-                        and "invalid_limitation_assessments" in str(message.content) for message in messages)
-        for call in result.generations[0].message.tool_calls:
-            if call["name"] == "DiscoveryOutput":
-                call["args"]["limitations"] = ["配置读取前提 A 未确认", "配置读取前提 B 未确认"]
-            if call["name"] == "LimitationReviewOutput" and (self.repeat_invalid or not corrected):
-                call["args"]["assessments"][1]["evidence_ids"] = ["pagination-is-not-source"]
-        return result
+def test_gap_rejects_blank_fields():
+    with pytest.raises(ValueError):
+        DiscoveryGap(**{**gap(DECLARATION, ["head"]), "missing_fact": " \n "})
 
 
-class RangeScopeModel(ScopeModel):
-    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-        if messages[0].content.startswith("You independently review proposed evidence gaps"):
-            reads = [json.loads(message.content) for message in messages
-                     if isinstance(message, ToolMessage) and message.name == "read_file"]
-            bounds = [1, 47] if not reads else reads[-1].get("suggested_range")
-            if bounds:
-                return ChatResult(generations=[ChatGeneration(message=AIMessage(content="", tool_calls=[{
-                    "name": "read_file", "args": {"path": "other.py", "start": bounds[0], "end": bounds[1]},
-                    "id": f"bounded-read-{len(reads)}"}],
-                    usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}))])
-        return super()._generate(messages, stop, run_manager, **kwargs)
+def test_structured_discovery_submission_round_trips_through_checkpoint_serializer():
+    submission = DiscoverySubmission(limitations=[gap(DECLARATION, ["head"])])
+    serializer = _checkpoint_serializer()
+    restored = serializer.loads_typed(serializer.dumps_typed(submission))
+    assert restored == submission and isinstance(restored.limitations[0], DiscoveryGap)
 
 
-async def test_scope_corrects_out_of_bounds_read_inside_original_budget(source_service):
-    _, report, outcome = await execute(source_service, RangeScopeModel())
-    result = report.limitation_results[0]
-    assert result.status == "completed" and result.model_calls == 3
-    assert result.tool_failures == 1 and outcome.pending_limitation_count == 0
-    assert result.model_calls <= 5
+async def test_gap_goal_membership_uses_existing_submission_correction(source_service):
+    output = DiscoverySubmission(limitations=[gap(DECLARATION, ["unknown"])])
+    feedback = submission_feedback(output, [{"id": "head", "path": "safe.py", "side": "head",
+        "start_line": 1, "end_line": 1, "status": "not_examined"}], source_service, set(), "assignment")
+    data = json.loads(feedback.split("\n", 1)[1])
+    assert data["invalid_gap_goal_ids"] == [0] and data["allowed_goal_ids"] == ["head"]
 
 
-@pytest.mark.parametrize("repeat_invalid", [False, True])
-async def test_framework_correction_and_partial_admission_keep_runtime_truth(source_service, repeat_invalid):
-    model = MixedAssessmentModel(repeat_invalid=repeat_invalid)
-    _, report, outcome = await execute(source_service, model)
-    assert model.scope_calls == 2
-    assert report.limitation_results[0].structured_output_retries == 1
-    assert outcome.pending_limitation_count == int(repeat_invalid)
-    if repeat_invalid:
-        assert report.termination == "partial" and outcome.runtime_reliability == "unreliable"
-        assert report.limitation_results[0].error == "limitation_assessment_evidence_not_read"
-        assert sorted(item.status for item in outcome.review_limitations) == ["boundary", "pending"]
-    else:
-        assert report.termination == "completed" and outcome.kind == "clean"
+async def test_untrusted_gap_goal_ids_cannot_claim_another_scope(source_service):
+    from app.services.publication.review_text_format import review_limitation_text
+
+    _, report, _ = await execute(source_service)
+    report.discovery_results[0].output["limitations"][0]["goal_ids"].append("outside")
+    record = derive_review_outcome(task_for(report), evidence=source_service).review_limitations[0]
+    assert "outside" not in record.goal_ids
+    assert "outside" in record.gap.goal_ids
+    assert "部分关联目标未通过范围校验" in review_limitation_text(record)
 
 
-async def test_partial_assessment_survives_sqlite_reopen_and_failed_retry(source_service, tmp_path):
-    database = tmp_path / "partial-assessment.db"
-    config = {"configurable": {"thread_id": "partial-assessment"}}
-    context = review_context(source_service, MixedAssessmentModel())
-    async with aiosqlite.connect(database) as connection:
-        graph = build_review_graph(AsyncSqliteSaver(connection, serde=_checkpoint_serializer()))
-        first = await graph.ainvoke({"review_id": "review"}, config, context=context)
-    original = first["limitation_results"][0]
-    update = retry_updates(first, context.limits)
-    resumed = review_context(source_service, ScopeModel(scope_failure=True))
-    resumed.budget = context.budget
-    resumed.retry_results = {(item["reviewer"], item["result"]["id"]): item["result"]
-                            for item in update["retry_results"]}
-    async with aiosqlite.connect(database) as connection:
-        graph = build_review_graph(AsyncSqliteSaver(connection, serde=_checkpoint_serializer()))
-        await graph.aupdate_state(config, update, as_node="plan")
-        state = await graph.ainvoke(None, config, context=resumed)
-    report = ReviewReport.model_validate_json(ReviewReport.model_validate(state["report"]).model_dump_json())
+async def test_real_coverage_and_unresolved_candidates_still_affect_outcome(source_service):
+    _, report, _ = await execute(source_service)
+    report.complete = False
     outcome = derive_review_outcome(task_for(report), evidence=source_service)
-    result = report.limitation_results[0]
-    assert result.id == original["id"]
-    assert result.previous_attempts[0].output == original["output"]
-    assert result.model_calls == original["model_calls"] + 1
-    assert outcome.pending_limitation_count == 1 and report.termination == "partial"
-    assert sorted(item.status for item in outcome.review_limitations) == ["boundary", "pending"]
+    assert outcome.kind == "inconclusive" and "scope_incomplete" in outcome.reason_codes
+    _, report, _ = await execute(source_service, ReviewModel(invalid_verifier=True))
+    outcome = derive_review_outcome(task_for(report), evidence=source_service)
+    assert outcome.kind == "inconclusive" and outcome.unresolved_count == 1
+    assert "verification_unresolved" in outcome.reason_codes and not report.findings
 
 
-async def test_scope_failure_preserves_pending_and_usage_without_claiming_a_necessary_gap(source_service):
-    model = ScopeModel(scope_failure=True)
-    _, report, outcome = await execute(source_service, model)
-    assert report.termination == "partial" and report.limitation_results[0].status == "failed"
+async def test_unresolved_candidate_gap_does_not_imply_a_retired_assessment(source_service):
+    from app.services.publication.review_text_format import review_limitation_text
+
+    _, report, _ = await execute(source_service, ReviewModel(invalid_verifier=True))
+    report.decisions[0].limitations = ["缺少调用方契约"]
+    outcome = derive_review_outcome(task_for(report), evidence=source_service)
+    assert outcome.kind == "inconclusive" and outcome.unresolved_count == 1
+    assert outcome.pending_limitation_count == 0
+    assert "verification_unresolved" in outcome.reason_codes
+    assert "limitation_assessment_incomplete" not in outcome.reason_codes
+    record = next(item for item in outcome.review_limitations if item.source == "verification")
+    assert record.status == "reported" and "候选核验证据缺口" in review_limitation_text(record)
+
+
+async def test_historical_report_keeps_its_policy_and_original_pending_gap(source_service):
+    _, report, _ = await execute(source_service)
+    raw = report.model_dump()
+    raw.pop("policy_version")
+    raw["discovery_results"][0]["output"]["limitations"] = [DECLARATION]
+    raw["discovery_results"][0]["investigation_limitations"] = [DECLARATION]
+    restored = ReviewReport.model_validate(raw)
+    original = restored.model_dump_json()
+    outcome = derive_review_outcome(task_for(restored), evidence=source_service)
+    assert restored.policy_version == 1 and restored.model_dump_json() == original
+    assert "policy_version" not in restored.model_dump()
+    assert "gap" not in outcome.review_limitations[0].model_dump()
+    from app.services.publication.review_text_format import review_limitation_text
+    assert review_limitation_text(outcome.review_limitations[0]).startswith("待复核的限制声明：")
     assert outcome.kind == "inconclusive" and outcome.pending_limitation_count == 1
-    assert outcome.incomplete_investigations == 0
     assert "limitation_assessment_incomplete" in outcome.reason_codes
-    assert "investigation_incomplete" not in outcome.reason_codes
-    assert report.limitation_results[0].input_tokens is None
 
 
-async def test_scope_discovery_enters_normal_independent_verification_once(source_service):
-    model = ScopeModel(scope_finding=True)
-    state, report, outcome = await execute(source_service, model)
-    assert len(report.candidates) == len(report.verification_results) == len(report.findings) == 1
-    assert model.scope_calls == state["limitation_round"] == 1
-    assert report.candidates[0].assignment_ids == [report.limitation_results[0].id]
-    assert outcome.kind == "findings" and outcome.confirmed_count == 1
-    assert not outcome.pending_limitation_count and not outcome.incomplete_investigations
-    from app.services.publication.review_publication import validated_findings
+async def test_retired_role_cannot_be_built(source_service):
+    with pytest.raises(ValueError, match="unknown_reviewer"):
+        await asyncio.to_thread(build_agent, ReviewModel(), "limitation_reviewer", ReviewLimits())
+
+
+def legacy_graph(saver, node, values):
+    graph = StateGraph(ReviewState)
+    graph.add_node("collect", lambda state: {})
+    graph.add_node(node, lambda state: pytest.fail("retired node must never execute"))
+    graph.add_edge(START, "collect")
+    if node == "review_limitation":
+        graph.add_conditional_edges("collect", lambda state: [
+            Send(node, {"review_id": "review", "limitation_batch_id": "legacy-batch",
+                        "review_limitations": [], "goals": values["goals"]})], [node])
+    else:
+        graph.add_edge("collect", node)
+    graph.add_edge(node, END)
+    return graph.compile(saver, interrupt_before=[node])
+
+
+@pytest.mark.parametrize("node", ["plan_limitations", "review_limitation", "collect_limitations"])
+async def test_sqlite_reopen_advances_retired_sends_without_model_replay(source_service, tmp_path, node):
+    values, report, _ = await execute(source_service)
+    config = {"configurable": {"thread_id": node}}
+    values["report"] = {}
+    values["limitation_batches"] = [{"id": "legacy-batch"}]
+    database = tmp_path / f"{node}.sqlite"
+    async with aiosqlite.connect(database) as connection:
+        saver = AsyncSqliteSaver(connection, serde=_checkpoint_serializer())
+        await legacy_graph(saver, node, values).ainvoke(values, config)
+    model = GapModel()
+    context = review_context(source_service, model)
+    context.budget = ReviewBudget(context.limits)
+    ticket = await context.budget.reserve("legacy-batch", 1, hold=1)
+    before = await context.budget.summary()
+    async with aiosqlite.connect(database) as connection:
+        saver = AsyncSqliteSaver(connection, serde=_checkpoint_serializer())
+        graph = build_review_graph(saver)
+        state = await build_review_graph(saver, checkpoint_inspection=True).aget_state(config)
+        assert state.next == (node,)
+        state = await advance_retired_limitation_checkpoint(graph, config, state, context)
+        assert state.next == ("evidence_gate",)
+        resumed = await graph.ainvoke(None, config, context=context)
+    restored = ReviewReport.model_validate(resumed["report"])
+    assert model.requests == 0 and restored.termination == "completed"
+    assert restored.discovery_results == report.discovery_results
+    after = await context.budget.summary()
+    assert after["model_calls"] == before["model_calls"] == 1
+    assert after["outstanding_input_tokens"] > 0
+    assert context.budget.rows[ticket]["input_tokens"] is None
+    assert not context.budget.rows[ticket]["settled"]
+    assert after["held_model_calls"] == 0
+    await context.budget.settle(ticket, None)
+
+
+async def test_historical_scope_candidate_still_needs_verification_and_publication_revalidation(source_service):
     from app.models.review.diff import ChangedFile
-    from tests.review.test_native_graph import CHANGE
-    from types import SimpleNamespace
     from app.models.review_plan import ReviewPlanOptions
-    task = task_for(report)
+    from app.services.publication.review_publication import validated_findings
+    from tests.review.test_native_graph import CHANGE
+
+    values, report, _ = await execute(source_service, ReviewModel())
+    original = values["discovery_results"][0]
+    values["limitation_results"] = [{**original, "id": "legacy-batch",
+        "output": {"findings": original["output"]["findings"], "assessments": []}}]
+    values["discovery_results"] = [{**original, "output": {
+        **original["output"], "findings": []}, "investigation_limitations": []}]
+    for key in ("candidates", "decisions", "findings", "verification_results", "verification_batches"):
+        values[key] = []
+    values["report"] = {}
+    saver = InMemorySaver()
+    config = {"configurable": {"thread_id": "candidate"}}
+    await legacy_graph(saver, "collect_limitations", values).ainvoke(values, config)
+    graph = build_review_graph(saver)
+    context = review_context(source_service, ReviewModel())
+    state = await build_review_graph(saver, checkpoint_inspection=True).aget_state(config)
+    await advance_retired_limitation_checkpoint(graph, config, state, context)
+    resumed = await graph.ainvoke(None, config, context=context)
+    restored = ReviewReport.model_validate(resumed["report"])
+    assert len(restored.findings) == len(restored.verification_results) == 1
+    assert restored.candidates[0].assignment_ids == ["legacy-batch"]
+    assert restored.limitation_results[0].output == values["limitation_results"][0]["output"]
+    task = task_for(restored)
     task.configuration = SimpleNamespace(options=ReviewPlanOptions())
     task.changed_files = [ChangedFile.model_validate({**CHANGE, "additions": 1, "deletions": 1})]
     findings, withheld = validated_findings(task, source_service.artifacts)
-    assert findings == report.findings and not withheld
+    assert findings == restored.findings and not withheld
 
 
-@pytest.mark.parametrize("fault", ["unknown_goal", "other_file", "unread", "unknown_id", "duplicate", "omitted"])
-async def test_assessment_members_scope_and_independent_source_are_enforced(source_service, fault):
-    head = await source_service.read("safe.py", 1, 1)
-    other = await source_service.read("other.py", 1, 1)
-    identity = other["evidence"]["id"] if fault == "other_file" else head["evidence"]["id"]
-    goal = {"id": "head", "path": "safe.py", "side": "head"}
-    record = {"id": "gap", "goal_ids": ["head"]}
-    assessment = LimitationAssessment(limitation_id="gap", status="boundary", explanation="固定范围之外的证明要求",
-        goal_ids=["head"], evidence_ids=[identity])
-    if fault == "unknown_goal":
-        assessment.goal_ids = ["elsewhere"]
-    if fault == "unknown_id":
-        assessment.limitation_id = "invented"
-    output = LimitationReviewOutput(assessments=[assessment] * (2 if fault == "duplicate" else 1))
-    limitations = [record, {"id": "omitted", "goal_ids": ["head"]}] if fault == "omitted" else [record]
-    with pytest.raises((ValueError, OSError)):
-        validate_assessments(output, limitations, [goal], [] if fault == "unread" else [identity], source_service)
+async def test_completed_legacy_parallel_output_survives_an_interrupted_send(source_service, tmp_path):
+    values, _, _ = await execute(source_service, ReviewModel())
+    original = values["discovery_results"][0]
+    historical = {**original, "id": "legacy-completed",
+        "output": {"findings": original["output"]["findings"], "assessments": []}}
+    values["discovery_results"] = [{**original, "output": {**original["output"], "findings": []}}]
+    for key in ("candidates", "decisions", "findings", "verification_results", "verification_batches"):
+        values[key] = []
+    values.update(report={}, limitation_results=[], limitation_batches=[
+        {"id": "legacy-completed"}, {"id": "legacy-interrupted"}])
 
+    async def retired(state):
+        if state["limitation_batch_id"] == "legacy-interrupted":
+            interrupt("pending")
+        return {"limitation_results": [historical]}
 
-@pytest.mark.parametrize("status", ["resolved", "boundary"])
-@pytest.mark.parametrize("with_source_goal", [False, True])
-@pytest.mark.parametrize("goal_path,path,side", [
-    ("safe.py", "safe.py", "head"),
-    ("safe.py", "other.py", "base"),
-    ("removed.py", "removed.py", "base"),
-])
-async def test_structural_assessment_cannot_close_with_target_or_base_evidence(
-        source_service, status, with_source_goal, goal_path, path, side):
-    from tests.review.test_retrieval import commit_sources
-
-    commit_sources(source_service, {"other.py": f"import {goal_path.removesuffix('.py')}\n"})
-    structural = ReviewGoal(id="structural", kind="structural", path=goal_path,
-        side="base" if goal_path == "removed.py" else "head").model_dump()
-    goals = [structural]
-    packet = await source_service.read(path, 1, 1, side)
-    identity = packet["evidence"]["id"]
-    if with_source_goal:
-        goals.append(ReviewGoal(id="source", path=path, side=side,
-            start_line=1, end_line=1).model_dump())
-    goal_ids = [goal["id"] for goal in goals]
-    limitation = {"id": "gap", "goal_ids": goal_ids}
-    assessment = LimitationAssessment(limitation_id="gap", status=status, explanation="检查引用方",
-        goal_ids=goal_ids, evidence_ids=[identity])
-    output = LimitationReviewOutput(assessments=[assessment])
-
-    with pytest.raises(ValueError, match="limitation_assessment_structural_source_missing"):
-        validate_assessments(output, [limitation], goals, [identity], source_service)
-
-    caller = await source_service.read("other.py", 1, 1)
-    caller_id = caller["evidence"]["id"]
-    assessment.evidence_ids.append(caller_id)
-    validate_assessments(output, [limitation], goals, [identity, caller_id], source_service)
-
-
-def test_vague_unresolved_caveat_is_not_a_valid_necessary_gap():
-    with pytest.raises(ValueError, match="necessary_gap_requires"):
-        LimitationAssessment(limitation_id="gap", status="unresolved", explanation="没有检查所有路径",
-            goal_ids=["head"], evidence_ids=["source"])
-
-
-async def test_completed_scope_review_survives_sqlite_reopen_without_repeating_calls(source_service, tmp_path):
-    config = {"configurable": {"thread_id": "scope-review"}}
-    path = tmp_path / "scope-checkpoints.db"
+    old = StateGraph(ReviewState)
+    old.add_node("collect", lambda state: {})
+    old.add_node("review_limitation", retired)
+    old.add_edge(START, "collect")
+    old.add_conditional_edges("collect", lambda state: [
+        Send("review_limitation", {"limitation_batch_id": identity})
+        for identity in ("legacy-completed", "legacy-interrupted")], ["review_limitation"])
+    old.add_edge("review_limitation", END)
+    config = {"configurable": {"thread_id": "parallel-retired"}}
+    path = tmp_path / "parallel.sqlite"
     async with aiosqlite.connect(path) as connection:
         saver = AsyncSqliteSaver(connection, serde=_checkpoint_serializer())
-        model = ScopeModel()
-        _, report, _ = await execute(source_service, model, saver, config)
-        calls = model.scope_calls
+        await old.compile(saver).ainvoke(values, config, durability="sync")
     async with aiosqlite.connect(path) as connection:
         saver = AsyncSqliteSaver(connection, serde=_checkpoint_serializer())
-        model = ScopeModel(scope_failure=True)
-        result = await build_review_graph(saver).ainvoke(None, config, context=review_context(source_service, model))
-        assert ReviewReport.model_validate(result["report"]) == report
-        assert model.scope_calls == 0 and calls == 1
+        inspection = build_review_graph(saver, checkpoint_inspection=True)
+        saved = await inspection.aget_state(config)
+        assert saved.next == ("review_limitation",)
+        assert saved.values["limitation_results"][0]["id"] == "legacy-completed"
+        graph = build_review_graph(saver)
+        context = review_context(source_service, ReviewModel())
+        await advance_retired_limitation_checkpoint(graph, config, saved, context)
+        restored_state = await graph.ainvoke(None, config, context=context)
+    restored = ReviewReport.model_validate(restored_state["report"])
+    assert restored.limitation_results[0].id == "legacy-completed"
+    assert restored.candidates[0].assignment_ids == ["legacy-completed"]
+    assert len(restored.findings) == len(restored.verification_results) == 1
 
 
-async def test_retry_keeps_completed_discovery_and_cumulative_scope_budget(source_service):
-    model = ScopeModel(scope_failure=True)
-    state, report, _ = await execute(source_service, model)
-    update = retry_updates(state, review_context(source_service, model).limits)
-    assert update["retry_results"][0]["reviewer"] == "limitation_reviewer"
-    assert update["retry_results"][0]["result"] == report.limitation_results[0].model_dump()
-    assert update["limitation_round"] == 0
+@pytest.mark.parametrize("error", [asyncio.CancelledError, ReviewLeaseLost])
+async def test_lease_or_cancellation_prevents_checkpoint_transition(source_service, error):
+    async def stopped():
+        raise error()
+
+    context = review_context(source_service, GapModel(), check_active=stopped)
+    graph = SimpleNamespace(aupdate_state=lambda *args, **kwargs: pytest.fail("must not write checkpoint"))
+    with pytest.raises(error):
+        await advance_retired_limitation_checkpoint(graph, {}, SimpleNamespace(
+            next=("review_limitation",), tasks=(), values={}), context)
 
 
-async def test_invalid_archived_assessment_returns_to_pending(source_service):
-    _, report, _ = await execute(source_service, ScopeModel())
-    identity = report.limitation_results[0].output["assessments"][0]["evidence_ids"][0]
-    (source_service.artifacts.root / "review" / f"evidence-{identity}.txt").unlink()
-    outcome = derive_review_outcome(task_for(report), evidence=source_service)
-    assert outcome.kind == "inconclusive" and outcome.pending_limitation_count == 1
-    assert outcome.incomplete_investigations == 0
+async def test_unknown_mixed_checkpoint_schedule_is_not_guessed(source_service):
+    context = review_context(source_service, GapModel())
+    with pytest.raises(ValueError, match="review_checkpoint_stage_changed"):
+        await advance_retired_limitation_checkpoint(None, {}, SimpleNamespace(
+            next=("review_limitation", "verify"), tasks=(), values={}), context)
 
 
-async def test_global_budget_exhaustion_keeps_declaration_pending(source_service):
-    model = ScopeModel()
-    context = review_context(source_service, model)
-    context.limits = ReviewLimits(total_model_calls=6)
-    context.budget = ReviewBudget(context.limits)
-    for index in range(3):
-        ticket = await context.budget.reserve(f"earlier-{index}", 1)
-        await context.budget.settle(ticket, {"input_tokens": 1, "output_tokens": 0})
-    result = await build_review_graph().ainvoke({"review_id": "review"}, context=context)
-    report = ReviewReport.model_validate(result["report"])
-    outcome = derive_review_outcome(task_for(report), evidence=source_service)
-    assert report.complete and report.termination == "partial"
-    assert report.limitation_results[0].error == "ReviewBudgetExceeded"
-    assert outcome.pending_limitation_count == 1 and not outcome.incomplete_investigations
-    assert (await context.budget.summary())["model_calls"] <= 6
-    assert model.scope_calls == 0
-
-
-async def test_cancellation_before_scope_model_call_cannot_become_a_complete_report(source_service):
-    model = ScopeModel()
-    cancelled = False
-
-    async def active():
-        if cancelled:
-            raise asyncio.CancelledError()
-
-    async def progress(event):
-        nonlocal cancelled
-        if event.get("phase") == "limitation_reviewer" and event.get("status") == "running":
-            cancelled = True
-
-    context = review_context(source_service, model, check_active=active, progress=progress)
-    with pytest.raises(NodeCancelledError):
-        await build_review_graph().ainvoke({"review_id": "review"}, context=context)
-    assert model.scope_calls == 0
-
-
-@pytest.mark.parametrize("depth,limit", [("quick", 6), ("deep", 20)])
-async def test_scope_review_respects_depth_and_quick_reads_on_demand(source_service, depth, limit):
-    model = ScopeModel()
-    context = review_context(source_service, model, depth=depth)
-    context.limits = ReviewLimits(model_calls=limit)
-    result = await build_review_graph().ainvoke({"review_id": "review"}, context=context)
-    report = ReviewReport.model_validate(result["report"])
-    outcome = derive_review_outcome(task_for(report), evidence=source_service)
-    assert outcome.kind == "clean"
-    assert model.scope_calls == (2 if depth == "quick" else 1)
-    assert report.limitation_results[0].evidence_ids
-    assert report.limitation_results[0].model_calls <= (3 if depth == "quick" else 7)
-
-
-async def test_scope_candidate_cannot_bypass_independent_verification(source_service):
-    _, report, outcome = await execute(source_service, ScopeModel(scope_finding=True, invalid_verifier=True))
-    assert len(report.candidates) == 1 and not report.findings
-    assert outcome.unresolved_count == 1 and outcome.kind == "inconclusive"
-
-
-async def test_retry_of_scope_discovered_candidate_keeps_candidate_and_completed_scope_review(source_service):
-    config = {"configurable": {"thread_id": "scope-candidate-retry"}}
-    graph = build_review_graph(InMemorySaver())
-    context = review_context(source_service, ScopeModel(scope_finding=True, verifier_failure=True))
-    first = await graph.ainvoke({"review_id": "review"}, config, context=context)
-    assert first["report"]["termination"] == "partial"
-    assert first["verification_results"][0]["status"] == "failed"
-    original_candidate = first["candidates"][0]["id"]
-    update = retry_updates(first, context.limits)
-    await graph.aupdate_state(config, update, as_node="plan")
-    model = ScopeModel(scope_failure=True)
-    resumed = review_context(source_service, model)
-    resumed.budget = context.budget
-    resumed.retry_results = {(item["reviewer"], item["result"]["id"]): item["result"]
-                            for item in update["retry_results"]}
-    result = await graph.ainvoke(None, config, context=resumed)
-    report = ReviewReport.model_validate(result["report"])
-    assert report.termination == "completed"
-    assert report.candidates[0].id == report.findings[0].id == original_candidate
-    assert report.limitation_results == ReviewReport.model_validate(first["report"]).limitation_results
-    assert model.scope_calls == 0
+async def test_retired_only_failure_can_close_without_resetting_history_or_usage(source_service):
+    values, _, _ = await execute(source_service)
+    failure = {"id": "legacy-batch", "status": "failed", "output": {}, "error": "RuntimeError",
+               "model_calls": None, "tool_calls": None, "input_tokens": None, "output_tokens": None}
+    values["limitation_results"] = [failure]
+    update = retry_updates(values, ReviewLimits())
+    assert not update["retry_results"] and "limitation_results" not in update
+    values.update({key: value for key, value in update.items() if key not in {
+        "discovery_results", "verification_results", "investigation_results"}})
+    # Completed core results are reused; the failed historical attempt stays failed.
+    model = GapModel()
+    state = await build_review_graph().ainvoke(values, context=review_context(source_service, model))
+    restored = ReviewReport.model_validate(state["report"])
+    outcome = derive_review_outcome(task_for(restored), evidence=source_service)
+    assert model.requests == 0 and restored.termination == "completed"
+    assert restored.limitation_results[0].status == "failed"
+    assert restored.limitation_results[0].model_calls is None
+    assert outcome.kind == "clean" and outcome.runtime_reliability == "unknown"
+    assert outcome.reason_codes == ["usage_integrity_unknown"]
+    with pytest.raises(ValueError, match="review_retry_limit"):
+        retry_updates(state, ReviewLimits())

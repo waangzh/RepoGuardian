@@ -12,7 +12,6 @@ from app.review.nodes.verification import (
     evidence_gate, verify, arbitrate, investigate, finish_investigation,
 )
 from app.review.nodes.reporting import report
-from app.review.nodes.limitation_review import plan_limitations, review_limitation, collect_limitations
 from app.review.state import ReviewState
 from app.review.synthesis import synthesize
 from app.review.verification_batches import verification_batches
@@ -58,7 +57,7 @@ INVESTIGATION_SEVERITIES = {
 
 def route_investigation(state):
     if state.get("investigation_round", 0):
-        return "plan_limitations"
+        return "report"
     severities = INVESTIGATION_SEVERITIES.get(state.get("review_depth", "standard"), frozenset())
     pending = {item["candidate_id"] for item in state["decisions"]
                if item["decision"] == "insufficient_evidence"}
@@ -71,28 +70,16 @@ def route_investigation(state):
     return [Send("investigate", {"review_id": state["review_id"], "candidate": item,
                                 "review_limitations": candidate_limitations(state, [item]),
                                 "related_candidates": comparison_candidates(item, state["eligible_candidates"])})
-            for item in candidates] or "plan_limitations"
-
-
-def route_limitations(state):
-    if state.get("limitation_round"):
-        return "report"
-    completed = {item["id"] for item in state.get("limitation_results", []) if item["status"] == "completed"}
-    return [Send("review_limitation", {
-        "review_id": state["review_id"], "limitation_batch_id": item["id"],
-        "review_limitations": item["review_limitations"], "goals": item["goals"],
-    }) for item in state.get("limitation_batches", []) if item["id"] not in completed] or "report"
+            for item in candidates] or "report"
 
 
 
-def build_review_graph(checkpointer=None):
+def build_review_graph(checkpointer=None, *, checkpoint_inspection=False):
     graph = StateGraph(ReviewState, context_schema=ReviewContext)
     for name, node in (
         ("prepare", prepare), ("plan", plan), ("discover", discover), ("collect", collect),
         ("evidence_gate", evidence_gate), ("verify", verify), ("arbitrate", arbitrate),
         ("investigate", investigate), ("finish_investigation", finish_investigation), ("report", report),
-        ("plan_limitations", plan_limitations), ("review_limitation", review_limitation),
-        ("collect_limitations", collect_limitations),
         ("synthesize", synthesize),
     ):
         graph.add_node(name, node)
@@ -103,14 +90,18 @@ def build_review_graph(checkpointer=None):
     graph.add_edge("collect", "evidence_gate")
     graph.add_conditional_edges("evidence_gate", route_verification, ["verify", "arbitrate"])
     graph.add_edge("verify", "arbitrate")
-    graph.add_conditional_edges("arbitrate", route_investigation, ["investigate", "plan_limitations"])
+    graph.add_conditional_edges("arbitrate", route_investigation, ["investigate", "report"])
     graph.add_edge("investigate", "finish_investigation")
     graph.add_edge("finish_investigation", "arbitrate")
-    graph.add_conditional_edges("plan_limitations", route_limitations, ["review_limitation", "report"])
-    graph.add_edge("review_limitation", "collect_limitations")
-    graph.add_conditional_edges("collect_limitations",
-        lambda state: "evidence_gate" if state["limitation_new_candidates"] else "report",
-        ["evidence_gate", "report"])
     graph.add_edge("report", "synthesize")
     graph.add_edge("synthesize", END)
+    if checkpoint_inspection:
+        # Read old pending Sends and writes before the new graph can discard their names.
+        from app.review.recovery import RETIRED_LIMITATION_NODES
+
+        def retired_node(state):
+            raise ValueError("retired_checkpoint_reader_cannot_execute")
+
+        for name in sorted(RETIRED_LIMITATION_NODES):
+            graph.add_node(name, retired_node)
     return graph.compile(checkpointer=checkpointer)

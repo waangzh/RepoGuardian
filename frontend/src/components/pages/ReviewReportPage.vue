@@ -34,7 +34,7 @@ const statusNotices = computed(() => {
   if (props.task.error) notices.push(`执行错误：${executionErrorLabel(props.task.error)}（${props.task.error}）。`);
   const outcome = props.plan?.outcome;
   if (outcome && (outcome.review_completeness !== 'complete' || outcome.coverage !== 'complete')) {
-    notices.push(`覆盖不完整：${outcome.incomplete_investigations} 项调查未完成，${outcome.pending_limitation_count} 项限制待复核。`);
+    notices.push(`覆盖不完整：已检查 ${outcome.examined_goals} / ${outcome.total_goals} 项约定目标，具体缺口见覆盖页。`);
   }
   if (headCheck.value?.status === 'stale') notices.push(`PR 已更新：最新提交 ${headCheck.value.latest_head_sha?.slice(0, 8) || '未知'}，本轮结论仅适用于审查快照。`);
   else if (headCheck.value?.status === 'unknown') notices.push('暂时无法确认 PR 是否有新提交，本轮记录不能作为当前版本结论。');

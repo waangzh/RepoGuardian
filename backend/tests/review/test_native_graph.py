@@ -71,7 +71,7 @@ class ReviewModel(ToolCallingModel):
                         item["id"] for item in evidence if item["side"] == goal["side"]]}
                     for goal in payload["goals"]
                 ]}
-                schema = "DiscoveryOutput"
+                schema = "DiscoverySubmission"
             calls = [{"name": schema, "args": args, "id": "output"}]
         return ChatResult(generations=[ChatGeneration(message=AIMessage(
             content="", tool_calls=calls, usage_metadata={
@@ -142,7 +142,7 @@ async def test_discovery_cannot_spend_the_verification_reserve(source_service, d
                     usage_metadata={"input_tokens": 20, "output_tokens": 10, "total_tokens": 30}))])
             result = super()._generate(messages, stop, run_manager, **kwargs)
             for call in result.generations[0].message.tool_calls:
-                if call["name"] == "DiscoveryOutput":
+                if call["name"] == "DiscoverySubmission":
                     call["args"]["findings"][0]["severity"] = "high"
             return result
 
@@ -334,15 +334,15 @@ def test_investigation_routes_only_once_for_high_impact_uncertainty():
     state = {"review_id": "review", "decisions": [{"candidate_id": "a", "decision": "insufficient_evidence"}],
              "eligible_candidates": [{"id": "a"}], "candidates": [{"id": "a", "severity": "high"}]}
     assert len(route_investigation(state)) == 1
-    assert route_investigation({**state, "investigation_round": 1}) == "plan_limitations"
+    assert route_investigation({**state, "investigation_round": 1}) == "report"
 
 
 def test_investigation_depth_follows_the_review_strategy():
     from app.review.graph import route_investigation
     state = {"review_id": "review", "decisions": [{"candidate_id": "a", "decision": "insufficient_evidence"}],
              "eligible_candidates": [{"id": "a"}], "candidates": [{"id": "a", "severity": "medium"}]}
-    assert route_investigation({**state, "review_depth": "quick"}) == "plan_limitations"
-    assert route_investigation({**state, "review_depth": "standard"}) == "plan_limitations"
+    assert route_investigation({**state, "review_depth": "quick"}) == "report"
+    assert route_investigation({**state, "review_depth": "standard"}) == "report"
     assert len(route_investigation({**state, "review_depth": "deep"})) == 1
     high = {**state, "candidates": [{"id": "a", "severity": "high"}]}
     assert len(route_investigation({**high, "review_depth": "standard"})) == 1
@@ -386,7 +386,7 @@ class InvestigatedReviewModel(ReviewModel):
         investigator = any("bounded independent investigation" in str(message.content)
                            for message in messages if message.type == "system")
         for call in result.generations[0].message.tool_calls:
-            if call["name"] == "DiscoveryOutput":
+            if call["name"] == "DiscoverySubmission":
                 call["args"]["findings"][0]["severity"] = "high"
             elif call["name"] == "VerificationOutput" and investigator:
                 call["args"] = {"decision": "refuted", "explanation": "调用方已校验输入，疑点不成立",
@@ -458,5 +458,6 @@ async def test_explicit_investigation_limitations_do_not_masquerade_as_execution
     )
     outcome = derive_review_outcome(task)
     assert outcome.kind == "findings"
-    assert outcome.incomplete_investigations == 0 and outcome.pending_limitation_count == 1
-    assert "limitation_assessment_incomplete" in {item.value for item in outcome.reason_codes}
+    assert outcome.incomplete_investigations == 0 and outcome.pending_limitation_count == 0
+    assert "limitation_assessment_incomplete" not in {item.value for item in outcome.reason_codes}
+    assert outcome.review_limitations[0].text == "调用方搜索仍有未读取范围"

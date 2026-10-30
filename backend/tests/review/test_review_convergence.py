@@ -1,13 +1,11 @@
-import json
-
 import pytest
 
 from app.review.context import AgentContext
-from app.review.limitations import limitation_batches, review_limitations
+from app.review.evidence import digest
+from app.review.limitations import assessment_errors, review_limitations
 from app.review.models import LimitationReviewOutput
 from app.review.planning import plan_review
 from app.review.retrieval import search
-from app.review.submission import submission_feedback
 from tests.review.test_planning import change
 
 pytest_plugins = ["tests.review.test_native_agents"]
@@ -79,13 +77,12 @@ def declarations():
 async def assessed_state(service):
     state = declarations()
     records = review_limitations(state)
-    batches = limitation_batches(records, state["goals"])
-    assert len(batches) == 1
     packet = await service.read("safe.py", 1, 1)
     identity = packet["evidence"]["id"]
     assessments = [{"limitation_id": item.id, "status": "boundary", "explanation": "Outside the fixed scope",
                     "goal_ids": ["head"], "evidence_ids": [identity]} for item in records]
-    result = {"id": batches[0]["id"], "status": "failed", "error": "limitation_assessment_evidence_not_read",
+    identity_key = "scope-" + digest(":".join(sorted(item.id for item in records)))
+    result = {"id": identity_key, "status": "failed", "error": "limitation_assessment_evidence_not_read",
               "evidence_ids": [identity], "output": {"assessments": assessments, "findings": []}}
     state["limitation_results"] = [result]
     return state, result
@@ -146,30 +143,26 @@ async def test_archive_corruption_is_isolated_to_the_member_using_that_source(so
     assert [item.status for item in review_limitations(state, source_service)] == ["boundary", "pending"]
 
 
-async def test_partial_batch_keeps_original_retry_identity_and_budget_owner(source_service):
+async def test_partial_historical_batch_preserves_original_identity(source_service):
     state, result = await assessed_state(source_service)
-    original = limitation_batches(review_limitations(state), state["goals"])
+    original_id = result["id"]
     result["output"]["assessments"][1]["evidence_ids"] = ["not-source"]
     records = review_limitations(state, source_service)
     assert {item.status for item in records} == {"boundary", "pending"}
-    retried = limitation_batches(records, state["goals"], original)
-    assert len(retried) == 1 and retried[0]["id"] == result["id"]
-    assert len(retried[0]["review_limitations"]) == 2
+    assert result["id"] == original_id
+    assert len(result["output"]["assessments"]) == 2
 
 
-async def test_limitation_feedback_identifies_member_and_available_branch_source(source_service):
+async def test_historical_assessment_validation_identifies_invalid_member(source_service):
     state, result = await assessed_state(source_service)
     assessments = result["output"]["assessments"]
     assessments[1]["evidence_ids"] = ["pagination-is-not-source"]
     output = LimitationReviewOutput.model_validate(result["output"])
-    feedback = submission_feedback(output, state["goals"], source_service,
-                                   result["evidence_ids"], result["id"],
-                                   [item.model_dump() for item in review_limitations(state)])
-    data = json.loads(feedback.split("\n", 1)[1])
-    error = data["invalid_limitation_assessments"][0]
+    errors = assessment_errors(output, [item.model_dump() for item in review_limitations(state)],
+                               state["goals"], result["evidence_ids"], source_service)
+    error = errors[0]
     assert error["limitation_id"] == assessments[1]["limitation_id"]
     assert error["invalid_evidence_ids"] == ["pagination-is-not-source"]
-    assert data["available_limitation_evidence"][0]["id"] == result["evidence_ids"][0]
 
 
 async def test_complete_no_match_search_distinguishes_scanning_from_matching(source_service):

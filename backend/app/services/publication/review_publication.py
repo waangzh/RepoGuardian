@@ -71,7 +71,8 @@ def validated_findings(task, artifacts=None):
                 candidate = candidates[identity]
                 decision, rebuilt = verify_finding(candidate, results[identity], archive, changed,
                     comparison_scope(candidate.model_dump(), eligible_candidates, results[identity]),
-                    candidate_limitations({"discovery_results": discovery, "candidates": all_candidates},
+                    candidate_limitations({"discovery_results": discovery, "candidates": all_candidates,
+                                           "assignments": [item.model_dump() for item in report.assignments]},
                                           [candidate.model_dump()]))
                 if rebuilt is None or decision != decisions[identity]:
                     raise ValueError("finding_subject_mismatch")

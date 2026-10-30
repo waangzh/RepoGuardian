@@ -22,17 +22,15 @@ async def report(state: ReviewState, runtime: Runtime[ReviewContext]):
                           == {item["id"] for item in state["assignments"]})
     verification_complete = ({item["id"] for item in verification}
                              == {item["id"] for item in state["eligible_candidates"]})
-    limitation_complete = ({item["id"] for item in state.get("limitation_batches", [])}
-                           <= {item["id"] for item in limitations})
-    execution_complete = discovery_complete and verification_complete and limitation_complete and all(
-        item["status"] == "completed" for item in results + verification + investigations + limitations)
+    execution_complete = discovery_complete and verification_complete and all(
+        item["status"] == "completed" for item in results + verification + investigations)
     termination = "completed" if execution_complete else "partial"
     if state["assignments"] and not any(item["status"] == "completed" for item in results):
         termination = "failed"
     observations, observation_errors = await asyncio.to_thread(
         collect_observations, results, state["assignments"], state.get("review_units", []),
         sources.evidence, state["goals"])
-    output = ReviewReport(snapshot=state["snapshot"],
+    output = ReviewReport(policy_version=2, snapshot=state["snapshot"],
         review_units=state.get("review_units", []), assignments=state["assignments"],
         goals=goals, discovery_results=results, verification_results=verification + investigations,
         limitation_results=limitations,

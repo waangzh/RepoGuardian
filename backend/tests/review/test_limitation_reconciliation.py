@@ -2,8 +2,6 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
 
 from app.review.checkpointer import _checkpoint_serializer
 from app.review.graph import build_review_graph
@@ -20,6 +18,12 @@ GAP = "未穷尽检查其他外部消费者是否按 method 字段分支"
 OTHER_GAP = "必要的存储调用方源码未读取，无法判断持久化影响"
 
 
+def gap(text, goal_ids):
+    return {"goal_ids": goal_ids, "missing_fact": text,
+            "dependent_conclusion": "变更是否破坏调用方契约", "change_relevance": "safe.py 返回值变化",
+            "next_check": "读取具体调用方的输入校验"}
+
+
 class LimitationModel(ReviewModel):
     assessment: str | None = None
     other_gap: bool = False
@@ -31,24 +35,12 @@ class LimitationModel(ReviewModel):
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         payload = json.loads(next(message.content for message in messages if message.type == "human"))
-        if messages[0].content.startswith("You independently review proposed evidence gaps"):
-            evidence = [item["evidence"]["id"] for item in payload["source_materials"]]
-            assessments = [{
-                "limitation_id": item["id"], "status": "unresolved" if item["text"] == OTHER_GAP else "boundary",
-                "explanation": "独立核对变更依赖，保留具体必要缺口并归类一般边界",
-                "goal_ids": item["goal_ids"], "evidence_ids": evidence,
-                "missing_fact": "存储调用方如何校验返回值", "dependent_conclusion": "变更是否破坏存储契约",
-                "change_relevance": "safe.py 的返回值发生变化", "next_check": "读取存储调用方的校验函数",
-            } for item in payload["review_limitations"]]
-            return ChatResult(generations=[ChatGeneration(message=AIMessage(content="",
-                tool_calls=[{"name": "LimitationReviewOutput", "id": "scope-output",
-                             "args": {"assessments": assessments}}],
-                usage_metadata={"input_tokens": 20, "output_tokens": 10, "total_tokens": 30}))])
         response = super()._generate(messages, stop, run_manager, **kwargs)
         for call in response.generations[0].message.tool_calls:
             args = call["args"]
-            if call["name"] == "DiscoveryOutput":
-                args["limitations"] = [GAP, OTHER_GAP] if self.other_gap else [GAP]
+            if call["name"] == "DiscoverySubmission":
+                args["limitations"] = [gap(text, [goal["id"] for goal in payload["goals"]])
+                                      for text in ([GAP, OTHER_GAP] if self.other_gap else [GAP])]
                 if self.multiple_candidates:
                     args["findings"].append({**args["findings"][0], "title": "另一候选"})
                 if self.investigate:
@@ -101,7 +93,7 @@ async def test_final_refutation_only_closes_explicit_source_backed_limitations(s
     assert outcome.incomplete_investigations == 0 and outcome.pending_limitation_count == 0
     assert outcome.kind == "clean"
     record = outcome.review_limitations[0]
-    assert record.status == (assessment or "boundary")
+    assert record.status == (assessment or "reported")
     assert record.candidate_ids == [report.candidates[0].id]
     assert record.source_id == report.discovery_results[0].id and record.text == GAP
     if assessment:
@@ -111,21 +103,22 @@ async def test_final_refutation_only_closes_explicit_source_backed_limitations(s
 
 async def test_independent_gap_survives_and_each_gap_is_counted(source_service):
     report = await run_review(source_service, other_gap=True)
-    assert derive_review_outcome(task_for(report)).pending_limitation_count == 2
+    assert derive_review_outcome(task_for(report)).pending_limitation_count == 0
     report = await run_review(source_service, assessment="boundary", other_gap=True)
     outcome = derive_review_outcome(task_for(report), evidence=source_service)
-    assert outcome.kind == "inconclusive" and outcome.incomplete_investigations == 1
+    assert outcome.kind == "clean" and outcome.incomplete_investigations == 0
     assert [(item.text, item.status) for item in outcome.review_limitations] == [
-        (GAP, "boundary"), (OTHER_GAP, "unresolved")]
+        (GAP, "boundary"), (OTHER_GAP, "reported")]
 
 
-async def test_zero_candidates_review_a_declaration_before_treating_it_as_a_gap(source_service):
+async def test_zero_candidates_keep_local_gap_without_another_agent(source_service):
     report = await run_review(source_service, empty=True)
     assert not report.candidates and not report.verification_results
     outcome = derive_review_outcome(task_for(report), evidence=source_service)
     assert outcome.confirmed_count == outcome.unresolved_count == 0
     assert outcome.incomplete_investigations == 0 and outcome.kind == "clean"
-    assert len(report.limitation_results) == 1
+    assert not report.limitation_results
+    assert outcome.review_limitations[0].status == "reported"
 
 
 async def test_resolution_survives_batch_splitting_and_serialization(source_service):
@@ -154,7 +147,7 @@ async def test_nonblocking_judgments_reconcile_per_candidate_without_erasing_gap
         missing = report.decisions[0].candidate_id
         report.decisions[0].limitation_resolutions = []
         next(item for item in report.verification_results if item.id == missing).output["limitation_resolutions"] = []
-        assert review_limitations(report, source_service)[0].status == "pending"
+        assert review_limitations(report, source_service)[0].status == "reported"
     elif case == "independent_gap":
         source = report.verification_results[0]
         assessment = {
@@ -216,7 +209,7 @@ async def test_projection_cannot_close_gaps_with_unverifiable_assessments(source
     elif tamper == "decision_only":
         report.verification_results[0].output["limitation_resolutions"] = []
     records = review_limitations(report, None if tamper == "no_archive" else source_service)
-    assert records[0].status == "pending"
+    assert records[0].status == "reported"
 
 
 async def test_verified_finding_with_explicit_resolution_still_passes_publication_revalidation(source_service):
@@ -230,6 +223,36 @@ async def test_verified_finding_with_explicit_resolution_still_passes_publicatio
     task.changed_files = [ChangedFile.model_validate({**CHANGE, "additions": 1, "deletions": 1})]
     findings, withheld = validated_findings(task, source_service.artifacts)
     assert findings == report.findings and not withheld
+
+
+async def test_invalid_optional_resolution_does_not_erase_valid_finding_or_close_gap(source_service):
+    from app.models.review.diff import ChangedFile
+    from app.models.review_plan import ReviewPlanOptions
+    from app.review.findings import verify_finding
+    from app.review.limitations import candidate_limitations
+    from app.services.publication.review_publication import validated_findings
+    from tests.review.test_native_graph import CHANGE
+
+    report = await run_review(source_service, assessment="resolved", verdict="confirmed")
+    candidate = report.candidates[0]
+    result = report.verification_results[0]
+    result.output["limitation_resolutions"][0]["evidence_ids"] = ["f" * 64]
+    limits = candidate_limitations(report.model_dump(), [candidate.model_dump()])
+    decision, finding = verify_finding(candidate, result.model_dump(), source_service, [CHANGE],
+                                       limitations=limits)
+    assert decision.decision == "confirmed" and finding is not None
+    assert not decision.limitation_resolutions
+    report.decisions, report.findings = [decision], [finding]
+    assert review_limitations(report, source_service)[0].status == "reported"
+    task = task_for(report)
+    task.configuration = SimpleNamespace(options=ReviewPlanOptions())
+    task.changed_files = [ChangedFile.model_validate({**CHANGE, "additions": 1, "deletions": 1})]
+    published, withheld = validated_findings(task, source_service.artifacts)
+    assert published == [finding] and not withheld
+
+    result.output["evidence_ids"] = ["f" * 64]
+    with pytest.raises(ValueError):
+        verify_finding(candidate, result.model_dump(), source_service, [CHANGE], limitations=limits)
 
 
 async def test_all_report_surfaces_show_specific_remaining_gap_and_source(source_service):
@@ -247,11 +270,39 @@ async def test_all_report_surfaces_show_specific_remaining_gap_and_source(source
     task.changed_files = [ChangedFile.model_validate({**CHANGE, "additions": 1, "deletions": 1})]
     task.pr_discussion = None
     plan = PublicationPlanner(source_service.artifacts).build(task)
-    assert plan.outcome.incomplete_investigations == 1
+    assert plan.outcome.incomplete_investigations == 0
     for text in (plan.summary_markdown, plan.user_report_markdown, plan.review_comment_markdown):
         assert OTHER_GAP in text
         assert "来源：主审" in text
         assert report.discovery_results[0].id[:12] in text
         assert "关联调查尚未完成" not in text
-    assert "1 项必要证据缺口尚未解决" in plan.review_comment_markdown
+    assert "主审局部证据缺口（未独立核实）" in plan.review_comment_markdown
     assert "一般审查边界" in plan.user_report_markdown
+
+
+async def test_historical_frozen_publication_plan_keeps_legacy_shape_and_hash(source_service):
+    from app.core.fingerprints import stable_hash
+    from app.models.publication import PublicationPlan
+    from app.models.review.diff import ChangedFile
+    from app.models.review_plan import ReviewPlanOptions
+    from app.review.contracts import ReviewConfiguration
+    from app.review.models import ReviewLimits
+    from tests.review.test_native_graph import CHANGE
+
+    report = await run_review(source_service, empty=True)
+    report.policy_version = 1
+    report.discovery_results[0].output["limitations"] = [GAP]
+    report.discovery_results[0].investigation_limitations = [GAP]
+    task = task_for(report)
+    task.configuration = ReviewConfiguration(provider="test", endpoint="http://localhost", model="test",
+        options=ReviewPlanOptions(), limits=ReviewLimits())
+    task.pr_url = "https://github.com/local/repo/pull/1"
+    task.pr.title, task.pr.body = "Test", ""
+    task.changed_files = [ChangedFile.model_validate({**CHANGE, "additions": 1, "deletions": 1})]
+    task.pr_discussion = None
+    plan = PublicationPlanner(source_service.artifacts).build(task)
+    frozen = plan.model_dump(mode="json")
+    assert frozen["outcome"]["review_limitations"][0]["status"] == "pending"
+    assert "gap" not in frozen["outcome"]["review_limitations"][0]
+    assert "待复核的限制声明" in frozen["review_comment_markdown"]
+    assert stable_hash(PublicationPlan.model_validate(frozen).model_dump(mode="json")) == stable_hash(frozen)

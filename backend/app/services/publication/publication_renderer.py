@@ -340,7 +340,7 @@ def _risk_section(plan):
     for reason in outcome.reason_codes:
         items.append(f"- {REASON_LABELS[reason]}")
     items.extend(f"- {markdown_text(review_limitation_text(item))}"
-                 for item in outcome.review_limitations if item.status in {"pending", "unresolved"})
+                 for item in outcome.review_limitations if item.status in {"pending", "reported", "unresolved"})
     for goal in plan.digest.incomplete_goals[:5]:
         items.append(f"- 未完成目标：{markdown_text(goal.path or '文件未记录', 500)}"
                      + (f":{goal.start_line}–{goal.end_line}" if goal.start_line else "")

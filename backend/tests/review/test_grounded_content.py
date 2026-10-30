@@ -83,7 +83,7 @@ class GroundedModel(ReviewModel):
                                 "input_token_details": {"cache_read": 9}}))])
         result = super()._generate(messages, stop, run_manager, **kwargs)
         for call in result.generations[0].message.tool_calls:
-            if call["name"] == "DiscoveryOutput":
+            if call["name"] == "DiscoverySubmission":
                 identities = call["args"]["findings"][0]["evidence_ids"]
                 call["args"]["observations"] = [{
                     "change": "VALUE 的返回常量由 1 调整为 2。",
@@ -172,7 +172,7 @@ async def test_summary_uses_frozen_diff_when_observations_are_missing(pipeline):
         def _generate(self, messages, stop=None, run_manager=None, **kwargs):
             response = super()._generate(messages, stop, run_manager, **kwargs)
             for call in response.generations[0].message.tool_calls:
-                if call["name"] == "DiscoveryOutput":
+                if call["name"] == "DiscoverySubmission":
                     call["args"]["observations"] = []
             return response
 
@@ -328,7 +328,7 @@ async def test_refuted_test_criticism_cannot_return_via_observation_analysis(pip
             response = super()._generate(messages, stop, run_manager, **kwargs)
             for call in response.generations[0].message.tool_calls:
                 args = call["args"]
-                if call["name"] == "DiscoveryOutput":
+                if call["name"] == "DiscoverySubmission":
                     args["findings"][0]["title"] = rejected
                     args["observations"][0].update(
                         change=rejected if mode == "invalid" else "新增中间样本保持不变的对照测试。",

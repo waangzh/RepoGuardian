@@ -5,8 +5,8 @@ import json
 from langchain_core.messages import ToolMessage
 
 from app.review.findings import covered_goals
-from app.review.limitations import assessment_errors, validate_resolutions
-from app.review.models import BatchVerificationOutput, DiscoveryOutput, LimitationReviewOutput
+from app.review.limitations import validate_resolutions
+from app.review.models import BatchVerificationOutput, DiscoveryGap, DiscoveryOutput
 from app.review.observations import validate_observation
 
 EXECUTION_BOUNDARIES = (
@@ -33,28 +33,13 @@ def issued_source_ids(messages, material_ids):
 
 def submission_feedback(output, goals, service, issued, identity, limitations=()):
     issues = {}
-    if isinstance(output, LimitationReviewOutput):
-        try:
-            rejected = assessment_errors(output, limitations, goals, issued, service)
-        except (ValueError, OSError) as exc:
-            issues["invalid_limitation_assessment"] = str(exc)
-        else:
-            if rejected:
-                issues["invalid_limitation_assessments"] = rejected
-                available = []
-                for identity in sorted(issued):
-                    try:
-                        available.append(service.resolve(identity).model_dump())
-                    except (ValueError, OSError):
-                        continue
-                issues["available_limitation_evidence"] = available[:32]
-                issues["evidence_instruction"] = (
-                    "evidence_ids 只使用本分支 read_file/read_base_file/read_symbol 或 "
-                    "source_materials 的 evidence.id；pagination_id 和 search/path/diff hint 不是证据。"
-                    "先修正无效引用；若缺少必要源码，仅在探索仍允许时补读。无法补读时用已读的"
-                    "变更源码说明 unresolved 的具体缺失前提，不得把缺口改成 resolved 或 boundary。")
     if isinstance(output, DiscoveryOutput) and goals:
         expected = {goal["id"] for goal in goals}
+        invalid_gaps = [index for index, gap in enumerate(output.limitations)
+                        if isinstance(gap, DiscoveryGap) and not set(gap.goal_ids) <= expected]
+        if invalid_gaps:
+            issues["invalid_gap_goal_ids"] = invalid_gaps
+            issues["allowed_goal_ids"] = sorted(expected)
         claimed = {item.goal_id for item in output.examined}
         coverage = covered_goals(goals, [{
             "id": identity, "status": "completed", "output": output.model_dump(),
@@ -99,7 +84,8 @@ def submission_feedback(output, goals, service, issued, identity, limitations=()
     boundaries = [{"output_index": index, "limitation_index": offset}
                   for index, item in enumerate(outputs)
                   for offset, text in enumerate(getattr(item, "limitations", []))
-                  if text.lstrip().casefold().startswith(EXECUTION_BOUNDARIES)]
+                  if (text.missing_fact if isinstance(text, DiscoveryGap) else text)
+                  .lstrip().casefold().startswith(EXECUTION_BOUNDARIES)]
     if boundaries:
         issues["possible_boundary_notes"] = boundaries[:12]
     if not issues:
@@ -117,8 +103,8 @@ def submission_feedback(output, goals, service, issued, identity, limitations=()
             "若同一条同时包含真实证据缺口，必须保留该缺口，不能只为通过验收而删除限制。"
             "limitation_resolutions 只能引用已提供且关联当前候选的限制 ID，附本分支实际读取的源码证据；"
             "不能凭候选被排除就关闭限制。无法证实时移除处理声明，原限制将继续保留。"
-            "限制复核必须逐条返回提供的 ID，引用本分支已读源码和提供的 Goal。"
-            "unresolved 必须说明具体 missing_fact、dependent_conclusion、change_relevance 和 next_check；"
+            "主审 limitations 逐条说明本分支 goal_ids、missing_fact、dependent_conclusion、"
+            "change_relevance 和 next_check；它们是未独立核实的局部说明，不是已确认缺陷。"
             "不要将穷尽全部构造、全仓正确性或未执行测试自动视为必要前提。"
             "invalid_observations 按 index/code 标记未通过的变更观察；优先复用本分支已读的"
             "available_observation_evidence，补齐对应 BASE/HEAD 引用，也可以移除无法支持的观察。"
