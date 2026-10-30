@@ -200,7 +200,7 @@ class ReviewStore:
                                          subject=candidate.id, payload=check.model_dump(mode="json")))
             return candidate.id
 
-    def deliver(self, run_id, work, hunk_ids, failures, lease, *, source_ids=()):
+    def deliver(self, run_id, work, hunk_ids, failures, lease, *, source_ids=(), digests=None):
         with self.sessions.begin() as session:
             run_row = self._guard(session, run_id, lease)
             row = self._attempt(session, run_id, work.id, work.attempt_id)
@@ -211,6 +211,7 @@ class ReviewStore:
                 raise ValueError("unknown_material_member")
             saved.delivered_hunk_ids = sorted(set(saved.delivered_hunk_ids) | set(hunk_ids))
             saved.visible_source_ids = sorted(set(saved.visible_source_ids) | set(source_ids))
+            saved.delivered_materials.update(digests or {})
             saved.missing_material_reasons.update(failures)
             for key in hunk_ids:
                 saved.missing_material_reasons.pop(key, None)

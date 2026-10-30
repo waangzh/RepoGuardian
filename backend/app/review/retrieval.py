@@ -5,6 +5,7 @@ import fnmatch
 import json
 import re
 import subprocess
+from uuid import uuid4
 
 from app.review.evidence import digest, source_lines
 from app.review.tool_scope import (
@@ -36,12 +37,7 @@ def _position(context, cursor, scope, size):
     try:
         if not re.fullmatch(r"[0-9a-f]{64}", cursor):
             raise ValueError("invalid_cursor")
-        service = context.evidence
-        artifact = service.artifacts.root / service.snapshot.review_id / f"cursor-{cursor}.txt"
-        encoded = service.artifacts.read_text(artifact.as_uri())
-        if digest(encoded) != cursor:
-            raise ValueError("invalid_cursor")
-        value = json.loads(encoded)
+        value = context.cursors[cursor]
         position, column, unreadable = value["position"], value["column"], value["unreadable_files"]
         if (value["scope"] != scope or type(position) is not int or type(column) is not int
                 or not 0 <= position < size or column < 0
@@ -57,12 +53,9 @@ def _position(context, cursor, scope, size):
 def _page(context, scope, cursor, position, has_more, *, unreadable_total=0, search_window=None, **body):
     next_cursor = None
     if has_more:
-        artifact = context.evidence.artifacts.put_text(
-            task_id=context.evidence.snapshot.review_id, kind="cursor",
-            content=json.dumps({"scope": scope, "position": position[0], "column": position[1],
-                                "unreadable_files": unreadable_total, "search_window": search_window},
-                               sort_keys=True))
-        next_cursor = artifact.sha256
+        next_cursor = digest(uuid4().hex)
+        context.cursors[next_cursor] = {"scope": scope, "position": position[0], "column": position[1],
+                                       "unreadable_files": unreadable_total, "search_window": search_window}
     return {"ok": True, **body, "pagination_id": scope, "cursor": cursor,
             "next_cursor": next_cursor, "has_more": has_more, "truncated": False}
 
@@ -121,12 +114,7 @@ async def search(context, query, path="", glob="", side="head", cursor="", limit
         _position, context, cursor, scope, len(paths))
     window = None
     if cursor:
-        service = context.evidence
-        artifact = service.artifacts.root / service.snapshot.review_id / f"cursor-{cursor}.txt"
-        encoded = await asyncio.to_thread(service.artifacts.read_text, artifact.as_uri())
-        if digest(encoded) != cursor:
-            raise ValueError("invalid_cursor")
-        saved = json.loads(encoded)
+        saved = context.cursors[cursor]
         window = saved.get("search_window")
     stop = min(len(paths), first + SCAN_FILES)
     matches, matched, unreadable, scanned = [], 0, 0, 0

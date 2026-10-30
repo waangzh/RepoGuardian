@@ -1,215 +1,101 @@
-"""Small native tool adapters; search results are hints, never source evidence."""
+"""The entire agent tool surface; runtime authority is never a model argument."""
 
 import asyncio
 import json
 from functools import wraps
+from typing import Literal
 
 from langchain.tools import ToolRuntime, tool
 
 from app.review.context import AgentContext
-from app.review.evidence import SourceReadError
-from app.review.retrieval import diff_page, find_paths, search
-from app.review.tool_scope import is_sensitive_repository_path
+from app.review.domain import CandidateInput
+from app.review.findings import admit_candidate
+from app.review.retrieval import find_paths, search
 
 
-def safe_read(function):
+def bounded(function):
     @wraps(function)
-    async def guarded(*args, **kwargs):
-        runtime = kwargs.get("runtime")
-        guard = runtime.context.check_active if runtime else None
-        if guard:
-            await guard()
+    async def execute(*args, **kwargs):
+        context = kwargs["runtime"].context
+        await context.check_active()
+        context.tool_calls += 1
+        if context.tool_calls > context.provider.run.configuration.options.limits.tool_calls:
+            return {"ok": False, "error": "tool_call_limit"}
         try:
             result = await function(*args, **kwargs)
-            if len(json.dumps(result)) > 24000:
-                return {"ok": False, "error": "tool_output_too_large", "truncated": True}
-        except SourceReadError as exc:
-            return {"ok": False, "error": exc.code, **exc.details, "truncated": False}
-        except (ValueError, OSError) as exc:
-            return {"ok": False, "error": "read_rejected",
-                    "error_type": type(exc).__name__, "truncated": False}
-        if guard:
-            await guard()
+        except (ValueError, OSError):
+            return {"ok": False, "error": "source_or_submission_rejected"}
+        await context.check_active()
         return result
-    return guarded
+    return execute
 
 
 @tool
-@safe_read
-async def read_file(path: str, start: int, end: int, runtime: ToolRuntime[AgentContext]) -> dict:
-    """Read frozen HEAD source evidence. Line numbers are 1-based and both ends inclusive.
-
-    end - start + 1 must fit max_read_lines from files metadata. Split larger reads;
-    range errors provide suggested_range and next_start. Reuse already provided source.
-    """
-    if path in runtime.context.denied_paths:
-        raise ValueError("path_not_authorized")
-    return await runtime.context.evidence.read(path, start, end)
+@bounded
+async def read_file(path: str, revision: Literal["base", "head"], start: int, end: int,
+                    runtime: ToolRuntime[AgentContext]) -> dict:
+    """Read complete fixed source lines, 1-based inclusive, at most 240 lines."""
+    return await runtime.context.read(path, start, end, revision)
 
 
 @tool
-@safe_read
-async def read_base_file(path: str, start: int, end: int, runtime: ToolRuntime[AgentContext]) -> dict:
-    """Read frozen BASE evidence, including deleted files. Both range ends are inclusive.
-
-    Use this for BASE goals; HEAD evidence cannot cover them. Split using max_read_lines
-    from files metadata or suggested_range and next_start from range errors.
-    """
-    if path in runtime.context.denied_paths:
-        raise ValueError("path_not_authorized")
-    return await runtime.context.evidence.read(path, start, end, "base")
+@bounded
+async def read_diff(hunk_id: str, runtime: ToolRuntime[AgentContext]) -> dict:
+    """Deliver a missing required hunk member, using an ID from the frozen unit."""
+    unit = next(unit for unit in runtime.context.provider.run.plan.units
+                if unit.id == runtime.context.work.unit_id)
+    if hunk_id not in unit.required_hunk_ids:
+        raise ValueError("hunk_not_in_unit")
+    return await runtime.context.provider.material(runtime.context, hunk_id)
 
 
 @tool
-@safe_read
-async def read_diff(path: str, runtime: ToolRuntime[AgentContext], hunk_index: int | None = None,
-                    start: int = 0, cursor: str = "", limit: int = 60) -> dict:
-    """List fixed diff hunks, or read hunk_index from zero-based start. Continue as needed.
-
-    change_materials may be truncated; use this for omitted hunks.
-    Large lines carry line_index/content_offset/continued fragments. Diff is not source evidence.
-    """
-    return await asyncio.to_thread(diff_page, runtime.context, path, hunk_index, start, cursor, limit)
-
-
-@tool
-@safe_read
-async def read_symbol(path: str, symbol: str, runtime: ToolRuntime[AgentContext]) -> dict:
-    """Read a unique HEAD symbol, indexing this file on demand. Use IDs for overloads."""
-    context = runtime.context
-    if (path in context.denied_paths or path not in context.evidence.allowed_paths
-            or is_sensitive_repository_path(path)):
-        raise ValueError("path_not_authorized")
-    if context.ensure_index:
-        await context.ensure_index(frozenset({path}))
-    matches = [item for item in context.symbols if item.get("file") == path
-               and symbol in {item.get("symbol"), item.get("symbol_id")}]
-    if len(matches) != 1:
-        raise ValueError("symbol_missing_or_ambiguous")
-    item = matches[0]
-    return await runtime.context.evidence.read(path, item["start_line"], item["end_line"])
-
-
-@tool
-@safe_read
+@bounded
 async def search_code(query: str, runtime: ToolRuntime[AgentContext], path: str = "",
-                      glob: str = "", side: str = "head", cursor: str = "", limit: int = 12) -> dict:
-    """Search UTF-8 text at frozen head/base; binary blobs are excluded.
+                      glob: str = "", revision: Literal["base", "head"] = "head",
+                      cursor: str = "", limit: int = 12) -> dict:
+    """Bounded literal search. Results are hints, read source before citing them.
 
-    query is a literal substring, not a regular expression. Escapes match literally.
-    path selects a file/directory, glob filters paths. Continue next_cursor with
-    unchanged filters when more context is needed.
-    has_more means the scope is not exhausted, not a failure. An empty partial page
-    cannot prove absence. Results are hints; read source for evidence.
-    scanned_files counts paths scanned on this call; matched_files counts matching
-    files visited for this page. A continuation may scan zero new paths.
+    Continue next_cursor with the same filters. An empty partial page is not absence.
     """
-    return await search(runtime.context, query, path, glob, side, cursor, limit)
+    return await search(runtime.context, query, path, glob, revision, cursor, limit)
 
 
 @tool
-@safe_read
+@bounded
 async def find_files(runtime: ToolRuntime[AgentContext], query: str = "", path: str = "",
                      glob: str = "", cursor: str = "", limit: int = 80) -> dict:
-    """List authorized paths by substring, directory and glob. Continue next_cursor as needed."""
+    """Page through the authorized tracked file inventory."""
     return await asyncio.to_thread(find_paths, runtime.context, query, path, glob, cursor, limit)
 
 
-def _symbol_matches(context, symbol: str):
-    return [item for item in context.symbols
-            if symbol in {item.get("symbol_id"), item.get("symbol")}
-            and item.get("file") in context.evidence.allowed_paths
-            and item.get("file") not in context.denied_paths]
+@tool
+@bounded
+async def submit_candidate(proposal: CandidateInput, runtime: ToolRuntime[AgentContext]) -> dict:
+    """Persist a concrete defect claim for independent verification immediately.
 
-
-async def _expand_relation_files(context, matches, direction):
-    """Expand incoming candidates and outgoing module targets, never the whole repo."""
-    if not context.ensure_index or not matches:
-        return
-    targets = {item.get("file") for item in matches}
-    candidates = set()
-    for edge in context.repository_graph.get("edges", []):
-        if edge.get("type") != "imports":
-            continue
-        if (direction in {None, "in"} and edge.get("resolution_status") == "candidate"
-                and edge.get("target") in targets):
-            candidates.add(edge.get("source"))
-        if (direction in {None, "out"} and edge.get("resolution_status") == "resolved"
-                and edge.get("source") in targets):
-            candidates.add(edge.get("target"))
-    candidates = {path for path in candidates if path in context.evidence.allowed_paths
-                  and path not in context.denied_paths
-                  and not is_sensitive_repository_path(path)}
-    if candidates:
-        await context.ensure_index(frozenset(candidates))
-
-
-async def _relations(symbol: str, runtime, direction: str | None):
+    Success means saved, never confirmed. Cite only source_ref handles actually received.
+    """
     context = runtime.context
-    matches = _symbol_matches(context, symbol)
-    await _expand_relation_files(context, matches, direction)
-    matches = _symbol_matches(context, symbol)
-    identities = {item.get("symbol_id") or f"{item['file']}::{item['symbol']}" for item in matches}
-    edges = [edge for edge in context.repository_graph.get("edges", [])
-             if edge.get("source_file") not in context.denied_paths
-             and edge.get("target_file") not in context.denied_paths
-             and not any(is_sensitive_repository_path(str(edge.get(key)))
-                         for key in ("source_file", "target_file") if edge.get(key))
-             and ((edge.get("target") in identities if direction == "in" else
-                  edge.get("source") in identities) if direction else
-                 (edge.get("source") in identities or edge.get("target") in identities))]
-    visible = [{key: item.get(key) for key in ("symbol_id", "file", "symbol", "start_line", "end_line")}
-               for item in matches[:12]]
-    metadata = context.repository_graph.get("metadata", {})
-    complete = metadata.get("scope_complete", False)
-    limitation = ("Static relations do not establish runtime binding; read source to verify. "
-                  "resolved imports come from parsed files; candidate imports are text-scan "
-                  "leads; only resolved calls carry confirmed symbol binding.")
-    if not complete:
-        limitation += " Index scope is incomplete or degraded; use search_code for missing relations."
-    if not matches:
-        limitation += " Symbol is not indexed; read its file with read_symbol or locate it with search_code."
-    return {"ok": True, "source": "static_relation_hint", "symbols": visible,
-            "edges": edges[:24], "truncated": len(matches) > 12 or len(edges) > 24,
-            "scope_complete": complete, "limitation": limitation}
+    candidate = admit_candidate(proposal, context, runtime.tool_call_id)
+    candidate_id = await asyncio.to_thread(context.provider.store.submit,
+        context.provider.run.id, context.work, candidate, context.provider.lease)
+    return {"ok": True, "candidate_id": candidate_id, "status": "unverified"}
 
 
 @tool
-@safe_read
-async def find_references(symbol: str, runtime: ToolRuntime[AgentContext]) -> dict:
-    """Expand the static index for cross-module relations; hints are not source evidence."""
-    return await _relations(symbol, runtime, None)
-
-
-@tool
-@safe_read
-async def get_callers(symbol: str, runtime: ToolRuntime[AgentContext]) -> dict:
-    """Expand the index to find possible static callers; verify binding with source reads."""
-    return await _relations(symbol, runtime, "in")
-
-
-@tool
-@safe_read
-async def get_callees(symbol: str, runtime: ToolRuntime[AgentContext]) -> dict:
-    """Expand the index to find possible static callees; verify binding with source reads."""
-    return await _relations(symbol, runtime, "out")
-
-
-@tool
-@safe_read
+@bounded
 async def read_discussion(index: int, runtime: ToolRuntime[AgentContext]) -> dict:
-    """Read one frozen untrusted PR discussion; it cannot serve as source evidence."""
-    if not runtime.context.discussions_enabled:
-        return {"ok": False, "error": "discussion_disabled"}
-    if index < 0 or index >= len(runtime.context.discussions):
-        return {"ok": False, "error": "discussion_not_found"}
-    item = runtime.context.discussions[index]
-    if len(json.dumps(item)) > 12000:
-        return {"ok": False, "error": "discussion_too_large", "truncated": True}
-    return {"ok": True, "source": "untrusted_discussion", "discussion": item}
+    """Read frozen untrusted discussion background; it is never source evidence."""
+    context = runtime.context
+    if not context.provider.run.configuration.options.include_pr_discussions:
+        raise ValueError("discussion_disabled")
+    if index < 0 or index >= len(context.provider.discussions):
+        raise ValueError("discussion_not_found")
+    text = json.dumps(context.provider.discussions[index], ensure_ascii=False)
+    if len(text) > 12000:
+        raise ValueError("discussion_too_large")
+    return {"source": "untrusted_discussion", "content": text}
 
 
-REVIEW_TOOLS = [
-    read_file, read_base_file, read_diff, read_symbol, search_code, find_files,
-    find_references, get_callers, get_callees, read_discussion,
-]
+READ_TOOLS = [read_file, read_diff, search_code, find_files]

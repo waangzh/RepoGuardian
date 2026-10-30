@@ -1,7 +1,7 @@
 from datetime import timedelta
 from uuid import uuid4
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base
@@ -51,3 +51,44 @@ def submit_candidate(store, run, lease, work):
                                                      source_refs=["S1"]), sources=[ref])
     store.submit(run.id, work, candidate, lease)
     return candidate
+
+
+def setup_source_run(tmp_path):
+    import subprocess
+    from app.models.orm import ReviewTaskOrm, ReviewWorkItemOrm
+    from app.review.context import ContextProvider
+    from app.review.evidence import EvidenceService
+    from app.review.planner import plan_review
+    from app.services.review.artifact_store import LocalArtifactStore
+    from app.tools.diff_parser import DiffParser
+    from app.tools.git_tool import GitTool
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    def git(*args):
+        return subprocess.run(["git", "-C", str(repo), *args], check=True,
+                              capture_output=True).stdout.decode().strip()
+    git("init")
+    (repo / "a.py").write_text("def ratio(x):\n    return 10 / (x or 1)\n", encoding="utf-8")
+    git("add", ".")
+    git("-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "base")
+    base = git("rev-parse", "HEAD")
+    (repo / "a.py").write_text("def ratio(x):\n    return 10 / x\n", encoding="utf-8")
+    git("add", ".")
+    git("-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "head")
+    head = git("rev-parse", "HEAD")
+    store, run, lease, sessions = setup_run(tmp_path)
+    run.snapshot.base_sha = run.snapshot.declared_base_sha = run.pr.base.sha = base
+    run.snapshot.head_sha = run.pr.head.sha = head
+    run.changed_files = DiffParser().parse(git("diff", base, head))
+    run.plan = plan_review(run.changed_files, run.snapshot, run.configuration.options)
+    with sessions.begin() as session:
+        row = session.get(ReviewTaskOrm, run.id)
+        row.task_snapshot = run.model_dump(mode="json")
+        item = session.scalar(select(ReviewWorkItemOrm).where(ReviewWorkItemOrm.run_id == run.id))
+        payload = dict(item.payload)
+        payload["unit_id"] = run.plan.units[0].id
+        item.payload, item.subject = payload, run.plan.units[0].id
+    evidence = EvidenceService(snapshot=run.snapshot, artifacts=LocalArtifactStore(tmp_path / "artifacts"),
+        repo_path=repo, allowed_paths=frozenset({"a.py"}), git=GitTool())
+    return store, run, lease, ContextProvider(run, evidence, store, lease), sessions

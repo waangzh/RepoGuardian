@@ -1,173 +1,26 @@
-"""Whole-review reservations survive failures, replay, and branch retries."""
+"""One request gate for discovery, verification, corrections and overview."""
 
 import asyncio
-import logging
-from uuid import uuid4
+from dataclasses import dataclass
 
-from app.review.configuration import discovery_limits
-
-logger = logging.getLogger("RepoGuardian.Review")
+from app.review.domain import utcnow
+from app.review.store import BudgetExceeded
 
 
-class ReviewBudgetExceeded(RuntimeError):
-    pass
+@dataclass
+class BudgetGate:
+    store: object
+    run: object
+    lease: dict
 
+    async def active(self):
+        await asyncio.to_thread(self.store.assert_active, self.run.id, self.lease)
+        if utcnow() >= self.run.hard_deadline:
+            raise BudgetExceeded("hard_deadline")
 
-def input_estimate(encoded_bytes, factor):
-    """UTF-8 bytes are a stable proxy, not tokens; the factor is calibrated from usage."""
-    return max(1, round(encoded_bytes * factor))
+    async def reserve(self, work, estimate, *, overview=False):
+        return await asyncio.to_thread(self.store.reserve, self.run.id, work,
+                                      estimate, self.lease, overview=overview)
 
-
-def branch_budget():
-    return {"held_input_tokens": 0, "held_model_calls": 0,
-            "finalizing": False, "final_requests": 0}
-
-
-def budget_summary(rows, limits, branches=(), *, input_token_factor=None):
-    measured = [row for row in rows if row["input_tokens"] is not None]
-    # 最差已观测比值：字节数无法换算 Token，只有实际 usage 能校准。
-    factor = input_token_factor if input_token_factor is not None else round(max(
-        (row["input_tokens"] / row["reserved_input_bytes"] for row in measured
-         if row["input_tokens"] > 0 and row["reserved_input_bytes"] > 0), default=1.0), 3)
-    held = sum(branch["held_input_tokens"] for branch in branches)
-    outstanding = sum(input_estimate(row["reserved_input_bytes"], factor)
-                      for row in rows if row["input_tokens"] is None) + held
-    return {
-        "model_calls": len(rows), "model_call_limit": limits.total_model_calls,
-        "input_tokens": sum(row["input_tokens"] for row in measured)
-            if len(measured) == len(rows) else None,
-        "reserved_input_bytes": sum(row["reserved_input_bytes"] for row in rows),
-        "committed_input_tokens": sum(row["input_tokens"] for row in measured) + outstanding,
-        "outstanding_input_tokens": outstanding, "input_token_factor": factor,
-        "held_input_tokens": held,
-        "held_model_calls": sum(branch["held_model_calls"] for branch in branches),
-        "input_token_limit": limits.total_input_tokens,
-        "output_tokens": sum(row["output_tokens"] for row in rows)
-            if all(row["output_tokens"] is not None for row in rows) else None,
-        "cached_input_tokens": sum(row["cached_input_tokens"] for row in rows)
-            if all(row["cached_input_tokens"] is not None for row in rows) else None,
-        "unknown_calls": len(rows) - len(measured),
-    }
-
-
-def enforce_budget(summary, estimate, held, limits, stage, *, held_calls=0,
-                   review_id="", agent_id="", scope="review"):
-    if summary["model_calls"] + summary["held_model_calls"] + 1 + held_calls > limits.total_model_calls:
-        dimension = "model_calls"
-    elif summary["committed_input_tokens"] + estimate + held > limits.total_input_tokens:
-        dimension = "input_tokens"
-    else:
-        return
-    logger.warning("预算拒绝 dimension=%s stage=%s model_calls=%s/%s committed_input=%s "
-        "outstanding_input=%s estimate=%s held=%s factor=%s input_limit=%s "
-        "held_calls=%s review_id=%s agent_id=%s scope=%s", dimension, stage,
-        summary["model_calls"], summary["model_call_limit"], summary["committed_input_tokens"],
-        summary["outstanding_input_tokens"], estimate, held, summary["input_token_factor"],
-        summary["input_token_limit"], summary["held_model_calls"] + held_calls, review_id[:8], agent_id[:8], scope)
-    raise ReviewBudgetExceeded(dimension)
-
-
-def plan_reservation(rows, branches, agent_id, encoded_bytes, limits, *, stage, hold, review_id="",
-                     discovery_agent_ids=(), phase_limits=None):
-    if (type(encoded_bytes) is not int or encoded_bytes < 1
-            or type(hold) is not int or not 0 <= hold <= 2
-            or stage not in {"explore", "finalize"}):
-        raise ValueError("invalid_budget_reservation")
-    branch = dict(branches.get(agent_id, branch_budget()))
-    if branch["finalizing"] and stage == "explore":
-        raise ValueError("branch_already_finalizing")
-    if stage == "finalize":
-        if branch["final_requests"] >= 2:
-            raise ReviewBudgetExceeded("finalization_attempts")
-        # The correction consumes the remaining reservation, without reserving a third attempt.
-        hold = min(hold, max(0, 1 - branch["final_requests"]))
-        branch["finalizing"] = True
-        branch["final_requests"] += 1
-    # Convert this owner's hold to a request and its remaining hold in one transaction.
-    summary = budget_summary(rows, limits, [value for key, value in branches.items() if key != agent_id])
-    estimate = input_estimate(encoded_bytes, summary["input_token_factor"])
-    enforce_budget(summary, estimate, estimate * hold, limits, stage, held_calls=hold,
-                   review_id=review_id, agent_id=agent_id)
-    if discovery_agent_ids:
-        if agent_id not in discovery_agent_ids or phase_limits is None:
-            raise ValueError("invalid_discovery_budget_scope")
-        discovery = budget_summary(
-            [row for row in rows if row["agent_id"] in discovery_agent_ids], phase_limits,
-            [value for key, value in branches.items() if key in discovery_agent_ids and key != agent_id],
-            input_token_factor=summary["input_token_factor"])
-        enforce_budget(discovery, estimate, estimate * hold, phase_limits, stage, held_calls=hold,
-                       review_id=review_id, agent_id=agent_id, scope="discovery")
-    branch.update(held_input_tokens=estimate * hold, held_model_calls=hold)
-    return branch
-
-
-class ReviewBudget:
-    def __init__(self, limits, *, repository=None, task_id=None, lease=None, active=None,
-                 depth="standard"):
-        self.limits, self.repository, self.task_id, self.lease = limits, repository, task_id, lease
-        self.depth = depth
-        self.active = active
-        self.rows = {}
-        self.branches = {}
-        self.settled = set()
-        self.lock = asyncio.Lock()
-
-    async def reserve(self, agent_id, encoded_bytes, *, stage="explore", hold=0,
-                      discovery_agent_ids=()):
-        if self.active:
-            await self.active()
-        if self.repository:
-            return await asyncio.to_thread(self.repository.reserve_model_call,
-                self.task_id, agent_id, encoded_bytes, self.limits, lease=self.lease,
-                stage=stage, hold=hold, discovery_agent_ids=discovery_agent_ids)
-        async with self.lock:
-            branch = plan_reservation(list(self.rows.values()), self.branches, agent_id,
-                encoded_bytes, self.limits, stage=stage, hold=hold, review_id=self.task_id or "",
-                discovery_agent_ids=discovery_agent_ids,
-                phase_limits=discovery_limits(self.limits, self.depth) if discovery_agent_ids else None)
-            identity = uuid4().hex
-            self.rows[identity] = {"agent_id": agent_id, "reserved_input_bytes": encoded_bytes,
-                                   "input_tokens": None,
-                                   "output_tokens": None, "cached_input_tokens": None,
-                                   "settled": False}
-            self.branches[agent_id] = branch
-            return identity
-
-    async def settle(self, identity, usage):
-        if self.repository:
-            await asyncio.to_thread(self.repository.settle_model_call,
-                                    self.task_id, identity, usage, lease=self.lease)
-            return
-        async with self.lock:
-            if identity in self.settled:
-                return
-            if usage:
-                if any(type(usage.get(key)) is not int or usage[key] < 0
-                       for key in ("input_tokens", "output_tokens")):
-                    raise ValueError("invalid_model_usage")
-                self.rows[identity].update(input_tokens=usage.get("input_tokens"),
-                    output_tokens=usage.get("output_tokens"),
-                    cached_input_tokens=usage.get("input_token_details", {}).get("cache_read"))
-            self.rows[identity]["settled"] = True
-            self.settled.add(identity)
-
-    async def summary(self):
-        if self.repository:
-            return await asyncio.to_thread(self.repository.model_budget_summary, self.task_id, self.limits)
-        async with self.lock:
-            return budget_summary(list(self.rows.values()), self.limits, self.branches.values())
-
-    async def branch_state(self, agent_id):
-        if self.repository:
-            return await asyncio.to_thread(self.repository.model_branch_budget, self.task_id, agent_id)
-        async with self.lock:
-            return dict(self.branches.get(agent_id, branch_budget()))
-
-    async def finish(self, agent_id):
-        if self.repository:
-            await asyncio.to_thread(self.repository.release_branch_budget,
-                                    self.task_id, agent_id, lease=self.lease)
-            return
-        async with self.lock:
-            if agent_id in self.branches:
-                self.branches[agent_id].update(held_input_tokens=0, held_model_calls=0)
+    async def settle(self, ticket, usage):
+        await asyncio.to_thread(self.store.settle, self.run.id, ticket, usage, self.lease)
