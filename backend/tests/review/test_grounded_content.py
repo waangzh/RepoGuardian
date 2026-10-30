@@ -43,25 +43,14 @@ COMMENT = {
 class GroundedModel(ReviewModel):
     no_findings: bool = False
     synthesis_calls: int = 0
-    grounding_calls: int = 0
     synthesis_mode: str = "ready"
-    grounding_groups: dict = {}
-    grounding_facts: dict = {}
+    material: dict = {}
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         payload = json.loads(next(item.content for item in messages if item.type == "human"))
-        if "output" in payload and "facts" in payload:
-            self.grounding_calls += 1
-            self.grounding_groups = payload.get("required_change_groups", {})
-            self.grounding_facts = payload["facts"]
-            supported = "可以安全上线" not in json.dumps(payload["output"], ensure_ascii=False)
-            return ChatResult(generations=[ChatGeneration(message=AIMessage(
-                content="", tool_calls=[{"name": "SynthesisGrounding", "id": "grounding",
-                    "args": {"supported": supported, "explanation": "fixture groundedness judgment"}}],
-                usage_metadata={"input_tokens": 23, "output_tokens": 11, "total_tokens": 34,
-                                "input_token_details": {"cache_read": 2}}))])
         if "facts" in payload:
             self.synthesis_calls += 1
+            self.material = payload
             if self.synthesis_mode == "timeout":
                 raise TimeoutError("fixture")
             facts = payload["facts"]
@@ -69,8 +58,6 @@ class GroundedModel(ReviewModel):
             args = {"change_overview": [{"source_ids": [change], "text": "VALUE 的返回常量由 1 调整为 2。"}]}
             if self.synthesis_mode == "invented":
                 args["change_overview"][0]["source_ids"] = ["finding:excluded"]
-            if self.synthesis_mode == "expanded":
-                args["change_overview"][0]["text"] = "所有功能均正确，可以安全上线。"
             if self.synthesis_mode == "paraphrase":
                 args["change_overview"][0]["text"] = "VALUE 由 1 改为 2。"
             if self.synthesis_mode == "invalid":
@@ -124,14 +111,14 @@ async def test_saved_content_shared_by_overview_comments_report_and_reopen(pipel
     assert task.review_report.complete and task.review_report.termination == "completed"
     synthesis = task.review_report.synthesis
     assert synthesis.status == "ready", synthesis
-    assert synthesis.model_calls == 2 and synthesis.input_tokens == 54
-    assert synthesis.cached_input_tokens == 11 and model.synthesis_calls == model.grounding_calls == 1
-    assert len(model.grounding_groups) == 1
-    group = next(iter(model.grounding_groups.values()))
-    assert len(group) == 1 and model.grounding_facts[group[0]]["path"] == "safe.py"
-    assert model.grounding_facts[group[0]]["hunks"]
+    assert synthesis.model_calls == 1 and synthesis.input_tokens == 31
+    assert synthesis.cached_input_tokens == 9 and model.synthesis_calls == 1
+    assert len(model.material["required_change_groups"]) == 1
+    group = next(iter(model.material["required_change_groups"].values()))
+    assert len(group) == 1 and model.material["facts"][group[0]]["path"] == "safe.py"
+    assert model.material["facts"][group[0]]["hunks"]
     assert any(item["kind"] == "source" and "VALUE" in item["content"]
-               for item in model.grounding_facts.values())
+               for item in model.material["facts"].values())
     assert plan.presentation.synthesis_status == "ready"
     assert plan.presentation.summary_source == "model"
     assert "返回常量由 1 调整为 2" in plan.presentation.change_summary
@@ -155,7 +142,7 @@ async def test_saved_content_shared_by_overview_comments_report_and_reopen(pipel
         assert "代码证据（核验依据）" not in draft.body_markdown
         assert task.review_report.findings[0].verification.explanation in task.report_markdown
         assert plan.digest.findings[0].author_body == COMMENT["body"]
-    assert task.review_report.budget["model_calls"] == 4 + 2 * (not no_findings)
+    assert task.review_report.budget["model_calls"] == 3 + 2 * (not no_findings)
     reopened = pipeline[1].get_task(task.id)
     assert reopened.review_report.synthesis == synthesis
     assert PublicationPlanner(pipeline[1]._artifacts).build(reopened).presentation == plan.presentation
@@ -186,7 +173,7 @@ async def test_summary_uses_frozen_diff_when_observations_are_missing(pipeline):
     assert task.review_report.complete and task.review_report.observations == []
     assert plan.presentation.synthesis_status == "ready"
     assert "返回常量由 1 调整为 2" in plan.review_comment_markdown
-    assert any(item["kind"] == "change" and item["hunks"] for item in model.grounding_facts.values())
+    assert any(item["kind"] == "change" and item["hunks"] for item in model.material["facts"].values())
 
 
 def test_change_overview_covers_logical_implementation_not_every_file():
@@ -249,35 +236,24 @@ async def test_synthesis_failure_is_expression_only_and_observations_remain(pipe
         assert task.review_report.budget["unknown_calls"] == 2
 
 
-async def test_expanded_claim_falls_back_without_pretending_synthesis_succeeded(pipeline):
-    task, plan, _ = await run_grounded(pipeline, synthesis_mode="expanded")
-    assert task.review_report.synthesis.status == "fallback"
-    assert task.review_report.synthesis.error == "synthesis_unsupported_prose"
-    assert not task.review_report.synthesis.grounding.supported
-    assert "可以安全上线" not in plan.review_comment_markdown
-    assert plan.presentation.summary_source == "metadata"
-
-
-async def test_supported_paraphrase_survives_generation_projection_and_reopen(pipeline):
+async def test_paraphrase_survives_generation_projection_and_reopen(pipeline):
     task, plan, model = await run_grounded(pipeline, synthesis_mode="paraphrase")
     text = "VALUE 由 1 改为 2。"
     assert plan.presentation.change_summary == text
     assert task.review_report.synthesis.status == "ready"
-    assert model.grounding_calls == 1
+    assert model.synthesis_calls == 1
     assert PublicationPlanner(pipeline[1]._artifacts).build(pipeline[1].get_task(task.id)).presentation.change_summary == text
-    task.review_report.synthesis.output.change_overview[0].text = "篡改后的正文"
-    assert PublicationPlanner(pipeline[1]._artifacts).build(task).presentation.synthesis_status == "fallback"
 
 
 async def test_citation_kind_error_is_corrected_once_with_durable_feedback(pipeline):
     task, plan, model = await run_grounded(pipeline, synthesis_mode="citation_correction")
     saved = task.review_report.synthesis
     assert saved.status == "ready" and model.synthesis_calls == 2
-    first, second = [item for item in saved.attempts if item.stage == "generation"]
+    first, second = saved.attempts
     assert first.status == "failed" and first.error == "synthesis_source_unknown"
     assert '"section":"change_overview"' in first.feedback and '"allowed_kinds"' in first.feedback
     assert first.retryable and second.status == "completed"
-    assert saved.model_calls == 3 and saved.input_tokens == 85
+    assert saved.model_calls == 2 and saved.input_tokens == 62
     assert plan.presentation.synthesis_status == "ready"
     with pipeline[1]._session_factory() as session:
         rows = pipeline[1]._model_budget_rows(session, task.id)
@@ -299,8 +275,7 @@ async def test_citation_kind_error_is_corrected_once_with_durable_feedback(pipel
         return version, material
 
     partial = saved.model_copy(deep=True)
-    partial.status, partial.output, partial.grounding = "fallback", None, None
-    partial.grounded_output_hash = None
+    partial.status, partial.output = "fallback", None
     partial.attempts = [first.model_copy(deep=True)]
     resumed_model = ResumedModel()
     context = ReviewContext(load=None, model=resumed_model, limits=task.configuration.limits,
@@ -312,16 +287,15 @@ async def test_citation_kind_error_is_corrected_once_with_durable_feedback(pipel
     recovered = await synthesize({"report": task.review_report.model_dump()}, SimpleNamespace(context=context))
     assert recovered["synthesis"]["status"] == "ready"
     assert resumed_model.received_feedback and resumed_model.synthesis_calls == 1
-    assert recovered["synthesis"]["model_calls"] == 3
+    assert recovered["synthesis"]["model_calls"] == 2
 
 
-@pytest.mark.parametrize("mode", ["neutral", "resurrect", "invalid"])
+@pytest.mark.parametrize("mode", ["neutral", "invalid"])
 async def test_refuted_test_criticism_cannot_return_via_observation_analysis(pipeline, mode):
     rejected = "负向对照缺乏区分力"
 
     class ObservationModel(GroundedModel):
         seen_materials: list[dict] = []
-        seen_checks: list[dict] = []
 
         def _generate(self, messages, stop=None, run_manager=None, **kwargs):
             payload = json.loads(next(item.content for item in messages if item.type == "human"))
@@ -338,12 +312,6 @@ async def test_refuted_test_criticism_cannot_return_via_observation_analysis(pip
                         decision.update(decision="refuted", explanation="该测试故意验证中间样本保持不变。")
                 elif call["name"] == "SynthesisOutput":
                     self.seen_materials.append(payload)
-                    if mode == "resurrect":
-                        change = next(key for key in payload["facts"] if key.startswith("change:"))
-                        args["change_overview"] = [{"source_ids": [change], "text": rejected}]
-                elif call["name"] == "SynthesisGrounding":
-                    self.seen_checks.append(payload)
-                    args["supported"] = mode != "resurrect"
             return response
 
     service, repository, _, _, _ = pipeline
@@ -363,9 +331,6 @@ async def test_refuted_test_criticism_cannot_return_via_observation_analysis(pip
         assert all(rejected not in item["text"] for item in material["notes"])
     if mode == "neutral":
         assert plan.presentation.synthesis_status == "ready"
-    elif mode == "resurrect":
-        assert model.seen_checks[0]["refuted_claims"] == material["refuted_claims"]
-        assert task.review_report.synthesis.error == "synthesis_unsupported_prose"
     else:
         assert plan.presentation.summary_source == "metadata"
 
@@ -542,13 +507,13 @@ async def test_timeout_retries_once_with_separate_durable_reservations(pipeline)
     report = repository.get_task(task.id).review_report
     saved = report.synthesis
     assert saved.status == "ready"
-    attempts = [item for item in saved.attempts if item.stage == "generation"]
+    attempts = saved.attempts
     assert [item.timeout_seconds for item in attempts] == [60, 120]
     assert [item.status for item in attempts] == ["timeout", "completed"]
-    assert len({item.reservation_id for item in saved.attempts}) == 3
-    assert saved.model_calls == 3 and saved.input_tokens is None
+    assert len({item.reservation_id for item in saved.attempts}) == 2
+    assert saved.model_calls == 2 and saved.input_tokens is None
     assert report.budget["unknown_calls"] == 1
-    assert len(repository.get_task(task.id).review_report.synthesis.attempts) == 3
+    assert len(repository.get_task(task.id).review_report.synthesis.attempts) == 2
     # Unknown usage after the first timeout does not invalidate neutral change prose.
     assert PublicationPlanner(repository._artifacts).build(
         repository.get_task(task.id)).presentation.synthesis_status == "ready"
@@ -566,10 +531,11 @@ async def test_deadline_after_generation_preserves_completed_business_report(pip
     class DeadlineModel(GroundedModel):
         def _generate(self, messages, stop=None, run_manager=None, **kwargs):
             payload = json.loads(next(item.content for item in messages if item.type == "human"))
-            response = super()._generate(messages, stop, run_manager, **kwargs)
             if "facts" in payload:
+                # Expire the round after the first attempt so the retry check stops before a second request.
                 clock["expired"] = task.created_at + timedelta(seconds=task.configuration.limits.timeout_seconds + 1)
-            return response
+                raise TimeoutError("fixture deadline")
+            return super()._generate(messages, stop, run_manager, **kwargs)
 
     service._provider.agent_model = lambda *args, **kwargs: DeadlineModel()
     await service._worker.run_once()
@@ -655,7 +621,7 @@ async def test_interrupted_retry_is_not_replayed_after_worker_restart(pipeline, 
     assert restored.review_report.budget["unknown_calls"] == 2
 
 
-@pytest.mark.parametrize("mode", ["permanent", "deadline", "grounding_budget"])
+@pytest.mark.parametrize("mode", ["permanent", "deadline"])
 async def test_editorial_refusal_paths_do_not_retry_or_admit_unchecked_prose(mode):
     report = ReviewReport(
         snapshot=ReviewSnapshot(review_id="review", repository="local/repo", pr_number=1,
@@ -689,8 +655,6 @@ async def test_editorial_refusal_paths_do_not_retry_or_admit_unchecked_prose(mod
     result = await synthesize({"report": report.model_dump()}, SimpleNamespace(context=context))
     saved = result["report"]["synthesis"]
     assert saved["status"] == "fallback"
-    assert saved["error"] == {"permanent": "ValueError", "deadline": "synthesis_deadline",
-                             "grounding_budget": "synthesis_budget_exhausted"}[mode]
+    assert saved["error"] == {"permanent": "ValueError", "deadline": "synthesis_deadline"}[mode]
     assert len(calls) == (0 if mode == "deadline" else 1)
     assert saved["model_calls"] == len(calls)
-    assert saved["grounded_output_hash"] is None

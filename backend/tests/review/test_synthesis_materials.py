@@ -11,8 +11,8 @@ from app.models.publication import (
     ChangeUnderstanding, MergeDecision, PublicationPlan, ReviewDigest, ReviewOutcome,
 )
 from app.review.evidence import EvidenceArchive, digest
-from app.review.models import AgentResult, ReviewReport, ReviewSynthesis, SynthesisGrounding
-from app.review.synthesis import output_hash, validate_synthesis
+from app.review.models import AgentResult, ReviewReport, ReviewSynthesis
+from app.review.synthesis import validate_synthesis
 from app.review.synthesis_materials import MATERIAL_BYTES, omitted_changes, synthesis_materials
 from app.services.publication.review_presentation import _change_overview, build_presentation, render_presentation
 from app.services.review.artifact_store import LocalArtifactStore
@@ -119,7 +119,7 @@ def test_frozen_materials_do_not_bypass_path_or_file_policy(frozen_pr, case):
     assert not material["facts"] and material["omitted_changes"]
 
 
-def test_grounding_sources_are_verified_original_bytes_and_tampering_changes_version(frozen_pr):
+def test_synthesis_sources_are_verified_original_bytes_and_tampering_changes_version(frozen_pr):
     report, _, archive, _, _ = frozen_pr
     content = "point = weighted_point(usable)\nlo = min(lo, point)\n"
     payload = {"review_id": report.snapshot.review_id, "commit_sha": report.snapshot.head_sha,
@@ -174,10 +174,8 @@ def test_saved_two_paragraph_overview_survives_complete_comment_projection(froze
     output = validate_synthesis({"change_overview": [
         {"source_ids": [primary], "text": first}, {"source_ids": [tests], "text": second},
     ]}, material)
-    report.synthesis = ReviewSynthesis(status="ready", material_version=version, output=output,
-        grounding=SynthesisGrounding(supported=True, explanation="Projection fixture; not a live semantic check."),
-        grounded_output_hash=output_hash(output))
-    # Exercise persistence -> version/hash revalidation -> overview -> full Markdown.
+    report.synthesis = ReviewSynthesis(status="ready", material_version=version, output=output)
+    # Exercise persistence -> version revalidation -> overview -> full Markdown.
     reopened = ReviewReport.model_validate_json(report.model_dump_json())
     plan.presentation = build_presentation(plan, report=reopened, observations=[],
         changed_files=changes, evidence=archive)

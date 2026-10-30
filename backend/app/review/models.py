@@ -388,13 +388,7 @@ class SynthesisOutput(ReviewModel):
     change_overview: list[SynthesisParagraph] = Field(min_length=1, max_length=3)
 
 
-class SynthesisGrounding(ReviewModel):
-    supported: bool
-    explanation: str = Field(min_length=1, max_length=2000)
-
-
 class SynthesisAttempt(ReviewModel):
-    stage: Literal["generation", "grounding"]
     number: Literal[1, 2]
     request_id: str
     reservation_id: str | None = None
@@ -420,9 +414,7 @@ class ReviewSynthesis(ReviewModel):
     input_tokens: int | None = None
     output_tokens: int | None = None
     cached_input_tokens: int | None = None
-    attempts: list[SynthesisAttempt] = Field(default_factory=list, max_length=4)
-    grounding: SynthesisGrounding | None = None
-    grounded_output_hash: str | None = None
+    attempts: list[SynthesisAttempt] = Field(default_factory=list, max_length=2)
     started_at: float | None = None
 
 

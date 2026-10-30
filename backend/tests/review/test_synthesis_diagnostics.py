@@ -48,18 +48,15 @@ class ScriptedModel:
             raise ValueError("PRIVATE_UPSTREAM_BODY")
         if self.mode == "cancel":
             raise asyncio.CancelledError()
-        if self.schema == "SynthesisOutput":
-            self.generation_calls += 1
-            if self.mode == "timeout" and self.generation_calls == 1:
-                raise TimeoutError("PRIVATE_UPSTREAM_BODY")
-            identity = "PRIVATE_INVALID_REFERENCE" if self.mode == "citation" and self.generation_calls == 1 else "change:1"
-            if self.mode == "example" and self.generation_calls == 1:
-                identity = "demo:range-impl"
-            args = {"change_overview": [{"source_ids": [identity], "text": "PRIVATE_RESPONSE_BODY"}]}
-            if self.mode == "schema" and self.generation_calls == 1:
-                args["change_overview"][0]["text"] = ["PRIVATE_SCHEMA_INPUT"]
-        else:
-            args = {"supported": self.mode != "unsupported", "explanation": "PRIVATE_GROUNDING_BODY"}
+        self.generation_calls += 1
+        if self.mode == "timeout" and self.generation_calls == 1:
+            raise TimeoutError("PRIVATE_UPSTREAM_BODY")
+        identity = "PRIVATE_INVALID_REFERENCE" if self.mode == "citation" and self.generation_calls == 1 else "change:1"
+        if self.mode == "example" and self.generation_calls == 1:
+            identity = "demo:range-impl"
+        args = {"change_overview": [{"source_ids": [identity], "text": "PRIVATE_RESPONSE_BODY"}]}
+        if self.mode == "schema" and self.generation_calls == 1:
+            args["change_overview"][0]["text"] = ["PRIVATE_SCHEMA_INPUT"]
         return AIMessage(content="", tool_calls=[{"id": "fixture", "name": self.schema, "args": args}],
             usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15})
 
@@ -97,7 +94,7 @@ async def test_success_and_correction_are_correlated_without_body_logging(mode, 
     assert "总览材料准备完成" in text and "material_version=fixture-vers" in text
     assert "fixture-version" not in text
     assert "review_id=diagnost" in text and "diagnostics-review" not in text
-    assert "总览请求开始" in text and "stage=grounding" in text and "status=ready" in text
+    assert "总览请求开始" in text and "stage=generation" in text and "status=ready" in text
     if mode in {"citation", "example"}:
         assert "error=synthesis_source_unknown" in text and "unknown_sources=1" in text
         assert "section=change_overview paragraph=0" in text
@@ -113,7 +110,6 @@ async def test_success_and_correction_are_correlated_without_body_logging(mode, 
 @pytest.mark.parametrize("mode,stage,error", [
     ("materials", "materials", "synthesis_material_preparation_failed"),
     ("permanent", "generation", "ValueError"),
-    ("unsupported", "grounding", "synthesis_unsupported_prose"),
     ("budget", "generation", "synthesis_budget_exhausted"),
 ])
 async def test_fallback_logs_precise_stage_and_safe_code(mode, stage, error, caplog):
