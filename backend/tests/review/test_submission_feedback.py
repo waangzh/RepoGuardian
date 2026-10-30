@@ -326,16 +326,15 @@ async def test_feedback_can_read_missing_base_only_while_exploration_is_allowed(
 
 
 @pytest.mark.parametrize("preserve_gap", [False, True])
-async def test_boundary_feedback_does_not_silently_remove_real_evidence_gaps(source_service, preserve_gap):
+async def test_boundary_note_misclassification_does_not_consume_correction(source_service, preserve_gap):
     model = SubmissionModel(mistake="boundary", preserve_gap=preserve_gap)
     context = review_context(source_service, model)
     result = await run_agent(context, "assignment", "reviewer", {"goals": goals()})
-    assert result["status"] == "completed" and model.calls == 2 and model.feedback_seen
-    if preserve_gap:
-        assert result["investigation_limitations"] and "必要调用方" in result["investigation_limitations"][0]
-    else:
-        assert not result["investigation_limitations"]
-        assert result["output"]["boundary_notes"]
+    assert result["status"] == "completed" and model.calls == 1 and not model.feedback_seen
+    assert result["structured_output_retries"] == 0
+    assert result["investigation_limitations"]
+    assert "未执行代码" in result["investigation_limitations"][0]
+    assert ("必要调用方" in result["investigation_limitations"][0]) is preserve_gap
 
 
 async def test_honest_partial_submission_does_not_receive_pointless_coverage_feedback(source_service):

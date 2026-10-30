@@ -290,15 +290,23 @@ async def test_citation_kind_error_is_corrected_once_with_durable_feedback(pipel
     assert recovered["synthesis"]["model_calls"] == 2
 
 
-@pytest.mark.parametrize("mode", ["neutral", "invalid"])
+@pytest.mark.parametrize("mode", ["neutral", "invalid", "resurrect", "paraphrase"])
 async def test_refuted_test_criticism_cannot_return_via_observation_analysis(pipeline, mode):
     rejected = "负向对照缺乏区分力"
+    paraphrase = "对照样本不能验证边界行为，需要重写断言。"
 
     class ObservationModel(GroundedModel):
         seen_materials: list[dict] = []
+        consistency_calls: int = 0
 
         def _generate(self, messages, stop=None, run_manager=None, **kwargs):
             payload = json.loads(next(item.content for item in messages if item.type == "human"))
+            if "overview" in payload:
+                self.consistency_calls += 1
+                return ChatResult(generations=[ChatGeneration(message=AIMessage(
+                    content="", tool_calls=[{"name": "SynthesisConsistency", "id": "consistency",
+                        "args": {"consistent": mode == "neutral", "explanation": "fixture consistency judgment"}}],
+                    usage_metadata={"input_tokens": 13, "output_tokens": 7, "total_tokens": 20}))])
             response = super()._generate(messages, stop, run_manager, **kwargs)
             for call in response.generations[0].message.tool_calls:
                 args = call["args"]
@@ -312,6 +320,8 @@ async def test_refuted_test_criticism_cannot_return_via_observation_analysis(pip
                         decision.update(decision="refuted", explanation="该测试故意验证中间样本保持不变。")
                 elif call["name"] == "SynthesisOutput":
                     self.seen_materials.append(payload)
+                    if mode in {"resurrect", "paraphrase"}:
+                        args["change_overview"][0]["text"] = rejected if mode == "resurrect" else paraphrase
             return response
 
     service, repository, _, _, _ = pipeline
@@ -322,17 +332,51 @@ async def test_refuted_test_criticism_cannot_return_via_observation_analysis(pip
     task = repository.get_task(task.id)
     plan = PublicationPlanner(repository._artifacts).build(task)
     assert task.status == "completed" and task.review_report.decisions[0].decision == "refuted"
+    assert task.review_report.complete and not task.review_report.findings
     assert task.review_report.observations[0].impact == rejected  # Original audit remains intact.
     assert rejected not in plan.review_comment_markdown
     assert rejected not in plan.presentation.change_summary
+    assert paraphrase not in plan.review_comment_markdown
+    assert paraphrase not in plan.summary_markdown
+    assert rejected not in plan.summary_markdown
     material = model.seen_materials[0]
     assert material["refuted_claims"][0]["claim"] == rejected
     if mode != "invalid":
         assert all(rejected not in item["text"] for item in material["notes"])
     if mode == "neutral":
         assert plan.presentation.synthesis_status == "ready"
+        assert model.consistency_calls == 1
+        saved = task.review_report.synthesis
+        assert [item.stage for item in saved.attempts] == ["generation", "consistency"]
+        assert saved.model_calls == 2 and saved.input_tokens == 44
+        for tamper in ("body", "missing_check", "missing_hash"):
+            changed = task.model_copy(deep=True)
+            synthesis = changed.review_report.synthesis
+            if tamper == "body":
+                synthesis.output.change_overview[0].text = rejected
+            elif tamper == "missing_check":
+                synthesis.consistency = None
+            else:
+                synthesis.checked_output_hash = None
+            rebuilt = PublicationPlanner(repository._artifacts).build(changed)
+            assert rebuilt.presentation.summary_source == "metadata"
+            assert rejected not in rebuilt.review_comment_markdown
+            assert rejected not in rebuilt.summary_markdown
+            assert rebuilt.outcome == plan.outcome
+        for field in ("trigger", "actual_behavior", "impact"):
+            changed = task.model_copy(deep=True)
+            candidate = changed.review_report.candidates[0]
+            setattr(candidate, field, getattr(candidate, field) + " altered")
+            rebuilt = PublicationPlanner(repository._artifacts).build(changed)
+            assert rebuilt.presentation.summary_source == "metadata"
+            assert rebuilt.presentation.synthesis.error == "synthesis_material_changed"
+        assert model.consistency_calls == 1
     else:
         assert plan.presentation.summary_source == "metadata"
+        assert model.consistency_calls == (mode != "invalid")
+        if mode != "invalid":
+            assert task.review_report.synthesis.error == "synthesis_refuted_claim_reintroduced"
+            assert model.synthesis_calls == model.consistency_calls == 1
 
 
 async def test_observation_evidence_scope_and_snapshot_are_revalidated(pipeline):

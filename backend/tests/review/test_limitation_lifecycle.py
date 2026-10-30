@@ -90,12 +90,10 @@ def test_structured_discovery_submission_round_trips_through_checkpoint_serializ
     assert restored == submission and isinstance(restored.limitations[0], DiscoveryGap)
 
 
-async def test_gap_goal_membership_uses_existing_submission_correction(source_service):
+async def test_gap_goal_membership_is_filtered_without_submission_correction(source_service):
     output = DiscoverySubmission(limitations=[gap(DECLARATION, ["unknown"])])
-    feedback = submission_feedback(output, [{"id": "head", "path": "safe.py", "side": "head",
-        "start_line": 1, "end_line": 1, "status": "not_examined"}], source_service, set(), "assignment")
-    data = json.loads(feedback.split("\n", 1)[1])
-    assert data["invalid_gap_goal_ids"] == [0] and data["allowed_goal_ids"] == ["head"]
+    assert submission_feedback(output, [{"id": "head", "path": "safe.py", "side": "head",
+        "start_line": 1, "end_line": 1, "status": "not_examined"}], source_service, set(), "assignment") is None
 
 
 async def test_untrusted_gap_goal_ids_cannot_claim_another_scope(source_service):

@@ -388,7 +388,13 @@ class SynthesisOutput(ReviewModel):
     change_overview: list[SynthesisParagraph] = Field(min_length=1, max_length=3)
 
 
+class SynthesisConsistency(ReviewModel):
+    consistent: bool
+    explanation: str = Field(min_length=1, max_length=2000)
+
+
 class SynthesisAttempt(ReviewModel):
+    stage: Literal["generation", "consistency"]
     number: Literal[1, 2]
     request_id: str
     reservation_id: str | None = None
@@ -414,7 +420,9 @@ class ReviewSynthesis(ReviewModel):
     input_tokens: int | None = None
     output_tokens: int | None = None
     cached_input_tokens: int | None = None
-    attempts: list[SynthesisAttempt] = Field(default_factory=list, max_length=2)
+    attempts: list[SynthesisAttempt] = Field(default_factory=list, max_length=4)
+    consistency: SynthesisConsistency | None = None
+    checked_output_hash: str | None = None
     started_at: float | None = None
 
 

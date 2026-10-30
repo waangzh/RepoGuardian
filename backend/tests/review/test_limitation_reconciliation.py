@@ -175,7 +175,8 @@ async def test_investigator_receives_and_resolves_original_discovery_limitations
 
 
 @pytest.mark.parametrize("failure", ["unknown", "other_candidate", "duplicate", "unread", "invalid"])
-async def test_resolution_scope_and_evidence_are_rejected(source_service, failure):
+async def test_resolution_scope_and_evidence_are_rejected_without_submission_correction(
+        source_service, failure):
     head = await source_service.read("safe.py", 1, 1)
     identity = head["evidence"]["id"]
     record = {"id": "limitation", "candidate_ids": ["candidate"]}
@@ -193,8 +194,8 @@ async def test_resolution_scope_and_evidence_are_rejected(source_service, failur
         validate_resolutions(claims, [record], "candidate", issued, source_service)
     feedback = submission_feedback(VerificationOutput(
         decision="refuted", explanation="候选不成立", attribution="uncertain",
-        limitation_resolutions=claims), [], source_service, issued, "candidate", [record])
-    assert "invalid_limitation_resolutions" in feedback
+        limitation_resolutions=claims), [], source_service, issued, "candidate")
+    assert feedback is None
 
 
 @pytest.mark.parametrize("tamper", ["missing_evidence", "failed_branch", "decision_only", "no_archive"])

@@ -3,7 +3,9 @@
 import re
 
 from app.models.publication import PresentationDelivery, ReviewPresentation
-from app.review.synthesis import log_projection_fallback, synthesis_materials, validate_synthesis
+from app.review.synthesis import (
+    log_projection_fallback, synthesis_materials, validate_consistency, validate_synthesis,
+)
 from app.review.synthesis_materials import omitted_changes
 from app.services.publication.review_prose import author_goal_text
 from app.services.publication.review_text_format import (
@@ -165,6 +167,7 @@ def build_presentation(plan, *, report=None, observations=(), changed_files=(), 
             if synthesis.material_version != version:
                 raise ValueError("synthesis_material_changed")
             output = validate_synthesis(synthesis.output, material)
+            validate_consistency(synthesis, output, material)
             summary = "\n\n".join(item.text for item in output.change_overview)
             synthesis.omitted_changes = omitted_changes(output, material)
             summary_source, synthesis_status = "model", "ready"

@@ -88,8 +88,7 @@ class ReviewGuardMiddleware(AgentMiddleware):
                 return None
         issued = issued_source_ids(state["messages"], context.material_evidence_ids)
         feedback = await asyncio.to_thread(
-            submission_feedback, output, context.goals, context.evidence, issued, context.budget_agent_id,
-            context.review_limitations)
+            submission_feedback, output, context.goals, context.evidence, issued, context.budget_agent_id)
         if feedback is None:
             return None
         message = next((item for item in reversed(state["messages"])
