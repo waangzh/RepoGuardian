@@ -4,6 +4,8 @@ import asyncio
 import hashlib
 import json
 import re
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -16,6 +18,11 @@ from app.review.tool_scope import (
 )
 from app.services.review.artifact_store import LocalArtifactStore
 from app.tools.git_tool import GitTool
+
+SOURCE_CACHE_MAX_BYTES = 64 * 1024 * 1024
+SOURCE_CACHE_MAX_ENTRIES = 512
+# Cache dict operations are short; one lock is enough across concurrent reviews.
+_SOURCE_CACHE_LOCK = threading.Lock()
 
 
 def digest(content: str) -> str:
@@ -93,6 +100,46 @@ class EvidenceService(EvidenceArchive):
     max_file_bytes: int = 512_000
     max_output_chars: int = 24_000
     _semaphore: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(8))
+    # Fixed commits make (commit_sha, path) bytes immutable; authorization and
+    # range checks still run per call, so this only avoids repeated Git reads.
+    _source_cache: OrderedDict[tuple[str, str], tuple[dict, str]] = field(
+        default_factory=OrderedDict, repr=False)
+    _source_cache_bytes: int = field(default=0, repr=False)
+
+    def _cache_get(self, key: tuple[str, str]) -> tuple[dict, str] | None:
+        with _SOURCE_CACHE_LOCK:
+            cached = self._source_cache.get(key)
+            if cached is not None:
+                self._source_cache.move_to_end(key)
+            return cached
+
+    def _cache_put(self, key: tuple[str, str], entry: dict, source: str) -> None:
+        size = entry["size"] or 0
+        if size > SOURCE_CACHE_MAX_BYTES:
+            return
+        with _SOURCE_CACHE_LOCK:
+            previous = self._source_cache.pop(key, None)
+            if previous is not None:
+                self._source_cache_bytes -= previous[0]["size"] or 0
+            self._source_cache[key] = (entry, source)
+            self._source_cache_bytes += size
+            while (self._source_cache_bytes > SOURCE_CACHE_MAX_BYTES
+                   or len(self._source_cache) > SOURCE_CACHE_MAX_ENTRIES):
+                _, (evicted, _) = self._source_cache.popitem(last=False)
+                self._source_cache_bytes -= evicted["size"] or 0
+
+    def _check_entry(self, entry: dict | None) -> dict:
+        if not entry or entry.get("mode") not in {"100644", "100755"}:
+            raise ReviewPathPolicyError("source_not_regular_blob")
+        if entry.get("size") is None or entry["size"] > self.max_file_bytes:
+            raise SourceReadError("source_too_large")
+        return entry
+
+    def _check_worktree(self, path: str) -> None:
+        # Existing Head paths must also obey realpath containment. Base deletions
+        # are read from blobs and need no working tree file.
+        if (self.repo_path / path).exists() or (self.repo_path / path).is_symlink():
+            validate_repository_file(self.repo_path, path, require_tracked_if_git=False)
 
     def _source(self, path: str, side: str) -> tuple[str, str]:
         _validate_repository_relative_path(path)
@@ -101,18 +148,19 @@ class EvidenceService(EvidenceArchive):
         if side not in {"head", "base"}:
             raise SourceReadError("invalid_source_side")
         sha = self.snapshot.head_sha if side == "head" else self.snapshot.base_sha
-        entry = self.git.get_tree_entries(self.repo_path, sha, [path]).get(path)
-        if not entry or entry.get("mode") not in {"100644", "100755"}:
-            raise ReviewPathPolicyError("source_not_regular_blob")
-        if entry.get("size") is None or entry["size"] > self.max_file_bytes:
-            raise SourceReadError("source_too_large")
-        # Existing Head paths must also obey realpath containment. Base deletions
-        # are read from blobs and need no working tree file.
-        if (self.repo_path / path).exists() or (self.repo_path / path).is_symlink():
-            validate_repository_file(self.repo_path, path, require_tracked_if_git=False)
-        source = self.git.get_file_content_at_revision(self.repo_path, sha, path)
-        if source is None:
-            raise SourceReadError("source_unavailable")
+        cached = self._cache_get((sha, path))
+        if cached is None:
+            entry = self._check_entry(
+                self.git.get_tree_entries(self.repo_path, sha, [path]).get(path))
+            self._check_worktree(path)
+            source = self.git.get_file_content_at_revision(self.repo_path, sha, path)
+            if source is None:
+                raise SourceReadError("source_unavailable")
+            self._cache_put((sha, path), entry, source)
+            return sha, source
+        entry, source = cached
+        self._check_entry(entry)
+        self._check_worktree(path)
         return sha, source
 
     def _read(self, path: str, start: int, end: int, side: str) -> dict:

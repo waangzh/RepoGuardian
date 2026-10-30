@@ -191,6 +191,53 @@ async def test_quick_depth_preloads_no_source_context(source_service):
     assert "preloads no source context" in packet["material_boundary"]
 
 
+async def test_frozen_source_is_fetched_once_per_commit_path(source_service, monkeypatch):
+    shows, trees = [], []
+    original_show = source_service.git.get_file_content_at_revision
+    original_tree = source_service.git.get_tree_entries
+
+    def show(*args):
+        shows.append(args[1:])
+        return original_show(*args)
+
+    def tree(*args):
+        trees.append(args[1:])
+        return original_tree(*args)
+
+    monkeypatch.setattr(source_service.git, "get_file_content_at_revision", show)
+    monkeypatch.setattr(source_service.git, "get_tree_entries", tree)
+    head = await source_service.read("safe.py", 1, 1)
+    await source_service.read("safe.py", 1, 1)
+    await source_service.read("safe.py", 1, 1, "base")
+    source_service.resolve(head["evidence"]["id"])
+    source_service.resolve(head["evidence"]["id"])
+    await prepare_materials(AgentContext(evidence=source_service, changed_files=[CHANGE]),
+        {"goals": [{"path": "safe.py", "side": side, "start_line": 1, "end_line": 1}
+                   for side in ("head", "base")]})
+    assert len(shows) == len(trees) == 2
+    assert {item[0] for item in shows} == {
+        source_service.snapshot.head_sha, source_service.snapshot.base_sha}
+
+
+async def test_cached_source_still_enforces_path_policy_and_size(source_service):
+    await source_service.read("safe.py", 1, 1)
+    source_service.allowed_paths = frozenset({"other.py"})
+    with pytest.raises(ValueError, match="path_not_authorized"):
+        await source_service.read("safe.py", 1, 1)
+    source_service.allowed_paths = frozenset({"safe.py"})
+    source_service.max_file_bytes = 1
+    with pytest.raises(ValueError, match="source_too_large"):
+        await source_service.read("safe.py", 1, 1)
+
+
+async def test_source_cache_is_scoped_to_the_fixed_commit(source_service):
+    first = await source_service.read("safe.py", 1, 1)
+    commit_sources(source_service, {"safe.py": "VALUE = 3\n"})
+    second = await source_service.read("safe.py", 1, 1)
+    assert first["content"] == "VALUE = 2\n"
+    assert second["content"] == "VALUE = 3\n"
+
+
 async def test_candidate_context_covers_head_anchor_and_base_comparison(source_service):
     packet, ids = await prepare_materials(AgentContext(evidence=source_service, changed_files=[CHANGE]),
         {"candidate": {"affected_path": "safe.py", "line": 1}})
