@@ -39,6 +39,11 @@ class ReviewOrchestrator:
                 queued.sort(key=lambda item: (item.kind != "verification", priority[item.unit_id]))
                 while queued and len(running) < run.configuration.options.limits.concurrency:
                     item = queued.pop(0)
+                    reason = await asyncio.to_thread(self.store.can_start, run_id, item)
+                    if reason:
+                        if not running:
+                            await asyncio.to_thread(self.store.skip, run_id, item.id, reason, lease)
+                        continue
                     claimed = await asyncio.to_thread(self.store.claim, run_id, item.id, lease)
                     if claimed:
                         task = asyncio.create_task(self.runner.run(claimed, provider, budget))

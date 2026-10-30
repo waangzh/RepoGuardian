@@ -28,6 +28,8 @@ class Limits(Model):
     output_tokens: int = Field(default=4096, ge=256, le=32768)
     total_model_calls: int = Field(default=64, ge=3, le=1000)
     total_input_tokens: int = Field(default=500_000, ge=12000, le=10_000_000)
+    total_output_tokens: int = Field(default=262144, ge=1024, le=10_000_000)
+    context_tokens: int = Field(default=64000, ge=8192, le=1_000_000)
 
 
 class Options(Model):

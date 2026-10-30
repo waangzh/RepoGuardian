@@ -11,6 +11,7 @@ from app.review.context import AgentContext
 from app.review.domain import CandidateInput
 from app.review.findings import admit_candidate
 from app.review.retrieval import find_paths, search
+from app.review.evidence import SourceReadError
 
 
 def bounded(function):
@@ -23,6 +24,8 @@ def bounded(function):
             return {"ok": False, "error": "tool_call_limit"}
         try:
             result = await function(*args, **kwargs)
+        except SourceReadError as exc:
+            return {"ok": False, "error": exc.code, **exc.details}
         except (ValueError, OSError):
             return {"ok": False, "error": "source_or_submission_rejected"}
         await context.check_active()
@@ -98,4 +101,22 @@ async def read_discussion(index: int, runtime: ToolRuntime[AgentContext]) -> dic
     return {"source": "untrusted_discussion", "content": text}
 
 
-READ_TOOLS = [read_file, read_diff, search_code, find_files]
+@tool
+@bounded
+async def read_symbol(path: str, symbol: str, runtime: ToolRuntime[AgentContext],
+                      revision: Literal["base", "head"] = "head") -> dict:
+    """Parse one fixed file on demand and read a unique symbol's complete source."""
+    context = runtime.context
+    found = await context.provider.index.symbol(path, symbol, revision)
+    return await context.read(path, found["start_line"], found["end_line"], revision)
+
+
+@tool
+@bounded
+async def find_relations(path: str, symbol: str, runtime: ToolRuntime[AgentContext],
+                         direction: Literal["in", "out", "both"] = "both", scope: str = "") -> dict:
+    """Find bounded caller/callee/reference hints, parsing likely related files only."""
+    return await runtime.context.provider.index.relations(path, symbol, direction, scope)
+
+
+READ_TOOLS = [read_file, read_diff, search_code, find_files, read_symbol, find_relations]

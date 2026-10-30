@@ -159,6 +159,7 @@ class ReviewStore:
             work.status, work.attempt_id = "running", uuid4().hex
             work.attempt += 1
             work.delivered_hunk_ids, work.missing_material_reasons = [], {}
+            work.delivered_materials = {}
             work.visible_source_ids = []
             work.material_delivery, work.error_code = "not_started", None
             row.payload = work.model_dump(mode="json")
@@ -272,34 +273,56 @@ class ReviewStore:
         with self.sessions() as session:
             return self._usage(session, run_id)[1]
 
+    def _admit_request(self, session, run, work, estimate, overview):
+        now, limits = utcnow(), run.configuration.options.limits
+        if now >= run.hard_deadline:
+            raise BudgetExceeded("hard_deadline")
+        kind = "overview" if overview else work.kind
+        if kind == "review" and now >= run.review_cutoff:
+            raise BudgetExceeded("review_cutoff")
+        calls, usage = self._usage(session, run.id)
+        protected_calls, protected_tokens = (0, 0) if overview else (1, OVERVIEW_INPUT)
+        if kind == "review":
+            checks = session.scalars(select(ReviewWorkItemOrm).where(
+                ReviewWorkItemOrm.run_id == run.id, ReviewWorkItemOrm.kind == "verification"))
+            requested = {call.work_item_id for call in calls if call.kind == "verification"}
+            pending = sum(item.id not in requested and item.payload["status"] in {"queued", "running"}
+                          for item in checks)
+            protected_calls += pending
+            protected_tokens += pending * VERIFICATION_INPUT
+        if work is not None and sum(call.attempt_id == work.attempt_id for call in calls) >= limits.model_calls:
+            raise BudgetExceeded("agent_model_limit")
+        if len(calls) + 1 + protected_calls > limits.total_model_calls:
+            raise BudgetExceeded("model_call_limit")
+        if usage["committed_input_tokens"] + estimate + protected_tokens > limits.total_input_tokens:
+            raise BudgetExceeded("input_token_limit")
+        if estimate + limits.output_tokens > limits.context_tokens:
+            raise BudgetExceeded("context_capacity")
+        if usage["committed_output_tokens"] + (1 + protected_calls) * limits.output_tokens > limits.total_output_tokens:
+            raise BudgetExceeded("output_token_limit")
+
+    def can_start(self, run_id, work):
+        with self.sessions() as session:
+            row = session.get(ReviewTaskOrm, run_id)
+            run = self._run(row)
+            unit = next(unit for unit in run.plan.units if unit.id == work.unit_id)
+            estimate = (unit.estimated_input_tokens * 2 + 4096 if work.kind == "review"
+                        else VERIFICATION_INPUT)
+            try:
+                self._admit_request(session, run, work, estimate, False)
+            except BudgetExceeded as exc:
+                return str(exc)
+            return None
+
     def reserve(self, run_id, work, estimate, lease, *, overview=False):
         with self.sessions.begin() as session:
             row = self._guard(session, run_id, lease)
             run = self._run(row)
-            now, limits = utcnow(), run.configuration.options.limits
-            if now >= run.hard_deadline:
-                raise BudgetExceeded("hard_deadline")
+            limits = run.configuration.options.limits
             kind = "overview" if overview else work.kind
             if not overview:
                 self._attempt(session, run_id, work.id, work.attempt_id)
-                if kind == "review" and now >= run.review_cutoff:
-                    raise BudgetExceeded("review_cutoff")
-            calls, usage = self._usage(session, run_id)
-            protected_calls, protected_tokens = (0, 0) if overview else (1, OVERVIEW_INPUT)
-            if kind == "review":
-                checks = session.scalars(select(ReviewWorkItemOrm).where(
-                    ReviewWorkItemOrm.run_id == run_id, ReviewWorkItemOrm.kind == "verification"))
-                requested = {call.work_item_id for call in calls if call.kind == "verification"}
-                pending = sum(item.id not in requested and item.payload["status"] in {"queued", "running"}
-                              for item in checks)
-                protected_calls += pending
-                protected_tokens += pending * VERIFICATION_INPUT
-            if work is not None and sum(call.attempt_id == work.attempt_id for call in calls) >= limits.model_calls:
-                raise BudgetExceeded("agent_model_limit")
-            if len(calls) + 1 + protected_calls > limits.total_model_calls:
-                raise BudgetExceeded("model_call_limit")
-            if usage["committed_input_tokens"] + estimate + protected_tokens > limits.total_input_tokens:
-                raise BudgetExceeded("input_token_limit")
+            self._admit_request(session, run, work, estimate, overview)
             ticket = uuid4().hex
             session.add(ReviewRequestOrm(id=ticket, run_id=run_id,
                 work_item_id=work.id if work else None, attempt_id=work.attempt_id if work else None,

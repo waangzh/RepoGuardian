@@ -369,18 +369,19 @@ def _extract_imports(file_path: Path, language: str = "python") -> list[str]:
 
 
 def _scan_imports(
-    file_path: Path, language: str = "python", *, cancel_event=None, diagnostics=None,
+    file_path: Path, language: str = "python", *, cancel_event=None, diagnostics=None, source=None,
 ) -> list[dict[str, str]]:
     """轻量扫描导入语句，供未解析文件的反向候选发现使用。"""
     if cancel_event is not None and cancel_event.is_set():
         raise ParserCancelled()
-    try:
-        with file_path.open("rb") as stream:
-            source = stream.read(MAX_SOURCE_BYTES + 1)
-    except OSError:
-        if diagnostics is not None:
-            diagnostics.append("import scan could not read source")
-        return []
+    if source is None:
+        try:
+            with file_path.open("rb") as stream:
+                source = stream.read(MAX_SOURCE_BYTES + 1)
+        except OSError:
+            if diagnostics is not None:
+                diagnostics.append("import scan could not read source")
+            return []
     if cancel_event is not None and cancel_event.is_set():
         raise ParserCancelled()
     if len(source) > MAX_SOURCE_BYTES:
