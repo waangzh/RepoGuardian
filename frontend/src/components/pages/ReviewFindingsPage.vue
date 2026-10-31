@@ -94,12 +94,13 @@ async function saveDisposition() {
   </div>
 
   <p v-if="loading" class="muted space-top" role="status">正在读取问题记录…</p>
-  <EmptyState
-    v-else-if="!visible.length"
-    icon="shield"
-    title="没有匹配的已准入问题"
-    :description="candidates.length ? '仍有候选或证据不足项，不能据此推断不存在缺陷。' : '未发现问题不能证明审查范围完整。'"
-  />
+  <section v-else-if="!visible.length" class="card card-pad space-top">
+    <EmptyState
+      icon="shield"
+      title="没有匹配的已准入问题"
+      :description="candidates.length ? '仍有候选或证据不足项，不能据此推断不存在缺陷。' : '未发现问题不能证明审查范围完整。'"
+    />
+  </section>
 
   <div v-else class="rg-restored-findings space-top">
     <aside class="card card-pad rg-findings-list">

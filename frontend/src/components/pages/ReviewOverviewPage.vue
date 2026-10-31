@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import type { Finding, Report, Run } from '../../types/review';
 import type { ReviewSection } from '../../types/workspace';
 import { phaseLabel, terminal } from '../../utils/nativeReview';
@@ -40,6 +40,10 @@ const overviewLabel = computed(() => ({
   skipped_empty: '没有可审查范围，未调用模型生成总览',
 }[props.report?.overview.status ?? 'pending']));
 const excluded = computed(() => Object.entries(props.report?.excluded || {}));
+const additions = computed(() => props.task.changed_files.reduce((sum, file) => sum + file.additions, 0));
+const deletions = computed(() => props.task.changed_files.reduce((sum, file) => sum + file.deletions, 0));
+const authorText = computed(() => props.task.pr.body?.trim() || props.task.pr.title);
+const authorOpen = ref(false);
 const omitted = computed(() => Object.entries(props.report?.overview.omitted || {}).filter(([, count]) => count > 0));
 const omissionSectionLabel: Record<string, string> = {
   changes: '变更片段', sources: '源码片段', findings: '已确认问题', decision_boundaries: '候选判定背景',
@@ -79,7 +83,9 @@ const omissionLabel = {
         </header>
         <p v-if="loading" class="ov-note" role="status">正在读取报告…</p>
         <template v-if="report?.overview.status === 'ready' && report.overview.output">
-          <p v-for="item in report.overview.output.change_overview" :key="item.text" class="rg-preserve-lines"><InlineCodeText :text="item.text" /></p>
+          <div class="ov-overview-text">
+            <p v-for="(item, index) in report.overview.output.change_overview" :key="item.text" class="rg-preserve-lines" :class="{ 'is-lead': index === 0 }"><InlineCodeText :text="item.text" /></p>
+          </div>
         </template>
         <p v-else class="ov-note" role="status">{{ overviewLabel }}</p>
         <button v-if="report?.overview.status === 'failed' && terminal(task.status)" class="ov-link" @click="$emit('retry-overview')">使用剩余额度重试总览</button>
@@ -101,11 +107,23 @@ const omissionLabel = {
         <dl class="ov-change__rows">
           <div>
             <dt>变更范围</dt>
-            <dd>{{ task.changed_files.length }} 个文件，新增 {{ task.changed_files.reduce((sum, file) => sum + file.additions, 0) }} 行、删除 {{ task.changed_files.reduce((sum, file) => sum + file.deletions, 0) }} 行。</dd>
+            <dd class="ov-change__scope">
+              <span class="ov-change__filecount"><b>{{ task.changed_files.length }}</b> 个文件</span>
+              <span class="ov-diff-stat is-add">+{{ additions }}</span>
+              <span class="ov-diff-stat is-del">−{{ deletions }}</span>
+            </dd>
           </div>
           <div>
             <dt>作者声明</dt>
-            <dd class="rg-preserve-lines">{{ task.pr.body || task.pr.title }}<p class="ov-change__limitation">作者描述是不可信背景，不表示目标已经源码核实。</p></dd>
+            <dd>
+              <div class="ov-author" :class="{ 'is-open': authorOpen }">
+                <p class="ov-author__body rg-preserve-lines">{{ authorText }}</p>
+                <button v-if="authorText.length > 240" type="button" class="ov-author__toggle" @click="authorOpen = !authorOpen">
+                  {{ authorOpen ? '收起作者原文' : '展开作者原文' }}
+                </button>
+              </div>
+              <p class="ov-change__limitation">作者描述是不可信背景，不表示目标已经源码核实。</p>
+            </dd>
           </div>
         </dl>
       </section>

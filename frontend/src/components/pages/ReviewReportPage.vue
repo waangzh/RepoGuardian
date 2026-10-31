@@ -14,7 +14,7 @@ try { capability.value = await getPublicationCapability(); } catch { capabilityE
 <p>基于提交 <code>{{ shortHead }}</code> · 已保存的审查结果</p>
 </div>
 <details class="rd-snapshot-info">
-<summary>快照与交付边界</summary>
+<summary>快照与交付边界 <AppIcon name="chevron-down" :size="14" /></summary>
 <dl>
 <div>
 <dt>HEAD</dt>
@@ -40,15 +40,26 @@ try { capability.value = await getPublicationCapability(); } catch { capabilityE
 </div>
 <div class="rd-shell">
 <div class="rd-toolbar">
+<div class="rd-toolbar__title">
+<span class="rd-toolbar__icon"><AppIcon name="report" :size="16" /></span>
+<div>
+<strong>审查报告</strong>
+<small>Markdown 文档 · 固定 Head <code>{{ shortHead }}</code></small>
+</div>
+</div>
+<div class="rd-toolbar__actions">
 <button class="btn secondary" :disabled="!report" @click="$emit('export')">
 <AppIcon name="download" />导出报告</button>
 <button class="btn secondary" :aria-expanded="showPublish" @click="showPublish = !showPublish">
 <AppIcon name="send" />{{ showPublish ? '收起发布面板' : '发布到 GitHub' }}</button>
 </div>
+</div>
+<div class="rd-document">
 <p v-if="loading" class="muted">正在读取报告…</p>
 <ReportMarkdown v-else-if="report" :content="report" />
 <p v-else class="muted">尚无可读取的 Markdown 报告。</p>
-<GitHubPublicationPanel v-if="showPublish && plan && terminal(task.status)" :review-id="task.id" :plan="plan" :capability="capability" :capability-error="capabilityError" @retry-capability="loadCapability" @result="() => {}" />
 </div>
+</div>
+<GitHubPublicationPanel v-if="showPublish && plan && terminal(task.status)" :review-id="task.id" :plan="plan" :capability="capability" :capability-error="capabilityError" @retry-capability="loadCapability" @result="() => {}" />
 </div>
 </template>

@@ -97,4 +97,25 @@
   .rg-app .rd-shell-caption { display: none; }
   .rg-app .rg-running-agent { flex-wrap: wrap; }
 }
+/* Activity: one usage strip and a ruled work item list. */
+.rg-activity-stats { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.rg-activity-stats > div { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; padding: 18px 20px; border-right: 1px solid var(--line); }
+.rg-activity-stats > div:last-child { border-right: 0; }
+.rg-activity-stats small { color: var(--muted); font-size: 12.5px; font-weight: 600; }
+.rg-activity-stats strong { color: var(--ink); font-size: 28px; line-height: 1.2; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.rg-activity-stats > div:last-child strong { font-size: 20px; }
+.rg-activity-stats span { color: var(--muted); font-size: 12px; }
+.rg-app .rg-stage-list { display: grid; gap: 0; margin: 8px 0 0; }
+.rg-app .rg-stage-list > li { display: grid; grid-template-columns: max-content minmax(0,1fr); align-items: start; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.rg-app .rg-stage-list > li:last-child { border-bottom: 0; padding-bottom: 4px; }
+.rg-app .rg-stage-list > li > .status-badge { justify-self: start; margin-top: 2px; }
+.rg-app .rg-stage-list strong { display: block; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.rg-app .rg-stage-list .rg-activity-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.rg-app .rg-stage-list .rg-activity-meta span { font-variant-numeric: tabular-nums; }
+@media (max-width: 760px) {
+  .rg-activity-stats { grid-template-columns: 1fr; }
+  .rg-activity-stats > div { padding: 14px 16px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .rg-activity-stats > div:last-child { border-bottom: 0; }
+  .rg-app .rg-stage-list > li { grid-template-columns: 1fr; gap: 8px; }
+}
 @media (prefers-reduced-motion: reduce) { .rg-live-dot { animation: none; } }

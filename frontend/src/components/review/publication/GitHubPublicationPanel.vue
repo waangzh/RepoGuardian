@@ -227,6 +227,13 @@ const highPriority = (key: string) => ["critical", "high"].includes(severityOf(k
 .github-publication__record ul { margin: 0; padding-left: 18px; color: var(--text-secondary); display: grid; gap: 6px; }
 .github-publication__dialog { width: min(520px, calc(100vw - 32px)); padding: 24px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); color: var(--text-primary); }
 .github-publication__dialog::backdrop { background: #17232980; }
+.github-publication fieldset > label { display: flex; align-items: center; gap: 9px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-subtle); cursor: pointer; }
+.github-publication fieldset > label:hover { border-color: var(--border-strong); background: var(--surface-muted); }
+.github-publication fieldset > label > span:first-of-type { flex: 1; min-width: 0; }
+.github-publication .runtime-technical { overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-subtle); }
+.github-publication .runtime-technical > summary { padding: 10px 12px; color: var(--text-secondary); cursor: pointer; font-size: 13px; font-weight: 600; }
+.github-publication .runtime-technical > p { margin: 0; padding: 0 12px 12px; color: var(--text-secondary); font-size: 13px; line-height: 1.8; }
+.github-publication__notice { border: 1px solid color-mix(in srgb, var(--warning) 22%, var(--border)); }
 @media (max-width: 600px) { .github-publication { padding: 16px; }
 }
 </style>

@@ -14,7 +14,9 @@ const related = computed(() => props.findings.filter(item => item.location?.path
 </div>
 <span class="badge neutral">{{ task.changed_files.length }} 个文件</span>
 </div>
-<EmptyState v-if="!task.changed_files.length" icon="file-code" title="没有变更文件" description="没有文件记录不能被解释为审查已完成。" />
+<section v-if="!task.changed_files.length" class="card card-pad">
+<EmptyState icon="file-code" title="没有变更文件" description="没有文件记录不能被解释为审查已完成。" />
+</section>
 <div v-else class="rg-file-workbench">
 <aside class="card rg-file-nav">
 <input v-model="query" class="input" placeholder="搜索文件路径" />

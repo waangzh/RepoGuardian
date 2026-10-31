@@ -12,6 +12,7 @@ export const phaseLabel = (phase: string) =>
     verification: '核验候选',
     report: '汇总报告',
     running: '执行中',
+    finished: '审查结束',
     completed: '审查结束',
     partial: '部分完成',
     failed: '执行失败',
