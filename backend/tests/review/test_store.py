@@ -129,13 +129,13 @@ def test_request_budget_snapshot_keeps_verification_overview_and_unknown_usage(t
     work = store.claim(run.id, store.work_items(run.id)[0].id, lease)
     submit_candidate(store, run, lease, work)
     first, available = store.reserve(run.id, work, 1000, lease, with_remaining=True)
-    assert available["input_tokens"] == 18000
+    assert available["input_tokens"] == 4000
     assert available["model_calls"] == 2
     assert available["output_tokens"] == run.configuration.options.limits.total_output_tokens - 8192
     store.settle(run.id, first, None, lease)
     second, available = store.reserve(run.id, work, 1000, lease, with_remaining=True)
     assert second != first
-    assert available["input_tokens"] == 17000
+    assert available["input_tokens"] == 3000
     assert available["model_calls"] == 1
     with pytest.raises(BudgetExceeded, match="model_call_limit"):
         store.reserve(run.id, work, 1000, lease)

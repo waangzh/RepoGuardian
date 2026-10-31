@@ -17,7 +17,7 @@ from app.review.context import AgentContext
 from app.review.domain import UnitCompletion, VerificationOutput, utcnow
 from app.review.findings import admit_verification
 from app.review.planner import tokens
-from app.review.store import BudgetExceeded, LeaseLost, ReviewStopped
+from app.review.store import BudgetExceeded, LeaseLost, ReviewStopped, verification_input_limit
 from app.review.tools import READ_TOOLS, read_discussion, submit_candidate
 
 logger = logging.getLogger("RepoGuardian.Review.Agent")
@@ -25,6 +25,14 @@ logger = logging.getLogger("RepoGuardian.Review.Agent")
 
 class MissingStructuredResult(ValueError):
     pass
+
+
+def request_input_tokens(messages, tools, schema):
+    return tokens({
+        "messages": [message.model_dump(mode="json") for message in messages],
+        "tools": [convert_to_openai_tool(tool) for tool in tools],
+        "response_format": schema.model_json_schema(),
+    }) + 512
 
 
 class RequestGate(AgentMiddleware):
@@ -58,12 +66,8 @@ class RequestGate(AgentMiddleware):
         schema = request.response_format.schema
         tools = request.tools
         # Reserve the full packet, including all tools and room for budget guidance.
-        estimate = tokens({
-            "messages": [message.model_dump(mode="json") for message in
-                         ([request.system_message] if request.system_message else []) + request.messages],
-            "tools": [convert_to_openai_tool(tool) for tool in tools],
-            "response_format": schema.model_json_schema(),
-        }) + 512
+        estimate = request_input_tokens(
+            ([request.system_message] if request.system_message else []) + request.messages, tools, schema)
         try:
             ticket, available = await context.budget.reserve(context.work, estimate, with_remaining=True)
         except BudgetExceeded as exc:
@@ -179,10 +183,6 @@ class AgentRunner:
         logger.info("Agent开始 review_id=%.8s work_id=%.8s unit_id=%.8s kind=%s attempt=%d attempt_id=%.8s",
                     provider.run.id, work.id, work.unit_id, work.kind, work.attempt, work.attempt_id)
         try:
-            if work.kind == "verification":
-                candidate = next(item for item in await asyncio.to_thread(
-                    provider.store.candidates, provider.run.id) if item.id == work.candidate_id)
-            initial = await provider.initial(context, candidate)
             role = "reviewer" if work.kind == "review" else "verifier"
             tools = list(READ_TOOLS)
             if role == "reviewer":
@@ -191,12 +191,27 @@ class AgentRunner:
                 tools.append(read_discussion)
             prompt = (Path(__file__).parent / "prompts" / f"{role}.md").read_text(encoding="utf-8")
             schema = UnitCompletion if role == "reviewer" else VerificationOutput
+            if work.kind == "verification":
+                candidate = next(item for item in await asyncio.to_thread(
+                    provider.store.candidates, provider.run.id) if item.id == work.candidate_id)
+            limits = provider.run.configuration.options.limits
+            request_budget = None
+            if role == "verifier":
+                usage = await asyncio.to_thread(provider.store.usage, provider.run.id)
+                request_budget = verification_input_limit(limits, usage["committed_input_tokens"])
+            initial_message = HumanMessage(content="", id=work.attempt_id)
+            def estimate_initial(packet):
+                return request_input_tokens([SystemMessage(content=prompt),
+                    initial_message.model_copy(update={
+                        "content": json.dumps(packet, ensure_ascii=False)})], tools, schema)
+            initial = await provider.initial(context, candidate, request_budget=request_budget,
+                                             estimate_request=estimate_initial)
             agent = create_agent(self.model, tools=tools, system_prompt=prompt,
                 response_format=ToolStrategy(schema), middleware=[RequestGate()],
                 context_schema=AgentContext, name=role)
-            limits = provider.run.configuration.options.limits
+            initial_message.content = json.dumps(initial, ensure_ascii=False)
             result = await agent.ainvoke(
-                {"messages": [{"role": "user", "content": json.dumps(initial, ensure_ascii=False)}]},
+                {"messages": [initial_message]},
                 context=context, config={"recursion_limit": limits.model_calls * 8 + 24})
             output = result.get("structured_response")
             if not isinstance(output, schema):

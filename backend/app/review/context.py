@@ -7,6 +7,7 @@ from typing import Any
 from app.review.domain import SourceRef
 from app.review.evidence import source_lines
 from app.review.planner import identity, members, tokens
+from app.review.store import BudgetExceeded
 
 MAX_MATERIAL_TOKENS = 12000
 
@@ -119,9 +120,62 @@ class ContextProvider:
         context.pending_hunks[key] = identity(packet)
         return packet
 
-    async def initial(self, context, candidate=None):
+    async def initial(self, context, candidate=None, *, request_budget=None, estimate_request=None):
         unit = next(unit for unit in self.run.plan.units if unit.id == context.work.unit_id)
-        material, spent = [], 0
+        saved = await asyncio.to_thread(self.store.candidates, self.run.id)
+        material, candidate_materials = [], []
+        missing_candidate_materials = [
+            {"path": ref.path, "side": ref.side, "start_line": ref.start_line,
+             "end_line": ref.end_line, "reason": "material_capacity"}
+            for ref in candidate.sources] if candidate else []
+        omissions = list(missing_candidate_materials)
+        context.material_failures.update({key: "material_capacity" for key in unit.required_hunk_ids})
+        base = {
+            "snapshot": self.run.snapshot.model_dump(), "depth": self.run.configuration.options.depth,
+            "focus": unit.focus,
+            "change_map": [{"paths": item.paths, "risk": item.risk} for item in self.run.plan.units][:100],
+            "history_untrusted": [{"claim": item["claim"], "head_sha": item["head_sha"],
+                "status": "historical_not_current_evidence"} for item in self.run.plan.history[:20]],
+            "author_statement_untrusted": {"title": self.run.pr.title, "body": (self.run.pr.body or "")[:4000]},
+            "unit": unit.model_dump(), "materials": material, "missing_material": context.material_failures,
+            "already_submitted": [{"id": item.id, "claim": item.proposal.claim}
+                                  for item in saved if item.unit_id == unit.id][:100],
+            "candidate": candidate.proposal.model_dump(exclude={"source_refs"}) if candidate else None,
+            "candidate_materials": candidate_materials,
+            "missing_candidate_materials": missing_candidate_materials,
+        }
+        def fits_request():
+            return request_budget is None or estimate_request(base) <= request_budget
+
+        # Account for omission metadata before admitting any source material.
+        if request_budget is not None:
+            for key in ("already_submitted", "history_untrusted", "change_map"):
+                while base[key] and not fits_request():
+                    base[key] = base[key][:len(base[key]) // 2]
+            for key in ("body", "title"):
+                if not fits_request():
+                    base["author_statement_untrusted"][key] = ""
+            if not fits_request():
+                raise BudgetExceeded("input_token_limit")
+        spent = 0
+        if candidate:
+            for ref, omission in zip(candidate.sources, omissions):
+                before_pending = dict(context.pending)
+                try:
+                    item = await context.read(ref.path, ref.start_line, ref.end_line, ref.side)
+                except (ValueError, OSError):
+                    omission["reason"] = "material_unavailable"
+                    continue
+                cost = tokens(item)
+                candidate_materials.append(item)
+                missing_candidate_materials.remove(omission)
+                if ((request_budget is None and spent + cost > MAX_MATERIAL_TOKENS)
+                        or not fits_request()):
+                    candidate_materials.pop()
+                    context.pending = before_pending
+                    missing_candidate_materials.append(omission)
+                    continue
+                spent += cost
         for key in unit.required_hunk_ids:
             before_pending = dict(context.pending)
             try:
@@ -130,31 +184,16 @@ class ContextProvider:
                 context.material_failures[key] = "material_unavailable"
                 continue
             cost = tokens(packet)
-            if spent + cost > MAX_MATERIAL_TOKENS:
+            material.append(packet)
+            context.material_failures.pop(key, None)
+            if ((request_budget is None and spent + cost > MAX_MATERIAL_TOKENS)
+                    or not fits_request()):
+                material.pop()
                 context.pending_hunks.pop(key, None)
                 context.pending = before_pending
                 context.material_failures[key] = "material_capacity"
                 continue
             spent += cost
-            material.append(packet)
-        candidate_materials = []
-        if candidate:
-            for ref in candidate.sources:
-                try:
-                    candidate_materials.append(await context.read(
-                        ref.path, ref.start_line, ref.end_line, ref.side))
-                except (ValueError, OSError):
-                    continue
-        saved = await asyncio.to_thread(self.store.candidates, self.run.id)
-        return {"snapshot": self.run.snapshot.model_dump(), "depth": self.run.configuration.options.depth,
-            "focus": unit.focus,
-            "change_map": [{"paths": item.paths, "risk": item.risk} for item in self.run.plan.units][:100],
-            "history_untrusted": [{"claim": item["claim"], "head_sha": item["head_sha"],
-                "status": "historical_not_current_evidence"} for item in self.run.plan.history[:20]],
-            "author_statement_untrusted": {"title": self.run.pr.title, "body": (self.run.pr.body or "")[:4000]},
-            "unit": unit.model_dump(), "materials": material,
-            "missing_material": context.material_failures,
-            "already_submitted": [{"id": item.id, "claim": item.proposal.claim}
-                                  for item in saved if item.unit_id == unit.id][:100],
-            "candidate": candidate.proposal.model_dump(exclude={"source_refs"}) if candidate else None,
-            "candidate_materials": candidate_materials}
+        if not fits_request():
+            raise BudgetExceeded("input_token_limit")
+        return base

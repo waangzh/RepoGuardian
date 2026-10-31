@@ -42,10 +42,10 @@ def setup_run(tmp_path, *, calls=20, input_tokens=100000, concurrency=2):
     return store, run, lease, sessions
 
 
-def submit_candidate(store, run, lease, work):
+def submit_candidate(store, run, lease, work, hunk_id="h1"):
     ref = SourceRef(id="c" * 64, review_id=run.id, commit_sha=run.snapshot.head_sha,
         side="head", path="a.py", start_line=1, end_line=1, content_hash="d" * 64)
-    store.deliver(run.id, work, ["h1"], {}, lease, source_ids=[ref.id])
+    store.deliver(run.id, work, [hunk_id], {}, lease, source_ids=[ref.id])
     candidate = Candidate(id=uuid4().hex, unit_id=work.unit_id, attempt_id=work.attempt_id,
         tool_call_id="call1", proposal=CandidateInput(claim="failure", trigger="input", impact="loss",
                                                      source_refs=["S1"]), sources=[ref])
@@ -53,7 +53,7 @@ def submit_candidate(store, run, lease, work):
     return candidate
 
 
-def setup_source_run(tmp_path):
+def setup_source_run(tmp_path, *, head_source="def ratio(x):\n    return 10 / x\n"):
     import subprocess
     from app.models.orm import ReviewTaskOrm, ReviewWorkItemOrm
     from app.review.context import ContextProvider
@@ -73,7 +73,7 @@ def setup_source_run(tmp_path):
     git("add", ".")
     git("-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "base")
     base = git("rev-parse", "HEAD")
-    (repo / "a.py").write_text("def ratio(x):\n    return 10 / x\n", encoding="utf-8")
+    (repo / "a.py").write_text(head_source, encoding="utf-8")
     git("add", ".")
     git("-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "head")
     head = git("rev-parse", "HEAD")

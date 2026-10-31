@@ -17,8 +17,14 @@ from app.review.domain import Candidate, Run, TERMINAL, WorkItem, utcnow
 from app.services.review.review_task_access import lock_live_review
 
 OVERVIEW_INPUT = 6000
-VERIFICATION_INPUT = 6000
+# Maximum verifier initial packet; smaller contexts and remaining budgets lower it.
+VERIFICATION_INPUT = 20000
 MAX_CANDIDATES = 100
+
+
+def verification_input_limit(limits, committed_input_tokens=0):
+    return max(1, min(VERIFICATION_INPUT, limits.context_tokens - limits.output_tokens,
+                      limits.total_input_tokens - committed_input_tokens - OVERVIEW_INPUT))
 
 
 class LeaseLost(RuntimeError):
@@ -310,6 +316,8 @@ class ReviewStore:
         if kind == "review" and now >= run.review_cutoff:
             raise BudgetExceeded("review_cutoff")
         calls, usage = self._usage(session, run.id)
+        if estimate is None:
+            estimate = verification_input_limit(limits, usage["committed_input_tokens"])
         protected_calls, protected_tokens = (0, 0) if overview else (1, OVERVIEW_INPUT)
         if kind == "review":
             checks = session.scalars(select(ReviewWorkItemOrm).where(
@@ -319,7 +327,7 @@ class ReviewStore:
                 item.payload["status"] == "running"
                 and (item.id, item.payload["attempt_id"]) not in requested) for item in checks)
             protected_calls += pending
-            protected_tokens += pending * VERIFICATION_INPUT
+            protected_tokens += pending * verification_input_limit(limits)
         if work is not None and sum(call.attempt_id == work.attempt_id for call in calls) >= limits.model_calls:
             raise BudgetExceeded("agent_model_limit")
         if len(calls) + 1 + protected_calls > limits.total_model_calls:
@@ -345,7 +353,7 @@ class ReviewStore:
             run = self._run(row)
             unit = next(unit for unit in run.plan.units if unit.id == work.unit_id)
             estimate = (unit.estimated_input_tokens * 2 + 4096 if work.kind == "review"
-                        else VERIFICATION_INPUT)
+                        else None)
             try:
                 self._admit_request(session, run, work, estimate, False)
             except BudgetExceeded as exc:
