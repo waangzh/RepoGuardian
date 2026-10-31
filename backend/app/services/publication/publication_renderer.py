@@ -9,6 +9,20 @@ def markdown_text(value, limit=4000):
     return re.sub(r"([\\`*_\[\]()!#|])", r"\\\1", text)
 
 
+def overview_markdown(value, limit=1000):
+    """Preserve only single-backtick code; escape all other Markdown and HTML."""
+    def prose(text):
+        return re.sub(r"([+\-.:])", r"\\\1", markdown_text(text, limit))
+
+    text, parts, start = value[:limit].replace("\r\n", "\n").replace("\r", "\n"), [], 0
+    for match in re.finditer(r"(?<!`)`([^`\r\n]+)`(?!`)", text):
+        parts.extend((prose(text[start:match.start()]),
+                      "`" + match[1].replace("@", "＠") + "`"))
+        start = match.end()
+    parts.append(prose(text[start:]))
+    return "".join(parts)
+
+
 def _findings(plan):
     return [*plan.inline_drafts, *plan.summary_findings]
 
@@ -28,6 +42,8 @@ def render_summary(plan, *, discussion_urls=None):
     else:
         lines += [f"LLM 总览未能生成（{markdown_text(plan.overview_status)}），审查事实已保留。",
                   "", *[f"- {markdown_text(item, 500)}" for item in plan.digest.actual_changes[:100]], ""]
+    if any(plan.overview_omitted.values()):
+        lines += ["总览输入有材料省略，仅概括已提供的变更，不代表完整变更范围。", ""]
     if plan.outcome.coverage != "complete" or plan.scope_reasons:
         lines += ["**结论不完整或存在范围说明。**", "",
                   *[f"- {markdown_text(reason, 500)}" for reason in plan.scope_reasons[:100]], ""]
@@ -80,6 +96,13 @@ def comment_selection(plan, *, exclude_resolved=False):
 def render_user_report(run, plan):
     lines = ["# RepoGuardian 审查报告", "", render_summary(plan), "", "### 固定变更", ""]
     lines += [f"- {markdown_text(item, 500)}" for item in plan.digest.actual_changes]
+    if run.report and run.report.overview.omitted_materials:
+        lines += ["", "### 总览省略范围", ""]
+        reasons = {"material_capacity": "材料容量不足", "source_unavailable": "源码不可用",
+                   "diff_source_mismatch": "Diff 与源码不一致"}
+        for item in run.report.overview.omitted_materials:
+            location = f" {item.side.upper()} {item.start_line}–{item.end_line}" if item.side else ""
+            lines.append(f"- {markdown_text(item.path, 500)}{location}：{reasons[item.reason]}")
     return "\n".join(lines)
 
 

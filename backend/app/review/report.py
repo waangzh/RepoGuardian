@@ -10,11 +10,12 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.review.domain import Overview, OverviewOutput, Report, utcnow
 from app.review.findings import aggregate
+from app.review.overview_materials import overview_material
 from app.review.planner import identity, tokens
-from app.review.planner import members
-from app.review.store import BudgetExceeded, LeaseLost, ReviewStopped
+from app.review.store import OVERVIEW_INPUT, BudgetExceeded, LeaseLost, ReviewStopped
 
 logger = logging.getLogger("RepoGuardian.Review.Overview")
+OVERVIEW_POLICY_VERSION = "change-first-prose-v1"
 
 
 def build_report(run, work_items, candidates, usage):
@@ -44,79 +45,6 @@ def build_report(run, work_items, candidates, usage):
     return Report(version=identity(facts), **facts)
 
 
-def overview_material(report, provider):
-    """Archive bytes are source, not reviewer narrative. Keep the input bounded."""
-    evidence, visible = [], {}
-    payload = {
-        "snapshot": provider.run.snapshot.model_dump(), "changes": [], "source_materials": evidence,
-        "findings": [], "decision_boundaries": [], "scope_reasons": report.reasons[:30],
-        "omitted": {"changes": 0, "findings": 0, "decision_boundaries": 0, "sources": 0},
-    }
-    for change in provider.run.changed_files:
-        item = {"path": change.file_path, "change_type": change.change_type,
-                "additions": change.additions, "deletions": change.deletions}
-        if tokens(payload) + tokens(item) > 1700:
-            payload["omitted"]["changes"] += 1
-        else:
-            payload["changes"].append(item)
-    for finding in report.findings:
-        item = {"id": finding.id, "author_comment": finding.author_comment[:800]}
-        if tokens(payload) + tokens(item) > 2300:
-            payload["omitted"]["findings"] += 1
-        else:
-            payload["findings"].append(item)
-    for candidate in report.candidates:
-        if candidate.finding is not None:
-            continue
-        item = {"claim": candidate.proposal.claim[:300],
-                "verdict": candidate.verification.verdict if candidate.verification else "unverified"}
-        if tokens(payload) + tokens(item) > 2800:
-            payload["omitted"]["decision_boundaries"] += 1
-        else:
-            payload["decision_boundaries"].append(item)
-    for item in report.units:
-        for source_id in item.visible_source_ids:
-            if source_id in visible:
-                continue
-            try:
-                ref, content = provider.evidence.read_source(source_id)
-            except (ValueError, OSError):
-                continue
-            packet = {"source_ref": f"S{len(visible) + 1}", "source": ref.model_dump(), "content": content}
-            if tokens(payload) + tokens(packet) > 4500:
-                payload["omitted"]["sources"] += 1
-                continue
-            evidence.append(packet)
-            visible[source_id] = packet
-    # Incremental reuse and cutoff may leave no new reviewer request. The overview
-    # can still receive bounded current source directly, without claiming review.
-    if not evidence:
-        included_members = {key for unit in provider.run.plan.units for key in unit.required_hunk_ids}
-        for member in members(provider.run.changed_files).values():
-            if member["id"] not in included_members:
-                continue
-            for side, key, path in (("head", "new_line_no", member["path"]),
-                                    ("base", "old_line_no", member["old_path"])):
-                lines = [line[key] for line in member["lines"] if line[key] is not None]
-                if not lines or path not in provider.evidence.allowed_paths:
-                    continue
-                try:
-                    result = provider.evidence._read(path, lines[0], lines[-1], side)
-                except (ValueError, OSError):
-                    continue
-                source_id = result["evidence"]["id"]
-                if source_id in visible:
-                    continue
-                packet = {"source_ref": f"S{len(visible) + 1}", "source": result["evidence"],
-                          "content": result["content"]}
-                if tokens(payload) + tokens(packet) > 4500:
-                    payload["omitted"]["sources"] += 1
-                    continue
-                evidence.append(packet)
-                visible[source_id] = packet
-    return payload, {packet["source_ref"]: packet["source"] for packet in evidence}
-
-
 async def generate_overview(report, provider, budget, model):
     started = perf_counter()
     run_id = provider.run.id
@@ -127,19 +55,38 @@ async def generate_overview(report, provider, budget, model):
     if utcnow() >= provider.run.hard_deadline:
         logger.warning("总览跳过 review_id=%.8s reason=hard_deadline", run_id)
         return Overview(status="skipped_deadline", error_code="hard_deadline")
-    packet, refs = await asyncio.to_thread(overview_material, report, provider)
-    if (previous and previous.overview.input_hash == identity(packet)
+    prompt = (Path(__file__).parent / "prompts" / "overview.md").read_text(encoding="utf-8")
+    schema = OverviewOutput.model_json_schema()
+    # Include editorial instructions and schema in the existing 6000-token
+    # protection; the material ceiling itself must not grow with the prompt.
+    material_limit = OVERVIEW_INPUT - tokens([prompt, schema]) - 512 - 128
+    try:
+        packet, refs, omissions = await asyncio.to_thread(
+            overview_material, report, provider, max_tokens=material_limit)
+    except BudgetExceeded:
+        return Overview(status="skipped_deadline", error_code="hard_deadline")
+    except (ValueError, OSError):
+        logger.warning("总览材料不可用 review_id=%.8s", run_id)
+        return Overview(status="failed", error_code="overview_material_unavailable")
+    input_hash = identity({"policy": OVERVIEW_POLICY_VERSION, "prompt": prompt,
+                          "schema": schema, "materials": packet,
+                          "omissions": [item.model_dump() for item in omissions]})
+    if (previous and previous.overview.input_hash == input_hash
             and previous.overview.status in {"ready", "failed"}):
         logger.info("总览复用 review_id=%.8s status=%s", run_id, previous.overview.status)
         return previous.overview
-    overview = Overview(status="running", input_hash=identity(packet), omitted=packet["omitted"])
+    overview = Overview(status="running", input_hash=input_hash, omitted=packet["omitted"],
+                        omitted_materials=omissions)
+    logger.info("总览材料准备完成 review_id=%.8s changes=%d sources=%d material_tokens=%d "
+                "omitted_changes=%d omitted_sources=%d policy=%s", run_id, len(packet["changes"]),
+                len(refs), tokens(packet), packet["omitted"]["changes"], packet["omitted"]["sources"],
+                OVERVIEW_POLICY_VERSION)
     report.overview = overview
     await asyncio.to_thread(provider.store.save_report, provider.run.id, report, provider.lease)
     ticket = None
     try:
-        prompt = (Path(__file__).parent / "prompts" / "overview.md").read_text(encoding="utf-8")
         messages = [SystemMessage(content=prompt), HumanMessage(content=json.dumps(packet, ensure_ascii=False))]
-        estimate = tokens([prompt, packet, OverviewOutput.model_json_schema()]) + 512
+        estimate = tokens([prompt, packet, schema]) + 512
         ticket = await budget.reserve(None, estimate, overview=True)
         logger.info("总览模型请求开始 review_id=%.8s ticket=%.8s estimated_input_tokens=%d",
                     run_id, ticket, estimate)

@@ -197,6 +197,17 @@ class OverviewOutput(Model):
     finding_order: list[str] = Field(default_factory=list, max_length=100)
 
 
+class OverviewOmission(Model):
+    kind: Literal["change", "source"]
+    unit_id: str | None = None
+    member_id: str | None = None
+    path: str
+    side: Literal["base", "head"] | None = None
+    start_line: int | None = None
+    end_line: int | None = None
+    reason: Literal["material_capacity", "source_unavailable", "diff_source_mismatch"]
+
+
 class Overview(Model):
     status: Literal["pending", "running", "ready", "failed", "skipped_deadline",
                     "skipped_cancelled", "skipped_empty"] = "pending"
@@ -205,6 +216,7 @@ class Overview(Model):
     sources: list[SourceRef] = Field(default_factory=list)
     error_code: str | None = None
     omitted: dict[str, int] = Field(default_factory=dict)
+    omitted_materials: list[OverviewOmission] = Field(default_factory=list)
 
 
 class Report(Model):

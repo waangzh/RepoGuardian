@@ -75,6 +75,7 @@ class PublicationPlan(BaseModel):
     blocking_reasons: list[str] = Field(default_factory=list)
     overview_markdown: str = ""
     overview_status: str = "pending"
+    overview_omitted: dict[str, int] = Field(default_factory=dict)
     scope_reasons: list[str] = Field(default_factory=list)
     historical_findings: list[dict] = Field(default_factory=list)
 

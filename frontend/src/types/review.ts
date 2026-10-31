@@ -144,6 +144,17 @@ export interface OverviewParagraph {
   source_refs: string[];
 }
 
+export interface OverviewOmission {
+  kind: 'change' | 'source';
+  unit_id: string | null;
+  member_id: string | null;
+  path: string;
+  side: 'base' | 'head' | null;
+  start_line: number | null;
+  end_line: number | null;
+  reason: 'material_capacity' | 'source_unavailable' | 'diff_source_mismatch';
+}
+
 export interface Overview {
   status: 'pending' | 'running' | 'ready' | 'failed' | 'skipped_deadline' | 'skipped_cancelled' | 'skipped_empty';
   input_hash: string | null;
@@ -153,6 +164,7 @@ export interface Overview {
   } | null;
   sources: SourceRef[];
   omitted: Record<'changes' | 'findings' | 'decision_boundaries' | 'sources', number>;
+  omitted_materials: OverviewOmission[];
   error_code: string | null;
 }
 

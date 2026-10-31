@@ -7,7 +7,7 @@ from app.models.publication import (
     ReviewDigest, ReviewOutcome, ReviewSummary, WithheldFinding,
 )
 from app.services.publication.publication_renderer import (
-    markdown_text, render_review_comment, render_summary, render_user_report,
+    markdown_text, overview_markdown, render_review_comment, render_summary, render_user_report,
 )
 from app.services.publication.review_publication import validated_findings
 from app.services.review.artifact_store import LocalArtifactStore
@@ -72,6 +72,7 @@ class PublicationPlanner:
                 actual_changes=[f"{item.file_path}: +{item.additions} / -{item.deletions}" for item in run.changed_files]),
             content_eligible=not blockers, blocking_reasons=blockers,
             overview_status=report.overview.status if report else "pending",
+            overview_omitted=report.overview.omitted if report else {},
             scope_reasons=report.reasons if report else [],
             historical_findings=[{"claim": item["claim"], "head_sha": item["head_sha"],
                 "rechecked": bool(report and any(candidate.previous_candidate_id == item["candidate_id"]
@@ -103,7 +104,7 @@ class PublicationPlanner:
                 if any(handle not in allowed for paragraph in report.overview.output.change_overview
                        for handle in paragraph.source_refs):
                     raise ValueError("overview_source_unknown")
-                plan.overview_markdown = "\n\n".join(markdown_text(paragraph.text, 1000)
+                plan.overview_markdown = "\n\n".join(overview_markdown(paragraph.text, 1000)
                     for paragraph in report.overview.output.change_overview)
             except (ValueError, OSError):
                 plan.overview_status = "failed"

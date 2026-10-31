@@ -4,6 +4,7 @@ import type { Finding, Report, Run } from '../../types/review';
 import type { ReviewSection } from '../../types/workspace';
 import { phaseLabel, terminal } from '../../utils/nativeReview';
 import AppIcon from '../common/AppIcon.vue';
+import InlineCodeText from '../common/InlineCodeText.vue';
 
 const props = defineProps<{
   task: Run;
@@ -40,6 +41,14 @@ const overviewLabel = computed(() => ({
 }[props.report?.overview.status ?? 'pending']));
 const excluded = computed(() => Object.entries(props.report?.excluded || {}));
 const omitted = computed(() => Object.entries(props.report?.overview.omitted || {}).filter(([, count]) => count > 0));
+const omissionSectionLabel: Record<string, string> = {
+  changes: '变更片段', sources: '源码片段', findings: '已确认问题', decision_boundaries: '候选判定背景',
+};
+const omissionLabel = {
+  material_capacity: '材料容量不足',
+  source_unavailable: '源码不可用',
+  diff_source_mismatch: 'Diff 与源码不一致',
+};
 </script>
 
 <template>
@@ -70,15 +79,25 @@ const omitted = computed(() => Object.entries(props.report?.overview.omitted || 
         </header>
         <p v-if="loading" class="ov-note" role="status">正在读取报告…</p>
         <template v-if="report?.overview.status === 'ready' && report.overview.output">
-          <p v-for="item in report.overview.output.change_overview" :key="item.text" class="rg-preserve-lines">{{ item.text }}</p>
+          <p v-for="item in report.overview.output.change_overview" :key="item.text" class="rg-preserve-lines"><InlineCodeText :text="item.text" /></p>
         </template>
         <p v-else class="ov-note" role="status">{{ overviewLabel }}</p>
         <button v-if="report?.overview.status === 'failed' && terminal(task.status)" class="ov-link" @click="$emit('retry-overview')">使用剩余额度重试总览</button>
         <p v-if="omitted.length" class="ov-note">
           <AppIcon name="info" />总览输入有省略：
-          <span v-for="[key, count] in omitted" :key="key">{{ key }} {{ count }} 项；</span>
+          <span v-for="[key, count] in omitted" :key="key">{{ omissionSectionLabel[key] }} {{ count }} 项；</span>
           引用只能证明已提供的来源，不能保证语义穷尽。
         </p>
+        <details v-if="report?.overview.omitted_materials.length" class="ov-note">
+          <summary>查看总览省略范围</summary>
+          <ul>
+            <li v-for="(item, index) in report.overview.omitted_materials" :key="index">
+              <code>{{ item.path }}</code>
+              <span v-if="item.side"> {{ item.side.toUpperCase() }} {{ item.start_line }}–{{ item.end_line }}</span>
+              {{ omissionLabel[item.reason] }}
+            </li>
+          </ul>
+        </details>
         <dl class="ov-change__rows">
           <div>
             <dt>变更范围</dt>
