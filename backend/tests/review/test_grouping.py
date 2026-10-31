@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from sqlalchemy import delete, select, update
 
 from app.models.orm import ReviewRequestOrm, ReviewTaskOrm, ReviewWorkItemOrm, WorkerJobOrm
@@ -56,11 +56,34 @@ def test_grouping_failure_falls_back_to_single_file_units(tmp_path):
 def test_repeated_immutable_tool_result_is_marked_as_stalled():
     context = AgentContext(provider=None, work=None, budget=None)
     arguments = {"path": "a.py", "revision": "head", "start": 1, "end": 2}
-    result = {"ok": True, "source": {"content": "VALUE = 1\n"}, "source_ref": "S1"}
+    result = {"ok": True, "source": {"commit_sha": "head-sha", "side": "head", "path": "a.py",
+                                   "start_line": 1, "end_line": 2},
+              "content": "VALUE = 1\n", "source_ref": "S1"}
 
     assert context.note_tool_result("read_file", arguments, result) == 1
     assert context.note_tool_result("read_file", arguments, result) == 2
     assert context.note_tool_result("read_file", arguments, result) == 3
+
+
+def test_duplicate_source_bodies_are_compacted_but_handles_are_kept():
+    source = {
+        "commit_sha": "a" * 40, "side": "head", "path": "a.py",
+        "review_id": "review", "content_hash": "b" * 64,
+        "start_line": 1, "end_line": 2, "id": "c" * 64,
+    }
+    messages = [
+        HumanMessage(content=json.dumps({
+            "materials": [{"sources": [{"source": source, "content": "VALUE = 1\n"}]}],
+        })),
+        ToolMessage(content=json.dumps({
+            "source": source, "source_ref": "S1", "content": "VALUE = 1\n",
+        }), tool_call_id="call-1"),
+    ]
+    compacted = AgentContext.compact_messages(messages)
+    payload = json.loads(compacted[1].content)
+    assert payload["source_ref"] == "S1"
+    assert payload["content_omitted"] is True
+    assert "VALUE = 1" not in payload["content"]
 
 
 def pending_run(tmp_path):
@@ -244,6 +267,25 @@ def test_opaque_cursor_changes_do_not_count_as_progress():
         context.note_tool_result("search_code", {"cursor": cursor},
                                  {"matches": [], "cursor": cursor, "next_cursor": str(index + 1)})
         assert context.begin_round() == index
+
+
+def test_overlapping_source_requests_require_new_lines_to_count_as_progress():
+    context = AgentContext(provider=None, work=None, budget=None)
+
+    def read(start, end, side="head", tool="read_file"):
+        source = {"commit_sha": side + "-sha", "side": side, "path": "a.py",
+                  "start_line": start, "end_line": end}
+        context.note_tool_result(tool, {"start": start, "end": end, "revision": side},
+                                 {"ok": True, "source": source, "content": "fixed bytes"})
+        return context.begin_round()
+
+    assert read(1, 100) == 0
+    assert read(101, 200) == 0
+    assert read(20, 180) == 1
+    assert read(30, 170, tool="read_symbol") == 2
+    assert read(40, 160) == 3
+    assert read(150, 220) == 0
+    assert read(40, 160, side="base") == 0
 
 
 def test_pending_grouping_cannot_be_reported_as_completed(tmp_path):

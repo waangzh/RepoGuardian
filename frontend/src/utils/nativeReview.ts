@@ -43,14 +43,26 @@ export const executionErrorLabel = (code: string | null) =>
   })[code || ''] || '执行异常，未取得有效结果';
 
 export function observedUsage(report: Report | null) {
-  if (!report) return { calls: null, tokens: null };
+  if (!report) return {
+    calls: null, tokens: null, input: null, output: null,
+    cachedInput: null, uncachedInput: null, cacheHitRate: null,
+  };
 
   const usage = report.usage;
   const calls = typeof usage.model_calls === 'number' ? usage.model_calls : null;
   const input = typeof usage.input_tokens === 'number' ? usage.input_tokens : null;
   const output = typeof usage.output_tokens === 'number' ? usage.output_tokens : null;
+  const cachedInput = typeof usage.cached_input_tokens === 'number'
+    ? usage.cached_input_tokens : null;
+  const uncachedInput = typeof usage.uncached_input_tokens === 'number'
+    ? usage.uncached_input_tokens : null;
+  const cacheHitRate = typeof usage.cache_hit_rate === 'number'
+    ? usage.cache_hit_rate : null;
 
-  return { calls, tokens: input == null || output == null ? null : input + output };
+  return {
+    calls, tokens: input == null || output == null ? null : input + output,
+    input, output, cachedInput, uncachedInput, cacheHitRate,
+  };
 }
 
 export function safeGitHubLink(value: string | null | undefined): string | undefined {

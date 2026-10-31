@@ -93,6 +93,7 @@ export const updateSystemSettings = (value: {
 export const getPublicationCapability = () =>
   request<import('../types/operations').PublicationCapability>('/api/system/publication-capability');
 export const getReview = (id: string, signal?: AbortSignal) =>
+  // Report.usage includes provider cache details; absent details remain unknown.
   request<Run>(reviewPath(id), { signal });
 
 export function subscribeToReview(id: string, refresh: () => void) {

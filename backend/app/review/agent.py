@@ -7,9 +7,9 @@ from pathlib import Path
 from time import perf_counter
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import AgentMiddleware, hook_config
+from langchain.agents.middleware import AgentMiddleware, ModelResponse, hook_config
 from langchain.agents.structured_output import ToolStrategy
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from app.core.config import settings
@@ -36,6 +36,29 @@ def request_input_tokens(messages, tools, schema):
 
 
 class RequestGate(AgentMiddleware):
+    async def awrap_tool_call(self, request, handler):
+        context = request.runtime.context
+        await context.check_active()
+        result = await handler(request)
+        # Schema and unknown-tool errors happen before @bounded executes.
+        if isinstance(result, ToolMessage) and result.status == "error":
+            context.tool_calls += 1
+            fields = request.tool.tool_call_schema.model_fields if request.tool else {}
+            error = ("tool_call_limit"
+                     if context.tool_calls > context.provider.run.configuration.options.limits.tool_calls
+                     else "invalid_tool_arguments" if request.tool else "unknown_tool")
+            body = {
+                "ok": False, "error": error,
+                "required_arguments": [name for name, field in fields.items() if field.is_required()],
+                "next_action": "Correct the arguments using the tool schema. Do not repeat "
+                               "the same rejected call. Return the required result tool if finished.",
+            }
+            context.note_tool_result(request.tool_call["name"], request.tool_call["args"], body)
+            result = ToolMessage(content=json.dumps(body), tool_call_id=request.tool_call["id"],
+                                 name=request.tool_call["name"], status="error")
+        await context.check_active()
+        return result
+
     @hook_config(can_jump_to=["model"])
     async def aafter_model(self, state, runtime):
         if state.get("structured_response") is not None:
@@ -63,14 +86,15 @@ class RequestGate(AgentMiddleware):
         context = request.runtime.context
         await context.check_active()
         stalled = context.begin_round()
-        if stalled >= 3:
+        if context.no_progress_closing_calls >= 2:
             raise NoProgressDetected("agent_no_progress")
         limits = context.provider.run.configuration.options.limits
         schema = request.response_format.schema
         tools = request.tools
+        messages = context.compact_messages(request.messages)
         # Reserve the full packet, including all tools and room for budget guidance.
         estimate = request_input_tokens(
-            ([request.system_message] if request.system_message else []) + request.messages, tools, schema)
+            ([request.system_message] if request.system_message else []) + messages, tools, schema) + 1024
         try:
             ticket, available = await context.budget.reserve(context.work, estimate, with_remaining=True)
         except BudgetExceeded as exc:
@@ -85,6 +109,8 @@ class RequestGate(AgentMiddleware):
         deadline = run.review_cutoff if context.work.kind == "review" else run.hard_deadline
         seconds = max(0, (deadline - utcnow()).total_seconds())
         closing_reasons = []
+        if stalled >= 3 or context.no_progress_closing_calls:
+            closing_reasons.append("no_progress")
         if (available["input_tokens"] is not None
                 and available["input_tokens"] < 2 * estimate):
             closing_reasons.append("input_tokens")
@@ -100,6 +126,9 @@ class RequestGate(AgentMiddleware):
         if context.structured_output_retry:
             closing_reasons.append("format_correction")
         closing = bool(closing_reasons)
+        context.investigation_closed = closing
+        if "no_progress" in closing_reasons:
+            context.no_progress_closing_calls += 1
         if closing:
             tools = [tool for tool in tools if tool.name == "submit_candidate"]
         if context.tool_calls >= limits.tool_calls:
@@ -128,6 +157,16 @@ class RequestGate(AgentMiddleware):
                 " The next request is reserved for your final structured result. "
                 "Submit supported candidates now; use any remaining reads only for a critical missing premise."
             )
+        if context.small_unit_ready_for_checkpoint() and not context.coverage_checkpoint_sent:
+            context.coverage_checkpoint_sent = True
+            instruction += (
+                " Small-unit coverage checkpoint: all required change materials, related test source "
+                "and consumer context have been received, together with a successful relationship search. "
+                "These observations are not proof that every necessary question is answered. "
+                "Return UnitCompletion now if the necessary checks are complete. Otherwise use the "
+                "available tools only for a specific remaining premise; do not enumerate unrelated "
+                "packages or transitive consumers. New relevant evidence may continue the investigation."
+            )
         if closing:
             instruction += (
                 f" Close now because of {','.join(closing_reasons)}. "
@@ -141,8 +180,21 @@ class RequestGate(AgentMiddleware):
                     " If you have a newly supported claim, call submit_candidate AND "
                     "UnitCompletion in this same response so it is saved before this attempt ends."
                 )
-        request = request.override(tools=tools, system_message=SystemMessage(
-            content=request.system_message.content + instruction))
+            if "no_progress" in closing_reasons:
+                instruction += (
+                    " Repetition alone is not a missing premise. Assess the evidence already received. "
+                    "This is a bounded finalization opportunity, not permission to assume success."
+                )
+                instruction += (
+                    " Finish with unresolved_reason=null if the necessary checks are complete; "
+                    "otherwise identify the specific unanswered question."
+                    if context.work.kind == "review" else
+                    " Confirm or refute only with the required supporting evidence; "
+                    "otherwise return insufficient and identify the missing premise."
+                )
+        guidance = HumanMessage(content="Runtime guidance (trusted host):" + instruction,
+                                id=f"runtime-{ticket}")
+        request = request.override(tools=tools, messages=[*messages, guidance])
         started = perf_counter()
         logger.info(
             "模型请求开始 review_id=%.8s work_id=%.8s kind=%s attempt_id=%.8s ticket=%.8s "
@@ -182,7 +234,9 @@ class RequestGate(AgentMiddleware):
         await context.check_active()
         # A successful response proves the model received the full request packet.
         await context.acknowledge(pending, hunks)
-        return response
+        # Keep the guidance at its original position in the append-only history.
+        return ModelResponse(result=[guidance, *response.result],
+                             structured_response=response.structured_response)
 
 
 class AgentRunner:

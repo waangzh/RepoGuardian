@@ -53,7 +53,8 @@ def submit_candidate(store, run, lease, work, hunk_id="h1"):
     return candidate
 
 
-def setup_source_run(tmp_path, *, head_source="def ratio(x):\n    return 10 / x\n"):
+def setup_source_run(tmp_path, *, head_source="def ratio(x):\n    return 10 / x\n",
+                     base_source="def ratio(x):\n    return 10 / (x or 1)\n", support_sources=None):
     import subprocess
     from app.models.orm import ReviewTaskOrm, ReviewWorkItemOrm
     from app.review.context import ContextProvider
@@ -69,7 +70,11 @@ def setup_source_run(tmp_path, *, head_source="def ratio(x):\n    return 10 / x\
         return subprocess.run(["git", "-C", str(repo), *args], check=True,
                               capture_output=True).stdout.decode().strip()
     git("init")
-    (repo / "a.py").write_text("def ratio(x):\n    return 10 / (x or 1)\n", encoding="utf-8")
+    (repo / "a.py").write_text(base_source, encoding="utf-8")
+    for path, content in (support_sources or {}).items():
+        target = repo / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
     git("add", ".")
     git("-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "base")
     base = git("rev-parse", "HEAD")
@@ -90,5 +95,5 @@ def setup_source_run(tmp_path, *, head_source="def ratio(x):\n    return 10 / x\
         payload["unit_id"] = run.plan.units[0].id
         item.payload, item.subject = payload, run.plan.units[0].id
     evidence = EvidenceService(snapshot=run.snapshot, artifacts=LocalArtifactStore(tmp_path / "artifacts"),
-        repo_path=repo, allowed_paths=frozenset({"a.py"}), git=GitTool())
+        repo_path=repo, allowed_paths=frozenset({"a.py", *(support_sources or {})}), git=GitTool())
     return store, run, lease, ContextProvider(run, evidence, store, lease), sessions

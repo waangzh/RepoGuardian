@@ -1,7 +1,9 @@
 """Attempt-local references over shared immutable source bytes."""
 
 import asyncio
+import json
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 from typing import Any
 
 from app.review.domain import SourceRef
@@ -11,7 +13,7 @@ from app.review.store import BudgetExceeded
 
 
 class NoProgressDetected(RuntimeError):
-    """The agent repeated an immutable tool request after a warning."""
+    """The stalled agent exhausted its bounded structured finalization attempts."""
 
 
 @dataclass
@@ -33,6 +35,14 @@ class AgentContext:
     round_tools: int = 0
     round_progress: bool = False
     stalled_rounds: int = 0
+    source_ranges: dict[tuple[str, str, str], list[tuple[int, int]]] = field(default_factory=dict)
+    no_progress_closing_calls: int = 0
+    investigation_closed: bool = False
+    investigation_tools: set[str] = field(default_factory=set)
+    source_paths: set[str] = field(default_factory=set)
+    related_paths: set[str] = field(default_factory=set)
+    delivered_hunks: set[str] = field(default_factory=set)
+    coverage_checkpoint_sent: bool = False
 
     @property
     def evidence(self):
@@ -48,6 +58,20 @@ class AgentContext:
 
     async def check_active(self):
         await self.budget.active()
+
+    def note_source(self, source) -> bool:
+        key = (source["commit_sha"], source["side"], source["path"])
+        start, end = source["start_line"], source["end_line"]
+        ranges = self.source_ranges.setdefault(key, [])
+        fresh = not any(first <= start and end <= last for first, last in ranges)
+        merged = []
+        for first, last in sorted([*ranges, (start, end)]):
+            if merged and first <= merged[-1][1] + 1:
+                merged[-1] = (merged[-1][0], max(last, merged[-1][1]))
+            else:
+                merged.append((first, last))
+        self.source_ranges[key] = merged
+        return fresh
 
     def note_tool_result(self, name, arguments, result) -> int:
         normalized = dict(arguments)
@@ -67,13 +91,145 @@ class AgentContext:
         digest = identity(semantic(result))
         progress = identity([key, digest])
         self.round_tools += 1
-        if progress not in self.progress_keys:
+        if result.get("ok") is True:
+            self.investigation_tools.add(name)
+            if name == "search_code":
+                self.related_paths.update(match["path"] for match in result.get("matches", []))
+            elif name == "find_relations":
+                self.related_paths.update(
+                    edge[key].partition("::")[0] for edge in result.get("edges", [])
+                    for key in ("source", "target") if isinstance(edge.get(key), str)
+                )
+        sources = ([result["source"]] if isinstance(result.get("source"), dict) else [])
+        sources.extend(item["source"] for item in result.get("sources", [])
+                       if isinstance(item, dict) and isinstance(item.get("source"), dict))
+        fresh = False
+        for source in sources:
+            self.source_paths.add(source.get("path", ""))
+            fresh = self.note_source(source) or fresh
+        if (fresh if sources else progress not in self.progress_keys):
             self.progress_keys.add(progress)
             self.round_progress = True
         previous, count = self.tool_repetitions.get(key, (None, 0))
         count = count + 1 if previous == digest else 1
         self.tool_repetitions[key] = (digest, count)
         return count
+
+    @staticmethod
+    def is_test_path(path: str) -> bool:
+        parts = PurePosixPath(path.casefold()).parts
+        name = parts[-1] if parts else ""
+        return (
+            any(part in {"test", "tests", "__tests__", "spec", "specs"} for part in parts[:-1])
+            or name.startswith("test_") or name.endswith(("_test.py", "_test.go"))
+            or ".test." in name or ".spec." in name
+        )
+
+    def small_unit_ready_for_checkpoint(self) -> bool:
+        if self.work.kind != "review":
+            return False
+        unit = next(unit for unit in self.provider.run.plan.units if unit.id == self.work.unit_id)
+        changed_lines = sum(
+            item.get("additions", 0) + item.get("deletions", 0)
+            for item in self.changed_files if item["file_path"] in unit.paths
+        )
+        if len(unit.paths) > 3 or changed_lines >= 200:
+            return False
+        relation_checked = bool(self.investigation_tools & {
+            "search_code", "find_relations",
+        })
+        materials_received = set(unit.required_hunk_ids) <= self.delivered_hunks
+        tests_received = any(self.is_test_path(path) for path in self.source_paths)
+        consumer_received = any(
+            path in self.related_paths and path not in unit.paths and not self.is_test_path(path)
+            for path in self.source_paths
+        )
+        return (
+            materials_received
+            and tests_received
+            and relation_checked
+            and consumer_received
+        )
+
+    @staticmethod
+    def _source_items(value):
+        if isinstance(value, dict):
+            source = value.get("source")
+            if isinstance(source, dict) and isinstance(value.get("content"), str):
+                try:
+                    SourceRef.model_validate(source)
+                except ValueError:
+                    pass
+                else:
+                    yield value, source
+            for item in value.values():
+                yield from AgentContext._source_items(item)
+        elif isinstance(value, list):
+            for item in value:
+                yield from AgentContext._source_items(item)
+
+    @staticmethod
+    def _source_range(source):
+        return (
+            source.get("commit_sha"), source.get("side"), source.get("path"),
+            source.get("start_line"), source.get("end_line"),
+        )
+
+    @classmethod
+    def compact_messages(cls, messages):
+        """Omit duplicate source bodies while preserving handles and fixed ranges."""
+        ranges = {}
+        tool_results = {}
+        compacted = []
+        for message in messages:
+            if message.type not in {"human", "tool"} or not isinstance(message.content, str):
+                compacted.append(message)
+                continue
+            try:
+                payload = json.loads(message.content)
+            except (TypeError, ValueError):
+                compacted.append(message)
+                continue
+            changed = False
+            for item, source in cls._source_items(payload):
+                key = cls._source_range(source)[:3]
+                start, end = source.get("start_line"), source.get("end_line")
+                known = ranges.setdefault(key, [])
+                duplicate = any(first <= start and end <= last for first, last in known)
+                if duplicate:
+                    item["content"] = (
+                        f"[source body omitted; use evidence {item.get('source_ref', source.get('id'))} "
+                        f"for {source.get('path')}:{start}-{end}]"
+                    )
+                    item["content_omitted"] = True
+                    changed = True
+                merged = []
+                for first, last in sorted([*known, (start, end)]):
+                    if merged and first <= merged[-1][1] + 1:
+                        merged[-1] = (merged[-1][0], max(last, merged[-1][1]))
+                    else:
+                        merged.append((first, last))
+                ranges[key] = merged
+                if message.type == "tool":
+                    item["source"] = {key: source[key] for key in (
+                        "commit_sha", "side", "path", "start_line", "end_line",
+                    )}
+                    changed = True
+            if message.type == "tool" and isinstance(payload, dict):
+                fingerprint = identity([message.name, payload])
+                previous = tool_results.get(fingerprint)
+                if previous and any(key in payload for key in ("matches", "edges", "paths", "member")):
+                    payload = {key: value for key, value in payload.items()
+                               if key not in {"matches", "edges", "paths", "member"}}
+                    payload["same_result_as_tool_call"] = previous
+                    payload["content_omitted"] = True
+                    changed = True
+                else:
+                    tool_results[fingerprint] = message.tool_call_id
+            compacted.append(message.model_copy(update={
+                "content": json.dumps(payload, ensure_ascii=False),
+            }) if changed else message)
+        return compacted
 
     def begin_round(self):
         if self.round_tools:
@@ -100,6 +256,10 @@ class AgentContext:
             list(hunks), self.material_failures, self.provider.lease,
             source_ids=[ref.id for ref in pending.values()], digests=hunks)
         self.visible.update(pending)
+        self.delivered_hunks.update(hunks)
+        for ref in pending.values():
+            self.source_paths.add(ref.path)
+            self.note_source(ref.model_dump())
         for handle in pending:
             self.pending.pop(handle, None)
         for key in hunks:

@@ -7,7 +7,7 @@ import re
 import subprocess
 from uuid import uuid4
 
-from app.review.evidence import digest, source_lines
+from app.review.evidence import SourceReadError, digest, source_lines
 from app.review.tool_scope import (
     _validate_repository_relative_path, is_sensitive_repository_path, validate_repository_file,
 )
@@ -47,7 +47,12 @@ def _position(context, cursor, scope, size):
             raise ValueError("invalid_cursor")
         return position, column, unreadable
     except (ValueError, KeyError, TypeError, UnicodeError, OSError) as exc:
-        raise ValueError("invalid_cursor") from exc
+        raise SourceReadError(
+            "invalid_cursor", retry_without_cursor=True,
+            next_action="A cursor belongs to the original query, path, glob and revision. "
+            "Keep all original filters to continue that search, or omit cursor to start "
+            "a new search with the current filters. Never invent or edit cursor tokens.",
+        ) from exc
 
 
 def _page(context, scope, cursor, position, has_more, *, unreadable_total=0, search_window=None, **body):

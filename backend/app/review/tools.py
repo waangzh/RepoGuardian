@@ -25,6 +25,15 @@ def bounded(function):
         context = kwargs["runtime"].context
         await context.check_active()
         context.tool_calls += 1
+        bound = parameters.bind(*args, **kwargs)
+        bound.apply_defaults()
+        arguments = {key: value for key, value in bound.arguments.items() if key != "runtime"}
+        if context.investigation_closed and function.__name__ != "submit_candidate":
+            result = {"ok": False, "error": "investigation_closed",
+                      "next_action": "Return the required result tool using existing evidence; "
+                      "state a concrete missing premise if the investigation is unfinished."}
+            context.note_tool_result(function.__name__, arguments, result)
+            return result
         if context.tool_calls > context.provider.run.configuration.options.limits.tool_calls:
             logger.warning("工具调用被预算阻止 review_id=%.8s work_id=%.8s tool=%s reason=tool_call_limit",
                            context.provider.run.id, context.work.id, function.__name__)
@@ -42,9 +51,6 @@ def bounded(function):
         await context.check_active()
         # Submission receipts remain idempotent; never block saving a candidate.
         if function.__name__ != "submit_candidate":
-            bound = parameters.bind(*args, **kwargs)
-            bound.apply_defaults()
-            arguments = {key: value for key, value in bound.arguments.items() if key != "runtime"}
             repetition = context.note_tool_result(function.__name__, arguments, result)
             if repetition == 3:
                 return {**result, "progress_warning": "Repeated request returned no new information. "
@@ -81,7 +87,8 @@ async def search_code(query: str, runtime: ToolRuntime[AgentContext], path: str 
                       cursor: str = "", limit: int = 12) -> dict:
     """Bounded literal search. Results are hints, read source before citing them.
 
-    Continue next_cursor with the same filters. An empty partial page is not absence.
+    Continue next_cursor with the same query/path/glob/revision. If any filter changes,
+    omit cursor to start a new search. An empty partial page is not absence.
     """
     return await search(runtime.context, query, path, glob, revision, cursor, limit)
 

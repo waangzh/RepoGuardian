@@ -51,6 +51,60 @@ def test_unknown_usage_stays_reserved_after_reopen_and_settle_is_idempotent(tmp_
     assert reopened.usage(run.id)["committed_input_tokens"] == 4000
 
 
+def test_usage_exposes_cached_and_uncached_input_tokens(tmp_path):
+    store, run, lease, _ = setup_run(tmp_path)
+    work = store.claim(run.id, store.work_items(run.id)[0].id, lease)
+    ticket = store.reserve(run.id, work, 1000, lease)
+    store.settle(run.id, ticket, {
+        "input_tokens": 1000, "output_tokens": 20,
+        "input_token_details": {"cache_read": 250},
+    }, lease)
+    usage = store.usage(run.id)
+    assert usage["cached_input_tokens"] == 250
+    assert usage["uncached_input_tokens"] == 750
+    assert usage["cache_hit_rate"] == 0.25
+    ticket = store.reserve(run.id, work, 9000, lease)
+    store.settle(run.id, ticket, {
+        "input_tokens": 9000, "output_tokens": 20,
+        "input_token_details": {"cache_read": 8100},
+    }, lease)
+    assert store.usage(run.id)["cache_hit_rate"] == 0.835
+
+
+@pytest.mark.parametrize("cached", [None, -1, 1001, "250", True])
+def test_missing_or_invalid_cache_details_stay_unknown(tmp_path, cached):
+    store, run, lease, _ = setup_run(tmp_path)
+    work = store.claim(run.id, store.work_items(run.id)[0].id, lease)
+    ticket = store.reserve(run.id, work, 1000, lease)
+    details = {} if cached is None else {"cache_read": cached}
+    store.settle(run.id, ticket, {
+        "input_tokens": 1000, "output_tokens": 20, "input_token_details": details,
+    }, lease)
+    usage = store.usage(run.id)
+    assert usage["input_tokens"] == 1000
+    assert usage["cached_input_tokens"] is None
+    assert usage["uncached_input_tokens"] is None
+    assert usage["cache_hit_rate"] is None
+    assert usage["cache_unknown_calls"] == 1
+
+
+def test_cached_usage_remains_gross_for_budget_and_unknown_calls(tmp_path):
+    store, run, lease, sessions = setup_run(tmp_path, input_tokens=30000)
+    work = store.claim(run.id, store.work_items(run.id)[0].id, lease)
+    ticket = store.reserve(run.id, work, 1000, lease)
+    store.settle(run.id, ticket, {
+        "input_tokens": 1000, "output_tokens": 20, "input_token_details": {"cache_read": 1000},
+    }, lease)
+    pending = store.reserve(run.id, work, 2000, lease)
+    store.settle(run.id, pending, None, lease)
+    usage = type(store)(sessions).usage(run.id)
+    assert usage["committed_input_tokens"] == 3000
+    assert usage["cached_input_tokens"] is None
+    assert usage["cache_unknown_calls"] == 1
+    assert usage["known_cached_input_tokens"] == 1000
+    assert usage["known_uncached_input_tokens"] == 0
+
+
 @pytest.mark.parametrize("stop", ["cancel", "lease", "attempt"])
 def test_late_candidate_cannot_write(tmp_path, stop):
     store, run, lease, sessions = setup_run(tmp_path)

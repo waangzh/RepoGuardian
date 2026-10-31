@@ -16,16 +16,31 @@ const count = (value: number | null) => value == null ? '未知' : value.toLocal
 <p v-if="task.plan.grouping_status" class="muted small">{{ groupingLabel[task.plan.grouping_status] }}。分组只是调查组织方式，不构成源码证据。</p>
 </div>
 </div>
-<div class="rg-activity-stats">
+<div class="rg-activity-stats rg-activity-stats-wide">
 <div>
 <small>模型调用</small>
 <strong>{{ count(usage.calls) }}</strong>
 <span>次请求</span>
 </div>
 <div>
-<small>Token 用量</small>
-<strong>{{ count(usage.tokens) }}</strong>
-<span>输入与输出合计</span>
+<small>总输入 Token</small>
+<strong>{{ count(usage.input) }}</strong>
+<span>包含命中与未命中缓存</span>
+</div>
+<div>
+<small>输入缓存</small>
+<strong>{{ count(usage.cachedInput) }}</strong>
+<span>{{ usage.cacheHitRate == null ? '命中率未知' : `命中率 ${(usage.cacheHitRate * 100).toFixed(1)}%` }}</span>
+</div>
+<div>
+<small>未缓存输入</small>
+<strong>{{ count(usage.uncachedInput) }}</strong>
+<span>供应商未命中缓存</span>
+</div>
+<div>
+<small>输出 Token</small>
+<strong>{{ count(usage.output) }}</strong>
+<span>模型生成量</span>
 </div>
 <div>
 <small>当前阶段</small>
@@ -33,6 +48,7 @@ const count = (value: number | null) => value == null ? '未知' : value.toLocal
 <StatusBadge :status="task.status" />
 </div>
 </div>
+<p v-if="report?.usage.cache_unknown_calls" class="muted small space-top">部分请求缺少供应商缓存明细，缓存合计与命中率保持未知。</p>
 <section class="card card-pad space-top">
 <div class="card-header">
 <h3>工作项</h3>

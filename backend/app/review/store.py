@@ -22,6 +22,14 @@ VERIFICATION_INPUT = 20000
 MAX_CANDIDATES = 100
 
 
+def cached_input_tokens(usage):
+    details = usage.get("input_token_details") or {}
+    if not isinstance(details, dict):
+        return None
+    value = details.get("cache_read")
+    return value if type(value) is int and 0 <= value <= usage["input_tokens"] else None
+
+
 def verification_input_limit(limits, committed_input_tokens=0):
     if limits.total_input_tokens is None:
         from app.review.planner import unit_capacity
@@ -296,12 +304,25 @@ class ReviewStore:
     def _usage(self, session, run_id):
         calls = list(session.scalars(select(ReviewRequestOrm).where(ReviewRequestOrm.run_id == run_id)))
         known = [call.usage for call in calls if call.usage is not None]
+        known_input = sum(item["input_tokens"] for item in known)
+        classified = [(item, cached_input_tokens(item)) for item in known]
+        classified = [(item, cached) for item, cached in classified if cached is not None]
+        known_cached = sum(cached for _, cached in classified)
+        known_uncached = sum(item["input_tokens"] - cached for item, cached in classified)
         unknown = len(calls) - len(known)
+        cache_unknown = len(calls) - len(classified)
         return calls, {
             "model_calls": len(calls), "unknown_calls": unknown,
-            "input_tokens": sum(item["input_tokens"] for item in known) if not unknown else None,
+            "input_tokens": known_input if not unknown else None,
             "output_tokens": sum(item["output_tokens"] for item in known) if not unknown else None,
-            "known_input_tokens": sum(item["input_tokens"] for item in known),
+            "cached_input_tokens": known_cached if not cache_unknown else None,
+            "uncached_input_tokens": known_uncached if not cache_unknown else None,
+            "cache_hit_rate": (known_cached / known_input if known_input else None)
+                               if not cache_unknown else None,
+            "cache_unknown_calls": cache_unknown,
+            "known_input_tokens": known_input,
+            "known_cached_input_tokens": known_cached,
+            "known_uncached_input_tokens": known_uncached,
             "known_output_tokens": sum(item["output_tokens"] for item in known),
             "committed_input_tokens": sum(call.usage["input_tokens"] if call.usage is not None
                                          else call.reserved_input_tokens for call in calls),

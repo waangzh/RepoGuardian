@@ -172,6 +172,23 @@ export interface Overview {
   error_code: string | null;
 }
 
+export interface ReviewUsage {
+  model_calls?: number;
+  unknown_calls?: number;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cached_input_tokens?: number | null;
+  uncached_input_tokens?: number | null;
+  cache_hit_rate?: number | null;
+  cache_unknown_calls?: number;
+  known_input_tokens?: number;
+  known_output_tokens?: number;
+  known_cached_input_tokens?: number;
+  known_uncached_input_tokens?: number;
+  committed_input_tokens?: number;
+  committed_output_tokens?: number;
+}
+
 export interface Report {
   version: string;
   status: RunStatus;
@@ -180,7 +197,7 @@ export interface Report {
   units: WorkItem[];
   excluded: Record<string, string>;
   overview: Overview;
-  usage: Record<string, unknown>;
+  usage: ReviewUsage;
   reasons: string[];
 }
 

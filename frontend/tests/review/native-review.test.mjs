@@ -48,6 +48,43 @@ test('活动页区分冻结语义分组并安全显示 Unit 标签', async () =>
   } finally { await server.close(); }
 });
 
+test('活动页显示输入缓存细分，缺失明细保持未知', async () => {
+  const server = await createServer({
+    server: { middlewareMode: true, hmr: false },
+    optimizeDeps: { noDiscovery: true, entries: [], include: [] },
+    appType: 'custom',
+  });
+  try {
+    const { default: Component } = await server.ssrLoadModule('/src/components/pages/ReviewActivityPage.vue');
+    const { observedUsage } = await server.ssrLoadModule('/src/utils/nativeReview.ts');
+    const report = { usage: {
+      model_calls: 10, input_tokens: 10000, cached_input_tokens: 8000,
+      uncached_input_tokens: 2000, output_tokens: 500, cache_hit_rate: 0.8,
+      cache_unknown_calls: 0,
+    }, reasons: [] };
+    const html = await renderToString(createSSRApp(Component, {
+      task: task('completed'), report, units: [],
+    }));
+    assert.match(html, /总输入 Token/);
+    assert.match(html, /10,000/);
+    assert.match(html, /8,000/);
+    assert.match(html, /2,000/);
+    assert.match(html, /输出 Token/);
+    assert.match(html, /命中率 80.0%/);
+    assert.equal(observedUsage(report).tokens, 10500);
+    report.usage.cached_input_tokens = null;
+    report.usage.uncached_input_tokens = null;
+    report.usage.cache_hit_rate = null;
+    report.usage.cache_unknown_calls = 1;
+    const unknown = await renderToString(createSSRApp(Component, {
+      task: task('completed'), report, units: [],
+    }));
+    assert.match(unknown, /命中率未知/);
+    assert.match(unknown, /缺少供应商缓存明细/);
+    assert.doesNotMatch(unknown, /命中率 0.0%/);
+  } finally { await server.close(); }
+});
+
 test('新运行投影保留终态、快照和安全链接语义', async () => { const server = await createServer({ server: { middlewareMode: true, hmr: false }, optimizeDeps: { noDiscovery: true, entries: [], include: [] }, appType: 'custom' }); try { const { terminal, phaseLabel, safeGitHubLink, isFileContextFor } = await server.ssrLoadModule('/src/utils/nativeReview.ts'); assert.equal(terminal('partial'), true); assert.equal(terminal('running'), false); assert.equal(phaseLabel('finished'), '审查结束'); assert.equal(safeGitHubLink('javascript:alert(1)'), undefined); assert.equal(safeGitHubLink('https://github.com/o/r/pull/1'), 'https://github.com/o/r/pull/1'); assert.equal(isFileContextFor({ file_id: 0, file_path: 'a.py', snapshot: task('completed').snapshot, base_lines: [], head_lines: [] }, 0, 'a.py', task('completed').snapshot), true); } finally { await server.close(); } });
 test('五切片工作台展示运行中和失败状态，不渲染不可信 HTML', async () => { const server = await createServer({ server: { middlewareMode: true, hmr: false }, optimizeDeps: { noDiscovery: true, entries: [], include: [] }, appType: 'custom' }); try { const { default: Component } = await server.ssrLoadModule('/src/components/review/ReviewWorkspace.vue'); for (const status of ['running', 'failed', 'cancelled']) { const html = await renderToString(createSSRApp(Component, { task: task(status) })); assert.match(html, /概览|变更|问题|活动|发布/); assert.match(html, /未执行目标代码/); assert.match(html, /&lt;script&gt;/); assert.doesNotMatch(html, /<script>alert/); if (status === 'running') assert.match(html, /停止审查/); } } finally { await server.close(); } });
 
