@@ -18,9 +18,33 @@ test('预算耗尽说明具体限制，避免显示为未知执行异常', async
     assert.equal(executionErrorLabel('agent_model_limit'), '达到单个 Agent 的模型调用上限，调查尚未完成');
     assert.equal(executionErrorLabel('agent_structured_output_missing'), '模型未返回有效的结构化结果，任务尚未完成');
     for (const code of ['model_call_limit', 'input_token_limit', 'output_token_limit',
-      'context_capacity', 'tool_call_limit', 'review_cutoff', 'hard_deadline']) {
+      'context_capacity', 'tool_call_limit', 'agent_no_progress', 'review_cutoff', 'hard_deadline']) {
       assert.doesNotMatch(executionErrorLabel(code), /执行异常/);
     }
+  } finally { await server.close(); }
+});
+
+test('活动页区分冻结语义分组并安全显示 Unit 标签', async () => {
+  const server = await createServer({
+    server: { middlewareMode: true, hmr: false },
+    optimizeDeps: { noDiscovery: true, entries: [], include: [] },
+    appType: 'custom',
+  });
+  try {
+    const { default: Component } = await server.ssrLoadModule('/src/components/pages/ReviewActivityPage.vue');
+    const run = task('running');
+    run.plan.grouping_status = 'model';
+    run.plan.units = [{ id: 'unit', label: '<script>Feature</script>', paths: ['auth/service.py'] }];
+    const html = await renderToString(createSSRApp(Component, {
+      task: run, report: null, units: [{ id: 'work', kind: 'review', unit_id: 'unit',
+        status: 'interrupted', attempt: 1, material_delivery: 'complete', tool_calls: 4,
+        error_code: 'agent_no_progress', missing_material_reasons: {} }],
+    }));
+    assert.match(html, /语义分组已冻结/);
+    assert.match(html, /auth\/service.py/);
+    assert.match(html, /&lt;script&gt;Feature&lt;\/script&gt;/);
+    assert.match(html, /没有取得进展/);
+    assert.doesNotMatch(html, /<script>/);
   } finally { await server.close(); }
 });
 

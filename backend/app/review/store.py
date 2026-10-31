@@ -23,8 +23,13 @@ MAX_CANDIDATES = 100
 
 
 def verification_input_limit(limits, committed_input_tokens=0):
-    return max(1, min(VERIFICATION_INPUT, limits.context_tokens - limits.output_tokens,
-                      limits.total_input_tokens - committed_input_tokens - OVERVIEW_INPUT))
+    if limits.total_input_tokens is None:
+        from app.review.planner import unit_capacity
+        return max(1, min(unit_capacity(limits), limits.context_tokens - limits.output_tokens - 1024))
+    available = [VERIFICATION_INPUT, limits.context_tokens - limits.output_tokens]
+    if limits.total_input_tokens is not None:
+        available.append(limits.total_input_tokens - committed_input_tokens - OVERVIEW_INPUT)
+    return max(1, min(available))
 
 
 class LeaseLost(RuntimeError):
@@ -109,7 +114,7 @@ class ReviewStore:
                     raise ValueError("review_frequency_limited")
             session.add(ReviewCreateIntentOrm(id=uuid4().hex, caller_id=caller_id, key=key,
                                              request_hash=request_hash, run_id=run.id))
-            for unit in run.plan.units:
+            for unit in (run.plan.units if run.plan.grouping_status != "pending" else []):
                 work = WorkItem(id=uuid4().hex, kind="review", unit_id=unit.id)
                 if unit.reused_from:
                     previous_id, work_id = unit.reused_from.split(":")
@@ -308,12 +313,12 @@ class ReviewStore:
         with self.sessions() as session:
             return self._usage(session, run_id)[1]
 
-    def _admit_request(self, session, run, work, estimate, overview):
+    def _admit_request(self, session, run, work, estimate, overview, *, kind_override=None):
         now, limits = utcnow(), run.configuration.options.limits
         if now >= run.hard_deadline:
             raise BudgetExceeded("hard_deadline")
-        kind = "overview" if overview else work.kind
-        if kind == "review" and now >= run.review_cutoff:
+        kind = kind_override or ("overview" if overview else work.kind)
+        if kind in {"review", "grouping"} and now >= run.review_cutoff:
             raise BudgetExceeded("review_cutoff")
         calls, usage = self._usage(session, run.id)
         if estimate is None:
@@ -330,19 +335,25 @@ class ReviewStore:
             protected_tokens += pending * verification_input_limit(limits)
         if work is not None and sum(call.attempt_id == work.attempt_id for call in calls) >= limits.model_calls:
             raise BudgetExceeded("agent_model_limit")
-        if len(calls) + 1 + protected_calls > limits.total_model_calls:
+        if (limits.total_model_calls is not None
+                and len(calls) + 1 + protected_calls > limits.total_model_calls):
             raise BudgetExceeded("model_call_limit")
-        if usage["committed_input_tokens"] + estimate + protected_tokens > limits.total_input_tokens:
+        if (limits.total_input_tokens is not None
+                and usage["committed_input_tokens"] + estimate + protected_tokens > limits.total_input_tokens):
             raise BudgetExceeded("input_token_limit")
         if estimate + limits.output_tokens > limits.context_tokens:
             raise BudgetExceeded("context_capacity")
-        if usage["committed_output_tokens"] + (1 + protected_calls) * limits.output_tokens > limits.total_output_tokens:
+        if (limits.total_output_tokens is not None and usage["committed_output_tokens"]
+                + (1 + protected_calls) * limits.output_tokens > limits.total_output_tokens):
             raise BudgetExceeded("output_token_limit")
         return {
-            "input_tokens": limits.total_input_tokens - usage["committed_input_tokens"] - protected_tokens,
-            "output_tokens": limits.total_output_tokens - usage["committed_output_tokens"]
-                             - protected_calls * limits.output_tokens,
-            "model_calls": limits.total_model_calls - len(calls) - protected_calls,
+            "input_tokens": (limits.total_input_tokens - usage["committed_input_tokens"] - protected_tokens
+                             if limits.total_input_tokens is not None else None),
+            "output_tokens": (limits.total_output_tokens - usage["committed_output_tokens"]
+                              - protected_calls * limits.output_tokens
+                              if limits.total_output_tokens is not None else None),
+            "model_calls": (limits.total_model_calls - len(calls) - protected_calls
+                            if limits.total_model_calls is not None else None),
             "agent_model_calls": limits.model_calls - sum(
                 call.attempt_id == work.attempt_id for call in calls) if work else None,
         }
@@ -352,8 +363,10 @@ class ReviewStore:
             row = session.get(ReviewTaskOrm, run_id)
             run = self._run(row)
             unit = next(unit for unit in run.plan.units if unit.id == work.unit_id)
-            estimate = (unit.estimated_input_tokens * 2 + 4096 if work.kind == "review"
-                        else None)
+            from app.review.planner import unit_capacity
+            estimate = (min(unit.estimated_input_tokens * 2 + 4096,
+                            unit_capacity(run.configuration.options.limits))
+                        if work.kind == "review" else None)
             try:
                 self._admit_request(session, run, work, estimate, False)
             except BudgetExceeded as exc:
@@ -375,6 +388,65 @@ class ReviewStore:
                 kind=kind, reserved_input_tokens=estimate, reserved_output_tokens=limits.output_tokens,
                 state="reserved", lease_fence=lease))
             return (ticket, remaining) if with_remaining else ticket
+
+    def reserve_grouping(self, run_id, estimate, lease):
+        """One durable attempt; a crashed grouping request is never silently replayed."""
+        with self.sessions.begin() as session:
+            row = self._guard(session, run_id, lease)
+            run = self._run(row)
+            if run.plan.grouping_status != "pending":
+                return None
+            if session.scalar(select(ReviewRequestOrm.id).where(
+                    ReviewRequestOrm.run_id == run_id, ReviewRequestOrm.kind == "grouping")):
+                return None
+            self._admit_request(session, run, None, estimate, False, kind_override="grouping")
+            ticket = uuid4().hex
+            session.add(ReviewRequestOrm(id=ticket, run_id=run_id, kind="grouping",
+                reserved_input_tokens=estimate,
+                reserved_output_tokens=run.configuration.options.limits.output_tokens,
+                state="reserved", lease_fence=lease))
+            run.phase = "grouping"
+            run.status = "running"
+            run.started_at = run.started_at or utcnow()
+            self._save(row, run)
+            return ticket
+
+    def freeze_grouping(self, run_id, plan, lease):
+        """Freeze membership and create its work items in the same fenced transaction."""
+        from collections import Counter
+
+        with self.sessions.begin() as session:
+            row = self._guard(session, run_id, lease)
+            run = self._run(row)
+            if run.plan.grouping_status != "pending":
+                return run
+            if plan.grouping_status not in {"model", "fallback"}:
+                raise ValueError("grouping_not_final")
+            if utcnow() >= run.hard_deadline:
+                raise BudgetExceeded("hard_deadline")
+            from app.review.planner import members
+            member_map = members(run.changed_files)
+            expected = Counter(key for unit in run.plan.units for key in unit.required_hunk_ids)
+            actual = Counter(key for unit in plan.units for key in unit.required_hunk_ids)
+            if expected != actual or plan.excluded != run.plan.excluded:
+                raise ValueError("grouping_scope_changed")
+            paths = [path for unit in plan.units for path in unit.paths]
+            if len(paths) != len(set(paths)) or len({unit.id for unit in plan.units}) != len(plan.units):
+                raise ValueError("grouping_duplicate_identity")
+            for unit in plan.units:
+                if (not unit.required_hunk_ids or set(unit.paths) != {
+                        member_map[key]["path"] for key in unit.required_hunk_ids}
+                        or unit.reused_from is not None or len(unit.paths) > 10):
+                    raise ValueError("grouping_invalid_membership")
+            if session.scalar(select(ReviewWorkItemOrm.id).where(ReviewWorkItemOrm.run_id == run_id)):
+                raise ValueError("grouping_already_dispatched")
+            for unit in plan.units:
+                work = WorkItem(id=uuid4().hex, kind="review", unit_id=unit.id)
+                session.add(ReviewWorkItemOrm(id=work.id, run_id=run_id, kind="review",
+                    subject=unit.id, payload=work.model_dump(mode="json")))
+            run.plan, run.phase = plan, "review"
+            self._save(row, run)
+            return run
 
     def settle(self, run_id, ticket, usage, lease):
         with self.sessions.begin() as session:
@@ -573,8 +645,9 @@ class ReviewStore:
             if self._publication_pending(session, run_id):
                 raise ValueError("review_publication_pending")
             limits, usage = run.configuration.options.limits, self._usage(session, run_id)[1]
-            if (usage["model_calls"] >= limits.total_model_calls
-                    or usage["committed_input_tokens"] + OVERVIEW_INPUT > limits.total_input_tokens):
+            if ((limits.total_model_calls is not None and usage["model_calls"] >= limits.total_model_calls)
+                    or (limits.total_input_tokens is not None
+                        and usage["committed_input_tokens"] + OVERVIEW_INPUT > limits.total_input_tokens)):
                 raise ValueError("review_budget_exhausted")
             if overview:
                 if run.report is None or not run.plan.units:

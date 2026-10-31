@@ -1,11 +1,15 @@
 import shutil
 import logging
+import json
+import subprocess
 from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
 import pytest
 from fastapi import FastAPI
+from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 
 from app.review.contracts import ReviewRequest
 from app.services.review.review_service import ReviewService
@@ -113,6 +117,58 @@ async def test_optional_preview_does_not_create_a_run_or_call_model(service_pipe
     preview = await service.preview(ReviewRequest(pr_url="https://github.com/o/r/pull/1"))
     assert preview["plan"].units
     assert service.store.list_runs()["total"] == before
+
+
+async def test_large_pr_groups_only_after_create_and_keeps_every_file(service_pipeline):
+    service, github, _ = service_pipeline
+    for name in ("b.py", "c.py", "d.py"):
+        (github.source_repo / name).write_text("VALUE = 1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(github.source_repo), "add", "."],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(github.source_repo), "-c", "user.name=Test",
+                    "-c", "user.email=test@example.test", "commit", "-m", "group fixture"],
+                   check=True, capture_output=True)
+    github.pr.head.sha = subprocess.run(
+        ["git", "-C", str(github.source_repo), "rev-parse", "HEAD"],
+        check=True, capture_output=True).stdout.decode().strip()
+    calls = []
+
+    class GroupedReviewModel(ReviewModel):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            if str(messages[0].content).startswith("Group changed files"):
+                packet = json.loads(messages[1].content)
+                calls.append(packet)
+                assert len(packet["files"]) == 4
+                assert "VALUE = 1" not in messages[1].content
+                return ChatResult(generations=[ChatGeneration(message=AIMessage(
+                    content="", usage_metadata={"input_tokens": 80, "output_tokens": 20,
+                                                 "total_tokens": 100}, tool_calls=[{
+                        "name": "GroupingOutput", "args": {"groups": [
+                            {"label": "Feature pair", "files": [0, 3]},
+                            {"label": "Support pair", "files": [1, 2]},
+                        ]}, "id": "grouping",
+                    }]))])
+            return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+    model = GroupedReviewModel(empty=True)
+    service._provider.agent_model = lambda *args, **kwargs: model
+    request = ReviewRequest(pr_url=github.pr.html_url)
+    preview = await service.preview(request)
+    assert preview["plan"].grouping_status == "deterministic"
+    assert calls == []
+    run = await service.create(request, "grouped-create")
+    assert run.plan.grouping_status == "pending"
+    assert service.store.work_items(run.id) == []
+    assert calls == []
+    assert await service._worker.run_once()
+    result = service.store.get(run.id)
+    assert result.status == "completed", result.report.reasons
+    assert result.plan.grouping_status == "model"
+    assert sorted(path for unit in result.plan.units for path in unit.paths) == [
+        "a.py", "b.py", "c.py", "d.py"]
+    assert len(service.store.work_items(run.id)) == 2
+    assert result.report.usage["model_calls"] == 4
+    assert len(calls) == 1
 
 
 async def test_cancel_preserves_candidate_facts_and_rejects_retry(service_pipeline):

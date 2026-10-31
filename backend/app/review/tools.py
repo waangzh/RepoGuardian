@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+from inspect import signature
 from functools import wraps
 from typing import Literal
 
@@ -18,6 +19,7 @@ logger = logging.getLogger("RepoGuardian.Review.Tools")
 
 
 def bounded(function):
+    parameters = signature(function)
     @wraps(function)
     async def execute(*args, **kwargs):
         context = kwargs["runtime"].context
@@ -32,12 +34,21 @@ def bounded(function):
         except SourceReadError as exc:
             logger.warning("工具调用被拒绝 review_id=%.8s work_id=%.8s tool=%s reason=%s",
                            context.provider.run.id, context.work.id, function.__name__, exc.code)
-            return {"ok": False, "error": exc.code, **exc.details}
+            result = {"ok": False, "error": exc.code, **exc.details}
         except (ValueError, OSError) as exc:
             logger.warning("工具调用被拒绝 review_id=%.8s work_id=%.8s tool=%s error_type=%s",
                            context.provider.run.id, context.work.id, function.__name__, type(exc).__name__)
-            return {"ok": False, "error": "source_or_submission_rejected"}
+            result = {"ok": False, "error": "source_or_submission_rejected"}
         await context.check_active()
+        # Submission receipts remain idempotent; never block saving a candidate.
+        if function.__name__ != "submit_candidate":
+            bound = parameters.bind(*args, **kwargs)
+            bound.apply_defaults()
+            arguments = {key: value for key, value in bound.arguments.items() if key != "runtime"}
+            repetition = context.note_tool_result(function.__name__, arguments, result)
+            if repetition == 3:
+                return {**result, "progress_warning": "Repeated request returned no new information. "
+                        "Use the evidence already received, change the query, or finish."}
         logger.debug("工具调用完成 review_id=%.8s work_id=%.8s tool=%s",
                      context.provider.run.id, context.work.id, function.__name__)
         return result
@@ -94,6 +105,11 @@ async def submit_candidate(proposal: CandidateInput, runtime: ToolRuntime[AgentC
     candidate = admit_candidate(proposal, context, runtime.tool_call_id)
     candidate_id = await asyncio.to_thread(context.provider.store.submit,
         context.provider.run.id, context.work, candidate, context.provider.lease)
+    progress = "candidate:" + candidate_id
+    if progress not in context.progress_keys:
+        context.progress_keys.add(progress)
+        context.round_progress = True
+        context.round_tools += 1
     logger.info("候选已保存并排队核验 review_id=%.8s work_id=%.8s candidate_id=%.8s",
                 context.provider.run.id, context.work.id, candidate_id)
     return {"ok": True, "candidate_id": candidate_id, "status": "unverified"}

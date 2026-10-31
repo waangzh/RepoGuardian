@@ -4,7 +4,7 @@ import os
 import re
 from pathlib import Path
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -70,10 +70,16 @@ class Settings(BaseSettings):
     repoguardian_agent_max_calls: int = Field(default=48, ge=1, le=100)
     repoguardian_agent_max_tool_calls: int = Field(default=80, ge=1, le=500)
     repoguardian_agent_output_tokens: int = Field(default=4096, ge=256, le=32768)
-    repoguardian_review_max_model_calls: int = Field(default=64, ge=1, le=1000)
-    repoguardian_review_max_input_tokens: int = Field(default=500_000, ge=1000, le=10_000_000)
-    repoguardian_review_max_output_tokens: int = Field(default=262144, ge=1024, le=10_000_000)
-    repoguardian_model_context_tokens: int = Field(default=64000, ge=8192, le=1_000_000)
+    repoguardian_review_max_model_calls: int | None = Field(default=None, ge=3, le=1000)
+    repoguardian_review_max_input_tokens: int | None = Field(default=None, ge=12000, le=10_000_000)
+    repoguardian_review_max_output_tokens: int | None = Field(default=None, ge=1024, le=10_000_000)
+    repoguardian_model_context_tokens: int = Field(default=1_000_000, ge=8192, le=1_000_000)
+
+    @field_validator("repoguardian_review_max_model_calls", "repoguardian_review_max_input_tokens",
+                     "repoguardian_review_max_output_tokens", mode="before")
+    @classmethod
+    def optional_review_limit(cls, value):
+        return None if value == "" else value
 
     # ---- 数据库 ----
     repoguardian_db_path: Path = Path(".repoguardian/reviews.db")

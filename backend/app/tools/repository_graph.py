@@ -338,6 +338,74 @@ def resolved_import_targets(
     return targets
 
 
+def resolved_import_edges(
+    sources: Iterable[str], files: dict[str, dict[str, Any]], *, minimum: float = 0.9,
+) -> list[tuple[str, str, float]]:
+    """Resolve direct imports to one unique target, preserving confidence.
+
+    Ambiguous imports are omitted: grouping on a guessed target is worse than
+    leaving the files separate.
+    """
+    lookup = _build_lookup(files)
+    edges: dict[tuple[str, str], float] = {}
+    for source in sorted(set(sources)):
+        item = files.get(source)
+        if item is None:
+            continue
+        refs = item.get("import_refs") or [
+            {"module": imported} for imported in item.get("imports", [])]
+        for ref in refs:
+            module = str(ref.get("module", ""))
+            if not module:
+                continue
+            ref_confidence = float(ref.get("confidence", 1.0))
+            resolved = [(path, confidence) for path, confidence in
+                        resolve_import(source, module, files, lookup)
+                        if min(confidence, ref_confidence) >= minimum]
+            targets = {path for path, _ in resolved}
+            if len(targets) == 1:
+                target = next(iter(targets))
+                edges[(source, target)] = max(
+                    edges.get((source, target), 0.0),
+                    min(max(confidence for _, confidence in resolved), ref_confidence))
+            member = ref.get("imported_name")
+            if item.get("language") == "python" and member and member != "*":
+                submodule = module + ("" if module.endswith(".") else ".") + str(member)
+                sub_minimum = max(minimum, 0.94)
+                resolved = [(path, confidence) for path, confidence in
+                            resolve_import(source, submodule, files, lookup)
+                            if min(confidence, ref_confidence) >= sub_minimum]
+                targets = {path for path, _ in resolved}
+                if len(targets) == 1:
+                    target = next(iter(targets))
+                    edges[(source, target)] = max(
+                        edges.get((source, target), 0.0),
+                        min(max(confidence for _, confidence in resolved), ref_confidence))
+    return sorted((source, target, confidence)
+                  for (source, target), confidence in edges.items())
+
+
+def related_test_edges(
+    paths: Iterable[str], files: dict[str, dict[str, Any]],
+) -> list[tuple[str, str, float]]:
+    """Pair changed tests with their best changed source using graph scoring."""
+    lookup = _build_lookup(files)
+    selected = {path for path in paths if not _is_test(path)}
+    edges = []
+    for test in sorted({path for path in paths if _is_test(path)}):
+        candidates = [source for source in _candidate_sources_for_test(test, lookup)
+                      if source in selected]
+        ranked = sorted(((_test_match_score(test, source), source) for source in candidates),
+                        key=lambda item: (-item[0], item[1]))
+        if not ranked or ranked[0][0] <= 0:
+            continue
+        score, source = ranked[0]
+        confidence = min(0.98, 0.78 + score * 0.05)
+        if confidence >= 0.9:
+            edges.append((test, source, confidence))
+    return sorted(edges)
+
+
 def reverse_import_hints(
     file_index: list[dict[str, Any]],
     imports_by_source: dict[str, list[dict[str, Any]]],

@@ -147,3 +147,35 @@ def test_request_budget_snapshot_keeps_verification_overview_and_unknown_usage(t
     assert usage["model_calls"] == 4
     assert usage["committed_input_tokens"] == 4000
     assert usage["input_tokens"] is None
+
+
+def test_optional_totals_do_not_stop_progress_or_reset_unknown_usage(tmp_path):
+    store, run, lease, sessions = setup_run(tmp_path)
+    limits = run.configuration.options.limits
+    limits.total_model_calls = limits.total_input_tokens = limits.total_output_tokens = None
+    limits.context_tokens = 1_000_000
+    with sessions.begin() as session:
+        session.get(ReviewTaskOrm, run.id).task_snapshot = run.model_dump(mode="json")
+    work = store.claim(run.id, store.work_items(run.id)[0].id, lease)
+    for _ in range(3):
+        ticket, available = store.reserve(run.id, work, 400_000, lease, with_remaining=True)
+        assert available["input_tokens"] is None
+        assert available["output_tokens"] is None
+        assert available["model_calls"] is None
+        store.settle(run.id, ticket, None, lease)
+    reopened = type(store)(sessions)
+    assert reopened.usage(run.id)["committed_input_tokens"] == 1_200_000
+    assert reopened.usage(run.id)["input_tokens"] is None
+    assert reopened.usage(run.id)["unknown_calls"] == 3
+    with pytest.raises(BudgetExceeded, match="context_capacity"):
+        reopened.reserve(run.id, work, limits.context_tokens, lease)
+
+
+def test_explicit_totals_still_block_when_actual_usage_exceeds_reservation(tmp_path):
+    store, run, lease, _ = setup_run(tmp_path, input_tokens=30_000)
+    work = store.claim(run.id, store.work_items(run.id)[0].id, lease)
+    ticket = store.reserve(run.id, work, 1000, lease)
+    store.settle(run.id, ticket, {"input_tokens": 40_000, "output_tokens": 50}, lease)
+    assert store.usage(run.id)["input_tokens"] == 40_000
+    with pytest.raises(BudgetExceeded, match="input_token_limit"):
+        store.reserve(run.id, work, 1000, lease)

@@ -21,6 +21,11 @@ OVERVIEW_POLICY_VERSION = "change-first-prose-v1"
 def build_report(run, work_items, candidates, usage):
     reasons = []
     reviews = [item for item in work_items if item.kind == "review"]
+    reviewed_units = {item.unit_id for item in reviews}
+    if run.plan.grouping_status == "pending":
+        reasons.append("grouping_incomplete")
+    reasons.extend(f"{unit.id}:not_started" for unit in run.plan.units
+                   if unit.id not in reviewed_units)
     for item in reviews:
         if item.status != "completed":
             reasons.append(f"{item.unit_id}:{item.error_code or item.status}")
@@ -37,7 +42,7 @@ def build_report(run, work_items, candidates, usage):
     status = "partial" if reasons else "completed"
     if reviews and all(item.status == "failed" for item in reviews) and not candidates:
         status = "failed"
-    if not reviews:
+    if not reviews and run.plan.grouping_status != "pending":
         reasons.append("scope_empty")
     findings = aggregate(candidates)
     facts = {"findings": findings, "candidates": candidates, "units": work_items,

@@ -6,10 +6,12 @@ from typing import Any
 
 from app.review.domain import SourceRef
 from app.review.evidence import source_lines
-from app.review.planner import identity, members, tokens
+from app.review.planner import identity, members, tokens, unit_capacity
 from app.review.store import BudgetExceeded
 
-MAX_MATERIAL_TOKENS = 12000
+
+class NoProgressDetected(RuntimeError):
+    """The agent repeated an immutable tool request after a warning."""
 
 
 @dataclass
@@ -26,6 +28,11 @@ class AgentContext:
     model_calls: int = 0
     structured_output_retry: bool = False
     source_counter: int = 0
+    tool_repetitions: dict[str, tuple[str, int]] = field(default_factory=dict)
+    progress_keys: set[str] = field(default_factory=set)
+    round_tools: int = 0
+    round_progress: bool = False
+    stalled_rounds: int = 0
 
     @property
     def evidence(self):
@@ -41,6 +48,38 @@ class AgentContext:
 
     async def check_active(self):
         await self.budget.active()
+
+    def note_tool_result(self, name, arguments, result) -> int:
+        normalized = dict(arguments)
+        cursor = normalized.get("cursor")
+        if cursor in self.cursors:
+            saved = self.cursors[cursor]
+            normalized["cursor"] = {key: saved.get(key) for key in ("scope", "position", "column")}
+        key = identity([name, normalized])
+        # Cursors and attempt-local handles are opaque identities, not progress.
+        def semantic(value):
+            if isinstance(value, dict):
+                return {key: semantic(item) for key, item in value.items()
+                        if key not in {"cursor", "next_cursor", "source_ref"}}
+            if isinstance(value, list):
+                return [semantic(item) for item in value]
+            return value
+        digest = identity(semantic(result))
+        progress = identity([key, digest])
+        self.round_tools += 1
+        if progress not in self.progress_keys:
+            self.progress_keys.add(progress)
+            self.round_progress = True
+        previous, count = self.tool_repetitions.get(key, (None, 0))
+        count = count + 1 if previous == digest else 1
+        self.tool_repetitions[key] = (digest, count)
+        return count
+
+    def begin_round(self):
+        if self.round_tools:
+            self.stalled_rounds = 0 if self.round_progress else self.stalled_rounds + 1
+        self.round_tools, self.round_progress = 0, False
+        return self.stalled_rounds
 
     def stage(self, ref: SourceRef):
         for handle, issued in {**self.visible, **self.pending}.items():
@@ -83,6 +122,9 @@ class ContextProvider:
     discussions: list[dict] = field(default_factory=list)
     index: Any = None
 
+    def material_capacity(self) -> int:
+        return unit_capacity(self.run.configuration.options.limits)
+
     def _member(self, key):
         return members(self.run.changed_files)[key]
 
@@ -113,7 +155,7 @@ class ContextProvider:
             member = {**member, "base_entry": before, "head_entry": after}
         packet = {"member": member, "sources": [
             {"source": ref.model_dump(), "content": content} for ref, content in references]}
-        if tokens(packet) > MAX_MATERIAL_TOKENS:
+        if tokens(packet) > self.material_capacity():
             raise ValueError("material_capacity")
         for item, (ref, _) in zip(packet["sources"], references):
             item["source_ref"] = context.stage(ref)
@@ -169,14 +211,21 @@ class ContextProvider:
                 cost = tokens(item)
                 candidate_materials.append(item)
                 missing_candidate_materials.remove(omission)
-                if ((request_budget is None and spent + cost > MAX_MATERIAL_TOKENS)
+                if ((request_budget is None and spent + cost > self.material_capacity())
                         or not fits_request()):
                     candidate_materials.pop()
                     context.pending = before_pending
                     missing_candidate_materials.append(omission)
                     continue
                 spent += cost
+        by_path = {}
+        member_map = members(self.run.changed_files)
         for key in unit.required_hunk_ids:
+            by_path.setdefault(member_map[key]["path"], []).append(key)
+        # Give every related file a chance before consuming the remaining space.
+        ordered_keys = [keys[index] for index in range(max(map(len, by_path.values()), default=0))
+                        for keys in by_path.values() if index < len(keys)]
+        for key in ordered_keys:
             before_pending = dict(context.pending)
             try:
                 packet = await self.material(context, key)
@@ -186,7 +235,7 @@ class ContextProvider:
             cost = tokens(packet)
             material.append(packet)
             context.material_failures.pop(key, None)
-            if ((request_budget is None and spent + cost > MAX_MATERIAL_TOKENS)
+            if ((request_budget is None and spent + cost > self.material_capacity())
                     or not fits_request()):
                 material.pop()
                 context.pending_hunks.pop(key, None)

@@ -30,7 +30,7 @@ def setup_run(tmp_path, *, calls=20, input_tokens=100000, concurrency=2):
             declared_base_sha="a" * 40, base_sha="a" * 40, head_sha="b" * 40),
         configuration=Configuration(provider="test", endpoint="http://localhost", model="fake",
             options=Options(limits=Limits(total_model_calls=calls, total_input_tokens=input_tokens,
-                                          concurrency=concurrency))),
+                                          total_output_tokens=262144, concurrency=concurrency))),
         changed_files=[], plan=Plan(units=[Unit(id="u1", paths=["a.py"], required_hunk_ids=["h1"],
             risk="low", focus=["correctness"], estimated_input_tokens=100)]),
         review_cutoff=now + timedelta(minutes=20), hard_deadline=now + timedelta(minutes=30))

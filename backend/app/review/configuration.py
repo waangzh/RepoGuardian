@@ -26,7 +26,8 @@ def freeze_configuration(request, provider):
     if request.include_pr_discussions and not settings.repoguardian_pr_discussions_enabled:
         raise ValueError("discussion_disabled")
     maximum = maxima()
-    if any(key not in maximum or value > maximum[key] for key, value in request.limits.items()):
+    if any(key not in maximum or (maximum[key] is not None and value > maximum[key])
+           for key, value in request.limits.items()):
         raise ValueError("review_limit_exceeds_server_policy")
     limits = Limits.model_validate({**maximum, **request.limits})
     options = Options(depth=request.depth, paths=request.paths, focus=request.focus, limits=limits,

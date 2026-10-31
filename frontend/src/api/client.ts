@@ -159,6 +159,7 @@ export async function createReview(
 }
 
 export const previewReview = (input: ReviewCreateRequest, signal?: AbortSignal) =>
+  // Preview is deterministic; semantic grouping is frozen by the review worker.
   request<ReviewPreviewResponse>('/api/reviews/preview', {
     method: 'POST',
     body: JSON.stringify(reviewBody(input)),

@@ -10,6 +10,7 @@ from app.models.review.diff import ChangedFile, PullRequestInfo
 
 RunStatus = Literal["queued", "running", "completed", "partial", "failed", "cancelled"]
 TERMINAL = frozenset({"completed", "partial", "failed", "cancelled"})
+PLAN_VERSION = "file-plan-v3"
 
 
 def utcnow() -> datetime:
@@ -26,10 +27,10 @@ class Limits(Model):
     tool_calls: int = Field(default=80, ge=1, le=500)
     timeout_seconds: int = Field(default=1800, ge=1, le=86400)
     output_tokens: int = Field(default=4096, ge=256, le=32768)
-    total_model_calls: int = Field(default=64, ge=3, le=1000)
-    total_input_tokens: int = Field(default=500_000, ge=12000, le=10_000_000)
-    total_output_tokens: int = Field(default=262144, ge=1024, le=10_000_000)
-    context_tokens: int = Field(default=64000, ge=8192, le=1_000_000)
+    total_model_calls: int | None = Field(default=None, ge=3, le=1000)
+    total_input_tokens: int | None = Field(default=None, ge=12000, le=10_000_000)
+    total_output_tokens: int | None = Field(default=None, ge=1024, le=10_000_000)
+    context_tokens: int = Field(default=1_000_000, ge=8192, le=1_000_000)
 
 
 class Options(Model):
@@ -100,15 +101,19 @@ class Unit(Model):
     focus: list[str]
     estimated_input_tokens: int = Field(ge=1)
     reused_from: str | None = None
+    label: str | None = Field(default=None, max_length=120)
 
 
 class Plan(Model):
-    version: str = "hunk-plan-v1"
+    version: str = PLAN_VERSION
     units: list[Unit]
     excluded: dict[str, str] = Field(default_factory=dict)
     incremental_from: str | None = None
     history: list[dict] = Field(default_factory=list)
     incremental_reason: str | None = None
+    grouping_status: Literal["pending", "deterministic", "model", "fallback"] = "deterministic"
+    grouping_reason: str | None = None
+    relations: list[tuple[int, str, str]] = Field(default_factory=list)
 
 
 class CandidateInput(Model):

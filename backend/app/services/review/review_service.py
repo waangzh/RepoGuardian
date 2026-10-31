@@ -15,8 +15,10 @@ from app.review.domain import Overview, Run, Snapshot, TERMINAL, utcnow
 from app.review.evidence import EvidenceService
 from app.review.index import OnDemandIndex
 from app.review.incremental import refine_plan
+from app.review.grouping import freeze_semantic_groups, grouping_files
 from app.review.orchestrator import ReviewOrchestrator
 from app.review.planner import identity, plan_review
+from app.review.relations import change_relations
 from app.review.report import build_report, generate_overview
 from app.review.budget import BudgetGate
 from app.review.store import LeaseLost, ReviewStopped
@@ -108,7 +110,7 @@ class ReviewService:
             self._repo_paths.pop(identity, None)
             raise
 
-    async def _inputs(self, request):
+    async def _inputs(self, request, *, execute=False):
         config = freeze_configuration(request, self._provider)
         observed_at = utcnow()
         cancel = threading.Event()
@@ -117,7 +119,14 @@ class ReviewService:
         try:
             pr = await self._github_tool.fetch_pr(str(request.pr_url))
             repo, changed, snapshot = await self._prepare(pr, run_id, cancel)
-            plan = await asyncio.to_thread(plan_review, changed, snapshot, config.options)
+            try:
+                relations = await asyncio.to_thread(
+                    change_relations, repo, changed, config.options, cancel_event=cancel)
+            except Exception as exc:
+                logger.warning("审查关系分析失败，按顺序打包 review_id=%.8s error_type=%s",
+                               run_id, type(exc).__name__)
+                relations = []
+            plan = await asyncio.to_thread(plan_review, changed, snapshot, config.options, relations)
             now = utcnow()
             seconds = config.options.limits.timeout_seconds
             run = Run(id=run_id, pr_url=str(request.pr_url), pr=pr, snapshot=snapshot,
@@ -129,6 +138,9 @@ class ReviewService:
             history = await asyncio.to_thread(self.store.history, previous)
             old_work = await asyncio.to_thread(self.store.work_items, previous.id) if previous else []
             await asyncio.to_thread(refine_plan, run, previous, old_work, self._git_tool, repo, history)
+            if (execute and len(grouping_files(run)) >= 4
+                    and not any(unit.reused_from for unit in run.plan.units)):
+                run.plan.grouping_status = "pending"
             logger.info("审查规划完成 review_id=%.8s units=%d excluded=%d reused_units=%d history_candidates=%d",
                         run_id, len(run.plan.units), len(run.plan.excluded),
                         sum(unit.reused_from is not None for unit in run.plan.units), len(run.plan.history))
@@ -150,7 +162,7 @@ class ReviewService:
                 await asyncio.to_thread(cleanup_workspace, repo, workdir=self._git_tool._workdir)
 
     async def preview(self, request):
-        run = await self._inputs(request)
+        run = await self._inputs(request, execute=False)
         return {"snapshot": run.snapshot, "plan": run.plan, "changed_files": run.changed_files}
 
     async def create(self, request, key, *, caller_id="installation", expected_snapshot=None):
@@ -165,7 +177,7 @@ class ReviewService:
                 raise ValueError("review_deleted")
             logger.info("审查创建复用幂等记录 review_id=%.8s", existing)
             return saved
-        run = await self._inputs(request)
+        run = await self._inputs(request, execute=True)
         if expected_snapshot and expected_snapshot != (run.snapshot.declared_base_sha, run.snapshot.head_sha):
             raise ValueError("webhook_snapshot_changed")
         result_id = await asyncio.to_thread(self.store.create, run, caller_id, key, request_hash)
@@ -188,6 +200,10 @@ class ReviewService:
             repo, changed, snapshot = await self._prepare(run.pr, run.id, cancel)
             if snapshot != run.snapshot or changed != run.changed_files:
                 raise NonRetryableJobError("fixed_snapshot_inputs_changed")
+            model = self._provider.agent_model(run.configuration.model,
+                output_tokens=run.configuration.options.limits.output_tokens)
+            if job.kind == "review" and run.plan.grouping_status == "pending":
+                run = await freeze_semantic_groups(run, self.store, lease, model)
             paths = await asyncio.to_thread(self._git_tool.list_tracked_files, repo)
             denied = {path for change in changed if is_sensitive_repository_change(
                 change.file_path, change.old_file_path)
@@ -205,8 +221,6 @@ class ReviewService:
                 await self._seed_history(provider)
             if run.configuration.options.include_pr_discussions:
                 provider.discussions = await self._discussions(run, lease)
-            model = self._provider.agent_model(run.configuration.model,
-                output_tokens=run.configuration.options.limits.output_tokens)
             if job.kind == "overview":
                 run = await asyncio.to_thread(self.store.begin, run.id, lease)
                 provider.run = run

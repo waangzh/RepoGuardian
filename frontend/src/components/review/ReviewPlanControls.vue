@@ -4,7 +4,7 @@ import type { ReviewCapabilities, ReviewPlanOptions } from '../../types/reviewPl
 const props = defineProps<{ modelValue: ReviewPlanOptions; capabilities: ReviewCapabilities | null; disabled?: boolean }>();
 const emit = defineEmits<{ 'update:modelValue': [value: ReviewPlanOptions] }>();
 const focuses = { correctness: '正确性', security: '安全', performance: '性能', compatibility: '跨模块契约' } as const;
-const limits = { total_input_tokens: '整轮输入 Token 预算', total_output_tokens: '整轮输出 Token 预算', timeout_seconds: '总期限（秒）', output_tokens: '单次输出 Token', concurrency: '并发', tool_calls: '单 Agent 工具调用上限', model_calls: '单 Agent 模型调用熔断', total_model_calls: '整轮模型调用熔断' } as const;
+const limits = { total_input_tokens: '整轮输入 Token 上限（可选）', total_output_tokens: '整轮输出 Token 上限（可选）', context_tokens: '模型上下文窗口', timeout_seconds: '总期限（秒）', output_tokens: '单次输出 Token', concurrency: '并发', tool_calls: '单 Agent 工具调用上限', model_calls: '单 Agent 模型调用熔断', total_model_calls: '整轮模型调用上限（可选）' } as const;
 function change(update: (plan: ReviewPlanOptions) => void) { const next = structuredClone(toRaw(props.modelValue)); update(next); emit('update:modelValue', next); }
 function focus(value: keyof typeof focuses, checked: boolean) { change(plan => { plan.focus = checked ? [...new Set([...plan.focus, value])] : plan.focus.filter(item => item !== value); }); }
 </script>

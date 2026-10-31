@@ -73,7 +73,8 @@ npm run dev
 ## 架构与运行边界
 
 ```text
-固定快照 → Planner 冻结 Unit / Hunk 成员
+固定快照 → 文件过滤 / 确定性初始规划
+         → 正式任务按需语义分组 → 冻结 Unit / Hunk 成员
          → ReviewOrchestrator 有界派发
          → Reviewer + 按需 Context → 即时 Candidate
          → 独立 Verifier → 条件准入 Finding
@@ -82,6 +83,10 @@ npm run dev
 ```
 
 `app/review/` 中的 `domain.py`、`planner.py`、`context.py`、`agent.py`、`budget.py`、`store.py`、`findings.py`、`report.py` 和 `orchestrator.py` 是核心。现有 Git、DiffParser、Parser、源码安全读取、准备仓库、WorkerJob Lease、GitHub API 和 Publisher 继续复用。主 LangGraph 工作流、Goal / Assignment、固定角色份额、最终大提交和历史 Checkpoint 协议已经移除；LangChain 内部依赖的 LangGraph 仍由其依赖树提供。
+
+Unit 以文件为完整性边界：1–3 个文件的小变更确定性分组；纳入文件达到 4 个且没有复用完成范围时，正式任务使用一次只含文件元数据和静态关系提示的 LLM 分组。预览不调用分组模型，因此不代表最终语义分组。结果经服务端去重、补齐遗漏、10 文件上限和上下文容量校验后，与工作项一起事务冻结；失败或恢复时已有请求状态不明，回退逐文件审查，不盲目重发收费请求。超大单文件保留一个 Unit，其材料继续分页交付，不因此丢弃变更。
+
+累计输入/输出 Token 与整轮模型调用上限默认不设门禁；仍持久化每次请求的预留、实际用量和未知用量。可通过 `.env.example` 中的 `REPOGUARDIAN_REVIEW_MAX_*` 显式设置成本上限，已有运行保持创建时冻结的配置。单次上下文窗口默认 1M，须按实际执行模型能力配置；它不是建议填满的目标。单 Agent 调用/工具熔断、扫描量和总期限仍有效。连续工具轮次没有新信息时先警告、持续重复时中断为未完成；合法分页、BASE/HEAD 对照和新的调查结果不按重复处理。
 
 材料交付与工作项执行分别记录。只收到部分 Hunk、读取失败或未启动的范围保持不完整。结构性变更使用固定树条目作为变更材料，不把元数据当成缺陷源码证据；必要消费者仍由 Agent 调查。
 

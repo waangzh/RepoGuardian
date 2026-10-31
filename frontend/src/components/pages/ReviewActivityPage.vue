@@ -4,6 +4,8 @@ const props = defineProps<{ task: Run; units: WorkItem[]; report: Report | null 
 const usage = computed(() => observedUsage(props.report));
 const ordered = computed(() => [...props.units].sort((a,b) => a.id.localeCompare(b.id)));
 const materialLabel = { complete: '完整', incomplete: '不完整', not_started: '未开始' };
+const groupingLabel = { pending: '等待正式语义分组', deterministic: '确定性分组', model: '语义分组已冻结', fallback: '分组降级为逐文件审查' };
+const unitDescription = (id: string) => { const unit = props.task.plan.units.find(item => item.id === id); return unit ? [unit.label, ...unit.paths].filter(Boolean).join(' · ') : id; };
 const count = (value: number | null) => value == null ? '未知' : value.toLocaleString('zh-CN');
 </script>
 <template>
@@ -11,6 +13,7 @@ const count = (value: number | null) => value == null ? '未知' : value.toLocal
 <div>
 <h2>活动</h2>
 <p class="title-sub">显示工作项、物料交付、失败原因与服务端记录的用量。</p>
+<p v-if="task.plan.grouping_status" class="muted small">{{ groupingLabel[task.plan.grouping_status] }}。分组只是调查组织方式，不构成源码证据。</p>
 </div>
 </div>
 <div class="rg-activity-stats">
@@ -40,7 +43,7 @@ const count = (value: number | null) => value == null ? '未知' : value.toLocal
 <li v-for="item in ordered" :key="item.id">
 <StatusBadge :status="item.status" />
 <div class="min0">
-<strong>{{ item.kind === 'review' ? '审查' : '核验' }} · {{ item.unit_id }}</strong>
+<strong>{{ item.kind === 'review' ? '审查' : '核验' }} · {{ unitDescription(item.unit_id) }}</strong>
 <p class="rg-activity-meta"><span>尝试 {{ item.attempt }}</span><span>物料{{ materialLabel[item.material_delivery] }}</span><span>工具调用 {{ item.tool_calls }}</span></p>
 <p v-if="item.reused_from" class="notice small">复用此前已交付且完成的范围：<code>{{ item.reused_from }}</code>。源码字节已重新核对，历史问题由本轮独立核验。</p>
 <p v-if="item.error_code" class="notice warn small">{{ executionErrorLabel(item.error_code) }}（{{ item.error_code }}）</p>

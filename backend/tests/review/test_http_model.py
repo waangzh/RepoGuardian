@@ -272,12 +272,15 @@ async def test_plain_text_verifier_requires_bounded_structured_correction(tmp_pa
         assert all(ticket.state == "settled" for ticket in tickets)
 
 
-@pytest.mark.parametrize("boundary", ["long", "input_tokens", "output_tokens", "time"])
+@pytest.mark.parametrize("boundary", ["long", "loop", "input_tokens", "output_tokens", "time"])
 async def test_tokens_and_time_guide_completion_before_call_fuse(tmp_path, boundary, monkeypatch):
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "repoguardian_model_request_timeout_seconds", 60)
-    store, run, lease, provider, sessions = setup_source_run(tmp_path)
+    source = "def ratio(x):\n    return 10 / x\n" + "\n".join(
+        f"VALUE_{index} = {index}" for index in range(15)) + "\n"
+    store, run, lease, provider, sessions = setup_source_run(
+        tmp_path, **({"head_source": source} if boundary == "long" else {}))
     if boundary == "input_tokens":
         run.configuration.options.limits.total_input_tokens = 12000
         run.pr.body = "预算调查上下文。" * 100
@@ -308,7 +311,9 @@ async def test_tokens_and_time_guide_completion_before_call_fuse(tmp_path, bound
                     assert tokens({"messages": payload["messages"], "tools": payload["tools"]}) \
                         <= reserved.reserved_input_tokens
             if "read_file" in names and len(review_requests) <= 13:
-                name, result = "read_file", {"path": "a.py", "revision": "head", "start": 1, "end": 2}
+                start = len(review_requests) if boundary == "long" else 1
+                name, result = "read_file", {"path": "a.py", "revision": "head",
+                                             "start": start, "end": start + 1}
             else:
                 name, result = "UnitCompletion", {}
         return httpx.Response(200, json={"id": "chat", "object": "chat.completion", "created": 1,
@@ -324,12 +329,17 @@ async def test_tokens_and_time_guide_completion_before_call_fuse(tmp_path, bound
                           max_retries=0)
         model.root_async_client, model.async_client = sdk, sdk.chat.completions
         report = await ReviewOrchestrator(store, AgentRunner(model)).run(run.id, provider, lease)
-    assert report.status == "completed", report.reasons
+    assert report.status == ("partial" if boundary == "loop" else "completed"), report.reasons
     assert report.overview.status == "ready"
-    assert report.units[0].error_code is None
+    assert report.units[0].error_code == ("agent_no_progress" if boundary == "loop" else None)
     if boundary == "long":
         assert len(review_requests) == 14
         assert report.units[0].tool_calls == 13
+    elif boundary == "loop":
+        assert len(review_requests) == 4
+        assert report.units[0].status == "interrupted"
+        assert report.units[0].tool_calls == 4
+        assert "last two tool rounds returned no new information" in review_requests[-1]["messages"][0]["content"]
     else:
         assert len(review_requests) == 1
         assert {tool["function"]["name"] for tool in review_requests[0]["tools"]} == {

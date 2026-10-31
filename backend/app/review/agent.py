@@ -13,10 +13,10 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from app.core.config import settings
-from app.review.context import AgentContext
+from app.review.context import AgentContext, NoProgressDetected
 from app.review.domain import UnitCompletion, VerificationOutput, utcnow
 from app.review.findings import admit_verification
-from app.review.planner import tokens
+from app.review.planner import tokens, unit_capacity
 from app.review.store import BudgetExceeded, LeaseLost, ReviewStopped, verification_input_limit
 from app.review.tools import READ_TOOLS, read_discussion, submit_candidate
 
@@ -62,6 +62,9 @@ class RequestGate(AgentMiddleware):
     async def awrap_model_call(self, request, handler):
         context = request.runtime.context
         await context.check_active()
+        stalled = context.begin_round()
+        if stalled >= 3:
+            raise NoProgressDetected("agent_no_progress")
         limits = context.provider.run.configuration.options.limits
         schema = request.response_format.schema
         tools = request.tools
@@ -77,17 +80,20 @@ class RequestGate(AgentMiddleware):
             raise
         context.model_calls += 1
         remaining = available["agent_model_calls"]
+        call_remaining = min(remaining, available["model_calls"]) if available["model_calls"] is not None else remaining
         run = context.provider.run
         deadline = run.review_cutoff if context.work.kind == "review" else run.hard_deadline
         seconds = max(0, (deadline - utcnow()).total_seconds())
         closing_reasons = []
-        if available["input_tokens"] < 2 * estimate:
+        if (available["input_tokens"] is not None
+                and available["input_tokens"] < 2 * estimate):
             closing_reasons.append("input_tokens")
-        if available["output_tokens"] < 2 * limits.output_tokens:
+        if (available["output_tokens"] is not None
+                and available["output_tokens"] < 2 * limits.output_tokens):
             closing_reasons.append("output_tokens")
         if seconds <= settings.repoguardian_model_request_timeout_seconds:
             closing_reasons.append("time")
-        if min(remaining, available["model_calls"]) <= 1:
+        if call_remaining <= 1:
             closing_reasons.append("call_fuse")
         if context.tool_calls >= limits.tool_calls:
             closing_reasons.append("tool_limit")
@@ -100,17 +106,24 @@ class RequestGate(AgentMiddleware):
             tools = []
         instruction = (
             f"\n\nShared input/output tokens available before this request, after protecting "
-            f"verification and overview: {available['input_tokens']}/{available['output_tokens']}. "
+            f"verification and overview: {available['input_tokens'] if available['input_tokens'] is not None else 'unlimited'}/"
+            f"{available['output_tokens'] if available['output_tokens'] is not None else 'unlimited'}. "
             f"Seconds to this role's cutoff: {seconds:.0f}. "
             f"Remaining model requests including this one: {remaining}. "
-            f"Remaining Run model requests after protection: {available['model_calls']}. "
+            f"Remaining Run model requests after protection: {available['model_calls'] if available['model_calls'] is not None else 'unlimited'}. "
             f"Remaining tool calls: {max(0, limits.tool_calls - context.tool_calls)}. "
-            "Tokens and time guide investigation; call counts are safety circuit breakers, not targets. "
+            "Complete the necessary investigation; optional cost limits are not completion targets. "
+            "Time and per-agent call/tool fuses still apply. "
             "All limits include structured output and correction requests. "
             "Finish as soon as the necessary investigation is complete; do not repeat "
             "reads or searches for already received evidence."
         )
-        if min(remaining, available["model_calls"]) == 2:
+        if stalled >= 2:
+            instruction += (
+                " The last two tool rounds returned no new information. Stop repeating those requests; "
+                "use existing evidence, change the investigation, or finish with a concrete limitation."
+            )
+        if call_remaining == 2:
             instruction += (
                 " The next request is reserved for your final structured result. "
                 "Submit supported candidates now; use any remaining reads only for a critical missing premise."
@@ -133,7 +146,7 @@ class RequestGate(AgentMiddleware):
         started = perf_counter()
         logger.info(
             "模型请求开始 review_id=%.8s work_id=%.8s kind=%s attempt_id=%.8s ticket=%.8s "
-            "call=%d/%d estimated_input_tokens=%d remaining_input_tokens=%d remaining_output_tokens=%d "
+            "call=%d/%d estimated_input_tokens=%d remaining_input_tokens=%s remaining_output_tokens=%s "
             "remaining_seconds=%.0f closing=%s closing_reason=%s",
             context.provider.run.id, context.work.id, context.work.kind, context.work.attempt_id,
             ticket, context.model_calls, limits.model_calls, estimate, available["input_tokens"],
@@ -195,7 +208,8 @@ class AgentRunner:
                 candidate = next(item for item in await asyncio.to_thread(
                     provider.store.candidates, provider.run.id) if item.id == work.candidate_id)
             limits = provider.run.configuration.options.limits
-            request_budget = None
+            request_budget = max(1, min(unit_capacity(limits),
+                                       limits.context_tokens - limits.output_tokens - 1024))
             if role == "verifier":
                 usage = await asyncio.to_thread(provider.store.usage, provider.run.id)
                 request_budget = verification_input_limit(limits, usage["committed_input_tokens"])
@@ -236,14 +250,16 @@ class AgentRunner:
                         provider.run.id, work.id, type(exc).__name__)
             raise
         except Exception as exc:
-            if isinstance(exc, BudgetExceeded):
+            if isinstance(exc, NoProgressDetected):
+                code = "agent_no_progress"
+            elif isinstance(exc, BudgetExceeded):
                 code = str(exc)
             elif isinstance(exc, MissingStructuredResult):
                 code = "agent_structured_output_missing"
             else:
                 code = "agent_execution_failed"
             await asyncio.to_thread(provider.store.finish_work, provider.run.id, work,
-                "interrupted" if isinstance(exc, BudgetExceeded) else "failed", None, code,
+                "interrupted" if isinstance(exc, (BudgetExceeded, NoProgressDetected)) else "failed", None, code,
                 provider.lease, tool_calls=context.tool_calls)
             logger.warning(
                 "Agent未完成 review_id=%.8s work_id=%.8s kind=%s code=%s error_type=%s "

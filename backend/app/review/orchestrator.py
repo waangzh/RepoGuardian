@@ -25,7 +25,7 @@ class ReviewOrchestrator:
         limits = run.configuration.options.limits
         logger.info(
             "审查开始 review_id=%.8s units=%d concurrency=%d agent_call_limit=%d "
-            "total_call_limit=%d input_token_limit=%d review_cutoff=%s hard_deadline=%s",
+            "total_call_limit=%s input_token_limit=%s review_cutoff=%s hard_deadline=%s",
             run_id, len(run.plan.units), limits.concurrency, limits.model_calls, limits.total_model_calls,
             limits.total_input_tokens, run.review_cutoff.isoformat(), run.hard_deadline.isoformat())
         try:

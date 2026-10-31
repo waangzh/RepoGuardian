@@ -7,6 +7,8 @@ export const phaseLabel = (phase: string) =>
   ({
     queued: '等待执行',
     prepare: '准备固定快照',
+    review: '审查中',
+    grouping: '组织审查单元',
     planning: '规划审查单元',
     reviewing: '审查中',
     verification: '核验候选',
@@ -29,6 +31,7 @@ export const executionErrorLabel = (code: string | null) =>
     output_token_limit: '达到整轮输出 Token 上限，未完成范围保持未知',
     context_capacity: '模型上下文容量不足，调查尚未完成',
     tool_call_limit: '达到工具调用上限，调查尚未完成',
+    agent_no_progress: 'Agent 重复执行相同调查，没有取得进展',
     review_cutoff: '达到调查截止时间，未完成范围保持未知',
     hard_deadline: '达到本轮审查总期限',
     TimeoutError: '模型或工具调用超时',

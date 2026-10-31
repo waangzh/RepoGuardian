@@ -56,6 +56,7 @@ export interface Unit {
   focus: string[];
   estimated_input_tokens: number;
   reused_from: string | null;
+  label: string | null;
 }
 
 export interface Plan {
@@ -65,6 +66,9 @@ export interface Plan {
   incremental_from: string | null;
   history: Record<string, unknown>[];
   incremental_reason: string | null;
+  grouping_status: 'pending' | 'deterministic' | 'model' | 'fallback';
+  grouping_reason: string | null;
+  relations: [number, string, string][];
 }
 
 export interface CandidateInput {
