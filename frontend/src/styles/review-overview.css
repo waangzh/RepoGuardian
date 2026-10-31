@@ -109,7 +109,6 @@
 .ov-change__rows dt .app-icon { margin-top: 5px; }
 .ov-change__rows dd { margin: 0; color: var(--ov-muted); overflow-wrap: anywhere; }
 .ov-change__rows .ov-tag { margin-left: 4px; }
-.rg-overview .ov-change__limitation { color: var(--ov-amber); font-size: 12px; line-height: 1.8; }
 .ov-change__footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--ov-line); }
 .ov-file-tags { display: flex; flex: 1; flex-wrap: wrap; align-items: center; gap: 5px; min-width: 0; }
 .ov-file-tags button { min-height: 38px; max-width: 100%; padding: 4px 7px; border: 1px solid var(--ov-line); border-radius: 6px; background: var(--ov-subtle); color: var(--ov-muted); font: 12px/1.6 var(--font-mono); cursor: pointer; overflow-wrap: anywhere; text-align: left; }
@@ -180,6 +179,7 @@
   .ov-metric__head { padding: 18px 14px 10px; }
   .ov-metric__sources { padding: 0 14px 14px; }
   .ov-change__rows > div { grid-template-columns: 148px minmax(0, 1fr); }
+  .rg-overview .ov-understanding { grid-template-columns: 148px minmax(0, 1fr); }
 }
 @media (max-width: 960px) {
   .rg-overview { grid-template-columns: minmax(0, 1fr); }
@@ -214,19 +214,46 @@
 .ov-dialog__body { font-size: 15px; }
 
 /* Overview prose and the untrusted author statement. */
+/* 总览标题、正文与下方“标签 + 内容”共用同一组两列，左边缘和顶部同时对齐。 */
+.rg-overview .ov-understanding { display: grid; grid-template-columns: 154px minmax(0, 1fr); grid-template-areas: "label content" "rows rows"; column-gap: 14px; row-gap: 14px; align-items: start; }
+.rg-overview .ov-understanding__label { grid-area: label; display: grid; justify-items: start; gap: 6px; }
+.rg-overview .ov-understanding__content { grid-area: content; min-width: 0; }
+.rg-overview .ov-understanding__content > :first-child { margin-top: 0; }
+.rg-overview .ov-change__rows { grid-area: rows; }
 .rg-overview .ov-overview-text { display: grid; gap: 10px; max-width: 82ch; }
 .rg-overview .ov-overview-text p { margin: 0; color: var(--ov-muted); font-size: 14.5px; line-height: 1.9; }
 .rg-overview .ov-overview-text p.is-lead { color: var(--ov-ink); font-size: 15px; }
 .rg-overview .ov-overview-text code { padding: 1px 5px; border: 1px solid var(--ov-line); border-radius: 5px; background: var(--ov-subtle); color: var(--ov-ink); font-family: var(--font-mono); font-size: .88em; }
+@media (max-width: 660px) {
+  .rg-overview .ov-understanding { grid-template-columns: minmax(0, 1fr); grid-template-areas: "label" "content" "rows"; row-gap: 12px; }
+}
 .rg-overview .ov-change__scope { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .rg-overview .ov-change__filecount { color: var(--ov-muted); font-size: 14px; }
 .rg-overview .ov-change__filecount b { color: var(--ov-ink); font-size: 16px; font-variant-numeric: tabular-nums; }
 .rg-overview .ov-diff-stat { display: inline-flex; align-items: center; min-height: 24px; padding: 1px 8px; border-radius: 6px; font-family: var(--font-mono); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .rg-overview .ov-diff-stat.is-add { background: var(--ov-teal-wash); color: var(--ov-teal); }
 .rg-overview .ov-diff-stat.is-del { background: var(--ov-red-wash); color: var(--ov-red); }
-.rg-overview .ov-author { padding: 14px 16px; border: 1px solid var(--ov-line); border-radius: 10px; background: var(--ov-subtle); }
-.rg-overview .ov-author__body { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 5; overflow: hidden; margin: 0; color: var(--ov-muted); font-size: 13.5px; line-height: 1.8; }
-.rg-overview .ov-author.is-open .ov-author__body { display: block; max-height: 440px; overflow: auto; -webkit-line-clamp: unset; }
+.rg-overview .ov-author { position: relative; padding: 14px 16px; border: 1px solid var(--ov-line); border-radius: 10px; background: var(--ov-subtle); }
+.rg-overview .ov-author__body { position: relative; max-height: 340px; overflow: hidden; }
+.rg-overview .ov-author__body::after { position: absolute; right: 0; bottom: 0; left: 0; height: 56px; background: linear-gradient(to bottom, transparent, var(--ov-subtle)); content: ""; pointer-events: none; }
+.rg-overview .ov-author.is-open .ov-author__body { max-height: none; overflow: visible; }
+.rg-overview .ov-author.is-open .ov-author__body::after { display: none; }
+.rg-overview .ov-author .rd-markdown { padding: 0; color: var(--ov-muted); font-size: 13.5px; line-height: 1.8; overflow-wrap: anywhere; }
+.rg-overview .ov-author .rd-markdown > :first-child { margin-top: 0; }
+.rg-overview .ov-author .rd-markdown p { margin: 0 0 10px; font-size: 13.5px; line-height: 1.8; }
+.rg-overview .ov-author .rd-markdown :is(h1, h2, h3, h4) { margin: 18px 0 10px; padding: 0 0 6px; border: 0; border-bottom: 1px solid var(--ov-line); color: var(--ov-ink); font-size: 14px; font-weight: 650; line-height: 1.5; }
+.rg-overview .ov-author .rd-markdown :is(ul, ol) { margin: 8px 0 10px; padding-left: 20px; }
+.rg-overview .ov-author .rd-markdown li { margin: 3px 0; font-size: 13.5px; line-height: 1.8; }
+.rg-overview .ov-author .rd-markdown strong { color: var(--ov-ink); font-weight: 650; }
+.rg-overview .ov-author .rd-markdown code { padding: 1px 5px; border: 1px solid var(--ov-line); border-radius: 5px; background: var(--ov-surface); color: var(--ov-ink); font-family: var(--font-mono); font-size: .88em; }
+.rg-overview .ov-author .rd-markdown pre { margin: 10px 0; padding: 12px 14px; border: 1px solid var(--ov-line); border-radius: 8px; background: var(--ov-surface); overflow: auto; }
+.rg-overview .ov-author .rd-markdown pre code { padding: 0; border: 0; background: transparent; font-size: 12px; line-height: 1.7; white-space: pre; }
+.rg-overview .ov-author .rd-markdown table { display: block; width: max-content; max-width: 100%; margin: 10px 0; overflow: auto; border-collapse: collapse; font-size: 12.5px; }
+.rg-overview .ov-author .rd-markdown :is(th, td) { padding: 6px 10px; border: 1px solid var(--ov-line); text-align: left; vertical-align: top; }
+.rg-overview .ov-author .rd-markdown th { background: var(--ov-subtle); color: var(--ov-ink); font-weight: 650; }
+.rg-overview .ov-author .rd-markdown blockquote { margin: 10px 0; padding: 2px 0 2px 12px; border-left: 3px solid var(--ov-line); color: var(--ov-muted); }
+.rg-overview .ov-author .rd-markdown hr { height: 1px; margin: 16px 0; border: 0; background: var(--ov-line); }
+.rg-overview .ov-author .rd-markdown a { color: var(--ov-blue); text-decoration: underline; text-underline-offset: 2px; }
 .rg-overview .ov-author__toggle { margin-top: 10px; padding: 2px 0; border: 0; background: transparent; color: var(--ov-blue); font-size: 12.5px; font-weight: 650; cursor: pointer; }
 .rg-overview .ov-author__toggle:hover { text-decoration: underline; text-underline-offset: 3px; }
 @media (max-width: 600px) {

@@ -194,6 +194,7 @@ def test_normal_report_does_not_repeat_statistics_or_zero_finding_notice(normali
     plan = PublicationPlanner(artifacts).build(run)
     plan.overview_markdown = "调整 `ratio` 的输入处理。\n\n补充边界断言。"
     markdown = render_user_report(run, plan)
+    assert markdown.startswith("# RepoGuardian 审查评论")
     body, details = markdown.split("<details>")
     assert "safe.py: +1 / -1" not in body
     assert "审查报告版本" not in body

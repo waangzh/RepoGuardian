@@ -128,7 +128,7 @@ function exportReport() {
   <ReviewActivityPage v-else-if="tab === 'activity'" :task="task" :units="units" :report="report" />
   <ReviewReportPage v-else :task="task" :plan="plan" :report="markdown" :loading="loading" @export="exportReport" />
 
-  <footer class="app-footer">
+  <footer v-if="tab !== 'publish'" class="app-footer">
     <span>只读静态审查 · 未执行目标代码、测试或构建 · 结论仅适用于本次快照</span>
     <code>{{ task.snapshot.head_sha.slice(0, 12) }}</code>
   </footer>

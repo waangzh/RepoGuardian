@@ -130,7 +130,7 @@ def comment_selection(plan, *, exclude_resolved=False):
 
 
 def render_user_report(run, plan):
-    lines = ["# RepoGuardian 审查报告", "", render_summary(plan)]
+    lines = ["# RepoGuardian 审查评论", "", render_summary(plan)]
     if run.report and run.report.overview.omitted_materials:
         lines += ["", "### 总览省略范围", ""]
         reasons = {"material_capacity": "材料容量不足", "source_unavailable": "源码不可用",

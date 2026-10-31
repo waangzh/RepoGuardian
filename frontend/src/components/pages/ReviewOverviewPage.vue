@@ -5,6 +5,7 @@ import type { ReviewSection } from '../../types/workspace';
 import { phaseLabel, terminal } from '../../utils/nativeReview';
 import AppIcon from '../common/AppIcon.vue';
 import InlineCodeText from '../common/InlineCodeText.vue';
+import ReportMarkdown from '../report/ReportMarkdown.vue';
 
 const props = defineProps<{
   task: Run;
@@ -77,33 +78,35 @@ const omissionLabel = {
 
     <div class="ov-main">
       <section class="ov-panel ov-understanding">
-        <header class="ov-section-head">
+        <div class="ov-understanding__label">
           <h2>变更总览</h2>
           <button class="ov-link" @click="$emit('navigate', 'changes')">查看 Diff <AppIcon name="external" :size="14" /></button>
-        </header>
-        <p v-if="loading" class="ov-note" role="status">正在读取报告…</p>
-        <template v-if="report?.overview.status === 'ready' && report.overview.output">
-          <div class="ov-overview-text">
-            <p v-for="(item, index) in report.overview.output.change_overview" :key="item.text" class="rg-preserve-lines" :class="{ 'is-lead': index === 0 }"><InlineCodeText :text="item.text" /></p>
-          </div>
-        </template>
-        <p v-else class="ov-note" role="status">{{ overviewLabel }}</p>
-        <button v-if="report?.overview.status === 'failed' && terminal(task.status)" class="ov-link" @click="$emit('retry-overview')">使用剩余额度重试总览</button>
-        <p v-if="omitted.length" class="ov-note">
-          <AppIcon name="info" />总览输入有省略：
-          <span v-for="[key, count] in omitted" :key="key">{{ omissionSectionLabel[key] }} {{ count }} 项；</span>
-          引用只能证明已提供的来源，不能保证语义穷尽。
-        </p>
-        <details v-if="report?.overview.omitted_materials.length" class="ov-note">
-          <summary>查看总览省略范围</summary>
-          <ul>
-            <li v-for="(item, index) in report.overview.omitted_materials" :key="index">
-              <code>{{ item.path }}</code>
-              <span v-if="item.side"> {{ item.side.toUpperCase() }} {{ item.start_line }}–{{ item.end_line }}</span>
-              {{ omissionLabel[item.reason] }}
-            </li>
-          </ul>
-        </details>
+        </div>
+        <div class="ov-understanding__content">
+          <p v-if="loading" class="ov-note" role="status">正在读取报告…</p>
+          <template v-if="report?.overview.status === 'ready' && report.overview.output">
+            <div class="ov-overview-text">
+              <p v-for="(item, index) in report.overview.output.change_overview" :key="item.text" class="rg-preserve-lines" :class="{ 'is-lead': index === 0 }"><InlineCodeText :text="item.text" /></p>
+            </div>
+          </template>
+          <p v-else class="ov-note" role="status">{{ overviewLabel }}</p>
+          <button v-if="report?.overview.status === 'failed' && terminal(task.status)" class="ov-link" @click="$emit('retry-overview')">使用剩余额度重试总览</button>
+          <p v-if="omitted.length" class="ov-note">
+            <AppIcon name="info" />总览输入有省略：
+            <span v-for="[key, count] in omitted" :key="key">{{ omissionSectionLabel[key] }} {{ count }} 项；</span>
+            引用只能证明已提供的来源，不能保证语义穷尽。
+          </p>
+          <details v-if="report?.overview.omitted_materials.length" class="ov-note">
+            <summary>查看总览省略范围</summary>
+            <ul>
+              <li v-for="(item, index) in report.overview.omitted_materials" :key="index">
+                <code>{{ item.path }}</code>
+                <span v-if="item.side"> {{ item.side.toUpperCase() }} {{ item.start_line }}–{{ item.end_line }}</span>
+                {{ omissionLabel[item.reason] }}
+              </li>
+            </ul>
+          </details>
+        </div>
         <dl class="ov-change__rows">
           <div>
             <dt>变更范围</dt>
@@ -114,15 +117,14 @@ const omissionLabel = {
             </dd>
           </div>
           <div>
-            <dt>作者声明</dt>
+            <dt>作者评论</dt>
             <dd>
               <div class="ov-author" :class="{ 'is-open': authorOpen }">
-                <p class="ov-author__body rg-preserve-lines">{{ authorText }}</p>
+                <div class="ov-author__body"><ReportMarkdown :content="authorText" :allow-images="false" /></div>
                 <button v-if="authorText.length > 240" type="button" class="ov-author__toggle" @click="authorOpen = !authorOpen">
-                  {{ authorOpen ? '收起作者原文' : '展开作者原文' }}
+                  {{ authorOpen ? '收起' : '展开' }}
                 </button>
               </div>
-              <p class="ov-change__limitation">作者描述是不可信背景，不表示目标已经源码核实。</p>
             </dd>
           </div>
         </dl>
