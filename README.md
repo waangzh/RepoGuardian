@@ -110,9 +110,10 @@ Publisher 独立复验规范化 Finding、核验准入、固定快照、来源�
 
 [环境变量示例](.env.example) 是配置清单。模型端点、默认模型和记录保留天数可在设置页修改；已有 Run 的配置保持冻结。源码会发送到所配置的模型服务，使用前确认数据边界；LangSmith 默认关闭。
 
-- `REPOGUARDIAN_REVIEW_MAX_MODEL_CALLS`、`REPOGUARDIAN_REVIEW_MAX_INPUT_TOKENS`、`REPOGUARDIAN_REVIEW_MAX_OUTPUT_TOKENS` 限制整轮资源。
+- 整轮成本主要由 `REPOGUARDIAN_REVIEW_MAX_INPUT_TOKENS`、`REPOGUARDIAN_REVIEW_MAX_OUTPUT_TOKENS` 和总期限控制；模型每次请求会获知扣除核验、总览保护份额后的共享余额，并在余额或时间接近边界时收尾。
 - `REPOGUARDIAN_MODEL_CONTEXT_TOKENS` 限制请求上下文容量；预估包括消息、工具和结构化 Schema。使用分词估算，不能当成所有模型的精确计费上界。
-- `REPOGUARDIAN_AGENT_MAX_CALLS`、`REPOGUARDIAN_AGENT_MAX_TOOL_CALLS` 限制单次 Agent；并发由 `REPOGUARDIAN_REVIEW_CONCURRENCY` 控制。
+- `REPOGUARDIAN_AGENT_MAX_CALLS` 与 `REPOGUARDIAN_REVIEW_MAX_MODEL_CALLS` 是调用次数熔断，默认分别为 48 与 64。quick/standard/deep 不再额外设置 6/12/20 次配额，深度只影响调查策略；显式配置更低上限仍会生效。
+- `REPOGUARDIAN_AGENT_MAX_TOOL_CALLS` 继续限制单次 Agent 的工具调用，扫描量和工具超时约束保留；并发由 `REPOGUARDIAN_REVIEW_CONCURRENCY` 控制。
 - 总时长由 `REPOGUARDIAN_REVIEW_TIMEOUT_SECONDS` 冻结。软截止停止新发现请求；硬截止阻止所有新模型请求，停止在途工作，只做合法的本地事实收尾。
 - 请求前原子预留，未知用量保持未知并占用预留；恢复不清零。实际用量超过估算后如实记录，停止后续超预算请求。
 

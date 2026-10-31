@@ -24,7 +24,7 @@ class ReviewOrchestrator:
         running = {}
         limits = run.configuration.options.limits
         logger.info(
-            "审查开始 review_id=%s units=%d concurrency=%d agent_call_limit=%d "
+            "审查开始 review_id=%.8s units=%d concurrency=%d agent_call_limit=%d "
             "total_call_limit=%d input_token_limit=%d review_cutoff=%s hard_deadline=%s",
             run_id, len(run.plan.units), limits.concurrency, limits.model_calls, limits.total_model_calls,
             limits.total_input_tokens, run.review_cutoff.isoformat(), run.hard_deadline.isoformat())
@@ -34,7 +34,7 @@ class ReviewOrchestrator:
                 work_items = await asyncio.to_thread(self.store.work_items, run_id)
                 queued = [item for item in work_items if item.status == "queued"]
                 if utcnow() >= run.hard_deadline:
-                    logger.warning("审查到达硬截止时间 review_id=%s active_agents=%d",
+                    logger.warning("审查到达硬截止时间 review_id=%.8s active_agents=%d",
                                    run_id, len(running))
                     for task in running:
                         task.cancel()
@@ -47,7 +47,7 @@ class ReviewOrchestrator:
                 for item in list(queued):
                     if item.kind == "review" and utcnow() >= run.review_cutoff:
                         await asyncio.to_thread(self.store.skip, run_id, item.id, "review_cutoff", lease)
-                        logger.warning("工作项未启动 review_id=%s work_id=%s kind=%s reason=review_cutoff",
+                        logger.warning("工作项未启动 review_id=%.8s work_id=%.8s kind=%s reason=review_cutoff",
                                        run_id, item.id, item.kind)
                         queued.remove(item)
                 priority = {unit.id: index for index, unit in enumerate(run.plan.units)}
@@ -58,7 +58,7 @@ class ReviewOrchestrator:
                     if reason:
                         if not running:
                             await asyncio.to_thread(self.store.skip, run_id, item.id, reason, lease)
-                            logger.warning("工作项未启动 review_id=%s work_id=%s kind=%s reason=%s",
+                            logger.warning("工作项未启动 review_id=%.8s work_id=%.8s kind=%s reason=%s",
                                            run_id, item.id, item.kind, reason)
                         continue
                     claimed = await asyncio.to_thread(self.store.claim, run_id, item.id, lease)
@@ -85,7 +85,7 @@ class ReviewOrchestrator:
             await asyncio.to_thread(self.store.candidates, run_id),
             await asyncio.to_thread(self.store.usage, run_id))
         await asyncio.to_thread(self.store.save_report, run_id, report, lease)
-        logger.info("审查事实已保存 review_id=%s status=%s candidates=%d findings=%d gaps=%d",
+        logger.info("审查事实已保存 review_id=%.8s status=%s candidates=%d findings=%d gaps=%d",
                     run_id, report.status, len(report.candidates), len(report.findings), len(report.reasons))
         report.overview = await generate_overview(report, provider, budget, self.runner.model)
         report.usage = await asyncio.to_thread(self.store.usage, run_id)
@@ -94,7 +94,7 @@ class ReviewOrchestrator:
         report.version = identity([report.version, report.overview.model_dump()])
         await asyncio.to_thread(self.store.save_report, run_id, report, lease, finished=True)
         logger.info(
-            "审查结束 review_id=%s status=%s overview=%s candidates=%d findings=%d gaps=%d "
+            "审查结束 review_id=%.8s status=%s overview=%s candidates=%d findings=%d gaps=%d "
             "model_calls=%s input_tokens=%s output_tokens=%s unknown_calls=%s elapsed_ms=%.0f",
             run_id, report.status, report.overview.status, len(report.candidates), len(report.findings),
             len(report.reasons), report.usage["model_calls"], report.usage["input_tokens"],

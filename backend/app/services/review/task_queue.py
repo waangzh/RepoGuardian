@@ -244,7 +244,7 @@ class ReviewWorker:
         job = await asyncio.to_thread(self.queue.claim, worker_id=self.worker_id, kinds=self.kinds)
         if job is None:
             return False
-        logger.info("作业已领取 review_id=%s job_id=%s kind=%s attempt=%d/%d",
+        logger.info("作业已领取 review_id=%.8s job_id=%.8s kind=%s attempt=%d/%d",
                     job.task_id, job.id, job.kind, job.attempts, job.max_attempts)
         handler_task = asyncio.create_task(self.handler(job))
         heartbeat = asyncio.create_task(self._heartbeat(job, handler_task))
@@ -253,7 +253,7 @@ class ReviewWorker:
         try:
             await handler_task
         except asyncio.CancelledError:
-            logger.info("作业执行取消 review_id=%s job_id=%s attempt=%d",
+            logger.info("作业执行取消 review_id=%.8s job_id=%.8s attempt=%d",
                         job.task_id, job.id, job.attempts)
             try:
                 await asyncio.to_thread(
@@ -272,18 +272,18 @@ class ReviewWorker:
                     attempt=job.attempts, retry=not isinstance(exc, NonRetryableJobError),
                     retry_after=exc.retry_after if isinstance(exc, RetryAfterJobError) else None,
                 )
-                logger.warning("作业执行失败 review_id=%s job_id=%s attempt=%d status=%s error_type=%s",
+                logger.warning("作业执行失败 review_id=%.8s job_id=%.8s attempt=%d status=%s error_type=%s",
                                job.task_id, job.id, job.attempts, status, type(exc).__name__)
             except ValueError:
-                logger.warning("作业失败回执未写入 review_id=%s job_id=%s reason=lease_changed",
+                logger.warning("作业失败回执未写入 review_id=%.8s job_id=%.8s reason=lease_changed",
                                job.task_id, job.id)
                 pass  # A replacement lease owns all subsequent job transitions.
         else:
             completed = await asyncio.to_thread(self.queue.complete, job.id, self.worker_id, attempt=job.attempts)
             if completed:
-                logger.info("作业完成回执已保存 review_id=%s job_id=%s", job.task_id, job.id)
+                logger.info("作业完成回执已保存 review_id=%.8s job_id=%.8s", job.task_id, job.id)
             else:
-                logger.warning("作业完成回执未写入 review_id=%s job_id=%s reason=lease_changed",
+                logger.warning("作业完成回执未写入 review_id=%.8s job_id=%.8s reason=lease_changed",
                                job.task_id, job.id)
         finally:
             self._active.pop(job.id, None)
@@ -323,7 +323,7 @@ class ReviewWorker:
             await asyncio.sleep(interval)
             renewed = await asyncio.to_thread(self.queue.heartbeat, job.id, self.worker_id, attempt=job.attempts)
             if not renewed:
-                logger.warning("作业租约续期失败 review_id=%s job_id=%s attempt=%d",
+                logger.warning("作业租约续期失败 review_id=%.8s job_id=%.8s attempt=%d",
                                job.task_id, job.id, job.attempts)
                 if handler_task is not None:
                     handler_task.cancel()

@@ -22,7 +22,7 @@ class Model(BaseModel):
 
 class Limits(Model):
     concurrency: int = Field(default=4, ge=1, le=16)
-    model_calls: int = Field(default=12, ge=1, le=100)
+    model_calls: int = Field(default=48, ge=1, le=100)
     tool_calls: int = Field(default=80, ge=1, le=500)
     timeout_seconds: int = Field(default=1800, ge=1, le=86400)
     output_tokens: int = Field(default=4096, ge=256, le=32768)
@@ -52,7 +52,7 @@ class Configuration(Model):
     endpoint: str
     model: str
     options: Options
-    prompt_version: str = "review-vnext-2"
+    prompt_version: str = "review-vnext-3"
 
 
 class Snapshot(Model):

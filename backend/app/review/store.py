@@ -330,6 +330,14 @@ class ReviewStore:
             raise BudgetExceeded("context_capacity")
         if usage["committed_output_tokens"] + (1 + protected_calls) * limits.output_tokens > limits.total_output_tokens:
             raise BudgetExceeded("output_token_limit")
+        return {
+            "input_tokens": limits.total_input_tokens - usage["committed_input_tokens"] - protected_tokens,
+            "output_tokens": limits.total_output_tokens - usage["committed_output_tokens"]
+                             - protected_calls * limits.output_tokens,
+            "model_calls": limits.total_model_calls - len(calls) - protected_calls,
+            "agent_model_calls": limits.model_calls - sum(
+                call.attempt_id == work.attempt_id for call in calls) if work else None,
+        }
 
     def can_start(self, run_id, work):
         with self.sessions() as session:
@@ -344,7 +352,7 @@ class ReviewStore:
                 return str(exc)
             return None
 
-    def reserve(self, run_id, work, estimate, lease, *, overview=False):
+    def reserve(self, run_id, work, estimate, lease, *, overview=False, with_remaining=False):
         with self.sessions.begin() as session:
             row = self._guard(session, run_id, lease)
             run = self._run(row)
@@ -352,13 +360,13 @@ class ReviewStore:
             kind = "overview" if overview else work.kind
             if not overview:
                 self._attempt(session, run_id, work.id, work.attempt_id)
-            self._admit_request(session, run, work, estimate, overview)
+            remaining = self._admit_request(session, run, work, estimate, overview)
             ticket = uuid4().hex
             session.add(ReviewRequestOrm(id=ticket, run_id=run_id,
                 work_item_id=work.id if work else None, attempt_id=work.attempt_id if work else None,
                 kind=kind, reserved_input_tokens=estimate, reserved_output_tokens=limits.output_tokens,
                 state="reserved", lease_fence=lease))
-            return ticket
+            return (ticket, remaining) if with_remaining else ticket
 
     def settle(self, run_id, ticket, usage, lease):
         with self.sessions.begin() as session:

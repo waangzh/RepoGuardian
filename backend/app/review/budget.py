@@ -18,9 +18,9 @@ class BudgetGate:
         if utcnow() >= self.run.hard_deadline:
             raise BudgetExceeded("hard_deadline")
 
-    async def reserve(self, work, estimate, *, overview=False):
+    async def reserve(self, work, estimate, *, overview=False, with_remaining=False):
         return await asyncio.to_thread(self.store.reserve, self.run.id, work,
-                                      estimate, self.lease, overview=overview)
+                                      estimate, self.lease, overview=overview, with_remaining=with_remaining)
 
     async def settle(self, ticket, usage):
         await asyncio.to_thread(self.store.settle, self.run.id, ticket, usage, self.lease)

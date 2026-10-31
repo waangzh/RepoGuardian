@@ -89,7 +89,7 @@ class ReviewService:
 
     async def _prepare(self, pr, identity, cancel):
         started = perf_counter()
-        logger.info("固定源码准备开始 review_id=%s", identity)
+        logger.info("固定源码准备开始 review_id=%.8s", identity)
         repo, diff = await asyncio.to_thread(prepare_repository, pr, self._git_tool, self.store,
                                              cancel_event=cancel)
         self._repo_paths[identity] = Path(repo)
@@ -100,7 +100,7 @@ class ReviewService:
             snapshot = Snapshot(review_id=identity, repository=f"{pr.owner}/{pr.repo}",
                 repository_id=pr.repository_id, pr_number=pr.number,
                 declared_base_sha=pr.base.sha, base_sha=comparison["effective_base_sha"], head_sha=pr.head.sha)
-            logger.info("固定源码准备完成 review_id=%s changed_files=%d elapsed_ms=%.0f",
+            logger.info("固定源码准备完成 review_id=%.8s changed_files=%d elapsed_ms=%.0f",
                         identity, len(changed), (perf_counter() - started) * 1000)
             return Path(repo), changed, snapshot
         except BaseException:
@@ -113,7 +113,7 @@ class ReviewService:
         observed_at = utcnow()
         cancel = threading.Event()
         run_id, repo = uuid4().hex, None
-        logger.info("审查准备开始 review_id=%s depth=%s", run_id, config.options.depth)
+        logger.info("审查准备开始 review_id=%.8s depth=%s", run_id, config.options.depth)
         try:
             pr = await self._github_tool.fetch_pr(str(request.pr_url))
             repo, changed, snapshot = await self._prepare(pr, run_id, cancel)
@@ -129,7 +129,7 @@ class ReviewService:
             history = await asyncio.to_thread(self.store.history, previous)
             old_work = await asyncio.to_thread(self.store.work_items, previous.id) if previous else []
             await asyncio.to_thread(refine_plan, run, previous, old_work, self._git_tool, repo, history)
-            logger.info("审查规划完成 review_id=%s units=%d excluded=%d reused_units=%d history_candidates=%d",
+            logger.info("审查规划完成 review_id=%.8s units=%d excluded=%d reused_units=%d history_candidates=%d",
                         run_id, len(run.plan.units), len(run.plan.excluded),
                         sum(unit.reused_from is not None for unit in run.plan.units), len(run.plan.history))
             # Publish only the disposable prepared repository, never target changes.
@@ -139,10 +139,10 @@ class ReviewService:
             return run
         except asyncio.CancelledError:
             cancel.set()
-            logger.info("审查准备取消 review_id=%s", run_id)
+            logger.info("审查准备取消 review_id=%.8s", run_id)
             raise
         except Exception as exc:
-            logger.warning("审查准备失败 review_id=%s error_type=%s", run_id, type(exc).__name__)
+            logger.warning("审查准备失败 review_id=%.8s error_type=%s", run_id, type(exc).__name__)
             raise
         finally:
             self._repo_paths.pop(run_id, None)
@@ -163,13 +163,13 @@ class ReviewService:
             saved = await asyncio.to_thread(self.get_task, existing)
             if saved is None:
                 raise ValueError("review_deleted")
-            logger.info("审查创建复用幂等记录 review_id=%s", existing)
+            logger.info("审查创建复用幂等记录 review_id=%.8s", existing)
             return saved
         run = await self._inputs(request)
         if expected_snapshot and expected_snapshot != (run.snapshot.declared_base_sha, run.snapshot.head_sha):
             raise ValueError("webhook_snapshot_changed")
         result_id = await asyncio.to_thread(self.store.create, run, caller_id, key, request_hash)
-        logger.info("审查已入队 review_id=%s", result_id)
+        logger.info("审查已入队 review_id=%.8s", result_id)
         self.start_worker()
         return await asyncio.to_thread(self.get_task, result_id)
 
@@ -179,7 +179,7 @@ class ReviewService:
         if run is None or run.status in TERMINAL:
             return
         cancel, repo, index = threading.Event(), None, None
-        logger.info("审查作业开始 review_id=%s job_id=%s kind=%s attempt=%d",
+        logger.info("审查作业开始 review_id=%.8s job_id=%.8s kind=%s attempt=%d",
                     run.id, job.id, job.kind, job.attempts)
         try:
             if (run.configuration.provider != self._provider._provider_name
@@ -198,7 +198,7 @@ class ReviewService:
             evidence = EvidenceService(snapshot=run.snapshot, artifacts=self._artifacts, repo_path=repo,
                                        allowed_paths=paths, git=self._git_tool)
             index = OnDemandIndex(evidence)
-            logger.info("审查上下文就绪 review_id=%s authorized_files=%d denied_files=%d",
+            logger.info("审查上下文就绪 review_id=%.8s authorized_files=%d denied_files=%d",
                         run.id, len(paths), len(denied))
             provider = ContextProvider(run, evidence, self.store, lease, frozenset(denied), index=index)
             if job.kind == "review":
@@ -218,15 +218,15 @@ class ReviewService:
             else:
                 await ReviewOrchestrator(self.store, AgentRunner(model)).run(run.id, provider, lease)
         except (ReviewStopped, LeaseLost) as exc:
-            logger.info("审查作业停止 review_id=%s job_id=%s reason=%s",
+            logger.info("审查作业停止 review_id=%.8s job_id=%.8s reason=%s",
                         run.id, job.id, type(exc).__name__)
             return
         except asyncio.CancelledError:
             cancel.set()
-            logger.info("审查作业取消 review_id=%s job_id=%s", run.id, job.id)
+            logger.info("审查作业取消 review_id=%.8s job_id=%.8s", run.id, job.id)
             raise
         except Exception as exc:
-            logger.error("审查作业失败 review_id=%s job_id=%s kind=%s error_type=%s",
+            logger.error("审查作业失败 review_id=%.8s job_id=%.8s kind=%s error_type=%s",
                          run.id, job.id, job.kind, type(exc).__name__)
             await asyncio.to_thread(self.store.fail_run, run.id, "review_execution_failed", lease)
             raise NonRetryableJobError("review_execution_failed") from None
@@ -285,12 +285,12 @@ class ReviewService:
         cancelled = await asyncio.to_thread(self.store.cancel, run_id)
         if cancelled:
             self._worker.cancel_task(run_id)
-            logger.info("审查取消已受理 review_id=%s", run_id)
+            logger.info("审查取消已受理 review_id=%.8s", run_id)
         return cancelled
 
     async def retry(self, run_id, *, overview=False):
         await asyncio.to_thread(self.store.retry, run_id, overview=overview)
-        logger.info("审查重试已入队 review_id=%s overview_only=%s", run_id, overview)
+        logger.info("审查重试已入队 review_id=%.8s overview_only=%s", run_id, overview)
         self.start_worker()
         return await asyncio.to_thread(self.get_task, run_id)
 

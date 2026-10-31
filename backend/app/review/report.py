@@ -122,15 +122,15 @@ async def generate_overview(report, provider, budget, model):
     run_id = provider.run.id
     previous = provider.run.report
     if not provider.run.plan.units:
-        logger.info("总览跳过 review_id=%s reason=scope_empty", run_id)
+        logger.info("总览跳过 review_id=%.8s reason=scope_empty", run_id)
         return Overview(status="skipped_empty")
     if utcnow() >= provider.run.hard_deadline:
-        logger.warning("总览跳过 review_id=%s reason=hard_deadline", run_id)
+        logger.warning("总览跳过 review_id=%.8s reason=hard_deadline", run_id)
         return Overview(status="skipped_deadline", error_code="hard_deadline")
     packet, refs = await asyncio.to_thread(overview_material, report, provider)
     if (previous and previous.overview.input_hash == identity(packet)
             and previous.overview.status in {"ready", "failed"}):
-        logger.info("总览复用 review_id=%s status=%s", run_id, previous.overview.status)
+        logger.info("总览复用 review_id=%.8s status=%s", run_id, previous.overview.status)
         return previous.overview
     overview = Overview(status="running", input_hash=identity(packet), omitted=packet["omitted"])
     report.overview = overview
@@ -141,7 +141,7 @@ async def generate_overview(report, provider, budget, model):
         messages = [SystemMessage(content=prompt), HumanMessage(content=json.dumps(packet, ensure_ascii=False))]
         estimate = tokens([prompt, packet, OverviewOutput.model_json_schema()]) + 512
         ticket = await budget.reserve(None, estimate, overview=True)
-        logger.info("总览模型请求开始 review_id=%s ticket=%s estimated_input_tokens=%d",
+        logger.info("总览模型请求开始 review_id=%.8s ticket=%.8s estimated_input_tokens=%d",
                     run_id, ticket, estimate)
         structured = model.bind_tools([OverviewOutput], tool_choice="OverviewOutput")
         seconds = max(0, (provider.run.hard_deadline - utcnow()).total_seconds())
@@ -149,7 +149,7 @@ async def generate_overview(report, provider, budget, model):
             raw = await structured.ainvoke(messages)
         usage = getattr(raw, "usage_metadata", None)
         await budget.settle(ticket, usage)
-        logger.info("总览模型请求返回 review_id=%s ticket=%s input_tokens=%s output_tokens=%s elapsed_ms=%.0f",
+        logger.info("总览模型请求返回 review_id=%.8s ticket=%.8s input_tokens=%s output_tokens=%s elapsed_ms=%.0f",
                     run_id, ticket, usage["input_tokens"] if usage is not None else "unknown",
                     usage["output_tokens"] if usage is not None else "unknown",
                     (perf_counter() - started) * 1000)
@@ -164,17 +164,17 @@ async def generate_overview(report, provider, budget, model):
         from app.review.domain import SourceRef
         overview.sources = [SourceRef.model_validate(ref) for ref in refs.values()]
     except (LeaseLost, ReviewStopped, asyncio.CancelledError) as exc:
-        logger.info("总览停止 review_id=%s reason=%s", run_id, type(exc).__name__)
+        logger.info("总览停止 review_id=%.8s reason=%s", run_id, type(exc).__name__)
         raise
     except Exception as exc:
         if ticket:
             await budget.settle(ticket, None)
         overview.status = "skipped_deadline" if utcnow() >= provider.run.hard_deadline else "failed"
         overview.error_code = str(exc) if isinstance(exc, BudgetExceeded) else "overview_unavailable"
-        logger.warning("总览未完成 review_id=%s status=%s code=%s error_type=%s elapsed_ms=%.0f",
+        logger.warning("总览未完成 review_id=%.8s status=%s code=%s error_type=%s elapsed_ms=%.0f",
                        run_id, overview.status, overview.error_code, type(exc).__name__,
                        (perf_counter() - started) * 1000)
     else:
-        logger.info("总览生成完成 review_id=%s paragraphs=%d omitted_sources=%d",
+        logger.info("总览生成完成 review_id=%.8s paragraphs=%d omitted_sources=%d",
                     run_id, len(overview.output.change_overview), overview.omitted.get("sources", 0))
     return overview

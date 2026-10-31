@@ -3,7 +3,7 @@
 from app.core.config import settings
 from app.review.domain import Configuration, Limits, Options
 
-DEPTHS = {"quick": ("快速初筛", 6), "standard": ("标准审查", 12), "deep": ("深度核验", 20)}
+DEPTHS = {"quick": "快速初筛", "standard": "标准审查", "deep": "深度核验"}
 
 
 def maxima():
@@ -20,10 +20,6 @@ def maxima():
     }
 
 
-def default_limits(depth):
-    return {**maxima(), "model_calls": min(DEPTHS[depth][1], settings.repoguardian_agent_max_calls)}
-
-
 def freeze_configuration(request, provider):
     if request.depth not in DEPTHS:
         raise ValueError("unknown_review_depth")
@@ -32,7 +28,7 @@ def freeze_configuration(request, provider):
     maximum = maxima()
     if any(key not in maximum or value > maximum[key] for key, value in request.limits.items()):
         raise ValueError("review_limit_exceeds_server_policy")
-    limits = Limits.model_validate({**default_limits(request.depth), **request.limits})
+    limits = Limits.model_validate({**maximum, **request.limits})
     options = Options(depth=request.depth, paths=request.paths, focus=request.focus, limits=limits,
         include_pr_discussions=(settings.repoguardian_pr_discussions_enabled
             if request.include_pr_discussions is None else request.include_pr_discussions))
@@ -42,12 +38,12 @@ def freeze_configuration(request, provider):
 
 def capabilities():
     return {
-        "depth_presets": [{"id": key, "label": value[0], "limits": default_limits(key)}
+        "depth_presets": [{"id": key, "label": value, "limits": maxima()}
                           for key, value in DEPTHS.items()],
         "focus_categories": ["correctness", "security", "performance", "compatibility"],
         "scope_selection_supported": True,
         "context_boundary": "固定提交的普通源码；不会执行目标仓库代码",
-        "limits": {"defaults": default_limits("standard"), "maxima": maxima()},
+        "limits": {"defaults": maxima(), "maxima": maxima()},
         "pr_discussions_available": settings.repoguardian_pr_discussions_enabled,
         "pr_discussions_default": settings.repoguardian_pr_discussions_enabled,
     }

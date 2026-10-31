@@ -122,3 +122,28 @@ def test_late_completion_cannot_turn_hard_timeout_into_completed(tmp_path):
     saved = store.work_items(run.id)[0]
     assert saved.status == "interrupted"
     assert saved.error_code == "hard_deadline"
+
+
+def test_request_budget_snapshot_keeps_verification_overview_and_unknown_usage(tmp_path):
+    store, run, lease, _ = setup_run(tmp_path, calls=4, input_tokens=30000)
+    work = store.claim(run.id, store.work_items(run.id)[0].id, lease)
+    submit_candidate(store, run, lease, work)
+    first, available = store.reserve(run.id, work, 1000, lease, with_remaining=True)
+    assert available["input_tokens"] == 18000
+    assert available["model_calls"] == 2
+    assert available["output_tokens"] == run.configuration.options.limits.total_output_tokens - 8192
+    store.settle(run.id, first, None, lease)
+    second, available = store.reserve(run.id, work, 1000, lease, with_remaining=True)
+    assert second != first
+    assert available["input_tokens"] == 17000
+    assert available["model_calls"] == 1
+    with pytest.raises(BudgetExceeded, match="model_call_limit"):
+        store.reserve(run.id, work, 1000, lease)
+    check = next(item for item in store.work_items(run.id) if item.kind == "verification")
+    check = store.claim(run.id, check.id, lease)
+    store.reserve(run.id, check, 1000, lease)
+    store.reserve(run.id, None, 1000, lease, overview=True)
+    usage = store.usage(run.id)
+    assert usage["model_calls"] == 4
+    assert usage["committed_input_tokens"] == 4000
+    assert usage["input_tokens"] is None

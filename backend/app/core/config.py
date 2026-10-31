@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     repoguardian_incremental_review_webhook_repositories: str = ""
     repoguardian_incremental_review_max_runs_per_hour: int = Field(default=4, ge=1, le=100)
     repoguardian_review_timeout_seconds: float = Field(default=1800, ge=1, le=86_400)
+    # 调用次数只作熔断；调查以整轮 Token 和期限为主，深度不再覆盖此值。
     repoguardian_agent_max_calls: int = Field(default=48, ge=1, le=100)
     repoguardian_agent_max_tool_calls: int = Field(default=80, ge=1, le=500)
     repoguardian_agent_output_tokens: int = Field(default=4096, ge=256, le=32768)

@@ -159,7 +159,8 @@ async def test_review_logs_correlate_lifecycle_without_review_content(service_pi
     for event in ("审查准备开始", "审查规划完成", "审查已入队", "作业已领取", "Agent开始",
                   "模型请求开始", "模型请求返回", "候选已保存并排队核验", "总览生成完成",
                   "审查结束", "作业完成回执已保存"):
-        assert any(event in message and f"review_id={run_id}" in message for message in messages)
+        assert any(event in message and f"review_id={run_id[:8]}" in message for message in messages)
+    assert run_id not in text
     assert "verdict=confirmed" in text
     assert "status=completed" in text
     assert "tools=submit_candidate" in text
@@ -181,7 +182,7 @@ async def test_job_failure_logs_error_type_without_exception_body(service_pipeli
     assert await service._worker.run_once()
     text = "\n".join(record.getMessage() for record in caplog.records
                      if record.name.startswith("RepoGuardian.Review"))
-    assert f"审查作业失败 review_id={run.id}" in text
+    assert f"审查作业失败 review_id={run.id[:8]}" in text
     assert "status=dead_letter" in text
     assert "error_type=RuntimeError" in text
     assert "PRIVATE_PROVIDER_CREDENTIAL_AND_RESPONSE" not in text

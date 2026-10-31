@@ -23,6 +23,7 @@ class AgentContext:
     cursors: dict[str, dict] = field(default_factory=dict)
     tool_calls: int = 0
     model_calls: int = 0
+    structured_output_retry: bool = False
     source_counter: int = 0
 
     @property
@@ -145,7 +146,8 @@ class ContextProvider:
                 except (ValueError, OSError):
                     continue
         saved = await asyncio.to_thread(self.store.candidates, self.run.id)
-        return {"snapshot": self.run.snapshot.model_dump(), "focus": unit.focus,
+        return {"snapshot": self.run.snapshot.model_dump(), "depth": self.run.configuration.options.depth,
+            "focus": unit.focus,
             "change_map": [{"paths": item.paths, "risk": item.risk} for item in self.run.plan.units][:100],
             "history_untrusted": [{"claim": item["claim"], "head_sha": item["head_sha"],
                 "status": "historical_not_current_evidence"} for item in self.run.plan.history[:20]],
