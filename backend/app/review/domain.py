@@ -52,7 +52,7 @@ class Configuration(Model):
     endpoint: str
     model: str
     options: Options
-    prompt_version: str = "review-vnext-1"
+    prompt_version: str = "review-vnext-2"
 
 
 class Snapshot(Model):
@@ -129,7 +129,14 @@ class VerificationOutput(Model):
 
 
 class UnitCompletion(Model):
-    unresolved_reason: str | None = Field(default=None, max_length=1500)
+    """Finish this unit's investigation; this is not a review summary."""
+
+    unresolved_reason: str | None = Field(default=None, max_length=1500, description=(
+        "An actual missing premise that prevents finishing this investigation. "
+        "Use null when the necessary investigation is complete, including when no defect "
+        "was found or only speculative claims remain. Do not put summaries, checked cases, "
+        "refuted claims, or already submitted candidates here; those are recorded separately."
+    ))
 
 
 class Finding(Model):

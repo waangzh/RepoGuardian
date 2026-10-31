@@ -1,4 +1,5 @@
 import shutil
+import logging
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -139,3 +140,49 @@ async def test_delete_removes_source_artifacts_but_keeps_creation_tombstone(serv
     assert service.store.work_items(run.id) == []
     with pytest.raises(ValueError, match="review_deleted"):
         await service.create(request, "delete")
+
+
+async def test_review_logs_correlate_lifecycle_without_review_content(service_pipeline, caplog):
+    service, github, app = service_pipeline
+    github.pr.title = "PRIVATE_TITLE_MUST_NOT_BE_LOGGED"
+    github.pr.body = "PRIVATE_DESCRIPTION_MUST_NOT_BE_LOGGED"
+    caplog.set_level(logging.INFO, logger="RepoGuardian.Review")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/reviews", json={"pr_url": github.pr.html_url},
+                                     headers={"Idempotency-Key": "log-lifecycle"})
+        assert response.status_code == 202
+        run_id = response.json()["id"]
+        assert await service._worker.run_once()
+    records = [record for record in caplog.records if record.name.startswith("RepoGuardian.Review")]
+    messages = [record.getMessage() for record in records]
+    text = "\n".join(messages)
+    for event in ("审查准备开始", "审查规划完成", "审查已入队", "作业已领取", "Agent开始",
+                  "模型请求开始", "模型请求返回", "候选已保存并排队核验", "总览生成完成",
+                  "审查结束", "作业完成回执已保存"):
+        assert any(event in message and f"review_id={run_id}" in message for message in messages)
+    assert "verdict=confirmed" in text
+    assert "status=completed" in text
+    assert "tools=submit_candidate" in text
+    for private in (github.pr.title, github.pr.body, "return 10 / x", "零输入导致除零",
+                    "source_refs", "http://localhost", "Idempotency-Key"):
+        assert private not in text
+    assert all(record.exc_info is None for record in records)
+
+
+async def test_job_failure_logs_error_type_without_exception_body(service_pipeline, caplog):
+    service, github, _ = service_pipeline
+    caplog.set_level(logging.INFO, logger="RepoGuardian.Review")
+    run = await service.create(ReviewRequest(pr_url=github.pr.html_url), "log-job-failure")
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("PRIVATE_PROVIDER_CREDENTIAL_AND_RESPONSE")
+
+    service._provider.agent_model = unavailable
+    assert await service._worker.run_once()
+    text = "\n".join(record.getMessage() for record in caplog.records
+                     if record.name.startswith("RepoGuardian.Review"))
+    assert f"审查作业失败 review_id={run.id}" in text
+    assert "status=dead_letter" in text
+    assert "error_type=RuntimeError" in text
+    assert "PRIVATE_PROVIDER_CREDENTIAL_AND_RESPONSE" not in text
+    assert service.store.get(run.id).status == "failed"

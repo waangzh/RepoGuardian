@@ -7,5 +7,21 @@ import { renderToString } from '@vue/server-renderer';
 const sha = char => char.repeat(40);
 const task = status => ({ id: 'review', status, phase: status, pr_url: 'https://github.com/o/r/pull/1', pr: { owner: 'o', repo: 'r', number: 1, title: '<script>alert(1)</script>', body: null, html_url: 'https://github.com/o/r/pull/1' }, snapshot: { review_id: 'review', repository: 'o/r', repository_id: 1, pr_number: 1, declared_base_sha: sha('a'), base_sha: sha('b'), head_sha: sha('c') }, configuration: { provider: 'fixture', endpoint: '', model: 'fixture', options: { depth: 'standard', paths: null, focus: ['correctness'], include_pr_discussions: false, limits: {} }, prompt_version: 'review-vnext-1' }, changed_files: [], plan: { version: 'hunk-plan-v1', units: [], excluded: {}, incremental_from: null, history: [] }, report: null, review_cutoff: '', hard_deadline: '', created_at: '', updated_at: '', started_at: null, completed_at: null, error_code: status === 'failed' ? 'TimeoutError' : null });
 
+test('预算耗尽说明具体限制，避免显示为未知执行异常', async () => {
+  const server = await createServer({
+    server: { middlewareMode: true, hmr: false },
+    optimizeDeps: { noDiscovery: true, entries: [], include: [] },
+    appType: 'custom',
+  });
+  try {
+    const { executionErrorLabel } = await server.ssrLoadModule('/src/utils/nativeReview.ts');
+    assert.equal(executionErrorLabel('agent_model_limit'), '达到单个 Agent 的模型调用上限，调查尚未完成');
+    for (const code of ['model_call_limit', 'input_token_limit', 'output_token_limit',
+      'context_capacity', 'tool_call_limit', 'review_cutoff', 'hard_deadline']) {
+      assert.doesNotMatch(executionErrorLabel(code), /执行异常/);
+    }
+  } finally { await server.close(); }
+});
+
 test('新运行投影保留终态、快照和安全链接语义', async () => { const server = await createServer({ server: { middlewareMode: true, hmr: false }, optimizeDeps: { noDiscovery: true, entries: [], include: [] }, appType: 'custom' }); try { const { terminal, safeGitHubLink, isFileContextFor } = await server.ssrLoadModule('/src/utils/nativeReview.ts'); assert.equal(terminal('partial'), true); assert.equal(terminal('running'), false); assert.equal(safeGitHubLink('javascript:alert(1)'), undefined); assert.equal(safeGitHubLink('https://github.com/o/r/pull/1'), 'https://github.com/o/r/pull/1'); assert.equal(isFileContextFor({ file_id: 0, file_path: 'a.py', snapshot: task('completed').snapshot, base_lines: [], head_lines: [] }, 0, 'a.py', task('completed').snapshot), true); } finally { await server.close(); } });
 test('五切片工作台展示运行中和失败状态，不渲染不可信 HTML', async () => { const server = await createServer({ server: { middlewareMode: true, hmr: false }, optimizeDeps: { noDiscovery: true, entries: [], include: [] }, appType: 'custom' }); try { const { default: Component } = await server.ssrLoadModule('/src/components/review/ReviewWorkspace.vue'); for (const status of ['running', 'failed', 'cancelled']) { const html = await renderToString(createSSRApp(Component, { task: task(status) })); assert.match(html, /概览|变更|问题|活动|发布/); assert.match(html, /未执行目标代码/); assert.match(html, /&lt;script&gt;/); assert.doesNotMatch(html, /<script>alert/); if (status === 'running') assert.match(html, /停止审查/); } } finally { await server.close(); } });

@@ -22,6 +22,7 @@ class AgentContext:
     material_failures: dict[str, str] = field(default_factory=dict)
     cursors: dict[str, dict] = field(default_factory=dict)
     tool_calls: int = 0
+    model_calls: int = 0
     source_counter: int = 0
 
     @property

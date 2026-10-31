@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from functools import wraps
 from typing import Literal
 
@@ -13,6 +14,8 @@ from app.review.findings import admit_candidate
 from app.review.retrieval import find_paths, search
 from app.review.evidence import SourceReadError
 
+logger = logging.getLogger("RepoGuardian.Review.Tools")
+
 
 def bounded(function):
     @wraps(function)
@@ -21,14 +24,22 @@ def bounded(function):
         await context.check_active()
         context.tool_calls += 1
         if context.tool_calls > context.provider.run.configuration.options.limits.tool_calls:
+            logger.warning("工具调用被预算阻止 review_id=%s work_id=%s tool=%s reason=tool_call_limit",
+                           context.provider.run.id, context.work.id, function.__name__)
             return {"ok": False, "error": "tool_call_limit"}
         try:
             result = await function(*args, **kwargs)
         except SourceReadError as exc:
+            logger.warning("工具调用被拒绝 review_id=%s work_id=%s tool=%s reason=%s",
+                           context.provider.run.id, context.work.id, function.__name__, exc.code)
             return {"ok": False, "error": exc.code, **exc.details}
-        except (ValueError, OSError):
+        except (ValueError, OSError) as exc:
+            logger.warning("工具调用被拒绝 review_id=%s work_id=%s tool=%s error_type=%s",
+                           context.provider.run.id, context.work.id, function.__name__, type(exc).__name__)
             return {"ok": False, "error": "source_or_submission_rejected"}
         await context.check_active()
+        logger.debug("工具调用完成 review_id=%s work_id=%s tool=%s",
+                     context.provider.run.id, context.work.id, function.__name__)
         return result
     return execute
 
@@ -83,6 +94,8 @@ async def submit_candidate(proposal: CandidateInput, runtime: ToolRuntime[AgentC
     candidate = admit_candidate(proposal, context, runtime.tool_call_id)
     candidate_id = await asyncio.to_thread(context.provider.store.submit,
         context.provider.run.id, context.work, candidate, context.provider.lease)
+    logger.info("候选已保存并排队核验 review_id=%s work_id=%s candidate_id=%s",
+                context.provider.run.id, context.work.id, candidate_id)
     return {"ok": True, "candidate_id": candidate_id, "status": "unverified"}
 
 

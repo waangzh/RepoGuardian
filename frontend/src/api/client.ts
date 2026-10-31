@@ -45,6 +45,13 @@ function reviewPath(id: string, suffix = '') {
 
 function requestError(payload: unknown, status: number) {
   const detail = (payload as { detail?: unknown } | null)?.detail;
+  if (Array.isArray(detail)) {
+    const message = detail.map((issue: { loc: (string | number)[]; msg: string }) => {
+      const field = issue.loc.filter(part => part !== 'body').join('.');
+      return field + ': ' + issue.msg;
+    }).join('; ');
+    return new ApiError(message, status);
+  }
   const message = typeof detail === 'string'
     ? detail
     : typeof detail === 'object' && detail !== null
@@ -113,7 +120,9 @@ function reviewBody(input: ReviewCreateRequest) {
     depth: input.depth,
     paths: input.paths,
     focus: input.focus,
-    limits: input.limits,
+    limits: Object.fromEntries(
+      Object.entries(input.limits).filter(([, value]) => value != null),
+    ),
     ...(input.model ? { model: input.model } : {}),
     ...(input.include_pr_discussions === undefined
       ? {}

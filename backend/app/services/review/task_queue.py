@@ -6,6 +6,7 @@ claim 使用带资格条件的原子 UPDATE；即使两个 worker 先读到同�
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -19,6 +20,8 @@ from app.core.database import sync_session
 from app.models.orm import ReviewTaskOrm, WorkerJobOrm, utcnow
 from app.services.review.review_task_access import lock_live_review
 from app.review.store import ReviewStore, as_utc
+
+logger = logging.getLogger("RepoGuardian.Review.Worker")
 
 
 class NonRetryableJobError(ValueError):
@@ -241,6 +244,8 @@ class ReviewWorker:
         job = await asyncio.to_thread(self.queue.claim, worker_id=self.worker_id, kinds=self.kinds)
         if job is None:
             return False
+        logger.info("作业已领取 review_id=%s job_id=%s kind=%s attempt=%d/%d",
+                    job.task_id, job.id, job.kind, job.attempts, job.max_attempts)
         handler_task = asyncio.create_task(self.handler(job))
         heartbeat = asyncio.create_task(self._heartbeat(job, handler_task))
         self._active[job.id] = handler_task
@@ -248,6 +253,8 @@ class ReviewWorker:
         try:
             await handler_task
         except asyncio.CancelledError:
+            logger.info("作业执行取消 review_id=%s job_id=%s attempt=%d",
+                        job.task_id, job.id, job.attempts)
             try:
                 await asyncio.to_thread(
                     self.queue.fail, job.id, self.worker_id, "task cancelled",
@@ -260,15 +267,24 @@ class ReviewWorker:
                 raise
         except Exception as exc:
             try:
-                await asyncio.to_thread(
+                status = await asyncio.to_thread(
                     self.queue.fail, job.id, self.worker_id, str(exc).strip() or type(exc).__name__,
                     attempt=job.attempts, retry=not isinstance(exc, NonRetryableJobError),
                     retry_after=exc.retry_after if isinstance(exc, RetryAfterJobError) else None,
                 )
+                logger.warning("作业执行失败 review_id=%s job_id=%s attempt=%d status=%s error_type=%s",
+                               job.task_id, job.id, job.attempts, status, type(exc).__name__)
             except ValueError:
+                logger.warning("作业失败回执未写入 review_id=%s job_id=%s reason=lease_changed",
+                               job.task_id, job.id)
                 pass  # A replacement lease owns all subsequent job transitions.
         else:
-            await asyncio.to_thread(self.queue.complete, job.id, self.worker_id, attempt=job.attempts)
+            completed = await asyncio.to_thread(self.queue.complete, job.id, self.worker_id, attempt=job.attempts)
+            if completed:
+                logger.info("作业完成回执已保存 review_id=%s job_id=%s", job.task_id, job.id)
+            else:
+                logger.warning("作业完成回执未写入 review_id=%s job_id=%s reason=lease_changed",
+                               job.task_id, job.id)
         finally:
             self._active.pop(job.id, None)
             self._active_task_ids.pop(job.id, None)
@@ -277,6 +293,7 @@ class ReviewWorker:
         return True
 
     async def run_forever(self) -> None:
+        logger.info("审查Worker启动 worker_id=%s", self.worker_id)
         while not self._stopping.is_set():
             worked = await self.run_once()
             if not worked:
@@ -286,6 +303,7 @@ class ReviewWorker:
                     )
                 except TimeoutError:
                     pass
+        logger.info("审查Worker停止 worker_id=%s", self.worker_id)
 
     def stop(self) -> None:
         self._stopping.set()
@@ -305,6 +323,8 @@ class ReviewWorker:
             await asyncio.sleep(interval)
             renewed = await asyncio.to_thread(self.queue.heartbeat, job.id, self.worker_id, attempt=job.attempts)
             if not renewed:
+                logger.warning("作业租约续期失败 review_id=%s job_id=%s attempt=%d",
+                               job.task_id, job.id, job.attempts)
                 if handler_task is not None:
                     handler_task.cancel()
                 return

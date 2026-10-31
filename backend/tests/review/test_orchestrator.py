@@ -1,4 +1,5 @@
 import json
+import logging
 
 import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -128,3 +129,25 @@ async def test_missing_decision_sources_cannot_admit_a_finding(tmp_path, verdict
     result = admit_verification(candidate, output, context)
     assert result.verification.verdict == "insufficient"
     assert result.finding is None
+
+
+async def test_model_failure_logs_unknown_usage_without_provider_exception(tmp_path, caplog):
+    class PrivateFailureModel(ReviewModel):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            if str(messages[0].content).startswith("Investigate") and any(
+                isinstance(message, ToolMessage) for message in messages
+            ):
+                raise ValueError("PRIVATE_PROVIDER_BODY_TOKEN_AND_SOURCE")
+            return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+    caplog.set_level(logging.INFO, logger="RepoGuardian.Review")
+    store, run, lease, provider, _ = setup_source_run(tmp_path)
+    report = await ReviewOrchestrator(store, AgentRunner(PrivateFailureModel())).run(run.id, provider, lease)
+    text = "\n".join(record.getMessage() for record in caplog.records
+                     if record.name.startswith("RepoGuardian.Review"))
+    assert report.status == "partial"
+    assert "模型请求失败" in text
+    assert "error_type=ValueError usage=unknown" in text
+    assert "Agent未完成" in text
+    assert "PRIVATE_PROVIDER_BODY_TOKEN_AND_SOURCE" not in text
+    assert report.usage["unknown_calls"] == 1

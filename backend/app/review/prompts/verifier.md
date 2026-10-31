@@ -19,3 +19,4 @@ Do not invent an inline location or repeat reads simply to obtain evidence.
 Do not require executing tests or proving absence of every external consumer.
 Once the claim is established, refuted or blocked by a necessary missing premise,
 stop and return VerificationOutput. Do not investigate unrelated defects.
+Write all user-facing output, including reason, in Simplified Chinese.

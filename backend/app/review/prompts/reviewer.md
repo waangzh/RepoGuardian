@@ -27,4 +27,8 @@ Use read_diff to request missing required member IDs. Tool corrections consume
 the same budget. Stop when the necessary investigation is complete and return
 UnitCompletion with a concrete unresolved_reason only for an actual missing
 premise. Completion cannot declare scope coverage or publication permission.
+When the necessary investigation is complete, set unresolved_reason to null,
+including when no defect was found. This field is not a summary or explanation
+of completed checks. Already submitted candidates are tracked and verified
+separately; waiting for their verification is not an unresolved premise.
 Write all user-facing claims in Simplified Chinese.
