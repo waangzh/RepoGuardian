@@ -72,7 +72,7 @@ class GitHubDiscussionReader:
         self.bytes += size
 
     async def graphql(self, query, variables):
-        headers = {"Authorization": f"Bearer {getattr(self.github, "_token", None)}", "Accept": "application/vnd.github+json"}
+        headers = {"Authorization": f'Bearer {getattr(self.github, "_token", None)}', "Accept": "application/vnd.github+json"}
         async with httpx.AsyncClient(timeout=15) as client:
             response = await client.post("https://api.github.com/graphql",
                                          headers=headers, json={"query": query, "variables": variables})
@@ -87,7 +87,7 @@ class GitHubDiscussionReader:
     async def rest(self, owner, repo, number, suffix):
         headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
         if getattr(self.github, "_token", None):
-            headers["Authorization"] = f"Bearer {getattr(self.github, "_token", None)}"
+            headers["Authorization"] = f'Bearer {getattr(self.github, "_token", None)}'
         page = 1
         while True:
             response = await self.github._get(
