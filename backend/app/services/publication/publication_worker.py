@@ -146,7 +146,7 @@ class PublicationDelivery:
             batch = pending[offset:offset + size]
             identity = stable_hash([attempt.id, [item.id for item in batch]])
             payload = {"commit_id": attempt.head_sha, "event": "COMMENT", "body":
-                "RepoGuardian 已提交本次快照的代码行审查意见；总体结论请查看本 PR 的 RepoGuardian Summary。\n\n"
+                "RepoGuardian 已提交本次快照的代码行审查意见；总体审查结论请查看本 PR 的审查摘要。\n\n"
                 + batch_marker(attempt.id, identity),
                 "comments": [{**checked["locations"][item.finding_key], "body": finding_body(by_key[item.finding_key], attempt.id)} for item in batch]}
             if any(len(comment["body"].encode()) > 60_000 for comment in payload["comments"]):

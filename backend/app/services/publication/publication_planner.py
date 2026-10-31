@@ -54,15 +54,22 @@ class PublicationPlanner:
             selected = []
         unresolved = sum(candidate.verification is None or candidate.verification.verdict == "insufficient"
                          for candidate in (report.candidates if report else []))
+        complete = bool(report and run.status == report.status == "completed")
+        reasons = [*blockers, *(report.reasons if report else [])]
+        history_unchecked = bool(report and any(
+            not any(candidate.previous_candidate_id == item["candidate_id"]
+                    and candidate.verification is not None for candidate in report.candidates)
+            for item in run.plan.history))
         outcome = ReviewOutcome(
-            kind=("failed" if run.status == "failed" else "cancelled" if run.status == "cancelled"
+            kind=("failed" if "failed" in {run.status, report.status if report else None}
+                  else "cancelled" if "cancelled" in {run.status, report.status if report else None}
                   else "findings" if selected else "inconclusive" if unresolved or withheld
-                    or run.status != "completed" or (report and "scope_empty" in report.reasons) else "clean"),
-            coverage="complete" if run.status == "completed" else "partial",
+                    or not complete or reasons or history_unchecked else "clean"),
+            coverage="complete" if complete and not reasons and not history_unchecked else "partial",
             confirmed_count=len([candidate for candidate in (report.candidates if report else [])
                                  if candidate.verification and candidate.verification.verdict == "confirmed"]),
             publishable_count=len(selected), unresolved_count=unresolved,
-            reason_codes=[*blockers, *(report.reasons if report else [])],
+            reason_codes=reasons,
         )
         plan = PublicationPlan(review_id=run.id, report_version=report_version,
             snapshot=PublicationSnapshot(declared_base_sha=run.snapshot.declared_base_sha,
